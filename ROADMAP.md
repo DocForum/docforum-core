@@ -117,7 +117,7 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 ## Phase 9 — Deploy & CI
 **Status: Not started for real production. A Render free-tier preview exists — see note. Remaining items scoped into issues #21–#22.**
 - [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Still not resolved.** A Render free-tier web service + Postgres now runs `backend/`, so `docforum-web`'s GitHub Pages preview has a live API to call — see `docs/adr/0003-render-preview-deployment.md`. This is explicitly a preview, not the production decision: no secrets manager, no backups, no staging/prod split, free-tier Postgres expires 2026-10-14 (30 days, 14-day grace period) unless recreated/upgraded before then. Tracked as [issue #22](https://github.com/DocForum/docforum-core/issues/22) (Medium, 150 pts).
-- [ ] Real CI pipeline (replace `.github/workflows/ci.yml` placeholder) — lint, test, build for backend + frontend. (Render's own build step runs `npm install && prisma generate && npm run build` on every push, but that's deploy, not CI/PR-gating — this item is still open.) Tracked as [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
+- [x] Real CI pipeline (replaced `.github/workflows/ci.yml` placeholder — was `pull_request`-only, `echo "TODO"`, never once run). Now runs on push to `main` and on PRs: `prisma:generate` → `typecheck` → unit tests → **integration tests (the self-contained embedded-Postgres double-booking proof)** → `build`. Verified locally end-to-end before pushing (14 unit + 1 integration test passing) and confirmed green in Actions. No lint script exists yet in `backend/package.json` — not added; `tsc --noEmit` is the closest static check currently available. Closes [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
 - [ ] Staging environment. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [ ] Production environment + secrets management. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [x] Docs site deployed — `docs/site/` (VitePress) via `.github/workflows/deploy-docs.yml`, live at https://docforum.github.io/docforum-core/. Unrelated to the production-deploy decision above; this is a static site with no backend of its own.
@@ -220,3 +220,13 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
   depend on #5; #10/#11/#12 depend on #9; #14/#15/#16 depend on #13) is
   stated explicitly in each issue body, same convention as #2's
   dependency on #1.
+- 2026-09-14 — Closed issue #21 directly (a maintainer fix, not left for
+  a Wave contributor): replaced the placeholder `ci.yml` with a real
+  workflow — `prisma:generate` → `typecheck` → unit tests → integration
+  tests → `build`, on push to `main` and on PRs. Companion fix applied
+  identically in `docforum-web` and (separately, already done) in
+  `docforum-escrow` — all three repos now have CI that actually runs
+  their real test suites instead of an `echo "TODO"` stub. Done ahead of
+  the Drips Wave application: a prospective contributor or organizer
+  landing on any of these repos now sees actual passing checks, not a
+  placeholder.
