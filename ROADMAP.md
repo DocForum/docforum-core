@@ -46,33 +46,30 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 - [ ] Patient-facing view: my intake history. Not yet split into its own issue — small enough to fold into whichever of the above lands last, or split out later if it grows.
 
 ## Phase 3 — Referrals
-**Status: Not started (blocked by Phase 2)**
-- [ ] `Referral` model with **immutable snapshot** of intake + notes (ARCHITECTURE.md §4.4 design note — do not implement as a live pointer).
-- [ ] Referral creation from a `Consultation` with outcome `referred`.
-- [ ] Patient accept/decline flow (PRD OQ-3 resolved: patient must confirm).
-- [ ] Accepted referral auto-generates a pre-populated `Appointment` against the target doctor/specialty — patient does not re-enter intake (PRD FR-8, the core value prop).
-- [ ] Routing rule for referrals with no specific `target_doctor_id` (ARCHITECTURE.md §6.1.2 — currently an unresolved design gap; this phase must resolve or explicitly re-scope it).
-- [ ] Handle "zero verified doctors in target specialty" edge case (PRD §8.2.2) — surface as "waiting for a specialist," not a silent failure.
-- [ ] Referral expiry job (addresses PRD §8.1.3 "orphaned" pattern for referrals specifically).
-- [ ] Doc reconciliation: update ARCHITECTURE_ESSENTIALS.md "Known unresolved design gaps" once routing rule + expiry exist.
+**Status: Not started (blocked by Phase 2). Scoped into issues #5–#8.**
+- [ ] `Referral` model with **immutable snapshot** of intake + notes (ARCHITECTURE.md §4.4 design note — do not implement as a live pointer), plus the "zero verified doctors in target specialty" edge case (PRD §8.2.2). Tracked as [issue #5](https://github.com/DocForum/docforum-core/issues/5) (Medium, 150 pts).
+- [ ] Referral creation from a `Consultation` with outcome `referred` — folded into issue #5 above.
+- [ ] Routing rule for referrals with no specific `target_doctor_id` (ARCHITECTURE.md §6.1.2 — currently an unresolved design gap; this phase must resolve or explicitly re-scope it). Tracked as [issue #6](https://github.com/DocForum/docforum-core/issues/6) (High, 200 pts) — an ADR.
+- [ ] Patient accept/decline flow (PRD OQ-3 resolved: patient must confirm). Tracked as [issue #7](https://github.com/DocForum/docforum-core/issues/7) (Medium, 150 pts) — depends on #5.
+- [ ] Accepted referral auto-generates a pre-populated `Appointment` against the target doctor/specialty — patient does not re-enter intake (PRD FR-8, the core value prop) — folded into issue #7 above.
+- [ ] Referral expiry job (addresses PRD §8.1.3 "orphaned" pattern for referrals specifically). Tracked as [issue #8](https://github.com/DocForum/docforum-core/issues/8) (Medium, 150 pts) — depends on #5.
+- [ ] Doc reconciliation: update ARCHITECTURE_ESSENTIALS.md "Known unresolved design gaps" once routing rule + expiry exist — part of issue #6's DoD.
 
 ## Phase 4 — Orders: prescriptions & lab orders
-**Status: Not started (blocked by Phase 2, informed by Phase 3)**
-- [ ] `Prescription` + `PrescriptionItem` models, **append-only** (issuance creates a row; corrections use `supersedes_prescription_id` — ARCHITECTURE.md §4.5, hard rule in ARCHITECTURE_ESSENTIALS.md).
-- [ ] `LabOrder` + `LabResult` models, same append-only rule.
-- [ ] Specialist UI: issue prescription/lab order from a consultation.
-- [ ] Patient UI: view active/past orders.
-- [ ] Order expiry/reminder logic (PRD §8.1.3 "orphaned orders" — general case, beyond referrals).
+**Status: Not started (blocked by Phase 2, informed by Phase 3). Scoped into issues #9–#12.**
+- [ ] `Prescription` + `PrescriptionItem` models, **append-only** (issuance creates a row; corrections use `supersedes_prescription_id` — ARCHITECTURE.md §4.5, hard rule in ARCHITECTURE_ESSENTIALS.md). Tracked as [issue #9](https://github.com/DocForum/docforum-core/issues/9) (High, 200 pts), which also covers `LabOrder`/`LabResult` (same append-only rule).
+- [ ] `LabOrder` + `LabResult` models, same append-only rule — folded into issue #9 above.
+- [ ] Specialist UI: issue prescription/lab order from a consultation. Tracked as [issue #10](https://github.com/DocForum/docforum-core/issues/10) (Medium, 150 pts) — depends on #9.
+- [ ] Patient UI: view active/past orders. Tracked as [issue #11](https://github.com/DocForum/docforum-core/issues/11) (Medium, 150 pts) — depends on #9.
+- [ ] Order expiry/reminder logic (PRD §8.1.3 "orphaned orders" — general case, beyond referrals). Tracked as [issue #12](https://github.com/DocForum/docforum-core/issues/12) (Medium, 150 pts) — depends on #9.
 
 ## Phase 5 — Facilities & fulfillment
-**Status: Not started (blocked by Phase 4)**
-- [ ] Resolve the polymorphic `FulfillmentRecord` design smell flagged in ARCHITECTURE.md §6.1.3 **before** building this phase — decide: keep polymorphic with constraints, or split into `PrescriptionFulfillment` / `LabOrderFulfillment`. Record the decision as an ADR in `docs/adr/`.
-- [ ] Facility account creation (admin-invited only per PRD OQ-2 — no self-serve facility signup in v1).
-- [ ] `FacilityCapability` matching: patient sees only qualified facilities for their specific order (PRD FR-13).
-- [ ] Facility fulfillment UI: view assigned orders, mark in-progress/fulfilled/rejected.
-- [ ] Lab result attachment (object storage integration — ARCHITECTURE.md §2 File/result storage row).
-- [ ] Order `status` transitions to `fulfilled` **only** via the facility-confirmed path (ARCHITECTURE.md §5.3 step 5 — patient/doctor cannot self-mark).
-- [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1.
+**Status: Not started (blocked by Phase 4). Scoped into issues #13–#16.**
+- [ ] Resolve the polymorphic `FulfillmentRecord` design smell flagged in ARCHITECTURE.md §6.1.3 **before** building this phase — decide: keep polymorphic with constraints, or split into `PrescriptionFulfillment` / `LabOrderFulfillment`. Record the decision as an ADR in `docs/adr/`. Tracked as [issue #13](https://github.com/DocForum/docforum-core/issues/13) (High, 200 pts) — the prerequisite for the rest of this phase.
+- [ ] Facility account creation (admin-invited only per PRD OQ-2 — no self-serve facility signup in v1) + `FacilityCapability` matching (patient sees only qualified facilities for their specific order, PRD FR-13). Tracked as [issue #14](https://github.com/DocForum/docforum-core/issues/14) (Medium, 150 pts) — depends on #13.
+- [ ] Facility fulfillment UI: view assigned orders, mark in-progress/fulfilled/rejected, enforcing that `status` transitions to `fulfilled` **only** via the facility-confirmed path (ARCHITECTURE.md §5.3 step 5 — patient/doctor cannot self-mark). Tracked as [issue #15](https://github.com/DocForum/docforum-core/issues/15) (Medium, 150 pts) — depends on #13/#14.
+- [ ] Lab result attachment (object storage integration — ARCHITECTURE.md §2 File/result storage row). Tracked as [issue #16](https://github.com/DocForum/docforum-core/issues/16) (Medium, 150 pts) — depends on #13.
+- [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1 — addressed by issue #14's admin-only gating; document any remaining gap in that issue's PR.
 
 ## Phase 5.5 — Payments (consumer side, depends on docforum-escrow existing)
 **Status: Not started (blocked by Phase 5, and by `docforum-escrow` publishing an initial `@docforum/escrow-sdk` release)**
@@ -84,35 +81,45 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 - [ ] Refund path for rejected/expired orders.
 - [ ] Doc reconciliation: this phase directly addresses PRD §8.1.6 (facility fulfillment integrity) — mark resolved if it lands.
 
+## Phase 5.5 — Payments (consumer side, depends on docforum-escrow existing)
+**Status: Not started (blocked by Phase 5, and by `docforum-escrow` publishing an initial `@docforum/escrow-sdk` release — tracked as `docforum-escrow` issues #4/#5, both still open). Deliberately left unscoped into issues here** — opening issues for work that can't start until a sibling repo ships its SDK would stall a contributor through no fault of their own (see `WAVE_ISSUE_TEMPLATE.md` "Notes to self"). Revisit once `docforum-escrow` #4/#5 close.
+- [ ] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — see schema.prisma comment, no PHI).
+- [ ] Add `@docforum/escrow-sdk` as a dependency; wire `payments/services` to call it.
+- [ ] On order issuance, create a `PaymentIntent` (`created` status).
+- [ ] On patient funding action, call SDK to move funds into escrow (`escrowed` status), store `stellarTxHash`.
+- [ ] On `FulfillmentRecord` reaching `fulfilled`, trigger SDK release call (`released` status) — this is the actual payoff of ADR 0002, don't let it drift into a manual/admin-triggered release.
+- [ ] Refund path for rejected/expired orders.
+- [ ] Doc reconciliation: this phase directly addresses PRD §8.1.6 (facility fulfillment integrity) — mark resolved if it lands.
+
 ## Phase 6 — Notifications
-**Status: Not started (blocked by Phases 3 & 4 at minimum)**
-- [ ] `Notification` model + dispatch interface (provider-agnostic, per ARCHITECTURE.md §2).
-- [ ] Trigger points per PRD FR-15/FR-16 (booking confirmed, referral created/accepted/declined, order ready, results available, new booking, lab results returned).
-- [ ] Pick and integrate a real provider (email/SMS) behind the interface — provider choice is currently undecided (ARCHITECTURE.md §8).
+**Status: Not started. Provider decision scoped into issue #17; trigger-point build-out blocked by Phases 3 & 4 and deliberately left unscoped until those land.**
+- [ ] `Notification` model + dispatch interface (provider-agnostic, per ARCHITECTURE.md §2) — part of the trigger-point work, still blocked.
+- [ ] Trigger points per PRD FR-15/FR-16 (booking confirmed, referral created/accepted/declined, order ready, results available, new booking, lab results returned) — still blocked by Phases 3/4.
+- [ ] Pick and integrate a real provider (email/SMS) behind the interface — provider choice is currently undecided (ARCHITECTURE.md §8). Tracked as [issue #17](https://github.com/DocForum/docforum-core/issues/17) (Trivial, 100 pts) — a decision task, unblocked now.
 
 ## Phase 7 — Frontend: core flows end-to-end
-**Status: Not started (parallelizable with Phases 3–6 once Phase 1/2 APIs exist)**
-- [ ] Patient: search doctors by specialty/availability, book, submit intake.
-- [ ] Patient: view referral status, accept/decline.
-- [ ] Patient: view orders, select fulfilling facility.
-- [ ] Doctor: manage availability, view bookings, run consultation, issue referral/orders.
-- [ ] Facility: view assigned fulfillment queue, update status, attach results.
-- [ ] Shared: auth screens (signup/login per role).
+**Status: Superseded.** This phase predates the 3-repo org split (see the org note at the top of this file) — all frontend work described below is actually tracked in `docforum-web`'s own `ROADMAP.md` (Phases W2–W5, issues opened there). Left in place as a historical record rather than deleted, but no issues are or will be opened against it here.
+- [ ] ~~Patient: search doctors by specialty/availability, book, submit intake.~~ → `docforum-web` Phase W2.
+- [ ] ~~Patient: view referral status, accept/decline.~~ → `docforum-web` Phase W2.
+- [ ] ~~Patient: view orders, select fulfilling facility.~~ → `docforum-web` Phase W2.
+- [ ] ~~Doctor: manage availability, view bookings, run consultation, issue referral/orders.~~ → `docforum-web` Phase W3.
+- [ ] ~~Facility: view assigned fulfillment queue, update status, attach results.~~ → `docforum-web` Phase W4.
+- [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: Not started**
-- [ ] `AuditEvent` table + write path for referral/prescription/lab-order state transitions (ARCHITECTURE.md §6.2.4 — flagged as needed before real patient data).
-- [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4).
-- [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1).
-- [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review.
-- [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence).
+**Status: Not started. Three of five items scoped into issues #18–#20 (independent of Phases 3–7); the other two remain blocked.**
+- [ ] `AuditEvent` table + write path for referral/prescription/lab-order state transitions (ARCHITECTURE.md §6.2.4 — flagged as needed before real patient data). Still blocked — needs the Phase 3/4 models (referral, prescription, lab order) to exist first. Not yet scoped into an issue.
+- [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
+- [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
+- [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. Not yet scoped into an issue.
+- [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence). Tracked as [issue #20](https://github.com/DocForum/docforum-core/issues/20) (Trivial, 100 pts) — a decision task, unblocked now.
 
 ## Phase 9 — Deploy & CI
-**Status: Not started for real production. A Render free-tier preview exists — see note.**
-- [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Still not resolved.** A Render free-tier web service + Postgres now runs `backend/`, so `docforum-web`'s GitHub Pages preview has a live API to call — see `docs/adr/0003-render-preview-deployment.md`. This is explicitly a preview, not the production decision: no secrets manager, no backups, no staging/prod split, free-tier Postgres expires 2026-10-14 (30 days, 14-day grace period) unless recreated/upgraded before then.
-- [ ] Real CI pipeline (replace `.github/workflows/ci.yml` placeholder) — lint, test, build for backend + frontend. (Render's own build step runs `npm install && prisma generate && npm run build` on every push, but that's deploy, not CI/PR-gating — this item is still open.)
-- [ ] Staging environment.
-- [ ] Production environment + secrets management.
+**Status: Not started for real production. A Render free-tier preview exists — see note. Remaining items scoped into issues #21–#22.**
+- [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Still not resolved.** A Render free-tier web service + Postgres now runs `backend/`, so `docforum-web`'s GitHub Pages preview has a live API to call — see `docs/adr/0003-render-preview-deployment.md`. This is explicitly a preview, not the production decision: no secrets manager, no backups, no staging/prod split, free-tier Postgres expires 2026-10-14 (30 days, 14-day grace period) unless recreated/upgraded before then. Tracked as [issue #22](https://github.com/DocForum/docforum-core/issues/22) (Medium, 150 pts).
+- [ ] Real CI pipeline (replace `.github/workflows/ci.yml` placeholder) — lint, test, build for backend + frontend. (Render's own build step runs `npm install && prisma generate && npm run build` on every push, but that's deploy, not CI/PR-gating — this item is still open.) Tracked as [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
+- [ ] Staging environment. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
+- [ ] Production environment + secrets management. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [x] Docs site deployed — `docs/site/` (VitePress) via `.github/workflows/deploy-docs.yml`, live at https://docforum.github.io/docforum-core/. Unrelated to the production-deploy decision above; this is a static site with no backend of its own.
 
 ## Explicitly deferred (not on this roadmap, tracked so they aren't forgotten)
@@ -187,3 +194,29 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
   follow_up_needed` outcome model that Phase 3's referral creation will
   depend on. Phase 2 checklist above updated to link each item to its
   issue.
+- 2026-09-14 — Scoped the rest of the roadmap that's actually actionable
+  right now into 18 more real GitHub issues (#5–#22): Phase 3 Referrals
+  (#5–#8, including a dedicated ADR issue for the unresolved
+  target-doctor routing rule, ARCHITECTURE.md §6.1.2), Phase 4 Orders
+  (#9–#12), Phase 5 Facilities & fulfillment (#13–#16, led by an ADR
+  issue resolving the polymorphic `FulfillmentRecord` smell before the
+  rest of the phase builds on it), Phase 6's notification-provider
+  decision (#17 — the only part of Phase 6 not blocked by Phases 3/4),
+  three of Phase 8's five hardening items that don't actually depend on
+  unbuilt phases (#18 JWT revocation, #19 held-slot TTL, #20 v1 scope
+  decision doc — `AuditEvent` and the privacy audit stay unscoped, they
+  need Phase 3/4/5 models to audit), and Phase 9's CI pipeline + a
+  dedicated production-deployment ADR (#21–#22, distinct from ADR 0003
+  which only covers the current preview).
+
+  Deliberately **not** scoped into issues: Phase 5.5 Payments (blocked on
+  `docforum-escrow` publishing its SDK — issues #4/#5 there are still
+  open; opening issues here now would hand a contributor work that
+  can't start) and Phase 7 Frontend, which is marked **superseded** in
+  place — it predates the 3-repo split and duplicates what's actually
+  tracked in `docforum-web`'s own roadmap (Phases W2–W5); left as a
+  historical record rather than deleted, but no issues will be opened
+  against it here. Every dependency between these issues (e.g., #7/#8
+  depend on #5; #10/#11/#12 depend on #9; #14/#15/#16 depend on #13) is
+  stated explicitly in each issue body, same convention as #2's
+  dependency on #1.
