@@ -1,4 +1,4 @@
-# PRD.md — DripsWave
+# PRD.md — DocForum
 
 Status: Draft v0.1
 Owner: (unassigned)
@@ -14,7 +14,7 @@ Patients in hospital settings waste significant time physically waiting: to see 
 
 ## 2. Product summary
 
-DripsWave is a web/app platform where a patient can:
+DocForum is a web/app platform where a patient can:
 
 1. Create an account and log in.
 2. Search for doctors by availability and (eventually) specialty/symptom.

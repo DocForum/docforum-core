@@ -1,4 +1,4 @@
-# ARCHITECTURE.md — DripsWave
+# ARCHITECTURE.md — DocForum
 
 Status: Draft v0.1
 Last updated: 2026-09-09

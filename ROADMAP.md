@@ -1,4 +1,4 @@
-# ROADMAP.md — DripsWave
+# ROADMAP.md — DocForum
 
 Last updated: 2026-09-09
 Status: Phase 0 complete (scaffolding). Phase 1 not started.
@@ -163,3 +163,11 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
   `docforum-web` or `docforum-escrow` doesn't trigger a rebuild here yet;
   noted in both `deploy-docs.yml` and `docs/site/README.md`, not silently
   accepted.
+- 2026-09-14 — Removed all remaining "DripsWave" naming (the product's
+  original codename before the org became `DocForum`): `PRD.md`/
+  `ARCHITECTURE.md`/`ROADMAP.md` titles and PRD.md's opening line, plus
+  ADR 0002's context paragraph. `docforum-web` and `docforum-escrow` were
+  already clean (checked). Also removed two stale, unreferenced,
+  never-committed leftovers from the top-level workspace (not this repo)
+  that still carried the old name: a superseded draft `ROADMAP.md` and an
+  early superseded ADR draft — moved aside rather than hard-deleted.

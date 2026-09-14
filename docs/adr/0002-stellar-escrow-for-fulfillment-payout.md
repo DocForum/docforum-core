@@ -4,7 +4,7 @@ Status: Accepted
 Date: 2026-09-09
 
 ## Context
-DripsWave/DocForum is being split across a 3-repo GitHub organization
+DocForum is being split across a 3-repo GitHub organization
 (`docforum-core`, `docforum-web`, `docforum-escrow`) partly to make
 `docforum-escrow` a credible, independently-evaluable Stellar Wave Program
 applicant (see PRD-adjacent conversation history / org rationale — a
