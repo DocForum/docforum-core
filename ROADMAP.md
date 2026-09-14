@@ -38,13 +38,12 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 - [x] Doc reconciliation: PRD §8.1.1 and ARCHITECTURE §6.1.1 marked resolved in place.
 
 ## Phase 2 — Intake, appointments, consultations
-**Status: Not started (blocked by Phase 1)**
-- [ ] `IntakeForm` model + structured symptom entry (not free-text-only, per PRD FR-5).
-- [ ] Booking flow requires intake before confirmation.
-- [ ] `Appointment` lifecycle (`scheduled → completed/cancelled/no_show`).
-- [ ] `Consultation` record + outcome (`resolved | referred | follow_up_needed`).
-- [ ] Doctor-facing view: today's appointments + intake summary.
-- [ ] Patient-facing view: my appointments, my intake history.
+**Status: Not started (blocked by Phase 1). Scoped into issues #1–#4.**
+- [ ] `IntakeForm` model + structured symptom entry (not free-text-only, per PRD FR-5). Tracked as [issue #1](https://github.com/DocForum/docforum-core/issues/1) (Medium, 150 pts).
+- [ ] Booking flow requires intake before confirmation. Tracked as [issue #2](https://github.com/DocForum/docforum-core/issues/2) (Medium, 150 pts) — depends on #1.
+- [ ] `Appointment` lifecycle (`scheduled → completed/cancelled/no_show`) + doctor's today view. Tracked as [issue #3](https://github.com/DocForum/docforum-core/issues/3) (Medium, 150 pts).
+- [ ] `Consultation` record + outcome (`resolved | referred | follow_up_needed`). Tracked as [issue #4](https://github.com/DocForum/docforum-core/issues/4) (High, 200 pts).
+- [ ] Patient-facing view: my intake history. Not yet split into its own issue — small enough to fold into whichever of the above lands last, or split out later if it grows.
 
 ## Phase 3 — Referrals
 **Status: Not started (blocked by Phase 2)**
@@ -178,3 +177,13 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
   directly, not from memory) — complexity/points tagging, honest sizing,
   and "why it matters" context apply to bug reports the same way they do
   to task issues, not just repro mechanics.
+- 2026-09-14 — Scoped Phase 2 into four real GitHub issues (#1–#4),
+  following the same shape already used on `docforum-escrow`'s issues:
+  why it matters, what to do, files likely involved, edge cases, DoD, how
+  it'll be reviewed. #2 explicitly depends on #1 (intake before booking
+  confirmation); #3 and #4 are independent of each other and of #1/#2.
+  Complexity: #1/#2/#3 Medium (150 pts), #4 (`Consultation` record) High
+  (200 pts) — it's the one that resolves the `resolved | referred |
+  follow_up_needed` outcome model that Phase 3's referral creation will
+  depend on. Phase 2 checklist above updated to link each item to its
+  issue.
