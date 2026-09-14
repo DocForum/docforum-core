@@ -171,3 +171,10 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
   never-committed leftovers from the top-level workspace (not this repo)
   that still carried the old name: a superseded draft `ROADMAP.md` and an
   early superseded ADR draft — moved aside rather than hard-deleted.
+- 2026-09-14 — Added `.github/ISSUE_TEMPLATE/bug_report.md`, deployed
+  identically across all three repos (same convention as the existing
+  `good-first-issue.md`). Built from a user-supplied bug-report structure
+  plus drips.network's "Creating Meaningful Issues" guide (fetched
+  directly, not from memory) — complexity/points tagging, honest sizing,
+  and "why it matters" context apply to bug reports the same way they do
+  to task issues, not just repro mechanics.
