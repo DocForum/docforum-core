@@ -1,8 +1,11 @@
-// schema.prisma — DripsWave canonical data model
+// schema.prisma — DocForum canonical data model
 // SOURCE OF TRUTH: if this file and ARCHITECTURE.md §4 disagree, fix ARCHITECTURE.md
 // to match this file (or vice versa) in the same PR — see AGENTS.md.
 //
-// STATUS: draft sketch, not yet generated/migrated. See ROADMAP.md Phase 1.
+// STATUS: Phase 1 models (User/PatientProfile/DoctorProfile/FacilityProfile/
+// Specialty/DoctorSpecialty/FacilityCapability/AvailabilitySlot/Appointment)
+// are fleshed out and migrated. Everything below the Phase 1 marker is still
+// the Phase 0 structural placeholder — see ROADMAP.md.
 
 generator client {
   provider = "prisma-client-js"
@@ -29,6 +32,11 @@ enum VerificationStatus {
 enum FacilityType {
   lab
   pharmacy
+}
+
+enum CapabilityType {
+  lab_test
+  medication_dispense
 }
 
 enum SlotStatus {
@@ -82,80 +90,155 @@ enum Urgency {
   urgent
 }
 
-// --- TODO Phase 1: flesh out every model below with real fields, relations,
-// and indices per ARCHITECTURE.md §4. This is a structural placeholder so
-// the schema shape is visible before individual models are implemented.
+// =========================================================================
+// Phase 1 models — identity, DB, safe booking foundation. See ROADMAP.md.
+// =========================================================================
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  role      Role
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(uuid())
+  email        String   @unique
+  phone        String?
+  passwordHash String
+  role         Role
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  // TODO: relations to PatientProfile / DoctorProfile / FacilityProfile
+  patientProfile  PatientProfile?
+  doctorProfile   DoctorProfile?
+  facilityProfile FacilityProfile?
+
+  @@index([role])
 }
 
 model PatientProfile {
-  id     String @id @default(uuid())
-  userId String @unique
-  // TODO: fullName, dateOfBirth, guardianUserId (nullable) — see PRD edge case: minors
+  id          String    @id @default(uuid())
+  userId      String    @unique
+  fullName    String
+  dateOfBirth DateTime?
+  // Nullable, no FK relation on purpose — the minor/dependent consent and
+  // account-ownership model is an explicit open PRD question (§8.2.5), not
+  // resolved here. Don't build on top of this field assuming it means
+  // anything enforced yet.
+  guardianUserId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
 }
 
 model DoctorProfile {
   id                 String             @id @default(uuid())
   userId             String             @unique
+  fullName           String
   verificationStatus VerificationStatus @default(pending)
-  // TODO: fullName, specialties relation
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialties       DoctorSpecialty[]
+  availabilitySlots AvailabilitySlot[]
+  appointments      Appointment[]
+
+  @@index([verificationStatus])
 }
 
 model Specialty {
   id   String @id @default(uuid())
   name String @unique
   slug String @unique
+
+  doctors DoctorSpecialty[]
 }
 
 model DoctorSpecialty {
-  id String @id @default(uuid())
-  // TODO: doctorProfileId, specialtyId
+  id              String @id @default(uuid())
+  doctorProfileId String
+  specialtyId     String
+
+  doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  specialty     Specialty     @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorProfileId, specialtyId])
 }
 
 model FacilityProfile {
-  id   String       @id @default(uuid())
-  userId String     @unique
-  type FacilityType
-  // TODO: name, capabilities relation
+  id        String       @id @default(uuid())
+  userId    String       @unique
+  name      String
+  type      FacilityType
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  capabilities FacilityCapability[]
 }
 
 model FacilityCapability {
-  id String @id @default(uuid())
-  // TODO: facilityProfileId, capabilityType, detail
+  id                String         @id @default(uuid())
+  facilityProfileId String
+  capabilityType    CapabilityType
+  // e.g. a lab test category, or a medication class — free text on purpose,
+  // no controlled vocabulary decided yet (out of Phase 1 scope).
+  detail String?
+
+  facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([facilityProfileId, capabilityType, detail])
 }
 
 model AvailabilitySlot {
-  id        String     @id @default(uuid())
-  status    SlotStatus @default(open)
-  startTime DateTime
-  endTime   DateTime
-  // TODO: doctorProfileId
-  // TODO: @@unique / exclusion constraint on (doctorProfileId, startTime, endTime)
-  // — this constraint is THE mechanism preventing double-booking. Do not
-  // implement booking logic without it. See ARCHITECTURE.md §5.1.
+  id              String     @id @default(uuid())
+  doctorProfileId String
+  status          SlotStatus @default(open)
+  startTime       DateTime
+  endTime         DateTime
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  appointment   Appointment?
+
+  // Prevents two slot ROWS for the same doctor/time range (duplicate
+  // generation). This is NOT what prevents double-BOOKING of one slot by
+  // two patients — that's the conditional `UPDATE ... WHERE status =
+  // 'open'` in availability/services, inside a transaction. See
+  // ARCHITECTURE.md §5.1 and the integration test in
+  // backend/tests/integration/booking.test.ts.
+  @@unique([doctorProfileId, startTime, endTime])
+  @@index([doctorProfileId, status])
 }
+
+model Appointment {
+  id                 String            @id @default(uuid())
+  patientProfileId   String
+  doctorProfileId    String
+  availabilitySlotId String            @unique
+  status             AppointmentStatus @default(scheduled)
+  origin             AppointmentOrigin @default(direct_booking)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  patientProfile   PatientProfile   @relation(fields: [patientProfileId], references: [id])
+  doctorProfile    DoctorProfile    @relation(fields: [doctorProfileId], references: [id])
+  availabilitySlot AvailabilitySlot @relation(fields: [availabilitySlotId], references: [id])
+
+  // TODO Phase 2: intakeId (FK -> IntakeForm). PRD FR-5 requires intake
+  // before confirmation, not enforced yet — booking works without it in
+  // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
+  // existing. Flagged, not silently dropped.
+  // TODO Phase 3: referralId (nullable FK -> Referral).
+}
+
+// =========================================================================
+// Below this line: Phase 0 structural placeholders, not yet implemented.
+// See ROADMAP.md for phase order.
+// =========================================================================
 
 model IntakeForm {
   id        String   @id @default(uuid())
   createdAt DateTime @default(now())
   // TODO: patientProfileId, symptoms (Json), freeTextNotes
-}
-
-model Appointment {
-  id        String             @id @default(uuid())
-  status    AppointmentStatus  @default(scheduled)
-  origin    AppointmentOrigin
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
-  // TODO: patientProfileId, doctorProfileId, availabilitySlotId (unique), intakeId, referralId (nullable)
 }
 
 model Consultation {

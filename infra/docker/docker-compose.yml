@@ -1,0 +1,25 @@
+# Local dev DB only — not a deployment target. See ARCHITECTURE.md §8
+# (deployment target still undecided).
+#
+# Usage: docker compose -f infra/docker/docker-compose.yml up -d
+# Then: cd backend && cp .env.example .env && npx prisma migrate dev
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: docforum
+      POSTGRES_PASSWORD: docforum
+      POSTGRES_DB: docforum_dev
+    ports:
+      - '5432:5432'
+    volumes:
+      - docforum_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U docforum -d docforum_dev']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  docforum_postgres_data:

@@ -1,3 +1,8 @@
-// appointments routes — placeholder. See PRD.md / ARCHITECTURE.md §3 for this module's scope.
-// TODO(Phase: see ROADMAP.md): define routes for appointments.
-export {};
+import { Router } from 'express';
+import { authenticate, requireRole } from '../../../middleware/auth';
+import * as appointmentsController from '../controllers';
+
+export const appointmentsRouter = Router();
+
+appointmentsRouter.post('/', authenticate, requireRole('patient'), appointmentsController.book);
+appointmentsRouter.get('/mine', authenticate, requireRole('patient'), appointmentsController.listMine);

@@ -1,7 +1,7 @@
 # docforum-core
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
-![Status](https://img.shields.io/badge/status-pre--implementation-yellow.svg)
+![Status](https://img.shields.io/badge/status-Phase%201-yellow.svg)
 ![Stack](https://img.shields.io/badge/stack-Node.js%20%2B%20TypeScript-339933.svg)
 
 **The backend of DocForum** — a platform that collapses a multi-visit,
@@ -140,31 +140,44 @@ Read in this order — `ARCHITECTURE_ESSENTIALS.md` exists specifically so you d
 
 ## Getting started
 
-> **Honest status:** this repo is scaffolded, not runnable yet. The steps
-> below reflect what exists today; `npm run dev`/`build`/`test` are
-> placeholders until Phase 1 lands (see [Project status](#project-status)).
+Needs a Postgres instance — either `infra/docker/docker-compose.yml`
+(**written but not exercised in this environment** — no Docker available
+where this was built; developed and tested against a local Postgres via
+the `embedded-postgres` devDependency instead, see below) or your own.
 
 ```bash
 git clone https://github.com/DocForum/docforum-core.git
 cd docforum-core/backend
 npm install
 cp .env.example .env   # fill in DATABASE_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET
+npx prisma migrate deploy   # applies backend/prisma/migrations/
+npm run dev                 # → http://localhost:4000, GET /health to check
 ```
 
-What's real today:
-- `backend/prisma/schema.prisma` — a structurally-complete but field-sparse schema (`npx prisma generate` works against it).
-- Module folder structure for all 14 backend modules.
+| Command | What it does |
+|---|---|
+| `npm run dev` | `tsx watch` dev server |
+| `npm run build` | Typecheck + compile to `dist/` |
+| `npm start` | Run the compiled `dist/server.js` |
+| `npm test` | Unit tests only (no DB needed) |
+| `npm run test:integration` | The booking-concurrency test — **spins up its own throwaway Postgres** (via `embedded-postgres`, a prebuilt binary) on port 5433, so this needs no pre-existing DB either |
+| `npm run test:all` | Everything |
 
-What's not wired up yet (tracked in `ROADMAP.md` Phase 1):
-- No dev server, no database migrations run, no tests to execute.
-- `infra/docker/` has no `docker-compose.yml` yet.
+All of the above are real and verified: signup → doctor verification →
+slot generation → booking → the concurrency guarantee, all exercised
+end-to-end (manually via curl and automatically in
+`backend/tests/integration/booking.test.mts`). API reference:
+[`docs/api/README.md`](docs/api/README.md).
 
 ## Project status
 
-**Phase 0 (foundations & scaffolding): done.** Phase 1 (identity, DB, and
-the safe-booking foundation) is next and not yet started — it's the
-highest-priority phase because everything downstream depends on real users
-existing and the booking-concurrency guarantee being real, not aspirational.
+**Phase 0 (foundations & scaffolding): done. Phase 1 (identity, DB, and
+the safe-booking foundation): built and tested** — auth, doctor
+verification, availability/slot generation, and the booking-concurrency
+guarantee are real, not aspirational (see Getting started above). One
+item is unverified: the Docker Compose file for local dev exists but
+wasn't exercisable in this environment. Phase 2 (intake, appointments
+lifecycle beyond booking, consultations) is next.
 
 Full phase breakdown: [`ROADMAP.md`](ROADMAP.md).
 

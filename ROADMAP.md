@@ -25,17 +25,17 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 - [x] This ROADMAP.md
 
 ## Phase 1 — Identity, DB, and safe booking foundation
-**Status: Not started**
+**Status: Built and tested. One item (Docker Compose) written but not verified running — see note.**
 **Why first:** everything else depends on real users existing and on the booking concurrency guarantee (ARCHITECTURE.md §5.1) being real, not aspirational.
 
-- [ ] Flesh out `User`, `PatientProfile`, `DoctorProfile`, `FacilityProfile`, `Specialty`, `DoctorSpecialty`, `FacilityCapability` in `schema.prisma` with real fields/relations.
-- [ ] Local dev DB via Docker Compose (`infra/docker`).
-- [ ] Auth module: signup/login, JWT access+refresh, role middleware.
-- [ ] Doctor verification status workflow (admin-gated, manual in v1 per PRD §6.1 FR-3).
-- [ ] `AvailabilitySlot` model finalized **with the DB-level constraint/transaction strategy** that prevents double-booking (ARCHITECTURE.md §5.1 / §6.1.1 — this is the single highest-priority correctness item in the whole roadmap).
-- [ ] Basic slot generation for a doctor (fixed-length, no recurrence engine — ARCHITECTURE.md §6.3.6).
-- [ ] Integration test: two concurrent booking attempts on the same slot — exactly one must succeed.
-- [ ] Doc reconciliation: mark resolved hard-questions in PRD §8.1.1 and ARCHITECTURE §6.1.1 if this phase actually closes them.
+- [x] Flesh out `User`, `PatientProfile`, `DoctorProfile`, `FacilityProfile`, `Specialty`, `DoctorSpecialty`, `FacilityCapability` in `schema.prisma` with real fields/relations. Migrated: `backend/prisma/migrations/20260914110638_init/`.
+- [ ] Local dev DB via Docker Compose (`infra/docker`) — **file written, not exercised.** No Docker in the environment this was built in, so the backend was developed and tested against a locally-installed Postgres (via the `embedded-postgres` devDependency — a prebuilt binary, not compiled) instead. The compose file matches `backend/.env.example`'s credentials but hasn't itself been run. See `infra/docker/README.md`.
+- [x] Auth module: signup/login, JWT access+refresh, role middleware. `POST /auth/signup` rejects `role: 'facility'`/`'admin'` server-side (PRD OQ-2), not just in docforum-web's UI. Refresh token travels as an httpOnly cookie — see `docs/api/README.md` for the local-dev-only cookie caveat (cross-origin `sameSite`/`secure` not verified end-to-end).
+- [x] Doctor verification status workflow (admin-gated, manual in v1 per PRD §6.1 FR-3). `PATCH /doctors/:id/verification`, admin-only.
+- [x] `AvailabilitySlot` model finalized **with the DB-level constraint/transaction strategy** that prevents double-booking (ARCHITECTURE.md §5.1 / §6.1.1 — this is the single highest-priority correctness item in the whole roadmap). **Resolved, not just implemented** — see the integration test below.
+- [x] Basic slot generation for a doctor (fixed-length, no recurrence engine — ARCHITECTURE.md §6.3.6). `POST /availability/doctors/:id/slots/generate`, idempotent re-runs.
+- [x] Integration test: two concurrent booking attempts on the same slot — exactly one must succeed. `backend/tests/integration/booking.test.mts` — 8 genuinely concurrent requests via `Promise.all`, self-contained (spins up its own throwaway Postgres, no pre-existing DB needed), passing. Also manually verified end-to-end via a full curl walkthrough (signup → generate slots → book → second booking attempt correctly gets `409`).
+- [x] Doc reconciliation: PRD §8.1.1 and ARCHITECTURE §6.1.1 marked resolved in place.
 
 ## Phase 2 — Intake, appointments, consultations
 **Status: Not started (blocked by Phase 1)**
@@ -128,3 +128,12 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 ## Changelog (append, don't rewrite history)
 - 2026-09-09 — Initial roadmap created alongside Phase 0 scaffolding.
 - 2026-09-14 — Resolved the open risk in `docs/adr/0002-stellar-escrow-for-fulfillment-payout.md`: confirmed against the real Drips Wave docs that this repo and `docforum-web` are not ecosystem-relevant to a Stellar-only Wave and will not be submitted. Only `docforum-escrow` will apply, once it has enough real GitHub activity — see its Phase E1–E4 work.
+- 2026-09-14 — Phase 1 built: Express 5 API, Prisma schema for the Phase 1
+  models + migration, JWT auth (signup/login/refresh/logout, role
+  middleware), admin-gated doctor verification, fixed-length slot
+  generation, and the booking-concurrency guarantee — implemented and
+  proven with a real, self-contained integration test (real Postgres, 8
+  concurrent requests, exactly 1 succeeds). PRD §8.1.1 and ARCHITECTURE
+  §6.1.1 marked resolved. Not done: Docker Compose file exists but wasn't
+  exercised (no Docker in this environment) — see the note under Phase 1
+  above and `infra/docker/README.md`.

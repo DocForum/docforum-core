@@ -1,3 +1,9 @@
-// auth routes — placeholder. See PRD.md / ARCHITECTURE.md §3 for this module's scope.
-// TODO(Phase: see ROADMAP.md): define routes for auth.
-export {};
+import { Router } from 'express';
+import * as authController from '../controllers';
+
+export const authRouter = Router();
+
+authRouter.post('/signup', authController.signup);
+authRouter.post('/login', authController.login);
+authRouter.post('/refresh', authController.refresh);
+authRouter.post('/logout', authController.logout);

@@ -99,7 +99,7 @@ The core value proposition: **collapse a multi-visit, multi-queue hospital journ
 ## 8. Hard questions (must stay answered or explicitly deferred — do not silently drop)
 
 ### 8.1 What do we think would break?
-1. **Double-booking under concurrency** — two patients booking the same slot simultaneously without a locking/transaction strategy at the DB level. This is the single most likely v1 bug class.
+1. **Double-booking under concurrency** — two patients booking the same slot simultaneously without a locking/transaction strategy at the DB level. This is the single most likely v1 bug class. **Resolved 2026-09-14:** `availability/repositories.ts`'s `claimOpenSlot` (a conditional `UPDATE ... WHERE status = 'open'`) makes this a DB-level guarantee, not an app-logic one. Proven by `backend/tests/integration/booking.test.mts` — 8 genuinely concurrent booking requests on the same slot, exactly 1 succeeds, verified against a real Postgres instance every run.
 2. **Referral loops** — Doctor A refers to specialty B, specialist in B refers back to A or sideways to C, with no cycle detection or max-hop limit → patient stuck in a referral loop with no human-visible "this isn't working" signal.
 3. **Orphaned orders** — a prescription/lab order issued, but the patient never selects a fulfilling facility, and there is no reminder/expiry logic → orders silently rot.
 4. **Referral context loss** — if referral doesn't strictly carry forward intake + notes (FR-7/FR-8 not enforced at the data layer), the whole value proposition (no re-explaining) quietly breaks and nobody notices until a patient complains.

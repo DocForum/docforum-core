@@ -1,3 +1,13 @@
-// doctors routes — placeholder. See PRD.md / ARCHITECTURE.md §3 for this module's scope.
-// TODO(Phase: see ROADMAP.md): define routes for doctors.
-export {};
+import { Router } from 'express';
+import { authenticate, requireRole } from '../../../middleware/auth';
+import * as doctorsController from '../controllers';
+
+export const doctorsRouter = Router();
+
+doctorsRouter.get('/me', authenticate, requireRole('doctor'), doctorsController.getMe);
+doctorsRouter.patch(
+  '/:doctorProfileId/verification',
+  authenticate,
+  requireRole('admin'),
+  doctorsController.setVerification,
+);

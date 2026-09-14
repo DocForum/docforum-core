@@ -5,3 +5,7 @@ build/
 .env.local
 *.log
 .DS_Store
+# Local Postgres data dirs (embedded-postgres, used for dev/test — see
+# infra/docker/README.md and backend/tests/integration/)
+.devdb/
+*.tsbuildinfo

@@ -22,7 +22,9 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | Layer | Choice | Why |
 |---|---|---|
 | Backend language/runtime | Node.js (TypeScript) | Single language across stack, large ecosystem, easy hiring. |
-| Backend framework | Express (or Fastify) | Minimal, unopinionated, matches "modular monolith" — avoid a heavy framework that fights the module boundaries. |
+| Backend framework | Express 5 — **decided 2026-09-14**, resolving the "(or Fastify)" either/or | Minimal, unopinionated, matches "modular monolith" — avoid a heavy framework that fights the module boundaries. Express 5's native async-handler error forwarding (rejected promises reach the error middleware without a manual wrapper) was a real factor, not just familiarity. |
+| Request validation | Zod | Not originally listed here — added alongside Phase 1's real request bodies. Schemas live per-module (`modules/*/validation.ts`), thrown `ZodError`s are caught centrally by `middleware/error-handler.ts`. |
+| Password hashing | bcryptjs | Pure-JS, not a native bcrypt binding — one less native build dependency for a repo with no other native deps yet. |
 | Database | PostgreSQL | Relational integrity is critical (bookings, orders, referrals all have strict FK/state constraints); JSONB available for the flexible parts (intake payload). |
 | ORM / schema | Prisma | Schema-as-code, migrations, keeps `backend/prisma/schema.prisma` as the single source of truth for data models (mirrors §4 below). |
 | Auth | JWT access + refresh tokens, role claims (`patient` \| `doctor` \| `facility` \| `admin`) | Simple, stateless for API scaling; refresh rotation for security. |
@@ -55,6 +57,8 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 ## 4. Data models
 
 Canonical source of truth: `backend/prisma/schema.prisma`. This section is the human-readable mirror — if they drift, the schema file wins and this doc should be corrected in the same PR.
+
+**Phase 1 models are now real** (User, PatientProfile, DoctorProfile, Specialty, DoctorSpecialty, FacilityProfile, FacilityCapability, AvailabilitySlot, Appointment) — migrated via `backend/prisma/migrations/20260914110638_init/`. Everything else below (§4.3 onward) is still the Phase 0 structural placeholder. Two intentional deviations from the sketches below, both flagged in the schema file itself: `Appointment.intakeId` is deferred (nullable-by-omission, not yet a column) since `IntakeForm` doesn't exist until Phase 2; `PatientProfile.guardianUserId` is a plain string with no FK relation, since the minor/dependent consent model (§8.2.5 in PRD.md) is still an open question, not resolved here.
 
 ### 4.1 User / Role model
 ```
@@ -186,7 +190,7 @@ Notification
 ## 6. Hard questions (architecture-level — see PRD §8 for product-level)
 
 ### 6.1 What do we think would break?
-1. Naive slot booking without the DB-level conditional update in §5.1 — the most likely first bug filed against this repo.
+1. Naive slot booking without the DB-level conditional update in §5.1 — the most likely first bug filed against this repo. **Resolved 2026-09-14:** implemented exactly as designed in §5.1 — see `backend/src/modules/availability/repositories/index.ts` (`claimOpenSlot`) and `backend/src/modules/appointments/services/index.ts` (`bookSlot`, the transaction wrapping it). Integration-tested with real concurrency in `backend/tests/integration/booking.test.mts`.
 2. `Referral.target_doctor_id` left nullable with no fallback assignment logic — referrals to "a specialty" with no specific doctor need a real routing rule (round robin? load-based?) or they'll pile up unassigned. **Not designed yet — flag as open architecture gap.**
 3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final.
 4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
