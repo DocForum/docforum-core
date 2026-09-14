@@ -110,7 +110,7 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 
 ## Phase 9 — Deploy & CI
 **Status: Not started**
-- [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR.
+- [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Not resolved by the item below** — `docforum-web` has a static GitHub Pages *UI preview* (https://docforum.github.io/docforum-web/), which is scoped to that repo's frontend only and doesn't answer where `docforum-core` (a stateful API + Postgres) or `docforum-escrow` deploy.
 - [ ] Real CI pipeline (replace `.github/workflows/ci.yml` placeholder) — lint, test, build for backend + frontend.
 - [ ] Staging environment.
 - [ ] Production environment + secrets management.
