@@ -1,0 +1,16 @@
+{
+  "name": "docforum-docs-site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Documentation site for the DocForum org (docforum-core, docforum-web, docforum-escrow). See README.md.",
+  "scripts": {
+    "docs:sync": "node scripts/sync-docs.mjs",
+    "dev": "npm run docs:sync && vitepress dev",
+    "build": "npm run docs:sync && vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  }
+}

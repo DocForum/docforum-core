@@ -114,6 +114,7 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 - [ ] Real CI pipeline (replace `.github/workflows/ci.yml` placeholder) — lint, test, build for backend + frontend. (Render's own build step runs `npm install && prisma generate && npm run build` on every push, but that's deploy, not CI/PR-gating — this item is still open.)
 - [ ] Staging environment.
 - [ ] Production environment + secrets management.
+- [x] Docs site deployed — `docs/site/` (VitePress) via `.github/workflows/deploy-docs.yml`, live at https://docforum.github.io/docforum-core/. Unrelated to the production-deploy decision above; this is a static site with no backend of its own.
 
 ## Explicitly deferred (not on this roadmap, tracked so they aren't forgotten)
 - In-app video/voice consultation (PRD OQ-1 — v1 assumes in-person + async messaging).
@@ -143,3 +144,22 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
   environment-aware (was a documented local-dev-only placeholder) and
   added `credentials: 'include'` in `docforum-web`'s api-client. Free
   Postgres expires 2026-10-14 — needs recreating/upgrading before then.
+- 2026-09-14 — Added `docs/site/`: a VitePress documentation site for the
+  whole org, deployed to GitHub Pages
+  (https://docforum.github.io/docforum-core/) via
+  `.github/workflows/deploy-docs.yml`. Content is synced at build time
+  (`docs/site/scripts/sync-docs.mjs`) — this repo's PRD/architecture/
+  essentials/roadmap/ADRs/API-reference copied locally, `docforum-web`'s
+  and `docforum-escrow`'s README/architecture-essentials/roadmap (and
+  escrow's ADR 0001) fetched from their `main` branch — nothing is a
+  hand-maintained duplicate, so the site can't drift from what each repo
+  actually says the way a copied-and-forgotten doc would. Relative links
+  in the fetched READMEs are rewritten to absolute GitHub URLs (they were
+  written relative to their own repo root, meaningless in this site's
+  structure — `vitepress build`'s dead-link check catches this if it's
+  ever skipped). Same pine/brass/Fraunces identity as `docforum-web`, for
+  visual consistency across the org's public surfaces. **Known gap:**
+  only rebuilds on a push to this repo — a docs change landing only in
+  `docforum-web` or `docforum-escrow` doesn't trigger a rebuild here yet;
+  noted in both `deploy-docs.yml` and `docs/site/README.md`, not silently
+  accepted.

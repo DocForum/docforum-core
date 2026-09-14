@@ -1,0 +1,20 @@
+node_modules/
+.vitepress/cache/
+.vitepress/dist/
+
+# Synced at build time from each repo's own files — never committed, see
+# scripts/sync-docs.mjs. Committing these would create exactly the doc-
+# drift problem this repo's AGENTS.md is built to prevent.
+/product/
+/architecture/overview.md
+/architecture/essentials.md
+/architecture/adr/
+/api/
+/roadmap/
+/repos/web/readme.md
+/repos/web/architecture.md
+/repos/web/roadmap.md
+/repos/escrow/readme.md
+/repos/escrow/architecture.md
+/repos/escrow/roadmap.md
+/repos/escrow/adr-0001.md

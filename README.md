@@ -14,6 +14,11 @@ This is the **hub repository** of the `DocForum` GitHub organization: it
 owns the product definition (PRD), the full system architecture, the data
 model, and the master roadmap that the other two repos are scoped against.
 
+**📖 [Browse the docs site](https://docforum.github.io/docforum-core/)** —
+PRD, architecture, ADRs, API reference, and every repo's roadmap in one
+place, synced at build time from each repo's own files (see
+[`docs/site/`](docs/site)).
+
 ---
 
 ## Table of contents
@@ -120,6 +125,8 @@ backend/
 docs/
   adr/                   Architecture decision records
   api/                   API documentation (generated once routes exist)
+  site/                  VitePress docs site for the whole org — content synced
+                          at build time, never hand-edited (see docs/site/README.md)
 infra/docker/            Local dev infra (Postgres, etc.) — not yet written, see ROADMAP.md Phase 1
 scripts/                 One-off/dev scripts
 .github/                 CI workflow, issue/PR templates

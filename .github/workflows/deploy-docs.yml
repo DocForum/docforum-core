@@ -1,0 +1,68 @@
+# Builds and deploys docs/site (VitePress) to GitHub Pages at
+# docforum.github.io/docforum-core/. Content is synced at build time from
+# this repo's own docs plus docforum-web's and docforum-escrow's real
+# files on their main branches (docs/site/scripts/sync-docs.mjs) — nothing
+# here is a hand-maintained copy, so the deployed site can't drift from
+# what each repo actually says. Separate from ci.yml (still a Phase 1
+# placeholder — see ROADMAP.md): different trigger (push to main, not
+# pull_request) and different purpose (deploy, not verify).
+#
+# KNOWN GAP: only triggers on a push to *this* repo. A docs-relevant
+# change landing in docforum-web or docforum-escrow alone does not
+# rebuild this site automatically — it goes stale until this repo's next
+# push, or someone runs workflow_dispatch by hand. Closing that gap needs
+# a repository_dispatch sender workflow in each sibling repo plus a
+# cross-repo token stored as a secret here; not built yet, tracked as a
+# real gap rather than silently accepted or falsely claimed as automated.
+name: Deploy docs site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/site/**'
+      - 'PRD.md'
+      - 'ARCHITECTURE.md'
+      - 'ARCHITECTURE_ESSENTIALS.md'
+      - 'ROADMAP.md'
+      - 'docs/adr/**'
+      - 'docs/api/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: docs-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs/site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - run: npm ci
+      - run: GITHUB_PAGES=true npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/site/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
