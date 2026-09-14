@@ -36,7 +36,14 @@ knowledge at all.
 - `docforum-web` never talks to `docforum-escrow` directly; it only ever
   talks to `docforum-core`'s API, which is the only place wallet/payment
   status is exposed to the frontend.
-- Open risk, not resolved by this ADR: whether `docforum-core` and
-  `docforum-web`, having no direct Stellar code, are accepted as Stellar
-  Wave Program repos at all. Only `docforum-escrow` is a strong bet on that
-  front.
+- **Resolved 2026-09-14:** confirmed against the actual Drips Wave program
+  docs (docs.drips.network/wave/). Wave is currently Stellar-ecosystem-only
+  (launching January 2026), applied per-repo, and approval runs substantially
+  on an "Applicant Metrics" GitHub-activity scorecard (PRs/issues/reviews
+  over a rolling 3-year window) plus organizer discretion on ecosystem
+  relevance — not a code-review gate. `docforum-core` and `docforum-web`
+  have no Stellar code and are not ecosystem-relevant to a Stellar-only
+  Wave: **decision is to not apply either of them.** Only `docforum-escrow`
+  will be submitted, once it has enough real activity (commits/PRs/issues)
+  to be a credible applicant under that scorecard — see its own
+  `ROADMAP.md` Phase E1–E4 and the issues tracking that work.

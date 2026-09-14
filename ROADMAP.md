@@ -127,3 +127,4 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 
 ## Changelog (append, don't rewrite history)
 - 2026-09-09 — Initial roadmap created alongside Phase 0 scaffolding.
+- 2026-09-14 — Resolved the open risk in `docs/adr/0002-stellar-escrow-for-fulfillment-payout.md`: confirmed against the real Drips Wave docs that this repo and `docforum-web` are not ecosystem-relevant to a Stellar-only Wave and will not be submitted. Only `docforum-escrow` will apply, once it has enough real GitHub activity — see its Phase E1–E4 work.
