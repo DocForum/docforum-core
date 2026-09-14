@@ -214,6 +214,11 @@ Notification
 
 ## 8. Explicit non-decisions (deferred, not forgotten)
 
-- Deployment target (Fly.io / Render / AWS / etc.) — undecided.
+- Deployment target (Fly.io / Render / AWS / etc.) — still undecided for
+  production. A Render free-tier instance exists as a **preview only**
+  (so `docforum-web`'s GitHub Pages preview has a live backend to call) —
+  see `docs/adr/0003-render-preview-deployment.md`. Explicitly not this
+  decision: no secrets manager, no backups, disposable data, 30-day
+  free-tier DB expiry.
 - Video/voice provider — undecided, PRD OQ-1 must resolve first.
 - Multi-region / i18n — not designed for, not blocked either.

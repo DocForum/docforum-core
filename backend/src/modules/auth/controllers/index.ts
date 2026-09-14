@@ -10,20 +10,26 @@ const REFRESH_COOKIE = 'docforum_refresh';
 // memory, never localStorage) can't be paired with a stolen refresh token
 // via the same XSS vector.
 //
-// KNOWN LIMITATION: `sameSite: 'lax'`/`secure: false` is a local-dev-only
-// choice (docforum-web on :5173, this API on :4000 — different origins).
-// Cross-site fetch with credentials under SameSite=Lax is not fully
-// verified end-to-end in this environment. Production needs `secure: true`
-// and a SameSite policy chosen once the real deployment topology (same
-// origin via proxy vs. genuinely cross-site) is decided — see
-// ARCHITECTURE.md §8 (deployment target: undecided).
+// docforum-web (GitHub Pages) and this API (Render, see docs/adr/0003-
+// render-preview-deployment.md) are genuinely cross-site — different
+// domains entirely, not just different ports. A cross-site cookie only
+// gets sent on a `fetch` with `credentials: 'include'` if it's
+// `SameSite=None; Secure`. `Secure` requires HTTPS, which local dev
+// (http://localhost) doesn't have — hence the NODE_ENV branch: real
+// cross-site behavior in production, a cookie that still works over plain
+// http in local dev.
+const isProduction = process.env.NODE_ENV === 'production';
+const REFRESH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: isProduction ? ('none' as const) : ('lax' as const),
+  path: '/',
+};
+
 function setRefreshCookie(res: Response, token: string) {
   res.cookie(REFRESH_COOKIE, token, {
-    httpOnly: true,
-    secure: false,
-    sameSite: 'lax',
+    ...REFRESH_COOKIE_OPTIONS,
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30d — matches config.jwt.refreshTtl
-    path: '/',
   });
 }
 
@@ -53,6 +59,6 @@ export async function refresh(req: Request, res: Response) {
 }
 
 export function logout(_req: Request, res: Response) {
-  res.clearCookie(REFRESH_COOKIE, { path: '/' });
+  res.clearCookie(REFRESH_COOKIE, REFRESH_COOKIE_OPTIONS);
   res.status(204).send();
 }

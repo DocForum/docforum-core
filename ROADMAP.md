@@ -109,9 +109,9 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 - [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence).
 
 ## Phase 9 — Deploy & CI
-**Status: Not started**
-- [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Not resolved by the item below** — `docforum-web` has a static GitHub Pages *UI preview* (https://docforum.github.io/docforum-web/), which is scoped to that repo's frontend only and doesn't answer where `docforum-core` (a stateful API + Postgres) or `docforum-escrow` deploy.
-- [ ] Real CI pipeline (replace `.github/workflows/ci.yml` placeholder) — lint, test, build for backend + frontend.
+**Status: Not started for real production. A Render free-tier preview exists — see note.**
+- [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Still not resolved.** A Render free-tier web service + Postgres now runs `backend/`, so `docforum-web`'s GitHub Pages preview has a live API to call — see `docs/adr/0003-render-preview-deployment.md`. This is explicitly a preview, not the production decision: no secrets manager, no backups, no staging/prod split, free-tier Postgres expires 2026-10-14 (30 days, 14-day grace period) unless recreated/upgraded before then.
+- [ ] Real CI pipeline (replace `.github/workflows/ci.yml` placeholder) — lint, test, build for backend + frontend. (Render's own build step runs `npm install && prisma generate && npm run build` on every push, but that's deploy, not CI/PR-gating — this item is still open.)
 - [ ] Staging environment.
 - [ ] Production environment + secrets management.
 
@@ -137,3 +137,9 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
   §6.1.1 marked resolved. Not done: Docker Compose file exists but wasn't
   exercised (no Docker in this environment) — see the note under Phase 1
   above and `infra/docker/README.md`.
+- 2026-09-14 — Deployed `backend/` to Render (free tier, preview only —
+  ADR 0003) so `docforum-web`'s GitHub Pages preview has a live API.
+  Fixed the refresh-cookie `secure`/`sameSite` to be genuinely
+  environment-aware (was a documented local-dev-only placeholder) and
+  added `credentials: 'include'` in `docforum-web`'s api-client. Free
+  Postgres expires 2026-10-14 — needs recreating/upgrading before then.
