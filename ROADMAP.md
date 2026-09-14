@@ -3,6 +3,8 @@
 Last updated: 2026-09-09
 Status: Phase 0 complete (scaffolding). Phase 1 not started.
 
+> **Org note:** this repo (`docforum-core`) is the hub of a 3-repo `DocForum` org. Frontend work is tracked in `docforum-web`'s own roadmap. Stellar contract/SDK work is tracked in `docforum-escrow`'s own roadmap. This file tracks only what runs inside `docforum-core` — including the `payments` module, which *consumes* `docforum-escrow`'s published package but doesn't implement contract logic itself.
+
 > **This file must be updated by every contribution that starts, completes, or blocks any item below.** No exceptions — see `AGENTS.md` / `CLAUDE.md`. If your PR doesn't touch this file and it touched roadmap-tracked work, the PR is incomplete.
 
 ## How to read this file
@@ -73,6 +75,16 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 - [ ] Order `status` transitions to `fulfilled` **only** via the facility-confirmed path (ARCHITECTURE.md §5.3 step 5 — patient/doctor cannot self-mark).
 - [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1.
 
+## Phase 5.5 — Payments (consumer side, depends on docforum-escrow existing)
+**Status: Not started (blocked by Phase 5, and by `docforum-escrow` publishing an initial `@docforum/escrow-sdk` release)**
+- [ ] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — see schema.prisma comment, no PHI).
+- [ ] Add `@docforum/escrow-sdk` as a dependency; wire `payments/services` to call it.
+- [ ] On order issuance, create a `PaymentIntent` (`created` status).
+- [ ] On patient funding action, call SDK to move funds into escrow (`escrowed` status), store `stellarTxHash`.
+- [ ] On `FulfillmentRecord` reaching `fulfilled`, trigger SDK release call (`released` status) — this is the actual payoff of ADR 0002, don't let it drift into a manual/admin-triggered release.
+- [ ] Refund path for rejected/expired orders.
+- [ ] Doc reconciliation: this phase directly addresses PRD §8.1.6 (facility fulfillment integrity) — mark resolved if it lands.
+
 ## Phase 6 — Notifications
 **Status: Not started (blocked by Phases 3 & 4 at minimum)**
 - [ ] `Notification` model + dispatch interface (provider-agnostic, per ARCHITECTURE.md §2).
@@ -99,10 +111,9 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 ## Phase 9 — Deploy & CI
 **Status: Not started**
 - [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR.
-- [ ] Real CI pipeline **per repo** (`docforum-core`, `docforum-web`, `docforum-escrow` each need their own — see ADR 0001, three-repo split) — lint, test, build.
+- [ ] Real CI pipeline (replace `.github/workflows/ci.yml` placeholder) — lint, test, build for backend + frontend.
 - [ ] Staging environment.
 - [ ] Production environment + secrets management.
-- [ ] Escrow contract deploy pipeline (Soroban/Stellar network + key management) — distinct from the above, not yet scoped.
 
 ## Explicitly deferred (not on this roadmap, tracked so they aren't forgotten)
 - In-app video/voice consultation (PRD OQ-1 — v1 assumes in-person + async messaging).
@@ -116,4 +127,3 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
 
 ## Changelog (append, don't rewrite history)
 - 2026-09-09 — Initial roadmap created alongside Phase 0 scaffolding.
-- 2026-09-14 — GitHub org `DocForum` and its three repos (`docforum-core`, `docforum-web`, `docforum-escrow`) confirmed set up (org + repos already existed, in sync; added missing `README.md` to `docforum-escrow`/`docforum-web`, pushed). Adopted 3-repo split as the real architecture, overriding the "no separate repos" guardrail in ARCHITECTURE.md §6.3.3 — see `docs/adr/0001-three-repo-split.md`. Updated ARCHITECTURE.md §1/§2/§3/§6.3.3, ARCHITECTURE_ESSENTIALS.md, and Phase 9 above accordingly.

@@ -1,0 +1,7 @@
+name: CI
+on: [pull_request]
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "TODO(Phase 1) - wire up lint/test/build once backend & frontend have real code"

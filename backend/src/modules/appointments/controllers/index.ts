@@ -1,0 +1,2 @@
+// appointments controllers — placeholder.
+export {};

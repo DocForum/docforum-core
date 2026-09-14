@@ -1,0 +1,15 @@
+{
+  "name": "dripswave-backend",
+  "version": "0.0.0",
+  "private": true,
+  "description": "DripsWave backend — modular monolith. See ARCHITECTURE.md.",
+  "scripts": {
+    "dev": "echo TODO: wire up dev server (Phase 1)",
+    "build": "echo TODO",
+    "test": "echo TODO",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

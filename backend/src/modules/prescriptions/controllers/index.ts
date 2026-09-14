@@ -1,0 +1,2 @@
+// prescriptions controllers — placeholder.
+export {};

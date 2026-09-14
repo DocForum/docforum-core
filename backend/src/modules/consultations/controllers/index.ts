@@ -1,0 +1,2 @@
+// consultations controllers — placeholder.
+export {};

@@ -11,8 +11,6 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 
 ## 1. Guiding principles
 
-> **2026-09-14 update:** the org has moved to a **3-repo split** — `docforum-core` (backend monolith), `docforum-web` (frontend), `docforum-escrow` (Rust Soroban payment-escrow contract + TS SDK). This supersedes the "no separate repos" guardrail in principle 1 below and in §6.3.3. Principle 1 (modular monolith *inside* `docforum-core`) still holds — the split is repo-level, not a module-by-module microservice split. See `docs/adr/0001-three-repo-split.md`.
-
 1. **Modular monolith first, not microservices.** One deployable backend, internally organized into bounded modules (auth, doctors, appointments, referrals, consultations, orders, facilities, notifications). Split into services only when a concrete scaling or team-ownership problem demands it — not preemptively (see PRD §8.3).
 2. **Orders are append-only.** Prescriptions and lab orders are never mutated after issuance. Corrections create a new versioned record referencing the original. This is a hard architectural constraint, not a style preference (clinical/legal safety).
 3. **The referral carries state, not a pointer to state.** A referral snapshots the intake + consultation notes it's built on, so later edits elsewhere can't silently rewrite what a specialist already saw.
@@ -35,16 +33,10 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | File/result storage | Object storage (S3-compatible) for lab result attachments | Never store clinical files directly in Postgres rows. |
 | Background jobs | Simple queue (BullMQ on Redis) for reminders, order-expiry checks, notification delivery | Needed for FR-15/16 and the "orphaned order" hard question (PRD §8.1.3). |
 | Infra | Docker Compose for local dev; containerized deploy target TBD (not decided — see Open Questions in ROADMAP) | Keep infra decisions deferred until a real deploy target is chosen; don't overbuild CI/CD for a repo with no code yet. |
-| Payment escrow | Rust Soroban smart contract (create/release/refund) + TypeScript client SDK, in the separate `docforum-escrow` repo, called from `docforum-core`'s `payments` module | Payment/escrow is generic (no PHI, no healthcare logic) so it's kept out of the monolith and out of Postgres — see `docs/adr/0001-three-repo-split.md`. Resolves PRD OQ-4 (payment architecture; billing/claims policy itself is still out of scope for v1). |
 
 ## 3. Module boundaries (backend)
 
-**Repo boundaries (org-level, above the module level):**
-- `docforum-core` — the backend modular monolith described in this section. Owns Postgres/Prisma, owns all PHI.
-- `docforum-web` — React/Vite frontend, consumes `docforum-core`'s API only.
-- `docforum-escrow` — Rust Soroban escrow contract + TS SDK, deliberately generic (no PHI, no healthcare logic). `docforum-core`'s `payments` module depends on this SDK; nothing in `docforum-escrow` depends back on `docforum-core`.
-
-Each module under `backend/src/modules/<name>/` (inside `docforum-core`) owns its own `routes/`, `controllers/`, `services/`, `repositories/`. Cross-module access happens through a module's exported service interface only — **never reach into another module's repository directly.** This is the internal seam that would let us extract a module into its own service later without a rewrite.
+Each module under `backend/src/modules/<name>/` owns its own `routes/`, `controllers/`, `services/`, `repositories/`. Cross-module access happens through a module's exported service interface only — **never reach into another module's repository directly.** This is the internal seam that would let us extract a module into its own service later without a rewrite.
 
 - `auth` — signup/login, tokens, role checks.
 - `users` — shared user profile fields common to all roles.
@@ -59,7 +51,6 @@ Each module under `backend/src/modules/<name>/` (inside `docforum-core`) owns it
 - `lab-orders` — lab order issuance and versioning.
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
-- `payments` — the only module that imports the `docforum-escrow` TS SDK; nothing else in `docforum-core` talks to escrow directly.
 
 ## 4. Data models
 
@@ -209,7 +200,7 @@ Notification
 ### 6.3 What's overengineered (architecture-level, for v1)?
 1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is.
 2. BullMQ/Redis job queue before there's a single job that needs it — fine to stub with a simple cron/interval check initially and introduce a real queue when reminder/expiry logic actually exists.
-3. ~~Designing for horizontal service extraction (module boundary purity, §3) before there's a single reason to split — worth doing lightly (it's cheap discipline), but not worth extra ceremony (e.g., separate repos, separate CI, internal API versioning) yet.~~ **Resolved 2026-09-14 (partially superseded):** a 3-repo split (`docforum-core`/`docforum-web`/`docforum-escrow`) has been adopted — not for the backend modules themselves (those stay one monolith inside `docforum-core`, per §1), but because escrow is a genuinely separate concern (different language/runtime, no PHI, external smart-contract deploy target). See `docs/adr/0001-three-repo-split.md`. Splitting backend modules (auth/doctors/appointments/etc.) into their own repos is still overengineered for v1 and remains out of scope.
+3. Designing for horizontal service extraction (module boundary purity, §3) before there's a single reason to split — worth doing lightly (it's cheap discipline), but not worth extra ceremony (e.g., separate repos, separate CI, internal API versioning) yet.
 
 ## 7. Non-functional / cross-cutting
 

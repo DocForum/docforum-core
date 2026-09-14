@@ -1,0 +1,277 @@
+// schema.prisma — DripsWave canonical data model
+// SOURCE OF TRUTH: if this file and ARCHITECTURE.md §4 disagree, fix ARCHITECTURE.md
+// to match this file (or vice versa) in the same PR — see AGENTS.md.
+//
+// STATUS: draft sketch, not yet generated/migrated. See ROADMAP.md Phase 1.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  patient
+  doctor
+  facility
+  admin
+}
+
+enum VerificationStatus {
+  pending
+  verified
+  rejected
+}
+
+enum FacilityType {
+  lab
+  pharmacy
+}
+
+enum SlotStatus {
+  open
+  held
+  booked
+}
+
+enum AppointmentStatus {
+  scheduled
+  completed
+  cancelled
+  no_show
+}
+
+enum AppointmentOrigin {
+  direct_booking
+  referral
+}
+
+enum ConsultationOutcome {
+  resolved
+  referred
+  follow_up_needed
+}
+
+enum ReferralStatus {
+  pending
+  accepted
+  declined
+  completed
+  expired
+}
+
+enum OrderStatus {
+  issued
+  fulfilled
+  expired
+  superseded
+}
+
+enum FulfillmentStatus {
+  pending
+  in_progress
+  fulfilled
+  rejected
+}
+
+enum Urgency {
+  routine
+  urgent
+}
+
+// --- TODO Phase 1: flesh out every model below with real fields, relations,
+// and indices per ARCHITECTURE.md §4. This is a structural placeholder so
+// the schema shape is visible before individual models are implemented.
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  role      Role
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // TODO: relations to PatientProfile / DoctorProfile / FacilityProfile
+}
+
+model PatientProfile {
+  id     String @id @default(uuid())
+  userId String @unique
+  // TODO: fullName, dateOfBirth, guardianUserId (nullable) — see PRD edge case: minors
+}
+
+model DoctorProfile {
+  id                 String             @id @default(uuid())
+  userId             String             @unique
+  verificationStatus VerificationStatus @default(pending)
+  // TODO: fullName, specialties relation
+}
+
+model Specialty {
+  id   String @id @default(uuid())
+  name String @unique
+  slug String @unique
+}
+
+model DoctorSpecialty {
+  id String @id @default(uuid())
+  // TODO: doctorProfileId, specialtyId
+}
+
+model FacilityProfile {
+  id   String       @id @default(uuid())
+  userId String     @unique
+  type FacilityType
+  // TODO: name, capabilities relation
+}
+
+model FacilityCapability {
+  id String @id @default(uuid())
+  // TODO: facilityProfileId, capabilityType, detail
+}
+
+model AvailabilitySlot {
+  id        String     @id @default(uuid())
+  status    SlotStatus @default(open)
+  startTime DateTime
+  endTime   DateTime
+  // TODO: doctorProfileId
+  // TODO: @@unique / exclusion constraint on (doctorProfileId, startTime, endTime)
+  // — this constraint is THE mechanism preventing double-booking. Do not
+  // implement booking logic without it. See ARCHITECTURE.md §5.1.
+}
+
+model IntakeForm {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  // TODO: patientProfileId, symptoms (Json), freeTextNotes
+}
+
+model Appointment {
+  id        String             @id @default(uuid())
+  status    AppointmentStatus  @default(scheduled)
+  origin    AppointmentOrigin
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  // TODO: patientProfileId, doctorProfileId, availabilitySlotId (unique), intakeId, referralId (nullable)
+}
+
+model Consultation {
+  id        String              @id @default(uuid())
+  outcome   ConsultationOutcome?
+  notes     String?
+  createdAt DateTime            @default(now())
+  // TODO: appointmentId (unique)
+}
+
+model Referral {
+  id             String         @id @default(uuid())
+  status         ReferralStatus @default(pending)
+  snapshotNotes  String
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  // TODO: sourceConsultationId, referringDoctorId, targetSpecialtyId,
+  // targetDoctorId (nullable), snapshotIntakeId, resultingAppointmentId (nullable)
+  // IMPORTANT: snapshotNotes / snapshotIntakeId must be copies, not live
+  // references — see ARCHITECTURE.md §4.4 design note.
+}
+
+model Prescription {
+  id                     String      @id @default(uuid())
+  status                 OrderStatus @default(issued)
+  createdAt              DateTime    @default(now())
+  // TODO: consultationId, patientProfileId, prescribingDoctorId, supersedesPrescriptionId (nullable, self-relation)
+}
+
+model PrescriptionItem {
+  id       String @id @default(uuid())
+  drugName String
+  dosage   String
+  frequency String
+  duration String
+  // TODO: prescriptionId
+}
+
+model LabOrder {
+  id        String      @id @default(uuid())
+  testType  String
+  urgency   Urgency     @default(routine)
+  status    OrderStatus @default(issued)
+  createdAt DateTime    @default(now())
+  // TODO: consultationId, patientProfileId, orderingDoctorId, supersedesLabOrderId (nullable, self-relation)
+}
+
+model LabResult {
+  id            String   @id @default(uuid())
+  resultFileUrl String?
+  summary       String?
+  createdAt     DateTime @default(now())
+  // TODO: labOrderId (unique), fulfillingFacilityId
+}
+
+model FulfillmentRecord {
+  id        String            @id @default(uuid())
+  orderType String // "prescription" | "lab_order" — see ARCHITECTURE.md §6.1.3 caveat on this polymorphic design
+  orderId   String
+  status    FulfillmentStatus @default(pending)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  // TODO: facilityId
+  // NOTE: this polymorphic (orderType, orderId) pair is flagged in
+  // ARCHITECTURE.md §6.1.3 as a design smell to revisit — may be split
+  // into PrescriptionFulfillment / LabOrderFulfillment before implementation.
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  type      String
+  payload   Json
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+  // TODO: userId
+}
+
+// --- Stellar payments (docforum-org split) -------------------------------
+// These two models hold relational metadata ONLY — amounts, status, tx
+// hashes, public keys. No clinical/PHI field ever belongs here. The actual
+// escrow contract logic lives in the sibling docforum-escrow repo and is
+// called via the @docforum/escrow-sdk package from
+// backend/src/modules/payments/services — never modeled or reimplemented
+// in this schema. See docs/adr/0002-stellar-escrow-for-fulfillment-payout.md.
+
+enum PaymentIntentStatus {
+  created
+  escrowed
+  released
+  refunded
+  failed
+}
+
+enum OrderTypeForPayment {
+  prescription
+  lab_order
+}
+
+model PaymentIntent {
+  id                  String              @id @default(uuid())
+  orderType           OrderTypeForPayment
+  orderId             String
+  amount              Decimal
+  currency            String              @default("USDC")
+  status              PaymentIntentStatus @default(created)
+  stellarTxHash       String?
+  sorobanContractId   String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  // TODO: patientProfileId, facilityId
+}
+
+model WalletLink {
+  id              String   @id @default(uuid())
+  stellarPublicKey String  @unique
+  verified        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  // TODO: userId
+}

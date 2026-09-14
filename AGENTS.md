@@ -2,6 +2,12 @@
 
 Instructions for any coding agent (human-directed or autonomous) working in this repository.
 
+> **Org context:** this is `docforum-core`, the hub of a 3-repo `DocForum`
+> org (`docforum-core`, `docforum-web`, `docforum-escrow`). This file's
+> rules are authoritative for this repo. `docforum-web` and
+> `docforum-escrow` have their own scoped `AGENTS.md` files — don't assume
+> this one governs them.
+
 ## Read this first, in this order
 1. `PRD.md` — what we're building and for whom.
 2. `ARCHITECTURE_ESSENTIALS.md` — the fast-reference rules. Don't skip this even if `ARCHITECTURE.md` feels like the "real" doc — essentials exists so you don't have to load the whole architecture doc into context for every small task.

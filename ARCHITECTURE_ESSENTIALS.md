@@ -2,17 +2,11 @@
 
 Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product scope in `PRD.md`. If this file and `ARCHITECTURE.md` conflict, `ARCHITECTURE.md` wins and this file is stale — fix it in the same PR.
 
-## Repos (see ADR 0001)
-- `docforum-core` — backend modular monolith, owns Postgres/all PHI.
-- `docforum-web` — frontend, talks only to `docforum-core`'s API.
-- `docforum-escrow` — Rust Soroban escrow contract + TS SDK, generic/no-PHI. Consumed only by `docforum-core`'s `payments` module.
-
 ## Stack (don't relitigate without an ADR in docs/adr/)
-- Backend (`docforum-core`): Node.js + TypeScript + Express/Fastify — **modular monolith**, not microservices.
+- Backend: Node.js + TypeScript + Express/Fastify — **modular monolith**, not microservices.
 - DB: PostgreSQL via Prisma (`backend/prisma/schema.prisma` = source of truth for models).
 - Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`.
-- Frontend (`docforum-web`): React + TypeScript + Vite, React Query + Zustand.
-- Payment escrow (`docforum-escrow`): Rust Soroban smart contract + TS client SDK — separate repo/runtime, not part of the monolith (ADR 0001).
+- Frontend: React + TypeScript + Vite, React Query + Zustand.
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
 - Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue.
 
@@ -45,11 +39,10 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - No configurable RBAC matrix — 4 fixed roles only.
 - No chat delivery receipts/typing indicators — plain message log.
 - No custom scheduling recurrence engine — fixed-length slot generation only.
-- No microservice split, no separate CI/repos **per backend module** — the three-repo split (core/web/escrow, ADR 0001) is org-level, not a module-by-module split.
+- No microservice split, no separate CI/repos per module.
 
 ## Where things live
-- Backend modules (in `docforum-core`): `backend/src/modules/<name>/{routes,controllers,services,repositories}`
-- Data model source of truth (in `docforum-core`): `backend/prisma/schema.prisma`
-- Frontend (in `docforum-web`): `frontend/src/{pages,components,features,hooks,services,store,types}`
-- Escrow contract + SDK: `docforum-escrow` (separate repo, Rust + TS)
+- Backend modules: `backend/src/modules/<name>/{routes,controllers,services,repositories}`
+- Data model source of truth: `backend/prisma/schema.prisma`
+- Frontend: `frontend/src/{pages,components,features,hooks,services,store,types}`
 - Roadmap / status: `ROADMAP.md` — **must be updated on every contribution that changes scope or completes work**.
