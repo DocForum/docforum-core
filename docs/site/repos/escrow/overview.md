@@ -10,17 +10,19 @@ Full docs: [README](/repos/escrow/readme), [architecture essentials](/repos/escr
 
 | Function | Status |
 |---|---|
-| `create_escrow(payer, payee, token, amount, condition_ref)` | ✅ Implemented, tested |
-| `get_status(escrow_id)` | ✅ Implemented, tested |
-| `release(escrow_id, caller)` | 🚧 Not started |
-| `refund(escrow_id, caller)` | 🚧 Not started |
+| `create_escrow(payer, payee, token, amount, condition_ref, releaser)` | ✅ Implemented, tested, live on testnet |
+| `get_status(escrow_id)` | ✅ Implemented, tested, live on testnet |
+| `release(escrow_id, caller)` | ✅ Implemented, tested, live on testnet |
+| `refund(escrow_id, caller)` | ✅ Implemented, tested, live on testnet |
+
+Authorization model: `release`/`refund` are restricted to the escrow's `releaser`, a per-escrow address set at `create_escrow` time (not a single contract-level admin) — see [ADR 0002](/repos/escrow/adr-0002).
 
 ## Status
 
-**Phase E1 mostly done** — `create_escrow`/`get_status` implemented on `soroban-sdk`, 4 passing tests, wasm build verified. Testnet deployment is the one remaining manual step. Phases E2 (release/refund), E3 (TS SDK wrapping), and E4 (security review — blocking for any mainnet use) are tracked as open issues on the repo, each scoped as a small independent unit with a stated complexity.
+**Phase E1 and E2 done, verified live on testnet** — all four functions implemented on `soroban-sdk`, 11 passing local tests, wasm build verified, and a real `release`, `refund`, and unauthorized-caller rejection confirmed on-chain (not just locally). **Phase E3** (TypeScript SDK, `@docforum/escrow-sdk`) is also done — wraps all four functions, distributed as a GitHub Release tarball (npm registry publish is the long-term goal, pending publishing credentials — see [ADR 0003](/repos/escrow/adr-0003)), with 3 tests passing against the live deployment. **Phase E4** (external security review — blocking for any mainnet use) remains open, tracked as an issue on the repo.
 
 Full breakdown: [roadmap](/repos/escrow/roadmap).
 
 ## Ecosystem context
 
-This is the one DocForum repo actually built *on* Stellar — the piece intended to be a credible [Drips Wave](https://docs.drips.network/wave/) applicant once it has enough real GitHub activity (that program's approval runs substantially on a rolling-window activity scorecard, not a one-time code review). `docforum-core` and `docforum-web` won't be submitted — see [ADR 0002](/architecture/adr/0002-stellar-escrow-for-fulfillment-payout)'s resolved note.
+This is the one DocForum repo built *on* Stellar from the ground up — a Drips Wave applicant under that program's Stellar-ecosystem criteria. `docforum-core` and `docforum-web` have since gained real (not simulated) Stellar payment integration of their own — a custodial payments module in `docforum-core` and its UI in `docforum-web`, both calling this repo's SDK — see `docforum-core`'s [ADR 0004](/architecture/adr/0004-custodial-payments-v1). All three repos were submitted to the program by the maintainer; this repo remains the one whose *entire* purpose is Stellar-ecosystem work, rather than one module within a larger non-Stellar application.

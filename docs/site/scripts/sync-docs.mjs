@@ -70,6 +70,10 @@ async function main() {
     'docs/adr/0003-render-preview-deployment.md',
     'architecture/adr/0003-render-preview-deployment.md',
   );
+  await copyLocal(
+    'docs/adr/0004-custodial-payments-v1.md',
+    'architecture/adr/0004-custodial-payments-v1.md',
+  );
 
   console.log('\ndocforum-web (remote — github.com/DocForum/docforum-web@main):');
   await fetchRemote('docforum-web', 'README.md', 'repos/web/readme.md');
@@ -84,6 +88,16 @@ async function main() {
     'docforum-escrow',
     'docs/adr/0001-generic-escrow-not-healthcare-specific.md',
     'repos/escrow/adr-0001.md',
+  );
+  await fetchRemote(
+    'docforum-escrow',
+    'docs/adr/0002-per-escrow-releaser-set-at-creation.md',
+    'repos/escrow/adr-0002.md',
+  );
+  await fetchRemote(
+    'docforum-escrow',
+    'docs/adr/0003-sdk-distribution-github-release-tarball.md',
+    'repos/escrow/adr-0003.md',
   );
 
   console.log('\nDone.');

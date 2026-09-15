@@ -12,7 +12,9 @@ React + TypeScript + Vite, React Query for server state, Zustand for client-only
 
 ## Status
 
-**Phase W1 (shell & auth): built and connected to a live backend.** Signup/login work end-to-end against `docforum-core`'s Render deployment. Phases W2–W5 (the actual patient/doctor/facility flow screens) aren't started yet — blocked on `docforum-core`'s Phase 2+.
+**Phase W1 (shell & auth): built and connected to a live backend.** Signup/login work end-to-end against `docforum-core`'s Render deployment.
+
+**Phase W5 (Payments UI): also built**, ahead of W2–W4 — a facility wallet-link screen and an admin console that drives a real payment through create → fund → release/refund, entirely via `docforum-core`'s API (never Stellar directly — the hard rule above held throughout). This was buildable independently once `docforum-core`'s Phase 5.5 shipped for real. W2–W4 (patient/doctor/facility core flow screens) aren't started yet — most of them are blocked on `docforum-core`'s Phase 2+ landing.
 
 Full breakdown: [roadmap](/repos/web/roadmap).
 

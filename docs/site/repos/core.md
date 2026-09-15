@@ -6,7 +6,7 @@ The hub of the org. Owns:
 - The product definition — [PRD](/product/prd)
 - The full system architecture — [overview](/architecture/overview), [essentials](/architecture/essentials), [ADRs](/architecture/adr/0001-modular-monolith)
 - Postgres and every PHI-bearing table
-- The `payments` module, the only place `docforum-escrow`'s SDK is imported
+- The `payments` module — the only place `docforum-escrow`'s SDK is imported, wired up for real (not just scaffolded) as of Phase 5.5
 
 ## Stack
 
@@ -15,6 +15,8 @@ Node.js + TypeScript, Express 5, PostgreSQL via Prisma. Modular monolith — one
 ## Status
 
 **Phase 1 (identity, DB, safe booking foundation): built and tested.** Real signup/login/refresh/logout, admin-gated doctor verification, fixed-length slot generation, and — the roadmap's own "single highest-priority correctness item" — a database-level guarantee against double-booking, proven by a self-contained integration test that fires genuinely concurrent booking requests against a real Postgres instance every run.
+
+**Phase 5.5 (Payments): also built, ahead of Phases 2–5** — a custodial payments module (this repo holds its own Stellar identities rather than patients signing with a wallet; see [ADR 0004](/architecture/adr/0004-custodial-payments-v1)) that really moves funds through `docforum-escrow`'s live testnet contract via its SDK. Verified against the real network, not mocked: fund → release, fund → refund, and reject-when-unlinked, all passing. Phases 2–4 (intake, referrals, orders) are scoped into GitHub issues but not yet built — Payments was deliberately decoupled from them (opaque order references instead of hard foreign keys) rather than waiting.
 
 Full breakdown: [roadmap](/roadmap/core).
 

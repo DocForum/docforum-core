@@ -286,3 +286,20 @@ issue links.
   now return the transaction hash instead of discarding it, since this
   module needs to persist `stellarTxHash`). See `docforum-escrow`'s own
   changelog for that side of it.
+- 2026-09-15 — Updated the hand-authored overview pages in
+  `docs/site/repos/` (`core.md`, `escrow/overview.md`, `web/overview.md`)
+  — these are the one part of the docs site NOT synced automatically at
+  build time, and had gone stale describing Phase E1-only /
+  Phase-W1-only states that no longer matched reality. Added
+  `sync-docs.mjs` entries for the new ADRs (this repo's 0004,
+  `docforum-escrow`'s 0002/0003) and matching sidebar nav entries.
+
+  Caught and fixed a real bug while verifying this, not just trusting
+  the workflow ran: `docforum-escrow`'s ADR 0003 contained angle-bracket
+  placeholder text that VitePress's Vue-based markdown compiler
+  misreads as an unclosed HTML tag, failing this site's build entirely.
+  Confirmed by actually building the site locally against the exact
+  content, not by inspecting text and guessing. Two rounds were needed
+  — the first fix addressed one instance, a second (different) instance
+  in the same file was still breaking the build; both are now fixed at
+  the source in `docforum-escrow`.
