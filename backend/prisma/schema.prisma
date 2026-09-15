@@ -123,8 +123,9 @@ model PatientProfile {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  appointments Appointment[]
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments   Appointment[]
+  paymentIntents PaymentIntent[]
 }
 
 model DoctorProfile {
@@ -170,8 +171,10 @@ model FacilityProfile {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  capabilities FacilityCapability[]
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  capabilities   FacilityCapability[]
+  paymentIntents PaymentIntent[]
+  walletLink     WalletLink?
 }
 
 model FacilityCapability {
@@ -322,7 +325,15 @@ model Notification {
 // escrow contract logic lives in the sibling docforum-escrow repo and is
 // called via the @docforum/escrow-sdk package from
 // backend/src/modules/payments/services — never modeled or reimplemented
-// in this schema. See docs/adr/0002-stellar-escrow-for-fulfillment-payout.md.
+// in this schema. See docs/adr/0002-stellar-escrow-for-fulfillment-payout.md
+// and docs/adr/0004-custodial-payments-v1.md.
+//
+// Deliberately decoupled from Prescription/LabOrder/FulfillmentRecord
+// below — those are still Phase 0 placeholders (Phase 4/5, not built).
+// `orderType`/`orderId` stay opaque, unvalidated references rather than
+// real foreign keys, so this phase is buildable independently rather than
+// blocked behind two unbuilt phases. Revisit once Phase 4/5 are real —
+// see ADR 0004's "Known gap."
 
 enum PaymentIntentStatus {
   created
@@ -338,23 +349,54 @@ enum OrderTypeForPayment {
 }
 
 model PaymentIntent {
-  id                  String              @id @default(uuid())
-  orderType           OrderTypeForPayment
-  orderId             String
-  amount              Decimal
-  currency            String              @default("USDC")
-  status              PaymentIntentStatus @default(created)
-  stellarTxHash       String?
-  sorobanContractId   String?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
-  // TODO: patientProfileId, facilityId
+  id         String              @id @default(uuid())
+  orderType  OrderTypeForPayment
+  // Opaque — Prescription/LabOrder don't exist as real records yet
+  // (Phase 4). Not validated against anything until then.
+  orderId    String
+  status     PaymentIntentStatus @default(created)
+
+  patientProfileId String
+  patientProfile   PatientProfile @relation(fields: [patientProfileId], references: [id])
+  facilityId       String
+  facility         FacilityProfile @relation(fields: [facilityId], references: [id])
+
+  // Raw stroops (native XLM's smallest unit) — matches
+  // @docforum/escrow-sdk's `amount: bigint` exactly. v1 is native-XLM
+  // only, no decimal/currency-conversion layer: an earlier scaffold draft
+  // of this model used a Decimal amount + "USDC" currency default,
+  // dropped here in favor of what's actually proven end-to-end on
+  // testnet (see ADR 0004). Multi-asset support is a future addition,
+  // not assumed by this field.
+  amountStroops BigInt
+
+  // Set once funded (create_escrow succeeds) — needed to later call
+  // release/refund against the right on-chain escrow.
+  escrowId          BigInt?
+  stellarTxHash     String?
+  // Which deployed contract this intent was funded against — this repo
+  // has already had two testnet contract IDs (Phase E1 vs. E2), so this
+  // isn't hypothetical.
+  sorobanContractId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([facilityId])
+  @@index([status])
 }
 
 model WalletLink {
-  id              String   @id @default(uuid())
-  stellarPublicKey String  @unique
-  verified        Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  // TODO: userId
+  id         String          @id @default(uuid())
+  // Scoped to the facility being paid, not the patient — v1 is a
+  // custodial model (docforum-core funds escrows from its own platform
+  // Stellar identity; patients never hold or sign with a wallet here).
+  // See ADR 0004.
+  facilityId String          @unique
+  facility   FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+
+  stellarPublicKey String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

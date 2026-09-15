@@ -7,6 +7,7 @@ import { authRouter } from './modules/auth/routes';
 import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
+import { paymentsRouter } from './modules/payments/routes';
 
 export function createApp() {
   const app = express();
@@ -21,6 +22,7 @@ export function createApp() {
   app.use('/doctors', doctorsRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
+  app.use('/payments', paymentsRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.

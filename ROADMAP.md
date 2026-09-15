@@ -75,25 +75,15 @@ issue links.
 - [ ] Lab result attachment (object storage integration — ARCHITECTURE.md §2 File/result storage row). Tracked as [issue #16](https://github.com/DocForum/docforum-core/issues/16) (Medium, 150 pts) — depends on #13.
 - [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1 — addressed by issue #14's admin-only gating; document any remaining gap in that issue's PR.
 
-## Phase 5.5 — Payments (consumer side, depends on docforum-escrow existing)
-**Status: Not started (blocked by Phase 5, and by `docforum-escrow` publishing an initial `@docforum/escrow-sdk` release)**
-- [ ] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — see schema.prisma comment, no PHI).
-- [ ] Add `@docforum/escrow-sdk` as a dependency; wire `payments/services` to call it.
-- [ ] On order issuance, create a `PaymentIntent` (`created` status).
-- [ ] On patient funding action, call SDK to move funds into escrow (`escrowed` status), store `stellarTxHash`.
-- [ ] On `FulfillmentRecord` reaching `fulfilled`, trigger SDK release call (`released` status) — this is the actual payoff of ADR 0002, don't let it drift into a manual/admin-triggered release.
-- [ ] Refund path for rejected/expired orders.
-- [ ] Doc reconciliation: this phase directly addresses PRD §8.1.6 (facility fulfillment integrity) — mark resolved if it lands.
-
-## Phase 5.5 — Payments (consumer side, depends on docforum-escrow existing)
-**Status: Not started (blocked by Phase 5, and by `docforum-escrow` publishing an initial `@docforum/escrow-sdk` release — tracked as `docforum-escrow` issues #4/#5, both still open). Deliberately left unscoped into issues here** — opening issues for work that can't start until a sibling repo ships its SDK would stall a contributor through no fault of their own (see `WAVE_ISSUE_TEMPLATE.md` "Notes to self"). Revisit once `docforum-escrow` #4/#5 close.
-- [ ] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — see schema.prisma comment, no PHI).
-- [ ] Add `@docforum/escrow-sdk` as a dependency; wire `payments/services` to call it.
-- [ ] On order issuance, create a `PaymentIntent` (`created` status).
-- [ ] On patient funding action, call SDK to move funds into escrow (`escrowed` status), store `stellarTxHash`.
-- [ ] On `FulfillmentRecord` reaching `fulfilled`, trigger SDK release call (`released` status) — this is the actual payoff of ADR 0002, don't let it drift into a manual/admin-triggered release.
-- [ ] Refund path for rejected/expired orders.
-- [ ] Doc reconciliation: this phase directly addresses PRD §8.1.6 (facility fulfillment integrity) — mark resolved if it lands.
+## Phase 5.5 — Payments (consumer side)
+**Status: Built, decoupled from Phase 4/5 rather than blocked by them — see docs/adr/0004-custodial-payments-v1.md.** `docforum-escrow` issues #4/#5 (SDK + distribution decision) closed, so the original blocker cleared; rather than wait further on Phase 4/5 (Orders/Facilities, still not built), `PaymentIntent`/`WalletLink` were designed with opaque, unvalidated `orderType`/`orderId` fields instead of hard FKs to `Prescription`/`LabOrder`, so this phase didn't have to wait on two more unbuilt phases. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
+- [x] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — no PHI). `WalletLink` scoped to the **facility** (payee), not the patient — see ADR 0004. Amount is raw stroops (`BigInt`), not the originally-scaffolded `Decimal`+`"USDC"` — matches what's actually proven end-to-end on testnet; multi-asset support is future work, not assumed.
+- [x] Added `@docforum/escrow-sdk` as a real dependency (via the GitHub Release tarball URL — see `docforum-escrow`'s ADR 0003); wired `payments/services` to call it through a dynamic `import()` (`escrow-sdk-loader.ts` — the SDK is ESM-only, this backend is CommonJS).
+- [ ] On order issuance, create a `PaymentIntent` (`created` status) — still manual/admin-triggered (`POST /payments/intents`) since Phase 4 order issuance doesn't exist yet to trigger it automatically.
+- [x] On patient funding action, call SDK to move funds into escrow (`escrowed` status), store `stellarTxHash` — except it's not a *patient* action in this design (custodial v1, ADR 0004): `POST /payments/intents/:id/fund`, admin-triggered, funds from `docforum-core`'s own platform payer identity.
+- [x] On `FulfillmentRecord` reaching `fulfilled`, trigger SDK release call (`released` status) — except there's no `FulfillmentRecord` yet (Phase 5), so v1 exposes `POST /payments/intents/:id/release` as an admin-triggered action instead. ADR 0002's "don't let it drift into a manual/admin-triggered release" goal is **not yet met** — this is the honest interim, not the destination; revisit once Phase 5 exists.
+- [x] Refund path for rejected/expired orders — `POST /payments/intents/:id/refund`, same admin-triggered caveat as release.
+- [ ] Doc reconciliation: PRD §8.1.6 (facility fulfillment integrity) — not marked resolved; this phase proves the payment *mechanism* works, not the fulfillment-integrity question, which still needs real `FulfillmentRecord`/facility-matching (Phase 5) to actually address.
 
 ## Phase 6 — Notifications
 **Status: Not started. Provider decision scoped into issue #17; trigger-point build-out blocked by Phases 3 & 4 and deliberately left unscoped until those land.**
@@ -250,3 +240,49 @@ issue links.
     own direct pushes.
   - Added GitHub topics to `docforum-core` and `docforum-web`
     (`docforum-escrow` already had them) for discoverability.
+- 2026-09-15 — Built Phase 5.5 (Payments) for real, ahead of Phase 4/5,
+  via docs/adr/0004-custodial-payments-v1.md: `docforum-core` holds its
+  own Stellar payer + releaser identities (custodial v1) rather than
+  patients signing with their own wallet — the only design consistent
+  with `docforum-web`'s existing "no direct Stellar calls" hard rule.
+  `PaymentIntent`/`WalletLink` filled in from the Phase 0 scaffold with
+  real FKs to `PatientProfile`/`FacilityProfile` (both Phase 1, already
+  real); `orderType`/`orderId` stay opaque rather than hard FKs to
+  `Prescription`/`LabOrder`, which don't exist yet — this is what let
+  the phase build independently instead of waiting on Phase 4/5.
+  `@docforum/escrow-sdk` added as a real dependency (the GitHub Release
+  tarball from `docforum-escrow`'s ADR 0003), wired through a dynamic
+  `import()` (CJS backend, ESM-only SDK — same interop pattern as
+  `embedded-postgres`). New `POST /payments/wallet-link`,
+  `POST /payments/intents`, `POST /payments/intents/:id/{fund,release,
+  refund}` endpoints — the latter three admin-only in v1, since there's
+  no `FulfillmentRecord` yet to trigger them automatically (ADR 0004
+  "Consequences" — explicitly not the final design).
+
+  Verified against **live testnet**, not mocked:
+  `npm run test:integration:payments-testnet` — 3/3 passing (full fund→
+  release lifecycle, full fund→refund lifecycle, reject-when-no-wallet).
+  Kept out of the default `test`/`test:integration`/CI, same reasoning
+  as `docforum-escrow`'s own SDK test (depends on testnet + the platform
+  payer's balance, not self-contained). Caught and fixed a real bug
+  while wiring this up: vitest's CLI path filter matches by substring,
+  so a `tests/integration-testnet/` directory got silently swept into
+  `test:integration`'s `tests/integration` filter — renamed to
+  `tests/testnet-integration/` to avoid the collision, confirmed via
+  actually re-running both scripts and checking which files each picked
+  up, not just reasoning about it.
+
+  Real testnet identities generated for this: a platform payer + a
+  platform releaser, both funded via Friendbot. Generated and written
+  directly to `backend/.env` by `scripts/gen-platform-identities.mjs` —
+  the secrets were never printed to any visible output, only the public
+  keys were (this repo's sandbox correctly refused an attempt to reveal
+  a stored `stellar` CLI identity's secret directly; the fix was
+  generating fresh keys via the SDK's own `Keypair.random()` and writing
+  them straight to a file instead of asking to view them).
+
+  Also: bumped `@docforum/escrow-sdk` to v0.2.0 (a small but real
+  addition made while building this — `createEscrow`/`release`/`refund`
+  now return the transaction hash instead of discarding it, since this
+  module needs to persist `stellarTxHash`). See `docforum-escrow`'s own
+  changelog for that side of it.

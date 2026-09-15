@@ -21,4 +21,16 @@ export const config = {
     refreshTtl: '30d',
   },
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
+  // Deliberately NOT required at startup via requireEnv() — unrelated
+  // parts of the app (auth, availability, etc.) shouldn't fail to boot
+  // just because payments isn't configured. The payments module itself
+  // (services/index.ts) validates these are present before doing
+  // anything that needs them, with a clear error naming which is
+  // missing. See docs/adr/0004-custodial-payments-v1.md.
+  payments: {
+    platformPayerSecret: process.env.PLATFORM_PAYER_SECRET,
+    platformReleaserSecret: process.env.PLATFORM_RELEASER_SECRET,
+    escrowContractId: process.env.ESCROW_CONTRACT_ID,
+    escrowTokenId: process.env.ESCROW_TOKEN_ID,
+  },
 } as const;

@@ -10,11 +10,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
+    "test:integration:payments-testnet": "DATABASE_URL_TEST=postgresql://docforum:docforum@localhost:5435/docforum_payments_test vitest run tests/testnet-integration",
     "test:all": "vitest run",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
+    "@docforum/escrow-sdk": "https://github.com/DocForum/docforum-escrow/releases/download/sdk-v0.2.0/docforum-escrow-sdk-0.2.0.tgz",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
