@@ -1,7 +1,11 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-09-09
-Status: Phase 0 complete (scaffolding). Phase 1 not started.
+Last updated: 2026-09-15
+Status: Phase 0 and Phase 1 complete and tested. Phases 2-9 fully scoped
+into GitHub issues (#1-#22); Phase 5.5 stays unscoped (blocked on
+`docforum-escrow` publishing its SDK) and Phase 7 is superseded by
+`docforum-web`'s own roadmap. See each phase section below for status and
+issue links.
 
 > **Org note:** this repo (`docforum-core`) is the hub of a 3-repo `DocForum` org. Frontend work is tracked in `docforum-web`'s own roadmap. Stellar contract/SDK work is tracked in `docforum-escrow`'s own roadmap. This file tracks only what runs inside `docforum-core` — including the `payments` module, which *consumes* `docforum-escrow`'s published package but doesn't implement contract logic itself.
 
@@ -230,3 +234,19 @@ Status: Phase 0 complete (scaffolding). Phase 1 not started.
   the Drips Wave application: a prospective contributor or organizer
   landing on any of these repos now sees actual passing checks, not a
   placeholder.
+- 2026-09-15 — General workspace-audit fixes, applied identically to all
+  three org repos:
+  - This file's own top status line was stale (dated 2026-09-09, said
+    "Phase 0 complete, Phase 1 not started" while the body below showed
+    Phases 1-9 built/scoped) — corrected.
+  - Added `CONTRIBUTING.md` — `AGENTS.md` is written for coding agents,
+    not a quick human onboarding path; this covers clone/install/test,
+    how to claim an issue, and the PR checklist.
+  - Branch protection enabled on `main` for all three repos: the real CI
+    check must pass and one approval is required before merge, force
+    pushes and deletion are disabled. `enforce_admins` left `false` so
+    the maintainer isn't blocked — this protects against a bad external
+    PR landing unreviewed/uncheck-passing, not against the maintainer's
+    own direct pushes.
+  - Added GitHub topics to `docforum-core` and `docforum-web`
+    (`docforum-escrow` already had them) for discoverability.
