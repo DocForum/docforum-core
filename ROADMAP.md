@@ -1,11 +1,11 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-09-15
-Status: Phase 0 and Phase 1 complete and tested. Phases 2-9 fully scoped
-into GitHub issues (#1-#22); Phase 5.5 stays unscoped (blocked on
-`docforum-escrow` publishing its SDK) and Phase 7 is superseded by
-`docforum-web`'s own roadmap. See each phase section below for status and
-issue links.
+Last updated: 2026-09-26
+Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
+`docs/adr/0004-custodial-payments-v1.md`) built and tested. Phases 2-6
+and 8-9 scoped into GitHub issues (#1-#22, #21 closed); Phase 7 is
+superseded by `docforum-web`'s own roadmap. See each phase section below
+for status and issue links.
 
 > **Org note:** this repo (`docforum-core`) is the hub of a 3-repo `DocForum` org. Frontend work is tracked in `docforum-web`'s own roadmap. Stellar contract/SDK work is tracked in `docforum-escrow`'s own roadmap. This file tracks only what runs inside `docforum-core` — including the `payments` module, which *consumes* `docforum-escrow`'s published package but doesn't implement contract logic itself.
 
@@ -47,6 +47,7 @@ issue links.
 - [ ] Booking flow requires intake before confirmation. Tracked as [issue #2](https://github.com/DocForum/docforum-core/issues/2) (Medium, 150 pts) — depends on #1.
 - [ ] `Appointment` lifecycle (`scheduled → completed/cancelled/no_show`) + doctor's today view. Tracked as [issue #3](https://github.com/DocForum/docforum-core/issues/3) (Medium, 150 pts).
 - [ ] `Consultation` record + outcome (`resolved | referred | follow_up_needed`). Tracked as [issue #4](https://github.com/DocForum/docforum-core/issues/4) (High, 200 pts).
+- [ ] Doctor discovery: specialty catalog, doctor ↔ specialty assignment, public `GET /doctors?specialty=` (verified doctors only). Nothing in `backend/src` touched `Specialty`/`DoctorSpecialty` before this; `docforum-web` issue #1 depends on it. Tracked as [issue #23](https://github.com/DocForum/docforum-core/issues/23) (Medium, 150 pts).
 - [ ] Patient-facing view: my intake history. Not yet split into its own issue — small enough to fold into whichever of the above lands last, or split out later if it grows.
 
 ## Phase 3 — Referrals
@@ -303,3 +304,12 @@ issue links.
   — the first fix addressed one instance, a second (different) instance
   in the same file was still breaking the build; both are now fixed at
   the source in `docforum-escrow`.
+- 2026-09-26 — Refreshed this file's stale top status line (still said
+  Phase 5.5 was unscoped/blocked on the escrow SDK, though it shipped
+  2026-09-15). Opened [issue #23](https://github.com/DocForum/docforum-core/issues/23)
+  (doctor discovery): a repo-wide check found no code path creating,
+  assigning, or reading `Specialty`/`DoctorSpecialty`, and no doctor
+  list endpoint, which `docforum-web` issue #1 assumes. Also noted, not
+  yet fixed: `npm audit --omit=dev` reports 3 high-severity findings via
+  `prisma` → `@prisma/config` → `deepmerge-ts <8`; the suggested
+  `npm audit fix --force` downgrades Prisma (breaking), so not applied.
