@@ -37,7 +37,8 @@ GitHub Pages UI preview has a real backend to call, nothing more.
 ## Consequences
 
 - **Free-tier limitations, accepted for a preview:** the Postgres instance
-  expires 30 days after creation (2026-10-14) with a 14-day grace period —
+  expires 30 days after creation (current date: see "Renewing the free
+  database" below) with a 14-day grace period —
   it will need recreating or upgrading before then, or the preview breaks.
   The web service spins down after 15 minutes of inactivity (~1 minute
   cold-start on the next request).
@@ -56,7 +57,7 @@ GitHub Pages UI preview has a real backend to call, nothing more.
 ## Renewing the free database
 
 The free Postgres expires 30 days after creation. **Current instance
-expires 2026-10-14** — update this date each time you renew. The data
+expires 2026-11-06** (renewed 2026-10-07) — update this date each time you renew. The data
 is disposable preview data (see above), so renewing means starting from
 an empty database, not migrating rows.
 
