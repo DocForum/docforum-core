@@ -52,3 +52,34 @@ GitHub Pages UI preview has a real backend to call, nothing more.
 - Data on the hosted Postgres instance is disposable preview data, not
   subject to any retention/backup guarantee — do not point real users or
   real PHI at this deployment.
+
+## Renewing the free database
+
+The free Postgres expires 30 days after creation. **Current instance
+expires 2026-10-14** — update this date each time you renew. The data
+is disposable preview data (see above), so renewing means starting from
+an empty database, not migrating rows.
+
+No manual migration step is needed: the web service's start command
+already runs `npx prisma migrate deploy`, so a fresh database gets the
+full schema on the next deploy.
+
+1. Render dashboard → **New → Postgres**, free plan, region `oregon`
+   (same as the web service, so the internal URL works).
+2. Once it's available, copy its **Internal Database URL**.
+3. Web service → **Environment** → replace `DATABASE_URL` with that URL →
+   save. Render redeploys; `prisma migrate deploy` runs on start.
+4. Check the deploy log shows the migrations applied, then sign up a
+   test user through the `docforum-web` Pages preview to confirm the
+   round trip (including the refresh cookie).
+5. Re-create any admin/demo accounts the preview relies on — they lived
+   in the old database. `POST /auth/signup` refuses `role: 'admin'`, so
+   sign up as a patient, then promote it with the database's **External
+   Database URL**:
+   `psql "<external-url>" -c "UPDATE \"User\" SET role = 'admin' WHERE email = '<email>';"`
+6. Delete the old Postgres instance, and update the expiry date at the
+   top of this section (and in `ROADMAP.md` Phase 9).
+
+Upgrading the existing instance to a paid plan instead keeps its data
+and removes the expiry entirely; do that if renewing monthly gets old
+before issue #22 picks a real production target.
