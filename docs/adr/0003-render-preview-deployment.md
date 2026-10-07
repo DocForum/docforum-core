@@ -64,21 +64,27 @@ No manual migration step is needed: the web service's start command
 already runs `npx prisma migrate deploy`, so a fresh database gets the
 full schema on the next deploy.
 
-1. Render dashboard → **New → Postgres**, free plan, region `oregon`
-   (same as the web service, so the internal URL works).
-2. Once it's available, copy its **Internal Database URL**.
-3. Web service → **Environment** → replace `DATABASE_URL` with that URL →
+Render allows only one free Postgres per workspace, so the old instance
+has to be deleted **before** the new one can be created. The preview
+backend is down between steps 2 and 4.
+
+1. Note the emails of any admin/demo accounts on the old database —
+   they won't carry over.
+2. Old Postgres instance → **Settings** → **Delete Database**.
+3. **New → Postgres**, free plan, region `oregon` (same as the web
+   service, so the internal URL works). Once it's available, copy its
+   **Internal Database URL**.
+4. Web service → **Environment** → replace `DATABASE_URL` with that URL →
    save. Render redeploys; `prisma migrate deploy` runs on start.
-4. Check the deploy log shows the migrations applied, then sign up a
+5. Check the deploy log shows the migrations applied, then sign up a
    test user through the `docforum-web` Pages preview to confirm the
    round trip (including the refresh cookie).
-5. Re-create any admin/demo accounts the preview relies on — they lived
-   in the old database. `POST /auth/signup` refuses `role: 'admin'`, so
-   sign up as a patient, then promote it with the database's **External
-   Database URL**:
+6. Re-create the admin/demo accounts from step 1. `POST /auth/signup`
+   refuses `role: 'admin'`, so sign up as a patient, then promote it
+   with the database's **External Database URL**:
    `psql "<external-url>" -c "UPDATE \"User\" SET role = 'admin' WHERE email = '<email>';"`
-6. Delete the old Postgres instance, and update the expiry date at the
-   top of this section (and in `ROADMAP.md` Phase 9).
+7. Update the expiry date at the top of this section (and in
+   `ROADMAP.md` Phase 9).
 
 Upgrading the existing instance to a paid plan instead keeps its data
 and removes the expiry entirely; do that if renewing monthly gets old
