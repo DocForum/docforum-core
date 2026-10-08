@@ -21,7 +21,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 
 | Layer | Choice | Why |
 |---|---|---|
-| Backend language/runtime | Node.js (TypeScript) | Single language across stack, large ecosystem, easy hiring. |
+| Backend language/runtime | Node.js (TypeScript) | Single language across stack, large ecosystem, easy hiring. **TS side-by-side (2026-10-08):** `tsc` is TS 7 (`@typescript/native` alias), but the `typescript` package resolves to `@typescript/typescript6` because typescript-eslint can't consume the TS 7 API yet (typescript-eslint#10940) — per the TS 7.0 release's recommended side-by-side setup. Typecheck/build are unchanged (TS 7). |
 | Backend framework | Express 5 — **decided 2026-09-14**, resolving the "(or Fastify)" either/or | Minimal, unopinionated, matches "modular monolith" — avoid a heavy framework that fights the module boundaries. Express 5's native async-handler error forwarding (rejected promises reach the error middleware without a manual wrapper) was a real factor, not just familiarity. |
 | Request validation | Zod | Not originally listed here — added alongside Phase 1's real request bodies. Schemas live per-module (`modules/*/validation.ts`), thrown `ZodError`s are caught centrally by `middleware/error-handler.ts`. |
 | Password hashing | bcryptjs | Pure-JS, not a native bcrypt binding — one less native build dependency for a repo with no other native deps yet. |
@@ -35,6 +35,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | File/result storage | Object storage (S3-compatible) for lab result attachments | Never store clinical files directly in Postgres rows. |
 | Background jobs | Simple queue (BullMQ on Redis) for reminders, order-expiry checks, notification delivery | Needed for FR-15/16 and the "orphaned order" hard question (PRD §8.1.3). |
 | Infra | Docker Compose for local dev; containerized deploy target TBD (not decided — see Open Questions in ROADMAP) | Keep infra decisions deferred until a real deploy target is chosen; don't overbuild CI/CD for a repo with no code yet. |
+| Linting | ESLint (flat config) + typescript-eslint, `backend/eslint.config.mjs`, `npm run lint` in CI | Issue #28: modest type-aware baseline (`no-floating-promises` on) — correctness feedback on async booking/payment code, not a style war. |
 
 ## 3. Module boundaries (backend)
 
