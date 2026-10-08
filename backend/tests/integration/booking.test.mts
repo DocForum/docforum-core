@@ -65,7 +65,7 @@ describe('booking concurrency', () => {
     await pg.start();
     await pg.createDatabase('docforum_test');
 
-    execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
+    execFileSync('npx', ['prisma', 'migrate', 'deploy'], { shell: process.platform === 'win32',
       cwd: BACKEND_ROOT,
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: 'pipe',

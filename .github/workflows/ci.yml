@@ -7,7 +7,7 @@ on:
 
 jobs:
   backend:
-    name: Backend (typecheck + test + build)
+    name: Backend (lint + typecheck + test + build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -24,6 +24,8 @@ jobs:
       - run: npm ci
 
       - run: npm run prisma:generate
+
+      - run: npm run lint
 
       - run: npm run typecheck
 

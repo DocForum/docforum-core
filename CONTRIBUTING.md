@@ -48,8 +48,8 @@ what depends on what, and what's deliberately not yet scoped (and why).
 - If your change starts, completes, or blocks a roadmap-tracked item,
   update `ROADMAP.md` in the same PR. A PR that finishes an issue but
   doesn't update the roadmap is incomplete.
-- Run `npm run typecheck && npm run test:all && npm run build` locally —
-  this is exactly what CI checks.
+- Run `npm run lint && npm run typecheck && npm run test:all && npm run build`
+  locally — this is exactly what CI checks.
 
 ## 4. Opening the PR
 
@@ -58,7 +58,7 @@ what depends on what, and what's deliberately not yet scoped (and why).
 - State in the PR description what changed, why, and which `ROADMAP.md`
   item it maps to — not a vague "made improvements" summary. Reviewers
   are trusting the roadmap/docs to reflect real state.
-- CI (typecheck, unit tests, the embedded-Postgres integration test,
+- CI (lint, typecheck, unit tests, the embedded-Postgres integration test,
   build) must pass before merge — it runs automatically on your PR.
 
 ## Found a bug instead?

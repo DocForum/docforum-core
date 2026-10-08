@@ -115,7 +115,7 @@ for status and issue links.
 ## Phase 9 — Deploy & CI
 **Status: Not started for real production. A Render free-tier preview exists — see note. Remaining items scoped into issues #21–#22.**
 - [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Still not resolved.** A Render free-tier web service + Postgres now runs `backend/`, so `docforum-web`'s GitHub Pages preview has a live API to call — see `docs/adr/0003-render-preview-deployment.md`. This is explicitly a preview, not the production decision: no secrets manager, no backups, no staging/prod split, free-tier Postgres expires 2026-11-06 (renewed 2026-10-07; 30 days, 14-day grace period) unless recreated/upgraded before then — renewal steps in ADR 0003's "Renewing the free database" section. Tracked as [issue #22](https://github.com/DocForum/docforum-core/issues/22) (Medium, 150 pts).
-- [x] Real CI pipeline (replaced `.github/workflows/ci.yml` placeholder — was `pull_request`-only, `echo "TODO"`, never once run). Now runs on push to `main` and on PRs: `prisma:generate` → `typecheck` → unit tests → **integration tests (the self-contained embedded-Postgres double-booking proof)** → `build`. Verified locally end-to-end before pushing (14 unit + 1 integration test passing) and confirmed green in Actions. No lint script exists yet in `backend/package.json` — not added; `tsc --noEmit` is the closest static check currently available. Lint now tracked as [issue #28](https://github.com/DocForum/docforum-core/issues/28) (Trivial, 100 pts). Closes [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
+- [x] Real CI pipeline (replaced `.github/workflows/ci.yml` placeholder — was `pull_request`-only, `echo "TODO"`, never once run). Now runs on push to `main` and on PRs: `prisma:generate` → `lint` → `typecheck` → unit tests → **integration tests (the self-contained embedded-Postgres double-booking proof)** → `build`. Verified locally end-to-end before pushing (14 unit + 1 integration test passing) and confirmed green in Actions. **Lint added 2026-10-08** (Closes [issue #28](https://github.com/DocForum/docforum-core/issues/28), Trivial, 100 pts): `npm run lint` (ESLint flat config + typescript-eslint, `backend/eslint.config.mjs`) runs locally and as a CI step before typecheck. Type-aware rules enabled — `@typescript-eslint/no-floating-promises` as the issue required — on a modest `recommended` + `recommendedTypeChecked` baseline; every relaxed/off rule carries an inline justification (tests: supertest's `res.body` is `any` by design; `scripts/*.mjs`: outside tsconfig, console output is their product). Note the TS side-by-side setup: the repo compiles with TS 7 (`@typescript/native` alias → `tsc`), while `typescript` resolves to `@typescript/typescript6` because typescript-eslint doesn't support the TS 7 API yet (typescript-eslint#10940) — per the TS 7.0 release's own guidance. Closes [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
 - [ ] Staging environment. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [ ] Production environment + secrets management. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [x] Docs site deployed — `docs/site/` (VitePress) via `.github/workflows/deploy-docs.yml`, live at https://docforum.github.io/docforum-core/. Unrelated to the production-deploy decision above; this is a static site with no backend of its own.
@@ -329,3 +329,19 @@ for status and issue links.
   `docforum-escrow`'s threat model §5/T1–T2; wallet key checksum
   validation (#26); Docker Compose verification (#27); ESLint in CI
   (#28); cross-repo docs-site rebuild (#29).
+- 2026-10-08 — Closed issue #28: added ESLint (flat config +
+  typescript-eslint) to `backend/` with a `npm run lint` script and a CI
+  lint step before typecheck. Type-aware baseline (`recommended` +
+  `recommendedTypeChecked`) with `no-floating-promises` on as the issue
+  required; existing code needed only two small source fixes (an unused
+  `_next` → underscore-arg convention, and the escrow-sdk loader's module
+  type rewritten to derive from the dynamic `import()` expression). One
+  non-obvious setup decision, noted per AGENTS.md's gap rule: typescript-
+  eslint hard-errors on the TS 7 API (typescript-eslint#10940), so
+  `typescript` now resolves to `@typescript/typescript6` while
+  `@typescript/native` keeps `tsc` at 7.0.2 — the side-by-side arrangement
+  the TS 7.0 release post recommends; `npm run typecheck`/`build` are
+  unchanged (still TS 7). Also fixed `test:integration` on Windows
+  (`execFileSync('npx', …)` needs a shell there — was ENOENT/EINVAL on
+  pristine `main`) and raised vitest's `hookTimeout` for the embedded-
+  Postgres startup.
