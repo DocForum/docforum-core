@@ -62,6 +62,10 @@ export default defineConfig({
               text: '0004 — Custodial payments v1',
               link: '/architecture/adr/0004-custodial-payments-v1',
             },
+            {
+              text: '0005 — Non-custodial payments v2 (proposed)',
+              link: '/architecture/adr/0005-non-custodial-patient-payments',
+            },
           ],
         },
       ],

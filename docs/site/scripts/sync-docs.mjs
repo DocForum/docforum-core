@@ -74,6 +74,10 @@ async function main() {
     'docs/adr/0004-custodial-payments-v1.md',
     'architecture/adr/0004-custodial-payments-v1.md',
   );
+  await copyLocal(
+    'docs/adr/0005-non-custodial-patient-payments.md',
+    'architecture/adr/0005-non-custodial-patient-payments.md',
+  );
 
   console.log('\ndocforum-web (remote — github.com/DocForum/docforum-web@main):');
   await fetchRemote('docforum-web', 'README.md', 'repos/web/readme.md');
