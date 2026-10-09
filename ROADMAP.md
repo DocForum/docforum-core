@@ -87,6 +87,7 @@ for status and issue links.
 - [ ] Idempotent escrow funding + on-chain reconcile job (`fundPaymentIntent` is check-then-act — docforum-escrow threat model §5). Tracked as [issue #24](https://github.com/DocForum/docforum-core/issues/24) (High, 200 pts).
 - [ ] ADR: releaser key custody — multisig, KMS, or per-period rotation (threat model T1/T2). Tracked as [issue #25](https://github.com/DocForum/docforum-core/issues/25) (Medium, 150 pts).
 - [ ] Checksum-validate facility wallet keys, not just regex. Tracked as [issue #26](https://github.com/DocForum/docforum-core/issues/26) (Trivial, 100 pts).
+- [ ] Non-custodial patient payments (v2): patients fund escrows from their own Stellar wallet, custodial kept as fallback. **Proposed** in `docs/adr/0005-non-custodial-patient-payments.md`; implementation issues to be opened once it's Accepted.
 - [ ] Doc reconciliation: PRD §8.1.6 (facility fulfillment integrity) — not marked resolved; this phase proves the payment *mechanism* works, not the fulfillment-integrity question, which still needs real `FulfillmentRecord`/facility-matching (Phase 5) to actually address.
 
 ## Phase 6 — Notifications
@@ -329,3 +330,11 @@ for status and issue links.
   `docforum-escrow`'s threat model §5/T1–T2; wallet key checksum
   validation (#26); Docker Compose verification (#27); ESLint in CI
   (#28); cross-repo docs-site rebuild (#29).
+- 2026-10-08 — Proposed ADR 0005 (non-custodial patient payments v2):
+  `docforum-core` builds and submits transactions, the browser only asks
+  the patient's wallet to sign, which removes ADR 0004's objection while
+  keeping all Stellar network calls in this repo. Patient becomes the
+  escrow `payer`, with `refund_after` as their protection; SEP-10 wallet
+  linking for patients and facilities; USDC; platform fee-bump
+  sponsorship. Custodial v1 stays as a fallback. Status: Proposed, not
+  yet Accepted. Added to the docs site.
