@@ -112,6 +112,7 @@ model User {
   patientProfile  PatientProfile?
   doctorProfile   DoctorProfile?
   facilityProfile FacilityProfile?
+  twoFactorAuth   TwoFactorAuth?
 
   emailVerificationTokens EmailVerificationToken[]
 

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticate, requireRole } from '../../../middleware/auth';
 import { requireAllowedOrigin } from '../../../middleware/csrf';
 import * as authController from '../controllers';
+import { authenticate } from '../../../middleware/auth';
 
 export const authRouter = Router();
 

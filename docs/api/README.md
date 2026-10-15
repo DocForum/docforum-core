@@ -130,6 +130,32 @@ cookie, 30-day TTL, `SameSite=None; Secure` in production and
 (`backend/src/config/index.ts`) so the refresh and CSRF cookies can never
 drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 
+### Two-step login (2FA enabled)
+
+```
+POST /auth/login   { email, password }
+  → 200 { mfaRequired: true, mfaPendingToken }        # no cookie, no access token
+POST /auth/2fa/verify  { mfaPendingToken, code }
+  → 200 { user, accessToken } + httpOnly refresh cookie
+```
+
+The `mfaPendingToken` is signed with the access-token secret but carries a
+`scope: 'mfa_pending'` claim, and `verifyAccessToken` refuses any token that
+has one — so it is **accepted by exactly one route** (this verify endpoint)
+and rejected by every authenticated route (tested both directions). It expires
+after 5 minutes. `code` is a 6-digit RFC 6238 TOTP code (SHA-1, 30s period,
+±1 step of clock skew) or one of the recovery codes.
+
+TOTP codes are replay-protected: the highest accepted time step is stored per
+user and any code at or below it is rejected, even inside the ±1 window.
+Recovery codes are single-use (bcrypt-hashed; the plaintext is returned only
+from `/2fa/enable`). The TOTP secret is stored AES-256-GCM encrypted with
+`TOTP_ENCRYPTION_KEY`.
+
+`REQUIRE_2FA_FOR_ADMIN=true` makes 2FA mandatory for admin logins: an admin
+without 2FA enrolled gets `403` at login. See
+`ARCHITECTURE_ESSENTIALS.md` for the enrollment bootstrap caveat on that flag.
+
 ## Doctors (`/doctors`) — `backend/src/modules/doctors`
 
 | Method & path | Auth | Notes |

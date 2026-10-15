@@ -19,7 +19,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
-`User` → `PatientProfile | DoctorProfile | FacilityProfile`
+`User` → `PatientProfile | DoctorProfile | FacilityProfile` ; `User` → `TwoFactorAuth` —< `TwoFactorRecoveryCode` (TOTP, secret encrypted at rest, single-use recovery codes — Phase 8 #36)
+Token kinds: access (15 min) / refresh (httpOnly cookie, 30 d) / `mfa_pending` (5 min, single purpose — accepted only by `POST /auth/2fa/verify`).
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
 `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
