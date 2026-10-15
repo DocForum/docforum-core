@@ -323,6 +323,15 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   const user = await findUserById(payload.sub);
   if (!user) throw new HttpError(401, 'Invalid or expired refresh token.');
 
+  // `tv` check: a password reset (or anything else that bumps
+  // User.tokenVersion) kills every refresh token issued before it. Tokens
+  // predating this field carry no `tv` and read as version 0, which is
+  // exactly right — they stay valid only while the user has never had a
+  // version bump.
+  if ((payload.tv ?? 0) !== user.tokenVersion) {
+    throw new HttpError(401, 'Invalid or expired refresh token.');
+  }
+
   const tokens = issueSession(user);
   return { user: toPublicUser(user), ...tokens };
 }

@@ -1,7 +1,7 @@
 // Auth module's repository — the only place that touches the `User` /
-// `PatientProfile` / `DoctorProfile` tables for auth purposes. Other
-// modules must go through this module's services, never import this file
-// directly (AGENTS.md hard rule 4).
+// `PatientProfile` / `DoctorProfile` / `PasswordResetToken` tables for auth
+// purposes. Other modules must go through this module's services, never
+// import this file directly (AGENTS.md hard rule 4).
 import { prisma } from '../../../db/prisma-client';
 import type { Prisma, Role } from '@prisma/client';
 

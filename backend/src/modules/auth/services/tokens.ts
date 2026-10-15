@@ -1,3 +1,7 @@
+// Token signing/verification. Every token carries `tv` (the user's
+// refresh-token version at issue time) so bumping `User.tokenVersion`
+// invalidates all outstanding tokens without a per-request DB read — the
+// check happens where the token is actually exchanged (refresh).
 import jwt from 'jsonwebtoken';
 import { config } from '../../../config';
 import type { Role } from '@prisma/client';
@@ -5,6 +9,8 @@ import type { Role } from '@prisma/client';
 export interface AccessTokenPayload {
   sub: string; // user id
   role: Role;
+  /** User.tokenVersion at issue time. Compared at refresh time. */
+  tv?: number;
 }
 
 /**

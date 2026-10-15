@@ -109,9 +109,18 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  patientProfile  PatientProfile?
-  doctorProfile   DoctorProfile?
-  facilityProfile FacilityProfile?
+  // Per-user refresh-token version. Embedded in every access/refresh token
+  // as `tv` and compared against this column at refresh time. Bumping it
+  // (password reset, Phase 8 #33) invalidates every outstanding refresh
+  // token for the user, since none of them carry the new value. This is
+  // the interim kill switch issue #33 explicitly asked for while the full
+  // revocation list (#18) doesn't exist yet — see ARCHITECTURE.md §6.1.4.
+  tokenVersion Int @default(0)
+
+  patientProfile     PatientProfile?
+  doctorProfile      DoctorProfile?
+  facilityProfile    FacilityProfile?
+  passwordResetTokens PasswordResetToken[]
 
   emailVerificationTokens EmailVerificationToken[]
 
