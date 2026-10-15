@@ -40,7 +40,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 
 Each module under `backend/src/modules/<name>/` owns its own `routes/`, `controllers/`, `services/`, `repositories/`. Cross-module access happens through a module's exported service interface only — **never reach into another module's repository directly.** This is the internal seam that would let us extract a module into its own service later without a rewrite.
 
-- `auth` — signup/login, tokens, role checks.
+- `auth` — signup/login, tokens, role checks, refresh-session management (its admin surface is mounted at `/admin`, not `/auth`).
 - `users` — shared user profile fields common to all roles.
 - `patients` — patient-specific profile data.
 - `doctors` — doctor profile, specialties, verification status.
@@ -167,6 +167,23 @@ Notification
   id, user_id, type, payload (jsonb), read_at (nullable), created_at
 ```
 
+### 4.9 Auth hardening (Phase 8)
+```
+RefreshSession (issue #38 — the revocation store issue #18 wanted)
+  id, user_id (FK -> User, cascade)
+  created_at, last_used_at, revoked_at (nullable)
+  user_agent (nullable), ip (nullable, coarse)
+```
+Design notes: one row per refresh-token **family**, i.e. per login. The refresh
+JWT carries `sid`; `POST /auth/refresh` looks the row up and refuses a missing
+or revoked session, so revocation is enforced exactly where new tokens are
+minted. Access tokens stay stateless and un-revoked (≤15 min of residual life)
+— a deliberate trade recorded in `ARCHITECTURE_ESSENTIALS.md` known gaps, not
+an oversight. `last_used_at` is written on refresh only, so authenticated
+requests don't write to this table. Collecting a coarse IP/user agent is what
+makes "sign out that other device" usable; nothing beyond what the request
+already carried is stored.
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)
@@ -193,7 +210,7 @@ Notification
 1. Naive slot booking without the DB-level conditional update in §5.1 — the most likely first bug filed against this repo. **Resolved 2026-09-14:** implemented exactly as designed in §5.1 — see `backend/src/modules/availability/repositories/index.ts` (`claimOpenSlot`) and `backend/src/modules/appointments/services/index.ts` (`bookSlot`, the transaction wrapping it). Integration-tested with real concurrency in `backend/tests/integration/booking.test.mts`.
 2. `Referral.target_doctor_id` left nullable with no fallback assignment logic — referrals to "a specialty" with no specific doctor need a real routing rule (round robin? load-based?) or they'll pile up unassigned. **Not designed yet — flag as open architecture gap.**
 3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final.
-4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
+4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added. **Addressed 2026-10-15 (issue #38):** refresh tokens now carry a `sid` referencing a `RefreshSession` row (§4.9), so refresh is refused once the session is revoked — which is what makes "list my sessions / sign out that device" and admin revocation real. Residual gap: access tokens are still unrevoked, so a revoked session's access token works for up to its 15-minute TTL.
 
 ### 6.2 What edge cases are we missing (architecture-level)?
 1. What happens to `AvailabilitySlot.status = 'held'` if a booking transaction fails/times out mid-flight — is there a TTL to release the hold? (Needed or slots leak into permanent limbo.)

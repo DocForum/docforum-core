@@ -19,7 +19,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
-`User` → `PatientProfile | DoctorProfile | FacilityProfile`
+`User` → `PatientProfile | DoctorProfile | FacilityProfile` ; `User` → `RefreshSession` (one row per login/refresh-token family; `sid` in the refresh JWT is checked at refresh — Phase 8 #38)
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
 `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
@@ -39,6 +39,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - No expiry/TTL job for held slots or pending referrals — currently just an enum value with no worker.
 - Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables.
 - No `AuditEvent` table yet, despite PRD requiring auditability — needed before real patient data.
+- Refresh-session revocation is enforced at refresh only. Access tokens are stateless, so a revoked session's access token still works for the rest of its 15-min TTL — acceptable for now, but it means "revoke immediately" is only true for refreshes.
+- `POST /auth/logout` clears the cookie but does not revoke the session server-side (the session stays listed until it's revoked or expires). Anyone wiring logout in the web app should call `DELETE /auth/sessions/:id` too.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 
 ## Overengineering guardrails (things NOT to build yet)

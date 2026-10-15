@@ -107,7 +107,8 @@ for status and issue links.
 - [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: Not started. Three of five items scoped into issues #18–#20 (independent of Phases 3–7); the other two remain blocked.**
+**Status: In progress — session management (#38) landed, plus TOTP 2FA (#36) and password reset (#33) opened as sibling hardening issues since. The two original blocked items still need Phases 3/4/5.**
+- [x] Session management: list and revoke active sessions per user — a `RefreshSession` row per refresh-token family (`sid` claim), `GET /auth/sessions` (marks the caller's current session), `DELETE /auth/sessions/:id`, `DELETE /auth/sessions` (sign out everywhere else), and admin `DELETE /admin/users/:id/sessions`. This is the revocation store #18 asked for, built in the auth module rather than as a parallel one: refresh is refused once a session is revoked, and `last_used_at` is written on refresh only (no write hot-spot per request). Ownership is part of the revoking UPDATE, not a branch above it. Closes [issue #38](https://github.com/DocForum/docforum-core/issues/38). Residual gap: access tokens stay stateless, so a revoked session's access token lives out its ≤15-min TTL — recorded in ARCHITECTURE_ESSENTIALS.md/§6.1.4.
 - [ ] `AuditEvent` table + write path for referral/prescription/lab-order state transitions (ARCHITECTURE.md §6.2.4 — flagged as needed before real patient data). Still blocked — needs the Phase 3/4 models (referral, prescription, lab order) to exist first. Not yet scoped into an issue.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
@@ -341,3 +342,16 @@ for status and issue links.
   yet Accepted. Added to the docs site.
 - 2026-10-09 — Opened issue #32: upgrade to escrow SDK 0.3.0 and the
   current testnet contract.
+- 2026-10-15 — Landed Phase 8's session management (issue #38):
+  `GET /auth/sessions`, `DELETE /auth/sessions/:id`,
+  `DELETE /auth/sessions` (all others) and admin
+  `DELETE /admin/users/:id/sessions`, backed by a new `RefreshSession`
+  table — one row per refresh-token family, with `sid` in the refresh JWT
+  and revocation enforced at refresh. This is the revocation store
+  issue #18 wanted, implemented in the auth module rather than as a
+  parallel mechanism. `last_used_at` is written on refresh only, so no
+  per-request write hot-spot; ownership scoping is part of the revoking
+  UPDATE. ARCHITECTURE.md §3/§4.9/§6.1.4, ARCHITECTURE_ESSENTIALS.md
+  (data model map + known gaps) and docs/api/README.md updated. Residual
+  gap flagged: access tokens are stateless, so revocation only bites at
+  refresh (≤15 min of residual access-token life).

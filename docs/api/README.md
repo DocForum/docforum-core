@@ -15,14 +15,27 @@ spec yet — TBD, tracked informally, not blocking Phase 1.
 | `POST /auth/signup` | none | `{ role: 'patient'\|'doctor', email, password, fullName }` | **`role` is restricted to `patient`/`doctor` server-side, not just in docforum-web's UI** — facility accounts are admin-invited only (PRD OQ-2). Returns `{ user, accessToken }`; sets an httpOnly refresh cookie. |
 | `POST /auth/login` | none | `{ email, password }` | Same response shape as signup. |
 | `POST /auth/refresh` | refresh cookie | — | Reads the httpOnly cookie (not the body). Returns a fresh `{ user, accessToken }` and rotates the cookie. |
-| `POST /auth/logout` | none | — | Clears the refresh cookie. `204 No Content`. |
+| `POST /auth/logout` | none | — | Clears the refresh cookie. `204 No Content`. Does **not** revoke the session — use `DELETE /auth/sessions/:id` for that. |
+| `GET /auth/sessions` | authenticated | — | The caller's own active sessions: `[{ id, createdAt, lastUsedAt, userAgent, ip, current }]`, most recently used first. `current` marks the session behind the request's refresh cookie. |
+| `DELETE /auth/sessions/:id` | authenticated | — | Revokes one of the caller's sessions. `204`. Another user's id is a `404` (scoped update, no existence signal). Revoking the *current* session also clears the refresh cookie in the same response. |
+| `DELETE /auth/sessions` | authenticated | — | "Sign out everywhere else": revokes every session of the caller **except** the current one. `200 { revoked }`. |
+| `DELETE /admin/users/:id/sessions` | admin | — | Revokes every session for a user. `200 { revoked }`. Mounted under `/admin`, not `/auth` — it acts on someone else's sessions. |
 
-Access tokens: `Authorization: Bearer <token>`, 15-minute TTL, no
-revocation list yet (see `ARCHITECTURE_ESSENTIALS.md` known gaps —
-JWT refresh rotation without a revocation list). Refresh tokens: httpOnly
-cookie, 30-day TTL, `sameSite: 'lax'`/`secure: false` — **local-dev-only
-choice**, see the comment above `setRefreshCookie` in
-`backend/src/modules/auth/controllers/index.ts` for what production needs.
+Access tokens: `Authorization: Bearer <token>`, 15-minute TTL, stateless —
+**no revocation check**, so a revoked session's access token keeps working
+until it expires (≤15 min). Refresh tokens: httpOnly cookie, 30-day TTL,
+`sameSite: 'lax'`/`secure: false` — **local-dev-only choice**, see the comment
+above `setRefreshCookie` in `backend/src/modules/auth/controllers/index.ts`
+for what production needs.
+
+Every login/signup creates a `RefreshSession` row and returns `sessionId` in
+the body; the refresh JWT carries `sid` and `POST /auth/refresh` only succeeds
+while that row exists and is unrevoked. Revocation therefore takes effect on
+the next refresh. Refresh rotates the tokens but keeps the same session (same
+family) — a new row per refresh would make "list my sessions" meaningless — and
+it is the **only** place `lastUsedAt` is written, so there's no session write on
+every authenticated request. Tokens minted before session records existed carry
+no `sid` and are rejected: the migration logs existing sessions out once.
 
 ## Doctors (`/doctors`) — `backend/src/modules/doctors`
 

@@ -13,6 +13,52 @@ export function findUserById(id: string) {
   return prisma.user.findUnique({ where: { id } });
 }
 
+// --- Refresh sessions (Phase 8 #38) -------------------------------------
+
+export function createRefreshSession(input: { userId: string; userAgent?: string; ip?: string }) {
+  return prisma.refreshSession.create({
+    data: { userId: input.userId, userAgent: input.userAgent, ip: input.ip },
+  });
+}
+
+export function findRefreshSessionById(id: string) {
+  return prisma.refreshSession.findUnique({ where: { id } });
+}
+
+/** The only write a session takes outside of creation/revocation — called
+ * from refresh, not from every authenticated request. */
+export function touchRefreshSession(id: string) {
+  return prisma.refreshSession.update({ where: { id }, data: { lastUsedAt: new Date() } });
+}
+
+export function listRefreshSessions(userId: string) {
+  return prisma.refreshSession.findMany({
+    where: { userId, revokedAt: null },
+    orderBy: { lastUsedAt: 'desc' },
+  });
+}
+
+/** Scoped by `userId` in the WHERE clause rather than checked afterwards —
+ * revoking someone else's session is a 0-row update, not a logic branch
+ * that could be got wrong. */
+export function revokeRefreshSession(id: string, userId: string) {
+  return prisma.refreshSession.updateMany({
+    where: { id, userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+}
+
+export function revokeRefreshSessionsForUser(input: { userId: string; exceptSessionId?: string }) {
+  return prisma.refreshSession.updateMany({
+    where: {
+      userId: input.userId,
+      revokedAt: null,
+      ...(input.exceptSessionId ? { id: { not: input.exceptSessionId } } : {}),
+    },
+    data: { revokedAt: new Date() },
+  });
+}
+
 export interface CreateSelfServeUserInput {
   email: string;
   phone?: string;
