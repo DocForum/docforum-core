@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { verifyAccessToken } from '../modules/auth/services';
+import { assertEmailVerified, verifyAccessToken } from '../modules/auth/services';
 import { HttpError } from '../http-error';
 import type { Role } from '@prisma/client';
 
@@ -29,6 +29,21 @@ export function authenticate(req: Request, _res: Response, next: NextFunction) {
   } catch {
     throw new HttpError(401, 'Invalid or expired access token.');
   }
+}
+
+/** Must run after `authenticate`. Rejects with `403 EMAIL_NOT_VERIFIED`
+ * (Phase 8, issue #34) when the caller's own address hasn't been verified.
+ * Applied only to mutations that need a trustworthy contact address —
+ * booking and payments — never to login/browsing.
+ *
+ * This is a DB read, so verifying the address in another tab unblocks the
+ * caller immediately, instead of after their access token's 15-minute TTL.
+ * It is deliberately *not* the doctor/facility `verificationStatus` gate:
+ * that is a separate, manual credential review (§4.1). */
+export async function requireVerifiedEmail(req: Request, _res: Response, next: NextFunction) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  await assertEmailVerified(req.user.id);
+  next();
 }
 
 /** Must run after `authenticate`. Rejects with 403 if the authenticated

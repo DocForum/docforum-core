@@ -84,6 +84,13 @@ backend is down between steps 2 and 4.
    refuses `role: 'admin'`, so sign up as a patient, then promote it
    with the database's **External Database URL**:
    `psql "<external-url>" -c "UPDATE \"User\" SET role = 'admin' WHERE email = '<email>';"`
+   A promoted account is still `emailVerifiedAt = null` (Phase 8, issue
+   #34), which the payments endpoints now reject with `403
+   EMAIL_NOT_VERIFIED`. Since no email provider is integrated yet (issue
+   #17), mark it verified out-of-band:
+   `node backend/scripts/mark-email-verified.mjs <email>` (see
+   `scripts/README.md`). This whole step is superseded by the admin
+   bootstrap CLI added in issue #39 — replace it once that lands.
 7. Update the expiry date at the top of this section (and in
    `ROADMAP.md` Phase 9).
 

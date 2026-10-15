@@ -16,6 +16,36 @@ spec yet — TBD, tracked informally, not blocking Phase 1.
 | `POST /auth/login` | none | `{ email, password }` | Same response shape as signup. |
 | `POST /auth/refresh` | refresh cookie | — | Reads the httpOnly cookie (not the body). Returns a fresh `{ user, accessToken }` and rotates the cookie. |
 | `POST /auth/logout` | none | — | Clears the refresh cookie. `204 No Content`. |
+| `POST /auth/verify-email` | none | `{ token }` | Redeems the token from the verification email. `200 { emailVerifiedAt }`. Errors are `400` with `code: 'INVALID_VERIFICATION_TOKEN'` (unknown / already used) or `code: 'VERIFICATION_TOKEN_EXPIRED'`. Single-use and atomic — two concurrent redemptions can't both succeed. |
+| `POST /auth/verify-email/resend` | access token | — | Re-sends to the caller's own address. `200 { resendAfterSeconds }`. `409 EMAIL_ALREADY_VERIFIED` if already verified; `429 EMAIL_VERIFICATION_RATE_LIMITED` if a mail went out less than `EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS` ago (default 60). Authenticated and account-scoped on purpose — no email in the body, so it can't be used to enumerate accounts. |
+
+### Email verification (Phase 8, issue #34)
+
+`POST /auth/signup` creates the account **unverified** (`user.emailVerifiedAt`
+is `null` in the response and in `GET`-style payloads). Unverified accounts
+can log in, refresh, and browse; they get
+`403 { message, code: 'EMAIL_NOT_VERIFIED' }` from mutating routes that
+depend on a trustworthy contact address:
+
+- `POST /appointments` (booking)
+- `POST /payments/wallet-link`, `POST /payments/intents`,
+  `POST /payments/intents/:id/{fund,release,refund}`
+
+That guard reads the database rather than trusting a claim in the access
+token, so verifying in one tab unblocks the caller immediately instead of
+after the 15-minute token TTL.
+
+**No email provider is integrated yet** (Phase 6, issue #17) —
+`backend/src/modules/auth/services/email-dispatcher.ts` is the
+provider-agnostic seam and currently drops the message (logging only the
+subject and recipient, never the body/token). On a hosted deployment, an
+operator can mark an address verified out-of-band with
+`node backend/scripts/mark-email-verified.mjs <email>`; see
+`scripts/README.md`. This is a documented interim, not the end state.
+
+Env knobs: `EMAIL_VERIFICATION_TOKEN_TTL_MINUTES` (default 1440),
+`EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS` (default 60),
+`EMAIL_VERIFICATION_LANDING_URL` (where the emailed link points).
 
 Access tokens: `Authorization: Bearer <token>`, 15-minute TTL, no
 revocation list yet (see `ARCHITECTURE_ESSENTIALS.md` known gaps —

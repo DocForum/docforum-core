@@ -47,3 +47,53 @@ export function createSelfServeUser(input: CreateSelfServeUserInput) {
     return user;
   });
 }
+
+// --- Email verification (Phase 8, issue #34) -----------------------------
+// Only hashes are stored; see services/verification-tokens.ts.
+
+export function findVerificationTokenByHash(tokenHash: string) {
+  return prisma.emailVerificationToken.findUnique({ where: { tokenHash } });
+}
+
+export function findLatestVerificationToken(userId: string) {
+  return prisma.emailVerificationToken.findFirst({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+/** Issues the newest token and retires any still-outstanding one, in one
+ * transaction — "latest link wins", so a resend doesn't leave two live
+ * links in two inboxes. Retiring is a `consumedAt` write, never a delete:
+ * this table is an append-only-ish audit of what was issued. */
+export function replaceVerificationToken(input: {
+  userId: string;
+  tokenHash: string;
+  expiresAt: Date;
+}) {
+  return prisma.$transaction(async (tx) => {
+    await tx.emailVerificationToken.updateMany({
+      where: { userId: input.userId, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+    return tx.emailVerificationToken.create({
+      data: { userId: input.userId, tokenHash: input.tokenHash, expiresAt: input.expiresAt },
+    });
+  });
+}
+
+/** Single-use enforcement, the same shape as the booking guarantee: a
+ * conditional UPDATE that only matches while the row is still unused, so
+ * two concurrent redemptions of one token can't both win. Returns whether
+ * *this* caller consumed it. */
+export async function consumeVerificationToken(tokenId: string, consumedAt: Date): Promise<boolean> {
+  const result = await prisma.emailVerificationToken.updateMany({
+    where: { id: tokenId, consumedAt: null },
+    data: { consumedAt },
+  });
+  return result.count === 1;
+}
+
+export function markUserEmailVerified(userId: string, verifiedAt: Date) {
+  return prisma.user.update({ where: { id: userId }, data: { emailVerifiedAt: verifiedAt } });
+}

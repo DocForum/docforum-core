@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import * as authService from '../services';
-import { loginSchema, signupSchema } from '../validation';
+import { loginSchema, signupSchema, verifyEmailSchema } from '../validation';
 import { HttpError } from '../../../http-error';
 
 const REFRESH_COOKIE = 'docforum_refresh';
@@ -56,6 +56,23 @@ export async function refresh(req: Request, res: Response) {
 
   const session = await authService.refresh(token);
   sessionResponse(res, session);
+}
+
+// Phase 8, issue #34.
+export async function verifyEmail(req: Request, res: Response) {
+  const { token } = verifyEmailSchema.parse(req.body);
+  const result = await authService.verifyEmail(token);
+  res.status(200).json({ emailVerifiedAt: result.emailVerifiedAt });
+}
+
+/** Authenticated on purpose: the resend target is the caller's own
+ * account, so this endpoint can't be used to enumerate registered
+ * addresses, and being logged in is exactly the state a user is in when
+ * they need it (login is allowed while unverified). */
+export async function resendVerificationEmail(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const result = await authService.resendVerificationEmail(req.user.id);
+  res.status(200).json(result);
 }
 
 export function logout(_req: Request, res: Response) {
