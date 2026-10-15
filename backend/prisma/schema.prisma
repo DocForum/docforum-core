@@ -100,6 +100,12 @@ model User {
   phone        String?
   passwordHash String
   role         Role
+  // Phase 8 (issue #34): null = never verified. Self-serve signup leaves
+  // this null; existing rows were backfilled to `createdAt` in the
+  // add_email_verification migration. Distinct from
+  // DoctorProfile.verificationStatus, which is the separate, manual
+  // admin verification of a doctor's credentials — do not conflate.
+  emailVerifiedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -108,34 +114,55 @@ model User {
   facilityProfile FacilityProfile?
   refreshSessions RefreshSession[]
 
+  emailVerificationTokens EmailVerificationToken[]
+
   @@index([role])
 }
 
-// One row per refresh-token *family*, i.e. per login. This is the
-// revocation store session management needs (Phase 8 #38) and the shape
-// issue #18's refresh-token revocation wanted: the refresh JWT carries
-// `sid`, and a refresh is only honoured while the row exists with
-// `revokedAt` still null.
-//
-// Collecting a coarse IP and user agent here is deliberate — it is what
-// makes "sign out that other device" usable. Nothing clinical or
-// identifying beyond what the request itself already carried.
-model RefreshSession {
-  id     String @id @default(uuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+// Phase 8 (issue #34): hashed, single-use, expiring email-verification
+// tokens. Only the SHA-256 hash is persisted — a database leak must not
+// hand out working verification links. One row per issued token so a
+// resend can be rate-limited against the most recent `createdAt`.
+model EmailVerificationToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
 
-  createdAt  DateTime @default(now())
-  // Updated on refresh only — never on every access-token-authenticated
-  // request, so this doesn't become a write hot-spot on the User row.
-  lastUsedAt DateTime @default(now())
-  revokedAt  DateTime?
-
-  userAgent String?
-  ip        String?
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
-  @@index([userId, revokedAt])
+}
+
+// Phase 8 (issue #35): login-throttle state. Deliberately in Postgres and
+// not in process memory — the backend runs as a single Render instance
+// today but must not assume that forever, and a restart must not hand an
+// attacker a fresh budget. One row per (scope, key) bucket, where scope is
+// `email` (normalised address) or `ip` (client IP, after the proxy chain is
+// resolved — see TRUST_PROXY in src/config/index.ts).
+//
+// Counters are only ever moved by a single conditional upsert (see
+// auth/repositories `recordFailedLoginAttempt`), never read-then-write: two
+// concurrent bad logins for the same account must both be counted.
+model LoginAttempt {
+  id           String    @id @default(uuid())
+  scope        String // 'email' | 'ip'
+  key          String // normalised email, or client IP
+  failedCount  Int       @default(0)
+  // Start of the current sliding window; a failure outside the window
+  // restarts the count at 1 instead of accumulating forever.
+  windowStart  DateTime  @default(now())
+  lastFailedAt DateTime  @default(now())
+  // Set once this bucket has hit the lock threshold; cleared by a
+  // successful login, an admin clear, or the start of a new window.
+  lockUntil    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([scope, key])
+  @@index([lastFailedAt])
 }
 
 model PatientProfile {

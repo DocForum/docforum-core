@@ -107,9 +107,12 @@ for status and issue links.
 - [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: In progress — session management (#38) landed, plus TOTP 2FA (#36) and password reset (#33) opened as sibling hardening issues since. The two original blocked items still need Phases 3/4/5.**
-- [x] Session management: list and revoke active sessions per user — a `RefreshSession` row per refresh-token family (`sid` claim), `GET /auth/sessions` (marks the caller's current session), `DELETE /auth/sessions/:id`, `DELETE /auth/sessions` (sign out everywhere else), and admin `DELETE /admin/users/:id/sessions`. This is the revocation store #18 asked for, built in the auth module rather than as a parallel one: refresh is refused once a session is revoked, and `last_used_at` is written on refresh only (no write hot-spot per request). Ownership is part of the revoking UPDATE, not a branch above it. Closes [issue #38](https://github.com/DocForum/docforum-core/issues/38). Residual gap: access tokens stay stateless, so a revoked session's access token lives out its ≤15-min TTL — recorded in ARCHITECTURE_ESSENTIALS.md/§6.1.4.
-- [ ] `AuditEvent` table + write path for referral/prescription/lab-order state transitions (ARCHITECTURE.md §6.2.4 — flagged as needed before real patient data). Still blocked — needs the Phase 3/4 models (referral, prescription, lab order) to exist first. Not yet scoped into an issue.
+**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 — #34 and #35 are merged; #37 and #39 are open PRs. Each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
+
+- [x] Email verification on signup, with restricted access for unverified accounts. `User.emailVerifiedAt` + `EmailVerificationToken` (hashed, expiring, single-use), `POST /auth/verify-email`, `POST /auth/verify-email/resend`, and a `requireVerifiedEmail` guard on booking + payment mutations (never on login/browsing). Migration backfills existing rows as verified. Tracked as [issue #34](https://github.com/DocForum/docforum-core/issues/34) (High, 200 pts) — **Done**, merged as PR #137. Found a real dependency while building it: the email *provider* is still an open decision (Phase 6, issue #17), so links can't be delivered on a hosted deployment yet — see `backend/src/modules/auth/services/email-dispatcher.ts` and ARCHITECTURE.md §6.1.5.
+- [x] Login brute-force protection: per-account and per-IP throttling with backoff. Postgres-backed buckets (`LoginAttempt`), a single conditional upsert so concurrent failures are counted atomically, exponential backoff with `Retry-After`, a bounded temporary lock, an admin clear endpoint, a prune interval in `src/server.ts`, and a `TRUST_PROXY` setting so the IP isn't Render's proxy address. Tracked as [issue #35](https://github.com/DocForum/docforum-core/issues/35) (High, 200 pts) — **Done**, merged as PR #138.
+- [ ] CSRF protection for the cookie-authenticated refresh/logout endpoints, plus an explicit per-environment CORS allowlist. A per-session CSRF token bound into the refresh token (not a double-submit cookie — a cookie set by this API is third-party to `docforum.github.io`, so the web client can't read it), a required `X-CSRF-Token` header on `/auth/refresh` + `/auth/logout`, an `Origin` allowlist check, and `CORS_ORIGINS` replacing the single configured origin. Tracked as [issue #37](https://github.com/DocForum/docforum-core/issues/37) (High, 200 pts) — **in progress**, branch `feat/csrf-protection-for-cookie-authenticated-refresh`.
+- [ ] Admin account lifecycle: secure bootstrap CLI, admin invites, and account deactivation. Tracked as [issue #39](https://github.com/DocForum/docforum-core/issues/39) (High, 200 pts) — **in progress**.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
 - [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. Not yet scoped into an issue.
@@ -342,16 +345,38 @@ for status and issue links.
   yet Accepted. Added to the docs site.
 - 2026-10-09 — Opened issue #32: upgrade to escrow SDK 0.3.0 and the
   current testnet contract.
-- 2026-10-15 — Landed Phase 8's session management (issue #38):
-  `GET /auth/sessions`, `DELETE /auth/sessions/:id`,
-  `DELETE /auth/sessions` (all others) and admin
-  `DELETE /admin/users/:id/sessions`, backed by a new `RefreshSession`
-  table — one row per refresh-token family, with `sid` in the refresh JWT
-  and revocation enforced at refresh. This is the revocation store
-  issue #18 wanted, implemented in the auth module rather than as a
-  parallel mechanism. `last_used_at` is written on refresh only, so no
-  per-request write hot-spot; ownership scoping is part of the revoking
-  UPDATE. ARCHITECTURE.md §3/§4.9/§6.1.4, ARCHITECTURE_ESSENTIALS.md
-  (data model map + known gaps) and docs/api/README.md updated. Residual
-  gap flagged: access tokens are stateless, so revocation only bites at
-  refresh (≤15 min of residual access-token life).
+- 2026-10-15 — Started Phase 8's auth-hardening work, scoped as issues
+  #34 (email verification), #35 (login brute-force throttling), #37 (CSRF
+  for the cookie-authenticated endpoints + per-environment CORS allowlist)
+  and #39 (admin account lifecycle). All four are independent of Phases
+  3–7 and of each other. #34 merged as PR #137: `User.emailVerifiedAt` +
+  a hashed/expiring/single-use `EmailVerificationToken` table (backfilled
+  as verified for existing rows), `POST /auth/verify-email`,
+  `POST /auth/verify-email/resend` (account-scoped, rate-limited), and a
+  `requireVerifiedEmail` guard on booking + payment mutations — never on
+  login/browsing. Also added
+  `backend/scripts/mark-email-verified.mjs` as the documented interim for
+  operating a deployment before an email provider exists (issue #17), and
+  flagged that dependency in ARCHITECTURE.md §6.1.5.
+
+  #35 merged as PR #138: a Postgres `LoginAttempt`
+  table with per-email and per-IP buckets, moved by a single conditional
+  upsert (`INSERT ... ON CONFLICT DO UPDATE`) so concurrent bad logins are
+  counted atomically, exponential backoff with a `Retry-After` header, a
+  bounded temporary lock that hammering can't extend, an admin
+  `/auth/login-attempts/clear` escape hatch, a prune interval, and a
+  `TRUST_PROXY` setting so throttling keys on the real client IP. Also
+  closed a related timing leak: an unknown email now pays the same bcrypt
+  comparison cost as a known one.
+
+  #37 has landed as a PR: the refresh cookie is
+  `SameSite=None` cross-site, so `/auth/refresh` and `/auth/logout` now
+  require an `X-CSRF-Token` header whose value is a per-session claim
+  inside the refresh JWT (rotating with it), an `Origin` allowlist check,
+  and a per-environment CORS allowlist (`CORS_ORIGINS`). The classic
+  double-submit cookie was rejected for a concrete reason — a cookie set
+  by this API is third-party to `docforum.github.io`, so the web client
+  could never read it; the token travels in the response body. Integration
+  tests assert a
+  forged cross-origin request is rejected while the legitimate cross-site
+  client still succeeds.
