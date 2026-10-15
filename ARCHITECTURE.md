@@ -14,8 +14,12 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 1. **Modular monolith first, not microservices.** One deployable backend, internally organized into bounded modules (auth, doctors, appointments, referrals, consultations, orders, facilities, notifications). Split into services only when a concrete scaling or team-ownership problem demands it — not preemptively (see PRD §8.3).
 2. **Orders are append-only.** Prescriptions and lab orders are never mutated after issuance. Corrections create a new versioned record referencing the original. This is a hard architectural constraint, not a style preference (clinical/legal safety).
 3. **The referral carries state, not a pointer to state.** A referral snapshots the intake + consultation notes it's built on, so later edits elsewhere can't silently rewrite what a specialist already saw.
-4. **Boring tech, correct concurrency.** Availability booking is a correctness problem before it's a scaling problem — solve double-booking with real DB constraints/transactions, not application-level checks.
-5. **Build vs. buy for anything not core IP.** Video/chat infra, SMS/email delivery, file storage — use managed providers behind an internal interface so they're swappable.
+4. **Clinical records are immutable once finalized.** Prescriptions and lab
+   orders are append-only from issuance (§1.2); a consultation note is editable
+   as a draft but immutable from sign-off, with corrections as addenda (§4.3,
+   issue #64). Enforced at the DB level, not just in application code.
+5. **Boring tech, correct concurrency.** Availability booking is a correctness problem before it's a scaling problem — solve double-booking with real DB constraints/transactions, not application-level checks.
+6. **Build vs. buy for anything not core IP.** Video/chat infra, SMS/email delivery, file storage — use managed providers behind an internal interface so they're swappable.
 
 ## 2. Tech stack
 
@@ -108,10 +112,35 @@ IntakeForm
 ### 4.3 Consultation
 ```
 Consultation
-  id, appointment_id (FK, unique)
+  id, doctor_profile_id (FK -> DoctorProfile — the authoring doctor)
   notes, outcome (enum: resolved|referred|follow_up_needed)
+  signed_at (nullable — null = draft/editable; set = immutable)
   created_at
+
+ConsultationAddendum (issue #64)
+  id, consultation_id (FK -> Consultation, cascade)
+  author_doctor_profile_id, body, created_at
 ```
+Design note (issue #64): clinical notes are legal records, so a consultation is
+**immutable once signed off** — the same rule as orders (§1.2), applied to
+notes. Corrections are `ConsultationAddendum` rows: append-only by
+construction, read back in order, and only the authoring doctor may add one.
+Immutability is enforced twice on purpose: repository writes are scoped to
+`signed_at IS NULL` (so a signed note simply doesn't match), and a `BEFORE
+UPDATE` trigger added in
+`prisma/migrations/*_consultation_note_sign_off/migration.sql` rejects any
+change to `notes`/`outcome`/`signed_at` on a signed row — including a direct
+Prisma `update()`, which is the test that proves it. `signed_at` is also part of
+the trigger's guard, so a signed note can't be un-signed back into mutability.
+`appointment_id` is still not modelled — issue #4 owns that link, and the
+auto-sign-off window is measured from `created_at` until it exists.
+
+**Referrals and sign-off:** a referral snapshots the consultation's notes at
+creation (§4.4), so a referral may only be created from a **signed-off**
+consultation — otherwise the snapshot could freeze a note that is still being
+drafted, or be taken twice with different contents. This is the rule Phase 3
+(#5) must implement; it is not enforced in code yet because referral creation
+doesn't exist yet.
 
 ### 4.4 Referral
 ```
@@ -124,7 +153,7 @@ Referral
   resulting_appointment_id (nullable FK -> Appointment)
   created_at, updated_at
 ```
-Design note: `snapshot_notes` and `snapshot_intake_id` deliberately duplicate data rather than pointing live at `Consultation.notes`, so a later edit to the original consultation can never silently change what the specialist already acted on (PRD hard question 8.1.4).
+Design note: `snapshot_notes` and `snapshot_intake_id` deliberately duplicate data rather than pointing live at `Consultation.notes`, so a later edit to the original consultation can never silently change what the specialist already acted on (PRD hard question 8.1.4). Combined with issue #64's sign-off (§4.3): a referral may only be created from a **signed-off** consultation, so the thing being snapshotted is already final and can't change under the specialist. #5 implements that rule; it isn't enforceable in code until referral creation exists.
 
 ### 4.5 Prescriptions (versioned, append-only)
 ```

@@ -42,7 +42,8 @@ for status and issue links.
 - [x] Doc reconciliation: PRD §8.1.1 and ARCHITECTURE §6.1.1 marked resolved in place.
 
 ## Phase 2 — Intake, appointments, consultations
-**Status: Not started — unblocked (Phase 1 is done). Scoped into issues #1–#4 and #23.**
+**Status: In progress — consultation note sign-off (#64) landed on the existing `Consultation` model. The rest is unblocked (Phase 1 is done) and scoped into issues #1–#4 and #23.**
+- [x] Consultation note sign-off with append-only addenda — `signedAt` on `Consultation` plus a `ConsultationAddendum` model; drafts are editable, signed-off notes are immutable. Enforced twice: repository writes are scoped to `signedAt IS NULL`, and a `BEFORE UPDATE` trigger rejects changes to `notes`/`outcome`/`signedAt` on a signed row even from a direct Prisma `update()` (integration-tested). `POST /consultations/:id/sign-off`, `POST /consultations/:id/addenda` (authoring doctor only, post-sign-off only), and an interval job that auto-signs-off drafts past `CONSULTATION_AUTO_SIGNOFF_HOURS`. Closes [issue #64](https://github.com/DocForum/docforum-core/issues/64). Flagged: the auto-sign-off window is measured from `createdAt` until #4 adds `appointmentId`, and patient-side access waits on that same link.
 - [ ] `IntakeForm` model + structured symptom entry (not free-text-only, per PRD FR-5). Tracked as [issue #1](https://github.com/DocForum/docforum-core/issues/1) (Medium, 150 pts).
 - [ ] Booking flow requires intake before confirmation. Tracked as [issue #2](https://github.com/DocForum/docforum-core/issues/2) (Medium, 150 pts) — depends on #1.
 - [ ] `Appointment` lifecycle (`scheduled → completed/cancelled/no_show`) + doctor's today view. Tracked as [issue #3](https://github.com/DocForum/docforum-core/issues/3) (Medium, 150 pts).
@@ -341,3 +342,15 @@ for status and issue links.
   yet Accepted. Added to the docs site.
 - 2026-10-09 — Opened issue #32: upgrade to escrow SDK 0.3.0 and the
   current testnet contract.
+- 2026-10-15 — Landed consultation note sign-off with append-only addenda
+  (issue #64): `POST /consultations`, `PATCH` while a draft,
+  `POST /consultations/:id/sign-off` and `POST /consultations/:id/addenda`,
+  plus `GET /consultations/:id` returning note + addenda in order. New
+  `Consultation.signedAt` and `ConsultationAddendum`; immutability is
+  enforced in the repository *and* by a BEFORE UPDATE trigger in the
+  migration, so a signed note can't be edited even through a raw Prisma
+  update (integration-tested that way, as the issue's review asks). An
+  interval job auto-signs-off drafts past
+  `CONSULTATION_AUTO_SIGNOFF_HOURS`. New hard rule 7 in
+  ARCHITECTURE_ESSENTIALS.md; ARCHITECTURE.md §1/§4.3/§4.4,
+  docs/api/README.md and the consultations module updated.

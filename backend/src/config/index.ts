@@ -21,6 +21,17 @@ export const config = {
     refreshTtl: '30d',
   },
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
+  consultations: {
+    // How long a consultation note stays editable before it's signed off
+    // automatically (issue #64) — notes shouldn't be editable forever.
+    // Measured from `createdAt` for now because the appointment link isn't
+    // modelled yet (#4 owns Consultation.appointmentId) — flagged, not
+    // treated as final.
+    autoSignoffHours: Number(process.env.CONSULTATION_AUTO_SIGNOFF_HOURS ?? 24),
+    autoSignoffCheckIntervalMinutes: Number(
+      process.env.CONSULTATION_AUTO_SIGNOFF_CHECK_INTERVAL_MINUTES ?? 15,
+    ),
+  },
   // Deliberately NOT required at startup via requireEnv() — unrelated
   // parts of the app (auth, availability, etc.) shouldn't fail to boot
   // just because payments isn't configured. The payments module itself

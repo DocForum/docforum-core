@@ -17,12 +17,13 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 4. **Cross-module access only through a module's service interface.** Never import another module's `repositories/*` directly.
 5. **Facilities write to their own `FulfillmentRecord` only** — never directly to `Prescription.status` / `LabOrder.status`.
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
+7. **Never edit a `Consultation` note/outcome once it's signed off.** Corrections = `ConsultationAddendum` rows. Enforced by a DB trigger on the `Consultation` table (`notes`/`outcome`/`signedAt`), not only in the repository — a direct `UPDATE` must fail (issue #64).
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` → `PatientProfile | DoctorProfile | FacilityProfile`
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
-`Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
+`Consultation` → `ConsultationAddendum` (append-only corrections after sign-off — #64) ; `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
 `Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
@@ -39,6 +40,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - No expiry/TTL job for held slots or pending referrals — currently just an enum value with no worker.
 - Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables.
 - No `AuditEvent` table yet, despite PRD requiring auditability — needed before real patient data.
+- Consultation auto sign-off is measured from `Consultation.createdAt` — the appointment link (`appointmentId`) isn't modelled yet (#4), so "N hours after the appointment completes" isn't actually what's implemented yet.
+- Only the authoring doctor can reach a consultation's read/write routes; patient access to their own care thread waits on the appointment link (#4). Flagged rather than invented.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 
 ## Overengineering guardrails (things NOT to build yet)

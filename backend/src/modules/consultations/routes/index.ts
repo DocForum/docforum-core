@@ -1,3 +1,15 @@
-// consultations routes — placeholder. See PRD.md / ARCHITECTURE.md §3 for this module's scope.
-// TODO(Phase: see ROADMAP.md): define routes for consultations.
-export {};
+import { Router } from 'express';
+import { authenticate, requireRole } from '../../../middleware/auth';
+import * as consultationsController from '../controllers';
+
+export const consultationsRouter = Router();
+
+// Doctor-only in v1: the authoring doctor is the only account wired to these
+// (see the flagged limitation in services/index.ts). Patient access to their
+// own care thread follows the appointment link that issue #4 owns — not
+// invented here.
+consultationsRouter.post('/', authenticate, requireRole('doctor'), consultationsController.create);
+consultationsRouter.get('/:id', authenticate, requireRole('doctor'), consultationsController.get);
+consultationsRouter.patch('/:id', authenticate, requireRole('doctor'), consultationsController.update);
+consultationsRouter.post('/:id/sign-off', authenticate, requireRole('doctor'), consultationsController.signOff);
+consultationsRouter.post('/:id/addenda', authenticate, requireRole('doctor'), consultationsController.addAddendum);
