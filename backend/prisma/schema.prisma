@@ -100,6 +100,12 @@ model User {
   phone        String?
   passwordHash String
   role         Role
+  // Phase 8 (issue #34): null = never verified. Self-serve signup leaves
+  // this null; existing rows were backfilled to `createdAt` in the
+  // add_email_verification migration. Distinct from
+  // DoctorProfile.verificationStatus, which is the separate, manual
+  // admin verification of a doctor's credentials — do not conflate.
+  emailVerifiedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -116,28 +122,55 @@ model User {
   facilityProfile    FacilityProfile?
   passwordResetTokens PasswordResetToken[]
 
+  emailVerificationTokens EmailVerificationToken[]
+
   @@index([role])
 }
 
-// Password reset tokens (Phase 8 #33). Only the SHA-256 hash of the
-// token is ever stored — the raw token exists exactly once, in the
-// notification that carries the reset link, and is never logged or
-// persisted. Single-use (`usedAt`) and expiring (`expiresAt`).
-model PasswordResetToken {
-  id        String    @id @default(uuid())
-  userId    String
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // SHA-256 hex of the raw token. Unique so lookup-by-hash is a single
-  // indexed read, and a duplicate hash (astronomically unlikely) is a
-  // constraint violation rather than a silent overwrite.
-  tokenHash String    @unique
-  expiresAt DateTime
-  // Non-null once used or superseded by a newer request — either way the
-  // token is dead. Requesting a second reset marks the first one used.
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
+// Phase 8 (issue #34): hashed, single-use, expiring email-verification
+// tokens. Only the SHA-256 hash is persisted — a database leak must not
+// hand out working verification links. One row per issued token so a
+// resend can be rate-limited against the most recent `createdAt`.
+model EmailVerificationToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+// Phase 8 (issue #35): login-throttle state. Deliberately in Postgres and
+// not in process memory — the backend runs as a single Render instance
+// today but must not assume that forever, and a restart must not hand an
+// attacker a fresh budget. One row per (scope, key) bucket, where scope is
+// `email` (normalised address) or `ip` (client IP, after the proxy chain is
+// resolved — see TRUST_PROXY in src/config/index.ts).
+//
+// Counters are only ever moved by a single conditional upsert (see
+// auth/repositories `recordFailedLoginAttempt`), never read-then-write: two
+// concurrent bad logins for the same account must both be counted.
+model LoginAttempt {
+  id           String    @id @default(uuid())
+  scope        String // 'email' | 'ip'
+  key          String // normalised email, or client IP
+  failedCount  Int       @default(0)
+  // Start of the current sliding window; a failure outside the window
+  // restarts the count at 1 instead of accumulating forever.
+  windowStart  DateTime  @default(now())
+  lastFailedAt DateTime  @default(now())
+  // Set once this bucket has hit the lock threshold; cleared by a
+  // successful login, an admin clear, or the start of a new window.
+  lockUntil    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([scope, key])
+  @@index([lastFailedAt])
 }
 
 model PatientProfile {

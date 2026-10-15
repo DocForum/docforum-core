@@ -5,7 +5,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 ## Stack (don't relitigate without an ADR in docs/adr/)
 - Backend: Node.js + TypeScript + Express/Fastify — **modular monolith**, not microservices.
 - DB: PostgreSQL via Prisma (`backend/prisma/schema.prisma` = source of truth for models).
-- Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`.
+- Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`. The refresh cookie is `SameSite=None` cross-site, so `/auth/refresh` + `/auth/logout` require an `X-CSRF-Token` header (a per-session token bound into the refresh JWT) and an allowlisted `Origin` — see `backend/src/middleware/csrf.ts`. CORS is an explicit per-environment allowlist (`CORS_ORIGINS`).
 - Frontend: React + TypeScript + Vite, React Query + Zustand.
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
 - Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue.
@@ -25,6 +25,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
 `Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
+`User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
+`LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
 `User` → `PasswordResetToken` (SHA-256 hash only, single-use, expiring — Phase 8 #33). `User.token_version` is embedded in every access/refresh token as `tv` and checked at refresh; bumping it (password reset) kills all outstanding refresh tokens for that user.
 
@@ -40,8 +42,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - No expiry/TTL job for held slots or pending referrals — currently just an enum value with no worker.
 - Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables.
 - No `AuditEvent` table yet, despite PRD requiring auditability — needed before real patient data.
-- Only a per-user token version, no per-session revocation store (issue #18). Password reset can kill every session for a user but not one device; and a bumped-away access token still works for the rest of its 15-min TTL.
-- The password-reset rate limiter is in-process memory (auth/services/rate-limit.ts) — correct for a single instance, wrong across replicas (needs a shared store).
+- No email/SMS provider integrated yet (Phase 6, issue #17) — email verification (issue #34) therefore can't deliver its link on a hosted deployment; `backend/scripts/mark-email-verified.mjs` is the interim operator path.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 
 ## Overengineering guardrails (things NOT to build yet)
