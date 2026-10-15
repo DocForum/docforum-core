@@ -41,7 +41,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 Each module under `backend/src/modules/<name>/` owns its own `routes/`, `controllers/`, `services/`, `repositories/`. Cross-module access happens through a module's exported service interface only — **never reach into another module's repository directly.** This is the internal seam that would let us extract a module into its own service later without a rewrite.
 
 - `auth` — signup/login, tokens, role checks.
-- `users` — shared user profile fields common to all roles.
+- `users` — shared user profile fields common to all roles, plus the admin account lifecycle (invites, soft deactivation — issue #39). `auth` calls this module's services to create an invited admin; `users` never calls back into `auth`.
 - `patients` — patient-specific profile data.
 - `doctors` — doctor profile, specialties, verification status.
 - `facilities` — lab/pharmacy accounts, capability tags (what order types they can fulfill).
@@ -64,7 +64,23 @@ Canonical source of truth: `backend/prisma/schema.prisma`. This section is the h
 ```
 User
   id, email, phone, password_hash, role (enum: patient|doctor|facility|admin)
+  deactivated_at (nullable — Phase 8 issue #39. Soft deactivation: login,
+    refresh and access tokens are all refused while set. Nothing is ever
+    deleted by it — no clinical or payment record is keyed to this flag)
+  sessions_invalidated_at (nullable — set on deactivate *and* reactivate, so
+    access tokens minted earlier stop working immediately instead of living
+    out their 15-minute TTL; tokens with no `iat` fail closed. Not a general
+    revocation list — that's still issue #18)
   created_at, updated_at
+
+AdminInvite (Phase 8 issue #39)
+  id, email, token_hash (unique, SHA-256 — raw token never stored)
+  expires_at, consumed_at (nullable), invited_by_user_id (FK -> User), created_at
+  # Single-use and expiring; redeeming it is what `POST /auth/signup-with-invite`
+    does, in one transaction with creating the admin account. Issuing a new
+    invite for an address retires any outstanding one. Admin-only: PRD OQ-2's
+    facility invites need their own profile fields at redemption, so they are
+    deliberately not folded in.
 
 PatientProfile (1:1 User)
   id, user_id, full_name, date_of_birth, guardian_user_id (nullable — see PRD edge case: minors)

@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import * as authService from '../services';
-import { loginSchema, signupSchema } from '../validation';
+import { loginSchema, signupSchema, signupWithInviteSchema } from '../validation';
 import { HttpError } from '../../../http-error';
 
 const REFRESH_COOKIE = 'docforum_refresh';
@@ -47,6 +47,18 @@ export async function signup(req: Request, res: Response) {
 export async function login(req: Request, res: Response) {
   const input = loginSchema.parse(req.body);
   const session = await authService.login(input);
+  sessionResponse(res, session);
+}
+
+/**
+ * Admin invite redemption (Phase 8, issue #39). Lives in the auth module
+ * because it ends in a session, but the invite itself is the users module's
+ * business — see `authService.signupWithInvite`, which calls that module's
+ * service rather than touching its tables.
+ */
+export async function signupWithInvite(req: Request, res: Response) {
+  const input = signupWithInviteSchema.parse(req.body);
+  const session = await authService.signupWithInvite(input);
   sessionResponse(res, session);
 }
 

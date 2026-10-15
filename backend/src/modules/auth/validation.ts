@@ -11,3 +11,11 @@ export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
 });
+
+// Phase 8, issue #39 — admin invite redemption. No `fullName`: an admin
+// account has no Patient/Doctor profile row.
+export const signupWithInviteSchema = z.object({
+  token: z.string().min(1),
+  email: z.string().email(),
+  password: z.string().min(8),
+});
