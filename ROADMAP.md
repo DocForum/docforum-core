@@ -107,12 +107,12 @@ for status and issue links.
 - [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 and are being implemented now — each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
+**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 — #34 is merged; #35, #37 and #39 are open PRs. Each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
 
-- [ ] Email verification on signup, with restricted access for unverified accounts. `User.emailVerifiedAt` + `EmailVerificationToken` (hashed, expiring, single-use), `POST /auth/verify-email`, `POST /auth/verify-email/resend`, and a `requireVerifiedEmail` guard on booking + payment mutations (never on login/browsing). Migration backfills existing rows as verified. Tracked as [issue #34](https://github.com/DocForum/docforum-core/issues/34) (High, 200 pts) — **in progress**, branch `feat/email-verification-on-signup-with-restricted`. Found a real dependency while building it: the email *provider* is still an open decision (Phase 6, issue #17), so links can't be delivered on a hosted deployment yet — see `backend/src/modules/auth/services/email-dispatcher.ts` and ARCHITECTURE.md §6.1.5.
-- [ ] Login brute-force protection: per-account and per-IP throttling with backoff. Tracked as [issue #35](https://github.com/DocForum/docforum-core/issues/35) (High, 200 pts) — **in progress**.
+- [x] Email verification on signup, with restricted access for unverified accounts. `User.emailVerifiedAt` + `EmailVerificationToken` (hashed, expiring, single-use), `POST /auth/verify-email`, `POST /auth/verify-email/resend`, and a `requireVerifiedEmail` guard on booking + payment mutations (never on login/browsing). Migration backfills existing rows as verified. Tracked as [issue #34](https://github.com/DocForum/docforum-core/issues/34) (High, 200 pts) — **Done**, merged as PR #137. Found a real dependency while building it: the email *provider* is still an open decision (Phase 6, issue #17), so links can't be delivered on a hosted deployment yet — see `backend/src/modules/auth/services/email-dispatcher.ts` and ARCHITECTURE.md §6.1.5.
 - [ ] CSRF protection for cookie-authenticated refresh/logout endpoints, plus an explicit CORS allowlist per environment. Tracked as [issue #37](https://github.com/DocForum/docforum-core/issues/37) (High, 200 pts) — **in progress**.
 - [ ] Admin account lifecycle: secure bootstrap CLI, admin invites, and account deactivation. Tracked as [issue #39](https://github.com/DocForum/docforum-core/issues/39) (High, 200 pts) — **in progress**.
+- [ ] Login brute-force protection: per-account and per-IP throttling with backoff. Postgres-backed buckets (`LoginAttempt`), a single conditional upsert so concurrent failures are counted atomically, exponential backoff with `Retry-After`, a bounded temporary lock, an admin clear endpoint, a prune interval in `src/server.ts`, and a `TRUST_PROXY` setting so the IP isn't Render's proxy address. Tracked as [issue #35](https://github.com/DocForum/docforum-core/issues/35) (High, 200 pts) — **in progress**, branch `feat/login-brute-force-protection-per-account-and-per`.
 - [ ] `AuditEvent` table + write path for referral/prescription/lab-order state transitions (ARCHITECTURE.md §6.2.4 — flagged as needed before real patient data). Still blocked — needs the Phase 3/4 models (referral, prescription, lab order) to exist first. Not yet scoped into an issue.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
@@ -350,7 +350,7 @@ for status and issue links.
   #34 (email verification), #35 (login brute-force throttling), #37 (CSRF
   for the cookie-authenticated endpoints + per-environment CORS allowlist)
   and #39 (admin account lifecycle). All four are independent of Phases
-  3–7 and of each other. #34 has landed as a PR: `User.emailVerifiedAt` +
+  3–7 and of each other. #34 merged as PR #137: `User.emailVerifiedAt` +
   a hashed/expiring/single-use `EmailVerificationToken` table (backfilled
   as verified for existing rows), `POST /auth/verify-email`,
   `POST /auth/verify-email/resend` (account-scoped, rate-limited), and a
@@ -359,3 +359,13 @@ for status and issue links.
   `backend/scripts/mark-email-verified.mjs` as the documented interim for
   operating a deployment before an email provider exists (issue #17), and
   flagged that dependency in ARCHITECTURE.md §6.1.5.
+
+  #35 has landed as a PR: a Postgres `LoginAttempt`
+  table with per-email and per-IP buckets, moved by a single conditional
+  upsert (`INSERT ... ON CONFLICT DO UPDATE`) so concurrent bad logins are
+  counted atomically, exponential backoff with a `Retry-After` header, a
+  bounded temporary lock that hammering can't extend, an admin
+  `/auth/login-attempts/clear` escape hatch, a prune interval, and a
+  `TRUST_PROXY` setting so throttling keys on the real client IP. Also
+  closed a related timing leak: an unknown email now pays the same bcrypt
+  comparison cost as a known one.

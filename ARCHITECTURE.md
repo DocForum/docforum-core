@@ -179,6 +179,24 @@ Notification
   id, user_id, type, payload (jsonb), read_at (nullable), created_at
 ```
 
+### 4.9 Auth hardening state (Phase 8)
+```
+LoginAttempt (issue #35)
+  id, scope ('email' | 'ip'), key, failed_count, window_start, last_failed_at
+  lock_until (nullable), created_at, updated_at
+  # unique (scope, key). One bucket per normalised email and per client IP.
+  # Deliberately in Postgres, not process memory: the deployment is a single
+  # instance today but must not be designed as one forever, and a restart
+  # must not hand an attacker a fresh budget.
+  # Counters move only via a single conditional upsert (INSERT ... ON
+  # CONFLICT DO UPDATE) — never read-then-write — so N concurrent bad logins
+  # are counted as N (integration-tested).
+  # The lock is set once per window; hammering a locked account grows the
+  # count but never extends the deadline, so a lock is a bounded wait.
+```
+`User` fields added in Phase 8 live in §4.1; the `email_verified_at` /
+`EmailVerificationToken` pair (issue #34) is in §4.1 as well.
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)
@@ -222,6 +240,7 @@ Notification
 ## 7. Non-functional / cross-cutting
 
 - **Testing**: unit tests per module (`backend/tests/unit`), integration tests for booking/referral/order flows specifically because those are the correctness-critical paths (`backend/tests/integration`).
+- **Security — login throttling (Phase 8, issue #35)**: `POST /auth/login` is throttled per normalised email *and* per client IP, in Postgres (`LoginAttempt`, §4.9): exponential backoff with `Retry-After` from `LOGIN_THROTTLE_BACKOFF_AFTER` failures, a temporary lock at `LOGIN_THROTTLE_LOCK_AFTER`, and a cleanup interval in `src/server.ts`. Two things this depends on operationally: (1) `TRUST_PROXY` must be set correctly in production — Render terminates TLS in front of exactly one hop, so `TRUST_PROXY=1`; leaving it unset makes every request look like Render's proxy (one shared bucket for everyone), and `true` lets a client spoof `X-Forwarded-For` for a fresh bucket per request; (2) the throttle deliberately does not reveal whether an account exists — locked, backoff and unknown-account responses are identical, and an absent account still pays the bcrypt comparison cost so response timing doesn't leak either.
 - **Migrations**: Prisma migrations are the only way schema changes happen — no manual DB edits, ever.
 - **Environments**: local (Docker Compose), staging, production — staging/production infra choice is an open item (see ROADMAP).
 

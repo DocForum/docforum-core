@@ -135,6 +135,35 @@ model EmailVerificationToken {
   @@index([userId])
 }
 
+// Phase 8 (issue #35): login-throttle state. Deliberately in Postgres and
+// not in process memory — the backend runs as a single Render instance
+// today but must not assume that forever, and a restart must not hand an
+// attacker a fresh budget. One row per (scope, key) bucket, where scope is
+// `email` (normalised address) or `ip` (client IP, after the proxy chain is
+// resolved — see TRUST_PROXY in src/config/index.ts).
+//
+// Counters are only ever moved by a single conditional upsert (see
+// auth/repositories `recordFailedLoginAttempt`), never read-then-write: two
+// concurrent bad logins for the same account must both be counted.
+model LoginAttempt {
+  id           String    @id @default(uuid())
+  scope        String // 'email' | 'ip'
+  key          String // normalised email, or client IP
+  failedCount  Int       @default(0)
+  // Start of the current sliding window; a failure outside the window
+  // restarts the count at 1 instead of accumulating forever.
+  windowStart  DateTime  @default(now())
+  lastFailedAt DateTime  @default(now())
+  // Set once this bucket has hit the lock threshold; cleared by a
+  // successful login, an admin clear, or the start of a new window.
+  lockUntil    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([scope, key])
+  @@index([lastFailedAt])
+}
+
 model PatientProfile {
   id          String    @id @default(uuid())
   userId      String    @unique

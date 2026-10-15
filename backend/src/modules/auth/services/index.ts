@@ -17,6 +17,14 @@ import { hashPassword, verifyPassword } from './password';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from './tokens';
 import { generateVerificationToken, hashVerificationToken } from './verification-tokens';
 import { sendEmail } from './email-dispatcher';
+import {
+  LoginThrottledError,
+  checkLoginThrottle,
+  emailThrottleKey,
+  normalizeClientIp,
+  registerFailedLogin,
+  resetLoginThrottle,
+} from './login-throttle';
 import type { Role } from '@prisma/client';
 
 // Re-exported so middleware/auth.ts (shared infra, not a peer module) can
@@ -30,6 +38,11 @@ export type { AccessTokenPayload } from './tokens';
 // service surface, not by importing the dispatcher file directly.
 export { setEmailSender, resetEmailSender } from './email-dispatcher';
 export type { EmailMessage, EmailSender } from './email-dispatcher';
+// Login throttling (Phase 8, issue #35) — the login controller needs the
+// error type to set a `Retry-After` header, and src/server.ts runs the
+// cleanup job. Both go through this module's service surface.
+export { LoginThrottledError, clearLoginAttempts, pruneLoginAttempts } from './login-throttle';
+export type { ThrottleDecision } from './login-throttle';
 
 export interface AuthenticatedUser {
   id: string;
@@ -114,16 +127,47 @@ export async function signup(input: SignupInput): Promise<AuthSession> {
 export interface LoginInput {
   email: string;
   password: string;
+  /** Client IP as Express resolved it (see TRUST_PROXY in config). Optional
+   * so non-HTTP callers/tests can omit it — the IP bucket is then simply
+   * not tracked for that attempt. */
+  ip?: string | null;
 }
 
-export async function login(input: LoginInput): Promise<AuthSession> {
-  const user = await findUserByEmail(input.email);
-  // Same message whether the email doesn't exist or the password is wrong
-  // — don't leak which one it was.
-  if (!user) throw new HttpError(401, 'Invalid email or password.');
+/** A real bcrypt hash (of a random string nobody knows) that a login for a
+ * non-existent address is compared against. Without it, an unknown email
+ * returns in ~0ms while a known one spends ~300ms in bcrypt — a timing
+ * side channel that answers "does this account exist?" even though the
+ * response body is identical. */
+const ABSENT_ACCOUNT_HASH = '$2b$12$z8J5gwFm9TiwC.YpeD6yguMkgakFPA8egT1KEKYiaeVkmb3CHRGXu';
 
-  const valid = await verifyPassword(input.password, user.passwordHash);
-  if (!valid) throw new HttpError(401, 'Invalid email or password.');
+export async function login(input: LoginInput): Promise<AuthSession> {
+  const throttleKeys = {
+    emailKey: emailThrottleKey(input.email),
+    ipKey: normalizeClientIp(input.ip),
+  };
+
+  // Before the password is even looked at: a locked or backing-off bucket is
+  // refused identically for a real and a non-existent address (issue #35).
+  const gate = await checkLoginThrottle(throttleKeys);
+  if (gate.blocked) {
+    // Still counted: backoff starts below the lock threshold, so if gated
+    // attempts weren't recorded the lock could never be reached. These are
+    // failed attempts either way (no credential was accepted).
+    const afterFailure = await registerFailedLogin(throttleKeys);
+    throw new LoginThrottledError(Math.max(gate.retryAfterSeconds, afterFailure.retryAfterSeconds));
+  }
+
+  const user = await findUserByEmail(input.email);
+  // Same message whether the email doesn't exist or the password is wrong —
+  // and the same *cost*, hence the dummy comparison for an absent account.
+  const valid = await verifyPassword(input.password, user?.passwordHash ?? ABSENT_ACCOUNT_HASH);
+  if (!user || !valid) {
+    const afterFailure = await registerFailedLogin(throttleKeys);
+    if (afterFailure.blocked) throw new LoginThrottledError(afterFailure.retryAfterSeconds);
+    throw new HttpError(401, 'Invalid email or password.');
+  }
+
+  await resetLoginThrottle(throttleKeys.emailKey);
 
   // Checked *after* the password: a deactivated account must not be
   // distinguishable from a non-existent one without knowing the password

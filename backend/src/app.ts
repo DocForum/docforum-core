@@ -13,6 +13,11 @@ import { adminRouter } from './modules/users/routes';
 export function createApp() {
   const app = express();
 
+  // Phase 8, issue #35: login throttling keys on the client IP, so the
+  // proxy chain has to be resolved deliberately rather than guessed. See
+  // config.trustProxy for why neither `true` nor the default is safe here.
+  app.set('trust proxy', config.trustProxy);
+
   app.use(cors({ origin: config.corsOrigin, credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
