@@ -19,7 +19,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
-`User` → `PatientProfile | DoctorProfile | FacilityProfile`
+`User` → `PatientProfile | DoctorProfile | FacilityProfile` ; `User` → `TwoFactorAuth` —< `TwoFactorRecoveryCode` (TOTP, secret encrypted at rest, single-use recovery codes — Phase 8 #36)
+Token kinds: access (15 min) / refresh (httpOnly cookie, 30 d) / `mfa_pending` (5 min, single purpose — accepted only by `POST /auth/2fa/verify`).
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
 `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
@@ -39,6 +40,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - No expiry/TTL job for held slots or pending referrals — currently just an enum value with no worker.
 - Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables.
 - No `AuditEvent` table yet, despite PRD requiring auditability — needed before real patient data.
+- `REQUIRE_2FA_FOR_ADMIN=true` makes 2FA mandatory for admin logins, but an admin who hasn't enrolled can't log in to reach `/auth/2fa/setup` — there is no bootstrap path (admin-invited provisioning or a one-time enrollment token). Turn that flag on only after admins have enrolled, until one exists.
+- 2FA secrets are encrypted with one process-wide key (`TOTP_ENCRYPTION_KEY`) — no rotation, no per-user key. Fine for v1; needs a KMS/rotation story before real patient data.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 
 ## Overengineering guardrails (things NOT to build yet)

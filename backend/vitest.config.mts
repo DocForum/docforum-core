@@ -10,6 +10,9 @@ export default defineConfig({
     env: {
       JWT_ACCESS_SECRET: 'test-access-secret',
       JWT_REFRESH_SECRET: 'test-refresh-secret',
+      // Encrypts stored TOTP secrets at rest (2FA, Phase 8 #36). Test-only
+      // value, never a real key.
+      TOTP_ENCRYPTION_KEY: 'test-totp-encryption-key',
       // Port 5433, not 5432 — tests/integration/booking.test.mts spins up
       // its own throwaway Postgres cluster on this port so the suite is
       // self-contained (no pre-existing DB required). A distinct port

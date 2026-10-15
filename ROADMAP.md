@@ -107,7 +107,8 @@ for status and issue links.
 - [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: Not started. Three of five items scoped into issues #18–#20 (independent of Phases 3–7); the other two remain blocked.**
+**Status: In progress — TOTP 2FA (#36) landed, and two more auth-hardening issues opened since (#33 password reset, #38 session management). The other two original items remain blocked on Phases 3/4/5.**
+- [x] TOTP two-factor authentication for doctor, facility and admin roles — enrollment (`POST /auth/2fa/setup` → otpauth URI → `POST /auth/2fa/enable` with a first code), two-step login (`POST /auth/2fa/verify` exchanges a short-lived `mfa_pending` token for a real session), 10 single-use bcrypt-hashed recovery codes, and `POST /auth/2fa/disable` requiring a current code. RFC 6238 implemented on `node:crypto` (no new dependency), pinned by the RFC's own test vectors; ±1 step window with per-user replay rejection; secret stored AES-256-GCM encrypted. Architected so an `mfa_pending` token is accepted by exactly one route. `REQUIRE_2FA_FOR_ADMIN` config flag enforces 2FA for admin logins (bootstrap caveat flagged in ARCHITECTURE_ESSENTIALS.md). Closes [issue #36](https://github.com/DocForum/docforum-core/issues/36).
 - [ ] `AuditEvent` table + write path for referral/prescription/lab-order state transitions (ARCHITECTURE.md §6.2.4 — flagged as needed before real patient data). Still blocked — needs the Phase 3/4 models (referral, prescription, lab order) to exist first. Not yet scoped into an issue.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
@@ -341,3 +342,15 @@ for status and issue links.
   yet Accepted. Added to the docs site.
 - 2026-10-09 — Opened issue #32: upgrade to escrow SDK 0.3.0 and the
   current testnet contract.
+- 2026-10-15 — Landed Phase 8's TOTP two-factor authentication (issue
+  #36): `POST /auth/2fa/{setup,enable,verify,disable}` plus `GET /auth/2fa`.
+  Enrollment returns an otpauth URI, then a first code confirms it and
+  issues 10 single-use recovery codes; login becomes two-step for enrolled
+  users, where the password step returns a short-lived `mfa_pending` token
+  that `verifyAccessToken` refuses everywhere except the verify endpoint.
+  TOTP is RFC 6238 on `node:crypto` (no new dependency) and is pinned to
+  the RFC's published test vectors; replay is rejected per user by storing
+  the highest spent time step. The TOTP secret is AES-256-GCM encrypted
+  with `TOTP_ENCRYPTION_KEY`; `REQUIRE_2FA_FOR_ADMIN` makes a second
+  factor mandatory for admin logins. ARCHITECTURE.md §4.9/§4.10,
+  ARCHITECTURE_ESSENTIALS.md and docs/api/README.md updated.

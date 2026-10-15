@@ -167,6 +167,42 @@ Notification
   id, user_id, type, payload (jsonb), read_at (nullable), created_at
 ```
 
+### 4.9 Auth hardening (Phase 8)
+```
+TwoFactorAuth (issue #36)
+  id, user_id (FK -> User, unique, cascade)
+  secret_encrypted (AES-256-GCM with TOTP_ENCRYPTION_KEY — never returned
+                    by the API after the enrollment URI)
+  enabled_at (nullable — null until a first code confirms enrollment;
+              an unconfirmed enrollment is NOT a second factor)
+  last_used_time_step (nullable bigint — highest TOTP step already spent;
+                        this is the replay guard)
+  created_at, updated_at
+
+TwoFactorRecoveryCode (issue #36)
+  id, two_factor_auth_id (FK -> TwoFactorAuth, cascade)
+  code_hash (bcrypt, same as passwords), used_at (nullable), created_at
+```
+Design notes: TOTP is RFC 6238 implemented on `node:crypto`
+(`auth/services/totp.ts`), deliberately not a new dependency — the reason for
+choosing TOTP over SMS in the first place was to avoid a provider dependency,
+and the algorithm is pinned by the RFC's own test vectors in
+`tests/unit/totp.test.ts`. Login becomes two-step for enrolled users: the
+password step returns a short-lived `mfa_pending` token instead of a session.
+That token is signed with the access-token secret but carries a
+`scope: 'mfa_pending'` claim, and `verifyAccessToken` rejects anything with a
+`scope` — so it is accepted by exactly one route (`POST /auth/2fa/verify`) and
+by no authenticated route. `REQUIRE_2FA_FOR_ADMIN` makes a second factor
+mandatory for admin logins; see ARCHITECTURE_ESSENTIALS.md for its bootstrap
+caveat (an admin who has not enrolled cannot log in to enroll while it's on).
+
+### 4.10 Auth token scopes
+Every token is one of: access (15 min), refresh (30 d, httpOnly cookie), or
+`mfa_pending` (5 min, single-purpose). They are separated by *secret* and/or
+*claim*, not by route convention — a refresh token fails verification where an
+access token is expected and vice versa, and an `mfa_pending` token fails
+`verifyAccessToken` on every protected route.
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)

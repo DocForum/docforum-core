@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import * as authService from '../services';
-import { loginSchema, signupSchema } from '../validation';
+import { loginSchema, signupSchema, twoFactorCodeSchema, twoFactorVerifySchema } from '../validation';
 import { HttpError } from '../../../http-error';
 
 const REFRESH_COOKIE = 'docforum_refresh';
@@ -46,8 +46,16 @@ export async function signup(req: Request, res: Response) {
 
 export async function login(req: Request, res: Response) {
   const input = loginSchema.parse(req.body);
-  const session = await authService.login(input);
-  sessionResponse(res, session);
+  const result = await authService.login(input);
+
+  // Two-step login: no cookie, no access token yet — just a short-lived
+  // token that only POST /auth/2fa/verify accepts.
+  if ('mfaRequired' in result) {
+    res.status(200).json(result);
+    return;
+  }
+
+  sessionResponse(res, result);
 }
 
 export async function refresh(req: Request, res: Response) {
@@ -60,5 +68,50 @@ export async function refresh(req: Request, res: Response) {
 
 export function logout(_req: Request, res: Response) {
   res.clearCookie(REFRESH_COOKIE, REFRESH_COOKIE_OPTIONS);
+  res.status(204).send();
+}
+
+// --- TOTP two-factor auth (Phase 8 #36) ---------------------------------
+
+function requireUserId(req: Request): string {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  return req.user.id;
+}
+
+/** Enrollment step 1: returns the otpauth URI (QR payload). Nothing is
+ * enforced until /auth/2fa/enable confirms a code. */
+export async function setupTwoFactor(req: Request, res: Response) {
+  const result = await authService.setupTwoFactor({ userId: requireUserId(req) });
+  res.status(200).json(result);
+}
+
+/** Enrollment step 2: confirms with a first code and returns the recovery
+ * codes — the only time their plaintext exists. */
+export async function enableTwoFactor(req: Request, res: Response) {
+  const { code } = twoFactorCodeSchema.parse(req.body);
+  const result = await authService.enableTwoFactor({ userId: requireUserId(req), code });
+  res.status(200).json(result);
+}
+
+export async function getTwoFactorStatus(req: Request, res: Response) {
+  const status = await authService.getTwoFactorStatus(requireUserId(req));
+  res.status(200).json(status);
+}
+
+/** Second step of login. Note this is the *only* route that may read an
+ * `mfa_pending` token — an access token here is rejected by the service
+ * (it isn't an mfa_pending token), and an mfa_pending token is rejected by
+ * every other route (verifyAccessToken refuses scoped tokens). */
+export async function verifyTwoFactor(req: Request, res: Response) {
+  const input = twoFactorVerifySchema.parse(req.body);
+  const session = await authService.completeTwoFactorLogin(input);
+  sessionResponse(res, session);
+}
+
+/** Disabling requires proof of possession: a current code or a recovery
+ * code — see services/two-factor.ts. */
+export async function disableTwoFactor(req: Request, res: Response) {
+  const { code } = twoFactorCodeSchema.parse(req.body);
+  await authService.disableTwoFactor({ userId: requireUserId(req), code });
   res.status(204).send();
 }
