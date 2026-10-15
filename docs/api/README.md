@@ -151,9 +151,33 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 | `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
 
+## Consultations (`/consultations`) — `backend/src/modules/consultations`
+
+Clinical notes are legal records: a draft is editable, and once signed off the
+note and outcome are immutable — corrections are **addenda**. Enforced twice: the
+repository scopes every write to `signedAt IS NULL`, and a `BEFORE UPDATE`
+trigger rejects any change to `notes`/`outcome`/`signedAt` on a signed row, so a
+direct Prisma update fails too.
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /consultations` | doctor | `{ notes?, outcome? }` | Opens a draft. `outcome` ∈ `resolved\|referred\|follow_up_needed`. `201`. |
+| `GET /consultations/:id` | doctor (author) | — | `{ id, notes, outcome, signedAt, createdAt, editable, addenda: [{ id, body, createdAt, authorDoctorProfileId }] }` — addenda oldest-first. An id belonging to another doctor is a `404`. |
+| `PATCH /consultations/:id` | doctor (author) | `{ notes? and/or outcome? }` | Draft only. `409` once signed off. An empty body is a `400`. |
+| `POST /consultations/:id/sign-off` | doctor (author) | — | Freezes the note. `409` if already signed off. |
+| `POST /consultations/:id/addenda` | doctor (author) | `{ body }` | **Post-sign-off only** (`409` while it's still a draft — edit the note instead). Append-only. `201`. |
+
+Drafts also get signed off automatically once they're older than
+`CONSULTATION_AUTO_SIGNOFF_HOURS` (default 24) — the job in
+`backend/src/jobs/consultation-auto-sign-off.ts`, started from `server.ts`.
+Until `Consultation.appointmentId` exists (issue #4) the window is measured from
+`createdAt`, and only the authoring doctor can reach these routes; patient access
+to their own care thread follows the appointment link.
+
 ## Not yet implemented
 
 Everything else in `ARCHITECTURE.md` §3's module list (`patients`,
-`facilities`, `consultations`, `referrals`, `prescriptions`, `lab-orders`,
-`pharmacy-orders`, `payments`, `notifications`) has no routes yet — Phase
-2 onward, see `ROADMAP.md`.
+`facilities`, `referrals`, `prescriptions`, `lab-orders`,
+`pharmacy-orders`, `notifications`) has no routes yet — Phase 2 onward, see
+`ROADMAP.md`. (`consultations` now has routes; `payments` has its own
+admin-triggered endpoints, documented in `docs/adr/0004`.)

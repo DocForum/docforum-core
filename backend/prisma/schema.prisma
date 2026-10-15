@@ -194,6 +194,7 @@ model DoctorProfile {
   specialties       DoctorSpecialty[]
   availabilitySlots AvailabilitySlot[]
   appointments      Appointment[]
+  consultations     Consultation[]
 
   @@index([verificationStatus])
 }
@@ -298,12 +299,51 @@ model IntakeForm {
   // TODO: patientProfileId, symptoms (Json), freeTextNotes
 }
 
+// Clinical notes are legal records (issue #64): once signed off, the note
+// and outcome are immutable. Corrections are *addenda*, never edits — the
+// same reason Prescription/LabOrder are append-only (hard rule 1).
+//
+// Immutability is enforced twice on purpose: the repository refuses to
+// write a signed note (and can't be bypassed by a caller that skips it),
+// and a BEFORE UPDATE trigger in the migration rejects the write at the DB
+// level even from a raw Prisma update — see
+// prisma/migrations/*_consultation_note_sign_off/migration.sql.
 model Consultation {
-  id        String              @id @default(uuid())
-  outcome   ConsultationOutcome?
-  notes     String?
-  createdAt DateTime            @default(now())
-  // TODO: appointmentId (unique)
+  id String @id @default(uuid())
+  // The authoring doctor — the only account that may sign off, edit the
+  // draft, or add addenda.
+  doctorProfileId String
+  doctorProfile   DoctorProfile @relation(fields: [doctorProfileId], references: [id])
+
+  outcome ConsultationOutcome?
+  notes   String?
+
+  // Null = draft (editable). Set = signed off (immutable).
+  signedAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  addenda ConsultationAddendum[]
+
+  // TODO(Phase 2 #4): appointmentId (unique) — the appointment this
+  // consultation closed. Deliberately not invented here; #4 owns that link.
+  @@index([doctorProfileId])
+  // Auto sign-off scans for drafts past their edit window (see
+  // CONSULTATION_AUTO_SIGNOFF_HOURS).
+  @@index([signedAt])
+}
+
+model ConsultationAddendum {
+  id             String       @id @default(uuid())
+  consultationId String
+  consultation   Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+
+  // Only the authoring doctor may add an addendum (enforced in the service,
+  // not just the controller).
+  authorDoctorProfileId String
+  body                  String
+  createdAt             DateTime @default(now())
+
+  @@index([consultationId])
 }
 
 model Referral {

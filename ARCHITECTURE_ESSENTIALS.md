@@ -17,12 +17,13 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 4. **Cross-module access only through a module's service interface.** Never import another module's `repositories/*` directly.
 5. **Facilities write to their own `FulfillmentRecord` only** — never directly to `Prescription.status` / `LabOrder.status`.
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
+7. **Never edit a `Consultation` note/outcome once it's signed off.** Corrections = `ConsultationAddendum` rows. Enforced by a DB trigger on the `Consultation` table (`notes`/`outcome`/`signedAt`), not only in the repository — a direct `UPDATE` must fail (issue #64).
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` → `PatientProfile | DoctorProfile | FacilityProfile`
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
-`Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
+`Consultation` → `ConsultationAddendum` (append-only corrections after sign-off — #64) ; `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
 `Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
 `User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).

@@ -7,6 +7,7 @@ import { authRouter } from './modules/auth/routes';
 import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
+import { consultationsRouter } from './modules/consultations/routes';
 import { paymentsRouter } from './modules/payments/routes';
 
 export function createApp() {
@@ -30,6 +31,7 @@ export function createApp() {
   app.use('/doctors', doctorsRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
+  app.use('/consultations', consultationsRouter);
   app.use('/payments', paymentsRouter);
 
   // Must be registered last — Express only routes errors here once every
