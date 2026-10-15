@@ -5,7 +5,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 ## Stack (don't relitigate without an ADR in docs/adr/)
 - Backend: Node.js + TypeScript + Express/Fastify — **modular monolith**, not microservices.
 - DB: PostgreSQL via Prisma (`backend/prisma/schema.prisma` = source of truth for models).
-- Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`.
+- Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`. The refresh cookie is `SameSite=None` cross-site, so `/auth/refresh` + `/auth/logout` require an `X-CSRF-Token` header (a per-session token bound into the refresh JWT) and an allowlisted `Origin` — see `backend/src/middleware/csrf.ts`. CORS is an explicit per-environment allowlist (`CORS_ORIGINS`).
 - Frontend: React + TypeScript + Vite, React Query + Zustand.
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
 - Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue.
@@ -26,6 +26,8 @@ Token kinds: access (15 min) / refresh (httpOnly cookie, 30 d) / `mfa_pending` (
 `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
 `Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
+`User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
+`LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
@@ -40,8 +42,7 @@ Token kinds: access (15 min) / refresh (httpOnly cookie, 30 d) / `mfa_pending` (
 - No expiry/TTL job for held slots or pending referrals — currently just an enum value with no worker.
 - Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables.
 - No `AuditEvent` table yet, despite PRD requiring auditability — needed before real patient data.
-- `REQUIRE_2FA_FOR_ADMIN=true` makes 2FA mandatory for admin logins, but an admin who hasn't enrolled can't log in to reach `/auth/2fa/setup` — there is no bootstrap path (admin-invited provisioning or a one-time enrollment token). Turn that flag on only after admins have enrolled, until one exists.
-- 2FA secrets are encrypted with one process-wide key (`TOTP_ENCRYPTION_KEY`) — no rotation, no per-user key. Fine for v1; needs a KMS/rotation story before real patient data.
+- No email/SMS provider integrated yet (Phase 6, issue #17) — email verification (issue #34) therefore can't deliver its link on a hosted deployment; `backend/scripts/mark-email-verified.mjs` is the interim operator path.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 
 ## Overengineering guardrails (things NOT to build yet)

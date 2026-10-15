@@ -3,7 +3,7 @@
 // modules must go through this module's services, never import this file
 // directly (AGENTS.md hard rule 4).
 import { prisma } from '../../../db/prisma-client';
-import type { Role } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 
 export function findUserByEmail(email: string) {
   return prisma.user.findUnique({ where: { email } });
@@ -102,4 +102,141 @@ export function createSelfServeUser(input: CreateSelfServeUserInput) {
 
     return user;
   });
+}
+
+// --- Email verification (Phase 8, issue #34) -----------------------------
+// Only hashes are stored; see services/verification-tokens.ts.
+
+export function findVerificationTokenByHash(tokenHash: string) {
+  return prisma.emailVerificationToken.findUnique({ where: { tokenHash } });
+}
+
+export function findLatestVerificationToken(userId: string) {
+  return prisma.emailVerificationToken.findFirst({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+/** Issues the newest token and retires any still-outstanding one, in one
+ * transaction — "latest link wins", so a resend doesn't leave two live
+ * links in two inboxes. Retiring is a `consumedAt` write, never a delete:
+ * this table is an append-only-ish audit of what was issued. */
+export function replaceVerificationToken(input: {
+  userId: string;
+  tokenHash: string;
+  expiresAt: Date;
+}) {
+  return prisma.$transaction(async (tx) => {
+    await tx.emailVerificationToken.updateMany({
+      where: { userId: input.userId, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+    return tx.emailVerificationToken.create({
+      data: { userId: input.userId, tokenHash: input.tokenHash, expiresAt: input.expiresAt },
+    });
+  });
+}
+
+/** Single-use enforcement, the same shape as the booking guarantee: a
+ * conditional UPDATE that only matches while the row is still unused, so
+ * two concurrent redemptions of one token can't both win. Returns whether
+ * *this* caller consumed it. */
+export async function consumeVerificationToken(tokenId: string, consumedAt: Date): Promise<boolean> {
+  const result = await prisma.emailVerificationToken.updateMany({
+    where: { id: tokenId, consumedAt: null },
+    data: { consumedAt },
+  });
+  return result.count === 1;
+}
+
+export function markUserEmailVerified(userId: string, verifiedAt: Date) {
+  return prisma.user.update({ where: { id: userId }, data: { emailVerifiedAt: verifiedAt } });
+}
+
+// --- Login throttling (Phase 8, issue #35) -------------------------------
+
+export interface ThrottleRow {
+  scope: string;
+  key: string;
+  failedCount: number;
+  lastFailedAt: Date;
+  lockUntil: Date | null;
+}
+
+/**
+ * Records one failed attempt for a bucket, atomically.
+ *
+ * This is a single INSERT ... ON CONFLICT DO UPDATE, not a read followed by
+ * a write: concurrent failed logins for the same account must all be
+ * counted, and a read-then-write would silently drop all but the last one.
+ * The three CASE expressions all read the *pre-update* row, which is what
+ * makes the window reset, the increment and the lock decision consistent
+ * with each other inside one statement.
+ *
+ * `gen_random_uuid()` is built in from Postgres 13 (no extension needed);
+ * Prisma normally generates the uuid client-side, which raw SQL can't.
+ *
+ * The lock is set once per window (`lockUntil IS NULL` guard): a client that
+ * keeps hammering a locked account grows the counter but does *not* push the
+ * lock's deadline out, so the lock is a bounded wait rather than a way to
+ * keep a legitimate user locked out indefinitely. The next window (which
+ * clears both the count and the lock) can lock again.
+ */
+export async function recordFailedLoginAttempt(input: {
+  scope: 'email' | 'ip';
+  key: string;
+  policy: { windowSeconds: number; lockAfterFailures: number; lockSeconds: number };
+}): Promise<ThrottleRow> {
+  const { windowSeconds, lockAfterFailures, lockSeconds } = input.policy;
+  const expiredWindow = prisma.$queryRaw<ThrottleRow[]>`
+    INSERT INTO "LoginAttempt" ("id", "scope", "key", "failedCount", "windowStart", "lastFailedAt", "lockUntil", "createdAt", "updatedAt")
+    VALUES (gen_random_uuid()::text, ${input.scope}, ${input.key}, 1, NOW(), NOW(), NULL, NOW(), NOW())
+    ON CONFLICT ("scope", "key") DO UPDATE SET
+      "failedCount" = CASE
+        WHEN "LoginAttempt"."windowStart" < NOW() - make_interval(secs => ${windowSeconds}::int) THEN 1
+        ELSE "LoginAttempt"."failedCount" + 1
+      END,
+      "windowStart" = CASE
+        WHEN "LoginAttempt"."windowStart" < NOW() - make_interval(secs => ${windowSeconds}::int) THEN NOW()
+        ELSE "LoginAttempt"."windowStart"
+      END,
+      "lockUntil" = CASE
+        WHEN "LoginAttempt"."windowStart" < NOW() - make_interval(secs => ${windowSeconds}::int) THEN NULL
+        WHEN (CASE
+          WHEN "LoginAttempt"."windowStart" < NOW() - make_interval(secs => ${windowSeconds}::int) THEN 1
+          ELSE "LoginAttempt"."failedCount" + 1
+        END) >= ${lockAfterFailures}::int
+          AND "LoginAttempt"."lockUntil" IS NULL
+          THEN NOW() + make_interval(secs => ${lockSeconds}::int)
+        ELSE "LoginAttempt"."lockUntil"
+      END,
+      "lastFailedAt" = NOW(),
+      "updatedAt" = NOW()
+    RETURNING "scope", "key", "failedCount", "lastFailedAt", "lockUntil"
+  `;
+  const rows = await expiredWindow;
+  if (!rows[0]) throw new Error('LoginAttempt upsert returned no row.');
+  return rows[0];
+}
+
+export function findThrottleBuckets(emailKey: string, ipKey: string | null): Promise<ThrottleRow[]> {
+  const clauses: Prisma.LoginAttemptWhereInput[] = [{ scope: 'email', key: emailKey }];
+  if (ipKey) clauses.push({ scope: 'ip', key: ipKey });
+  return prisma.loginAttempt.findMany({
+    where: { OR: clauses },
+    select: { scope: true, key: true, failedCount: true, lastFailedAt: true, lockUntil: true },
+  });
+}
+
+export function clearLoginAttempts(buckets: { scope: string; key: string }[]) {
+  if (buckets.length === 0) return Promise.resolve(0);
+  return prisma.loginAttempt
+    .deleteMany({ where: { OR: buckets.map((bucket) => ({ scope: bucket.scope, key: bucket.key })) } })
+    .then((result) => result.count);
+}
+
+/** Cleanup: drop buckets whose last failure is older than `before`. */
+export function pruneStaleLoginAttempts(before: Date) {
+  return prisma.loginAttempt.deleteMany({ where: { lastFailedAt: { lt: before } } }).then((result) => result.count);
 }

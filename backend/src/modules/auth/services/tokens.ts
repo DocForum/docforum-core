@@ -18,11 +18,23 @@ export interface AccessTokenPayload {
   scope?: 'mfa_pending';
 }
 
+/**
+ * The refresh token additionally carries the session's CSRF token (Phase 8,
+ * issue #37). Binding it here rather than storing it means the CSRF check is
+ * stateless and rotates with the refresh token itself: a token minted before
+ * this change has no `csrf` claim and is therefore rejected by
+ * `refresh()` — a pre-existing refresh cookie forces one re-login, which is
+ * the honest cost of closing the hole.
+ */
+export interface RefreshTokenPayload extends AccessTokenPayload {
+  csrf: string;
+}
+
 export function signAccessToken(payload: AccessTokenPayload): string {
   return jwt.sign(payload, config.jwt.accessSecret, { expiresIn: config.jwt.accessTtl });
 }
 
-export function signRefreshToken(payload: AccessTokenPayload): string {
+export function signRefreshToken(payload: RefreshTokenPayload): string {
   return jwt.sign(payload, config.jwt.refreshSecret, { expiresIn: config.jwt.refreshTtl });
 }
 
@@ -47,6 +59,6 @@ export function verifyMfaPendingToken(token: string): AccessTokenPayload {
   return payload;
 }
 
-export function verifyRefreshToken(token: string): AccessTokenPayload {
-  return jwt.verify(token, config.jwt.refreshSecret) as AccessTokenPayload;
+export function verifyRefreshToken(token: string): RefreshTokenPayload {
+  return jwt.verify(token, config.jwt.refreshSecret) as RefreshTokenPayload;
 }
