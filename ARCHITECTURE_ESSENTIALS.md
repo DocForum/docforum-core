@@ -19,7 +19,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
-`User` → `PatientProfile | DoctorProfile | FacilityProfile`
+`User` → `PatientProfile | DoctorProfile | FacilityProfile` ; `User` → `RefreshSession` (one row per login/refresh-token family; `sid` in the refresh JWT is checked at refresh — Phase 8 #38)
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
 `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`

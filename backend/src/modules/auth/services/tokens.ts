@@ -5,6 +5,10 @@ import type { Role } from '@prisma/client';
 export interface AccessTokenPayload {
   sub: string; // user id
   role: Role;
+  /** Refresh-session id (Phase 8 #38). Present only on refresh tokens —
+   * the access token stays stateless so protected requests don't need a
+   * session lookup. */
+  sid?: string;
 }
 
 /**

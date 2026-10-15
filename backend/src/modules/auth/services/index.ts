@@ -109,7 +109,7 @@ export interface SignupInput {
   fullName: string;
 }
 
-export async function signup(input: SignupInput): Promise<AuthSession> {
+export async function signup(input: SignupInput, context: SessionContext = {}): Promise<AuthSession> {
   // Facility accounts are admin-invited only (PRD OQ-2) — enforced here,
   // not just in docforum-web's UI. `Extract<Role, 'patient'|'doctor'>` on
   // the type already narrows this at compile time; this is the runtime
@@ -186,7 +186,7 @@ export async function login(input: LoginInput): Promise<AuthSession> {
 
   await resetLoginThrottle(throttleKeys.emailKey);
 
-  const tokens = issueSession(user);
+  const tokens = await issueNewSession(user, context);
   return { user: toPublicUser(user), ...tokens };
 }
 
@@ -323,6 +323,29 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   const user = await findUserById(payload.sub);
   if (!user) throw new HttpError(401, 'Invalid or expired refresh token.');
 
-  const tokens = issueSession(user);
-  return { user: toPublicUser(user), ...tokens };
+  // Tokens minted before session records existed carry no `sid` and are
+  // rejected: the migration logs existing sessions out once, which is the
+  // honest trade for actually having a revocation store.
+  if (!payload.sid) throw new HttpError(401, 'Invalid or expired refresh token.');
+
+  await assertSessionUsable({ sessionId: payload.sid, userId: user.id });
+  await recordSessionUse(payload.sid);
+
+  // Rotation keeps the same session (same family, same `sid`) — a new
+  // session row per refresh would make "list my sessions" useless.
+  const tokens = issueTokensForSession(user, payload.sid);
+  return { user: toPublicUser(user), ...tokens, sessionId: payload.sid };
+}
+
+/** The session id behind a refresh cookie, for endpoints that need to know
+ * which of the caller's sessions is the current one. Returns undefined for
+ * a missing/unverifiable cookie rather than throwing — "which session am
+ * I" is never the reason a request should fail. */
+export function sessionIdFromRefreshToken(refreshToken: string | undefined): string | undefined {
+  if (!refreshToken) return undefined;
+  try {
+    return verifyRefreshToken(refreshToken).sid;
+  } catch {
+    return undefined;
+  }
 }
