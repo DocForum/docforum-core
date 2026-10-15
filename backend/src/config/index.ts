@@ -17,6 +17,17 @@ function parseTrustProxy(raw: string | undefined, isProduction: boolean): boolea
   return raw;
 }
 
+const PRODUCTION_CORS_ORIGINS = ['https://docforum.github.io'];
+const LOCAL_DEV_CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+
+function parseCorsOrigins(raw: string | undefined, isProduction: boolean): string[] {
+  if (!raw) return isProduction ? PRODUCTION_CORS_ORIGINS : LOCAL_DEV_CORS_ORIGINS;
+  return raw
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: requireEnv('DATABASE_URL'),
@@ -31,7 +42,6 @@ export const config = {
     accessTtl: '15m',
     refreshTtl: '30d',
   },
-  corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
   // Phase 8 hardening knobs (issues #34/#35/#37). Env-configurable so a
   // preview deployment can be tightened without a code change, and so
   // tests can set short windows instead of waiting real minutes.
@@ -75,6 +85,26 @@ export const config = {
     // last failure has to be before its row is dropped.
     pruneIntervalSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_INTERVAL_SECONDS ?? 60 * 60),
     pruneAfterSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_AFTER_SECONDS ?? 24 * 60 * 60),
+  },
+  // Explicit, per-environment CORS allowlist (Phase 8, issue #37). A single
+  // configured origin string was one typo away from "reflect whatever origin
+  // asked"; an allowlist makes every permitted frontend a deliberate entry.
+  // `CORS_ORIGINS` (comma-separated) is the preferred form; `CORS_ORIGIN` is
+  // still honoured as a single-origin setting so the existing Render
+  // configuration (docs/adr/0003) keeps working unchanged.
+  corsOrigins: parseCorsOrigins(
+    process.env.CORS_ORIGINS ?? process.env.CORS_ORIGIN,
+    process.env.NODE_ENV === 'production',
+  ),
+  cookie: {
+    // The refresh cookie is `SameSite=None; Secure` in production because
+    // docforum-web (GitHub Pages) and this API (Render) are genuinely
+    // different sites — see docs/adr/0003. `Secure` needs HTTPS, which local
+    // dev over plain http doesn't have, hence the NODE_ENV branch. Shared
+    // with the CSRF cookie so the two can never drift apart.
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
+    path: '/',
   },
   // Deliberately NOT required at startup via requireEnv() — unrelated
   // parts of the app (auth, availability, etc.) shouldn't fail to boot
