@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import * as authService from '../services';
-import { loginSchema, signupSchema, verifyEmailSchema } from '../validation';
+import { clearLoginAttemptsSchema, loginSchema, signupSchema, verifyEmailSchema } from '../validation';
 import { HttpError } from '../../../http-error';
 
 const REFRESH_COOKIE = 'docforum_refresh';
@@ -46,8 +46,31 @@ export async function signup(req: Request, res: Response) {
 
 export async function login(req: Request, res: Response) {
   const input = loginSchema.parse(req.body);
-  const session = await authService.login(input);
-  sessionResponse(res, session);
+  try {
+    // Express's `req.ip` honours the `trust proxy` setting (app.ts) — it is
+    // the whole reason the throttle keys on the IP the client believes it
+    // is, rather than Render's proxy address (see config.trustProxy).
+    const session = await authService.login({ ...input, ip: req.ip });
+    sessionResponse(res, session);
+  } catch (err) {
+    // Phase 8, issue #35: a throttled attempt must tell the client how long
+    // to wait, both as a header and in the message (see LoginThrottledError).
+    if (err instanceof authService.LoginThrottledError) {
+      res.set('Retry-After', String(err.retryAfterSeconds));
+    }
+    throw err;
+  }
+}
+
+/** Admin-only: clear a login lock/throttle bucket for an account or an IP.
+ * Writes an audit line to the server log — there is no AuditEvent table yet
+ * (ARCHITECTURE_ESSENTIALS.md known gaps), so this is the interim record. */
+export async function clearLoginAttempts(req: Request, res: Response) {
+  const { email, ip } = clearLoginAttemptsSchema.parse(req.body);
+  const cleared = await authService.clearLoginAttempts({ email, ip });
+  // eslint-disable-next-line no-console
+  console.info(`[auth] admin ${req.user?.id ?? 'unknown'} cleared ${cleared} login-throttle bucket(s) (email=${email ?? '-'} ip=${ip ?? '-'})`);
+  res.status(200).json({ cleared });
 }
 
 export async function refresh(req: Request, res: Response) {

@@ -18,3 +18,13 @@ export const loginSchema = z.object({
 export const verifyEmailSchema = z.object({
   token: z.string().min(1),
 });
+// Phase 8, issue #35 — admin escape hatch for a lock a legitimate user is
+// stuck behind.
+export const clearLoginAttemptsSchema = z
+  .object({
+    email: z.string().email().optional(),
+    ip: z.string().min(1).optional(),
+  })
+  .refine((value) => Boolean(value.email || value.ip), {
+    message: 'Provide an email or an ip to clear.',
+  });

@@ -22,6 +22,11 @@ GitHub Pages UI preview has a real backend to call, nothing more.
 - Database: Render Postgres, free plan, same region (`oregon`) for
   internal networking.
 - `CORS_ORIGIN` set to `https://docforum.github.io`.
+- `TRUST_PROXY=1` (Phase 8, issue #35): Render terminates TLS in front of
+  exactly one proxy hop. Login throttling keys on the client IP, so this has
+  to be set — unset, the backend sees only the proxy address and every user
+  shares one throttle bucket; `true` would let a client spoof
+  `X-Forwarded-For` into a fresh bucket per request.
 - `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET`: Render-generated random
   values, distinct from the dev placeholders in `.env.example`.
 - Refresh-token cookie (`backend/src/modules/auth/controllers/index.ts`)

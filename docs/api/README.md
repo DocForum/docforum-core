@@ -13,7 +13,7 @@ spec yet — TBD, tracked informally, not blocking Phase 1.
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
 | `POST /auth/signup` | none | `{ role: 'patient'\|'doctor', email, password, fullName }` | **`role` is restricted to `patient`/`doctor` server-side, not just in docforum-web's UI** — facility accounts are admin-invited only (PRD OQ-2). Returns `{ user, accessToken }`; sets an httpOnly refresh cookie. |
-| `POST /auth/login` | none | `{ email, password }` | Same response shape as signup. |
+| `POST /auth/login` | none | `{ email, password }` | Same response shape as signup. **Throttled** (Phase 8, issue #35) — see below. |
 | `POST /auth/refresh` | refresh cookie | — | Reads the httpOnly cookie (not the body). Returns a fresh `{ user, accessToken }` and rotates the cookie. |
 | `POST /auth/logout` | none | — | Clears the refresh cookie. `204 No Content`. |
 | `POST /auth/verify-email` | none | `{ token }` | Redeems the token from the verification email. `200 { emailVerifiedAt }`. Errors are `400` with `code: 'INVALID_VERIFICATION_TOKEN'` (unknown / already used) or `code: 'VERIFICATION_TOKEN_EXPIRED'`. Single-use and atomic — two concurrent redemptions can't both succeed. |
@@ -46,6 +46,42 @@ operator can mark an address verified out-of-band with
 Env knobs: `EMAIL_VERIFICATION_TOKEN_TTL_MINUTES` (default 1440),
 `EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS` (default 60),
 `EMAIL_VERIFICATION_LANDING_URL` (where the emailed link points).
+
+### Login throttling (Phase 8, issue #35)
+
+`POST /auth/login` is rate-limited **per normalised email and per client
+IP**, with state in Postgres (so it survives restarts and doesn't assume a
+single instance). Bucket size is capped by the first limit reached:
+
+| Phase | Response |
+|---|---|
+| Below `LOGIN_THROTTLE_BACKOFF_AFTER` failures (default 3) in the window | normal `401 { message: 'Invalid email or password.' }` |
+| At/after it | `429` with a `Retry-After: <seconds>` header, growing exponentially (`LOGIN_THROTTLE_BACKOFF_BASE_SECONDS` × 2ⁿ, capped at `LOGIN_THROTTLE_BACKOFF_MAX_SECONDS`) |
+| At `LOGIN_THROTTLE_LOCK_AFTER` failures (default 10) | `429` locked for `LOGIN_THROTTLE_LOCK_SECONDS` (default 15 min). The lock is set once per window and is not extended by further attempts |
+| Window (`LOGIN_THROTTLE_WINDOW_SECONDS`, default 15 min) | New window restarts the count at 1 and clears the lock |
+
+A successful login clears the **per-account** counter. The per-IP bucket is
+left alone, so one valid login can't reset a shared-IP budget.
+
+Clients should honour `Retry-After` and must **not** treat a `429` as
+"account locked permanently". The response is identical for a real and a
+non-existent address, and for a locked and a backing-off bucket — it
+deliberately reveals nothing about whether the account exists (an absent
+account also pays bcrypt's comparison cost, so timing doesn't leak either).
+
+`POST /auth/login-attempts/clear` (admin-only) clears a lock a legitimate
+user is stuck behind: body `{ email?, ip? }` (at least one), returns
+`{ cleared }`. Clear **both** when a lock was taken out via the account's IP,
+or the IP bucket will keep refusing them. It's logged to the server console
+— there is no `AuditEvent` table yet (known gap), so that's the interim
+record.
+
+Under the hood this uses Express's `trust proxy` setting via the
+`TRUST_PROXY` env var: `1` behind Render's single proxy hop, `false` (the
+default) locally. See `ARCHITECTURE.md` §7 — the wrong value is a security
+bug in either direction. A cleanup interval in `src/server.ts` prunes
+buckets whose last failure is older than
+`LOGIN_THROTTLE_PRUNE_AFTER_SECONDS` (default 24 h).
 
 Access tokens: `Authorization: Bearer <token>`, 15-minute TTL, no
 revocation list yet (see `ARCHITECTURE_ESSENTIALS.md` known gaps —

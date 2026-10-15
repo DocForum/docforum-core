@@ -6,6 +6,17 @@ function requireEnv(name: string): string {
   return value;
 }
 
+/** `TRUST_PROXY` accepts what Express accepts: `true`/`false`, a hop count
+ * (`1`), or a preset string (`loopback`). Absent, it defaults to `false`
+ * everywhere except production, where a proxy is assumed in front. */
+function parseTrustProxy(raw: string | undefined, isProduction: boolean): boolean | number | string {
+  if (raw === undefined || raw === '') return isProduction ? 1 : false;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  return raw;
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: requireEnv('DATABASE_URL'),
@@ -36,6 +47,34 @@ export const config = {
       // page that consumes `?token=`; this is just where we send people.
       landingUrl: process.env.EMAIL_VERIFICATION_LANDING_URL ?? 'http://localhost:5173/verify-email',
     },
+  },
+  // Express's `trust proxy` setting (Phase 8, issue #35). Login throttling
+  // keys off the client IP, and a wrong setting here is a security bug in
+  // both directions:
+  //   - too trusting (`true`) means a client can spoof `X-Forwarded-For`
+  //     and get a fresh throttle bucket per request;
+  //   - not trusting at all means every request looks like it came from
+  //     Render's proxy — one shared bucket for the whole internet.
+  // Default: local dev has no proxy in front (false). Production is set by
+  // the deployment (Render terminates TLS in front of exactly one hop), so
+  // set TRUST_PROXY explicitly there; `1` is the value that matches it.
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY, process.env.NODE_ENV === 'production'),
+  loginThrottle: {
+    // Sliding window: failures older than this don't count toward a lock.
+    windowSeconds: Number(process.env.LOGIN_THROTTLE_WINDOW_SECONDS ?? 15 * 60),
+    // After this many failures (still inside the window) start refusing with
+    // Retry-After, growing exponentially. Deliberately below the lock
+    // threshold: slow them down before locking them out.
+    backoffAfterFailures: Number(process.env.LOGIN_THROTTLE_BACKOFF_AFTER ?? 3),
+    backoffBaseSeconds: Number(process.env.LOGIN_THROTTLE_BACKOFF_BASE_SECONDS ?? 2),
+    backoffMaxSeconds: Number(process.env.LOGIN_THROTTLE_BACKOFF_MAX_SECONDS ?? 300),
+    // The actual lock, applied per normalised email (and per IP).
+    lockAfterFailures: Number(process.env.LOGIN_THROTTLE_LOCK_AFTER ?? 10),
+    lockSeconds: Number(process.env.LOGIN_THROTTLE_LOCK_SECONDS ?? 15 * 60),
+    // Cleanup job (src/server.ts): how often to run, and how old a bucket's
+    // last failure has to be before its row is dropped.
+    pruneIntervalSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_INTERVAL_SECONDS ?? 60 * 60),
+    pruneAfterSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_AFTER_SECONDS ?? 24 * 60 * 60),
   },
   // Deliberately NOT required at startup via requireEnv() — unrelated
   // parts of the app (auth, availability, etc.) shouldn't fail to boot

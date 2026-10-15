@@ -26,6 +26,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
 `User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
+`LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
