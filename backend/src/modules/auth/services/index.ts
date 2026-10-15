@@ -25,6 +25,7 @@ import {
   registerFailedLogin,
   resetLoginThrottle,
 } from './login-throttle';
+import { csrfTokensMatch, generateCsrfToken } from '../../../middleware/csrf';
 import type { Role } from '@prisma/client';
 
 // Re-exported so middleware/auth.ts (shared infra, not a peer module) can
@@ -60,6 +61,11 @@ export interface AuthSession {
   user: AuthenticatedUser;
   accessToken: string;
   refreshToken: string;
+  /** Phase 8, issue #37 — handed to the client in the response body so it can
+   * echo it back in the `X-CSRF-Token` header on cookie-authenticated routes.
+   * It deliberately is NOT a JS-readable cookie: docforum-web is a different
+   * site from this API, so it couldn't read one. */
+  csrfToken: string;
 }
 
 function toPublicUser(user: {
@@ -80,9 +86,20 @@ function toPublicUser(user: {
   };
 }
 
-function issueSession(user: { id: string; role: Role }): { accessToken: string; refreshToken: string } {
+function issueSession(user: { id: string; role: Role }): {
+  accessToken: string;
+  refreshToken: string;
+  csrfToken: string;
+} {
   const payload = { sub: user.id, role: user.role };
-  return { accessToken: signAccessToken(payload), refreshToken: signRefreshToken(payload) };
+  // A fresh CSRF token per session, and per rotation — bound into the
+  // refresh token so verifying it needs no server-side state (issue #37).
+  const csrfToken = generateCsrfToken();
+  return {
+    accessToken: signAccessToken(payload),
+    refreshToken: signRefreshToken({ ...payload, csrf: csrfToken }),
+    csrfToken,
+  };
 }
 
 export interface SignupInput {
@@ -280,12 +297,27 @@ export async function assertEmailVerified(userId: string): Promise<void> {
   }
 }
 
-export async function refresh(refreshToken: string): Promise<AuthSession> {
+/**
+ * Exchanges the refresh cookie for a new session.
+ *
+ * `csrfToken` is the `X-CSRF-Token` header value (Phase 8, issue #37),
+ * checked against the claim inside the presented refresh token. The cookie
+ * is verified first so a garbage/missing cookie is still a 401, and a
+ * *valid* cookie without a matching CSRF token is a 403.
+ */
+export async function refresh(refreshToken: string, csrfToken?: string | null): Promise<AuthSession> {
   let payload;
   try {
     payload = verifyRefreshToken(refreshToken);
   } catch {
     throw new HttpError(401, 'Invalid or expired refresh token.');
+  }
+
+  if (!payload.csrf || !csrfToken || !csrfTokensMatch(csrfToken, payload.csrf)) {
+    throw new HttpError(
+      403,
+      'Missing or invalid CSRF token. Send the csrfToken from your login response in the X-CSRF-Token header.',
+    );
   }
 
   const user = await findUserById(payload.sub);

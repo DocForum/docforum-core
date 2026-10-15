@@ -17,7 +17,10 @@ export function createApp() {
   // config.trustProxy for why neither `true` nor the default is safe here.
   app.set('trust proxy', config.trustProxy);
 
-  app.use(cors({ origin: config.corsOrigin, credentials: true }));
+  // Explicit allowlist per environment (Phase 8, issue #37) — see
+  // config.corsOrigins. `credentials: true` is required for the refresh
+  // cookie and is exactly why the allowlist can't be a wildcard.
+  app.use(cors({ origin: config.corsOrigins, credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
 

@@ -5,7 +5,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 ## Stack (don't relitigate without an ADR in docs/adr/)
 - Backend: Node.js + TypeScript + Express/Fastify — **modular monolith**, not microservices.
 - DB: PostgreSQL via Prisma (`backend/prisma/schema.prisma` = source of truth for models).
-- Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`.
+- Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`. The refresh cookie is `SameSite=None` cross-site, so `/auth/refresh` + `/auth/logout` require an `X-CSRF-Token` header (a per-session token bound into the refresh JWT) and an allowlisted `Origin` — see `backend/src/middleware/csrf.ts`. CORS is an explicit per-environment allowlist (`CORS_ORIGINS`).
 - Frontend: React + TypeScript + Vite, React Query + Zustand.
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
 - Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue.

@@ -21,12 +21,14 @@ GitHub Pages UI preview has a real backend to call, nothing more.
   start: `npx prisma migrate deploy && npm start`.
 - Database: Render Postgres, free plan, same region (`oregon`) for
   internal networking.
-- `CORS_ORIGIN` set to `https://docforum.github.io`.
 - `TRUST_PROXY=1` (Phase 8, issue #35): Render terminates TLS in front of
   exactly one proxy hop. Login throttling keys on the client IP, so this has
   to be set — unset, the backend sees only the proxy address and every user
   shares one throttle bucket; `true` would let a client spoof
   `X-Forwarded-For` into a fresh bucket per request.
+- `CORS_ORIGIN` set to `https://docforum.github.io` (Phase 8, issue #37
+  generalised this to a comma-separated allowlist, `CORS_ORIGINS`; the
+  single-origin variable still works and is honoured first if set).
 - `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET`: Render-generated random
   values, distinct from the dev placeholders in `.env.example`.
 - Refresh-token cookie (`backend/src/modules/auth/controllers/index.ts`)
@@ -38,6 +40,13 @@ GitHub Pages UI preview has a real backend to call, nothing more.
 - `docforum-web`'s `api-client.ts` now sends `credentials: 'include'`
   (previously missing — flagged in that repo's `ARCHITECTURE_ESSENTIALS.md`
   as a known gap before this ADR).
+- **Phase 8, issue #37 (follow-up):** because this cookie is genuinely
+  cross-site, `/auth/refresh` and `/auth/logout` now also require the
+  `X-CSRF-Token` header, and requests are checked against the CORS origin
+  allowlist. `docforum-web` must keep the `csrfToken` returned by
+  signup/login/refresh in memory and send it on those two calls — see
+  `docs/api/README.md`. Sessions created before that change get one forced
+  re-login (their refresh token has no `csrf` claim).
 
 ## Consequences
 
