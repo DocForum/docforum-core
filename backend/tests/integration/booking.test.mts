@@ -41,16 +41,27 @@ const pg = new EmbeddedPostgres({
 // prisma-client.ts) will lazily connect with on first query.
 const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_test`;
 
+/** Phase 8, issue #34: booking now requires a verified email address, so
+ * this test verifies each patient before it books. The verification token
+ * only exists in the email (the database stores its hash), so the test
+ * installs its own email sender and reads the link from the message. */
+const emailedTokens = new Map<string, string>();
+
 async function signupPatient(app: ReturnType<typeof import('../../src/app.js').createApp>, index: number) {
-  const res = await request(app)
-    .post('/auth/signup')
-    .send({
-      role: 'patient',
-      email: `patient-${runId}-${index}@example.com`,
-      password: 'longenough123',
-      fullName: `Test Patient ${index}`,
-    });
+  const email = `patient-${runId}-${index}@example.com`;
+  const res = await request(app).post('/auth/signup').send({
+    role: 'patient',
+    email,
+    password: 'longenough123',
+    fullName: `Test Patient ${index}`,
+  });
   expect(res.status).toBe(200);
+
+  const token = emailedTokens.get(email);
+  expect(token, `no verification email captured for ${email}`).toBeTruthy();
+  const verified = await request(app).post('/auth/verify-email').send({ token });
+  expect(verified.status).toBe(200);
+
   return res.body.accessToken as string;
 }
 
@@ -77,8 +88,14 @@ describe('booking concurrency', () => {
     // schema in place before anything touches it.
     const appModule = await import('../../src/app.js');
     const dbModule = await import('../../src/db/prisma-client.js');
+    const authServices = await import('../../src/modules/auth/services/index.js');
     app = appModule.createApp();
     prisma = dbModule.prisma;
+
+    authServices.setEmailSender(async (message) => {
+      const match = /[?&]token=([^&\s]+)/.exec(message.text);
+      if (match) emailedTokens.set(message.to, decodeURIComponent(match[1]));
+    });
 
     const doctorSignup = await request(app).post('/auth/signup').send({
       role: 'doctor',
@@ -109,6 +126,8 @@ describe('booking concurrency', () => {
   });
 
   afterAll(async () => {
+    const authServices = await import('../../src/modules/auth/services/index.js');
+    authServices.resetEmailSender();
     await prisma?.$disconnect();
     await pg.stop();
     fs.rmSync(dataDir, { recursive: true, force: true });

@@ -8,7 +8,9 @@ import { HttpError } from '../http-error';
 // implementation that assumption is checked against. Keep them in sync.
 export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
   if (err instanceof HttpError) {
-    res.status(err.status).json({ message: err.message });
+    // `code` is only present when the thrower supplied one — the envelope
+    // for every existing error is unchanged (`{ message }`).
+    res.status(err.status).json(err.code ? { message: err.message, code: err.code } : { message: err.message });
     return;
   }
 

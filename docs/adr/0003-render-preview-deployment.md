@@ -80,24 +80,17 @@ backend is down between steps 2 and 4.
 5. Check the deploy log shows the migrations applied, then sign up a
    test user through the `docforum-web` Pages preview to confirm the
    round trip (including the refresh cookie).
-6. Re-create the admin/demo accounts from step 1. Use the bootstrap CLI
-   added in issue #39 (it needs the database URL, so run it with the
-   **External Database URL** in `DATABASE_URL`):
-
-   ```
-   cd backend
-   DATABASE_URL="<external-url>" node scripts/create-admin.mjs --email <email>
-   ```
-
-   It prompts for the password (never takes it in argv, never prints it), and
-   refuses to add a second admin unless `--force` is passed. For a second/demo
-   admin, invite one instead: `POST /admin/invites` as the first admin, then
-   redeem the returned token at `POST /auth/signup-with-invite`. See
-   `scripts/README.md`.
-
-   (Before issue #39 this step was `POST /auth/signup` as a patient followed by
-   a hand-written `UPDATE "User" SET role = 'admin'` — that's the path this
-   replaced.)
+6. Re-create the admin/demo accounts from step 1. `POST /auth/signup`
+   refuses `role: 'admin'`, so sign up as a patient, then promote it
+   with the database's **External Database URL**:
+   `psql "<external-url>" -c "UPDATE \"User\" SET role = 'admin' WHERE email = '<email>';"`
+   A promoted account is still `emailVerifiedAt = null` (Phase 8, issue
+   #34), which the payments endpoints now reject with `403
+   EMAIL_NOT_VERIFIED`. Since no email provider is integrated yet (issue
+   #17), mark it verified out-of-band:
+   `node backend/scripts/mark-email-verified.mjs <email>` (see
+   `scripts/README.md`). This whole step is superseded by the admin
+   bootstrap CLI added in issue #39 — replace it once that lands.
 7. Update the expiry date at the top of this section (and in
    `ROADMAP.md` Phase 9).
 

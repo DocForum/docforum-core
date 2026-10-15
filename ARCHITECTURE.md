@@ -64,23 +64,19 @@ Canonical source of truth: `backend/prisma/schema.prisma`. This section is the h
 ```
 User
   id, email, phone, password_hash, role (enum: patient|doctor|facility|admin)
-  deactivated_at (nullable — Phase 8 issue #39. Soft deactivation: login,
-    refresh and access tokens are all refused while set. Nothing is ever
-    deleted by it — no clinical or payment record is keyed to this flag)
-  sessions_invalidated_at (nullable — set on deactivate *and* reactivate, so
-    access tokens minted earlier stop working immediately instead of living
-    out their 15-minute TTL; tokens with no `iat` fail closed. Not a general
-    revocation list — that's still issue #18)
+  email_verified_at (nullable — Phase 8 issue #34; null = unverified.
+    Backfilled to created_at for pre-existing rows in the
+    add_email_verification migration, so accounts from before this phase
+    are treated as verified)
   created_at, updated_at
 
-AdminInvite (Phase 8 issue #39)
-  id, email, token_hash (unique, SHA-256 — raw token never stored)
-  expires_at, consumed_at (nullable), invited_by_user_id (FK -> User), created_at
-  # Single-use and expiring; redeeming it is what `POST /auth/signup-with-invite`
-    does, in one transaction with creating the admin account. Issuing a new
-    invite for an address retires any outstanding one. Admin-only: PRD OQ-2's
-    facility invites need their own profile fields at redemption, so they are
-    deliberately not folded in.
+EmailVerificationToken (Phase 8 issue #34)
+  id, user_id (FK -> User), token_hash (unique, SHA-256 — raw token never stored)
+  expires_at, consumed_at (nullable), created_at
+  # Append-only-ish: issuing a new token marks any outstanding one consumed
+    ("latest link wins") rather than deleting it. Redemption is a conditional
+    UPDATE (consumed_at IS NULL), same single-use shape as §5.1's booking
+    guarantee, so two concurrent redemptions can't both win.
 
 PatientProfile (1:1 User)
   id, user_id, full_name, date_of_birth, guardian_user_id (nullable — see PRD edge case: minors)
@@ -210,6 +206,7 @@ Notification
 2. `Referral.target_doctor_id` left nullable with no fallback assignment logic — referrals to "a specialty" with no specific doctor need a real routing rule (round robin? load-based?) or they'll pile up unassigned. **Not designed yet — flag as open architecture gap.**
 3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final.
 4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
+5. **Discovered 2026-10-15 while building email verification (Phase 8, issue #34):** the email/SMS provider is still undecided (Phase 6, issue #17), so verification links can't actually be delivered in a hosted environment yet — `backend/src/modules/auth/services/email-dispatcher.ts` is a no-op seam until a provider is integrated. Until then `backend/scripts/mark-email-verified.mjs` is the documented out-of-band path for an operator with DB access. Not a reason to skip the guard: the guard is what makes the flow safe once delivery exists, and shipping it locked-off would just mean shipping it untested.
 
 ### 6.2 What edge cases are we missing (architecture-level)?
 1. What happens to `AvailabilitySlot.status = 'held'` if a booking transaction fails/times out mid-flight — is there a TTL to release the hold? (Needed or slots leak into permanent limbo.)

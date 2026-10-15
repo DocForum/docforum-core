@@ -100,17 +100,12 @@ model User {
   phone        String?
   passwordHash String
   role         Role
-  // Phase 8 (issue #39): null = active. Deactivating never deletes anything
-  // — no clinical or payment record is keyed to this flag, and none of the
-  // deactivation paths remove rows. Login, refresh and access tokens are all
-  // refused while this is set.
-  deactivatedAt DateTime?
-  // Phase 8 (issue #39): bumped when an account is deactivated/reactivated,
-  // so access tokens minted before that moment stop working immediately
-  // instead of living out their 15-minute TTL. There is still no general
-  // refresh-token revocation list (issue #18) — this is the narrow "revoke
-  // everything for one account" case that deactivation needs.
-  sessionsInvalidatedAt DateTime?
+  // Phase 8 (issue #34): null = never verified. Self-serve signup leaves
+  // this null; existing rows were backfilled to `createdAt` in the
+  // add_email_verification migration. Distinct from
+  // DoctorProfile.verificationStatus, which is the separate, manual
+  // admin verification of a doctor's credentials — do not conflate.
+  emailVerifiedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -118,30 +113,26 @@ model User {
   doctorProfile   DoctorProfile?
   facilityProfile FacilityProfile?
 
-  adminInvitesSent AdminInvite[]
+  emailVerificationTokens EmailVerificationToken[]
 
   @@index([role])
 }
 
-// Phase 8 (issue #39): admin invites. Admin accounts are "seeded or
-// invited" (ROADMAP Phase 8) and there was no supported path for either.
-// Only the SHA-256 hash of the token is stored — a database leak must not
-// hand out working invite links — and every invite is single-use and
-// expiring. Admin-only scope for now: PRD OQ-2's facility invites will need
-// their own profile fields (name/type) at redemption, so they are
-// deliberately not folded in here.
-model AdminInvite {
-  id              String    @id @default(uuid())
-  email           String
-  tokenHash       String    @unique
-  expiresAt       DateTime
-  consumedAt      DateTime?
-  invitedByUserId String
-  createdAt       DateTime  @default(now())
+// Phase 8 (issue #34): hashed, single-use, expiring email-verification
+// tokens. Only the SHA-256 hash is persisted — a database leak must not
+// hand out working verification links. One row per issued token so a
+// resend can be rate-limited against the most recent `createdAt`.
+model EmailVerificationToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
 
-  invitedBy User @relation(fields: [invitedByUserId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([email])
+  @@index([userId])
 }
 
 model PatientProfile {

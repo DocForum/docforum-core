@@ -1,11 +1,22 @@
 // Auth services — the only exported surface other modules (and this
 // module's own controllers) may call. Never import repositories/* from
 // outside this module.
+import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
-import { createSelfServeUser, findUserByEmail, findUserById } from '../repositories';
+import {
+  consumeVerificationToken,
+  createSelfServeUser,
+  findLatestVerificationToken,
+  findUserByEmail,
+  findUserById,
+  findVerificationTokenByHash,
+  markUserEmailVerified,
+  replaceVerificationToken,
+} from '../repositories';
 import { hashPassword, verifyPassword } from './password';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from './tokens';
-import { redeemAdminInvite } from '../../users/services';
+import { generateVerificationToken, hashVerificationToken } from './verification-tokens';
+import { sendEmail } from './email-dispatcher';
 import type { Role } from '@prisma/client';
 
 // Re-exported so middleware/auth.ts (shared infra, not a peer module) can
@@ -14,10 +25,20 @@ import type { Role } from '@prisma/client';
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
 
+// Re-exported for the same reason: tests (and, at Phase 6, the provider
+// integration) replace the outbound email sender through this module's
+// service surface, not by importing the dispatcher file directly.
+export { setEmailSender, resetEmailSender } from './email-dispatcher';
+export type { EmailMessage, EmailSender } from './email-dispatcher';
+
 export interface AuthenticatedUser {
   id: string;
   email: string;
   role: Role;
+  // Phase 8, issue #34 — exposed so docforum-web can gate booking UI on it
+  // without a second round trip. The server-side guard is the real
+  // enforcement point (`assertEmailVerified`).
+  emailVerifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -32,10 +53,18 @@ function toPublicUser(user: {
   id: string;
   email: string;
   role: Role;
+  emailVerifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }): AuthenticatedUser {
-  return { id: user.id, email: user.email, role: user.role, createdAt: user.createdAt, updatedAt: user.updatedAt };
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    emailVerifiedAt: user.emailVerifiedAt,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
 }
 
 function issueSession(user: { id: string; role: Role }): { accessToken: string; refreshToken: string } {
@@ -72,6 +101,12 @@ export async function signup(input: SignupInput): Promise<AuthSession> {
     fullName: input.fullName,
   });
 
+  // Phase 8, issue #34: the account is created and usable for browsing
+  // immediately, but unverified — mutating routes that depend on a
+  // trustworthy contact address are gated by `assertEmailVerified` until
+  // the link is redeemed.
+  await issueEmailVerification(user);
+
   const tokens = issueSession(user);
   return { user: toPublicUser(user), ...tokens };
 }
@@ -101,34 +136,111 @@ export async function login(input: LoginInput): Promise<AuthSession> {
   return { user: toPublicUser(user), ...tokens };
 }
 
-/**
- * Redeems an admin invite and signs the new admin in (Phase 8, issue #39).
- *
- * The invite itself belongs to the users module — this module only hashes
- * the password and issues the session, calling that module's service rather
- * than its repository (AGENTS.md hard rule 4).
- */
-export interface SignupWithInviteInput {
-  token: string;
-  email: string;
-  password: string;
+// --- Email verification (Phase 8, issue #34) -----------------------------
+
+/** Mints a fresh token, retires any outstanding one, and hands the link to
+ * the email dispatcher. The raw token is never persisted and never logged. */
+async function issueEmailVerification(user: { id: string; email: string }): Promise<void> {
+  const token = generateVerificationToken();
+  const expiresAt = new Date(Date.now() + config.auth.emailVerification.tokenTtlMinutes * 60_000);
+
+  await replaceVerificationToken({ userId: user.id, tokenHash: hashVerificationToken(token), expiresAt });
+
+  const link = `${config.auth.emailVerification.landingUrl}?token=${encodeURIComponent(token)}`;
+  try {
+    await sendEmail({
+      to: user.email,
+      subject: 'Verify your DocForum email address',
+      text: [
+        'Confirm this email address to book appointments and pay for orders:',
+        '',
+        link,
+        '',
+        `The link expires in ${Math.round(config.auth.emailVerification.tokenTtlMinutes / 60)} hour(s).`,
+      ].join('\n'),
+    });
+  } catch (err) {
+    // A provider hiccup must not fail signup — the account exists and is
+    // usable, and the user can hit resend. Logged without the message body.
+    // eslint-disable-next-line no-console
+    console.error('[auth] verification email dispatch failed:', err instanceof Error ? err.message : err);
+  }
 }
 
-export async function signupWithInvite(input: SignupWithInviteInput): Promise<AuthSession> {
-  const passwordHash = await hashPassword(input.password);
-  const user = await redeemAdminInvite({ token: input.token, email: input.email, passwordHash });
+export interface VerifyEmailResult {
+  emailVerifiedAt: Date;
+}
 
-  const tokens = issueSession(user);
-  return {
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
-    },
-    ...tokens,
-  };
+export async function verifyEmail(rawToken: string): Promise<VerifyEmailResult> {
+  const record = await findVerificationTokenByHash(hashVerificationToken(rawToken));
+  if (!record) {
+    throw new HttpError(400, 'Invalid email verification token.', 'INVALID_VERIFICATION_TOKEN');
+  }
+  if (record.consumedAt) {
+    throw new HttpError(
+      400,
+      'This verification link has already been used. Request a new one if your email is still unverified.',
+      'INVALID_VERIFICATION_TOKEN',
+    );
+  }
+  if (record.expiresAt.getTime() <= Date.now()) {
+    throw new HttpError(400, 'This verification link has expired. Request a new one.', 'VERIFICATION_TOKEN_EXPIRED');
+  }
+
+  const now = new Date();
+  // Conditional, not read-then-write — two tabs redeeming the same link
+  // must not both report success.
+  const consumed = await consumeVerificationToken(record.id, now);
+  if (!consumed) {
+    throw new HttpError(400, 'This verification link has already been used.', 'INVALID_VERIFICATION_TOKEN');
+  }
+
+  const user = await markUserEmailVerified(record.userId, now);
+  return { emailVerifiedAt: user.emailVerifiedAt ?? now };
+}
+
+export interface ResendVerificationResult {
+  resendAfterSeconds: number;
+}
+
+/** Rate-limited so an unverified account can't be used to flood an inbox.
+ * Account-scoped rather than IP-scoped on purpose, and the endpoint is
+ * authenticated, so it can't be used to probe which addresses exist. */
+export async function resendVerificationEmail(userId: string): Promise<ResendVerificationResult> {
+  const user = await findUserById(userId);
+  if (!user) throw new HttpError(401, 'Authentication required.');
+
+  if (user.emailVerifiedAt) {
+    throw new HttpError(409, 'This email address is already verified.', 'EMAIL_ALREADY_VERIFIED');
+  }
+
+  const intervalSeconds = config.auth.emailVerification.resendIntervalSeconds;
+  const latest = await findLatestVerificationToken(userId);
+  if (latest) {
+    const waitedSeconds = (Date.now() - latest.createdAt.getTime()) / 1000;
+    if (waitedSeconds < intervalSeconds) {
+      throw new HttpError(
+        429,
+        `Please wait ${Math.ceil(intervalSeconds - waitedSeconds)}s before requesting another verification email.`,
+        'EMAIL_VERIFICATION_RATE_LIMITED',
+      );
+    }
+  }
+
+  await issueEmailVerification(user);
+  return { resendAfterSeconds: intervalSeconds };
+}
+
+/** The enforcement point for "unverified accounts can log in and browse, but
+ * not book or pay" (issue #34). Deliberately a DB read rather than a claim
+ * baked into the access token: verifying in another tab then takes effect
+ * immediately instead of after the token's 15-minute TTL. */
+export async function assertEmailVerified(userId: string): Promise<void> {
+  const user = await findUserById(userId);
+  if (!user) throw new HttpError(401, 'Authentication required.');
+  if (!user.emailVerifiedAt) {
+    throw new HttpError(403, 'Verify your email address before continuing.', 'EMAIL_NOT_VERIFIED');
+  }
 }
 
 export async function refresh(refreshToken: string): Promise<AuthSession> {

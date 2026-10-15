@@ -21,11 +21,21 @@ export const config = {
     refreshTtl: '30d',
   },
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
-  // Admin invites (Phase 8, issue #39). `acceptUrl` is where the invite link
-  // points — docforum-web owns the page that consumes `?token=`.
-  adminInvites: {
-    ttlHours: Number(process.env.ADMIN_INVITE_TTL_HOURS ?? 72),
-    acceptUrl: process.env.ADMIN_INVITE_ACCEPT_URL ?? 'http://localhost:5173/accept-admin-invite',
+  // Phase 8 hardening knobs (issues #34/#35/#37). Env-configurable so a
+  // preview deployment can be tightened without a code change, and so
+  // tests can set short windows instead of waiting real minutes.
+  auth: {
+    emailVerification: {
+      // How long a verification link stays usable.
+      tokenTtlMinutes: Number(process.env.EMAIL_VERIFICATION_TOKEN_TTL_MINUTES ?? 24 * 60),
+      // Minimum gap between two "resend verification email" requests for
+      // the same account (a resend is otherwise an open email-flooding
+      // button).
+      resendIntervalSeconds: Number(process.env.EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS ?? 60),
+      // Base URL the verification link points at. docforum-web owns the
+      // page that consumes `?token=`; this is just where we send people.
+      landingUrl: process.env.EMAIL_VERIFICATION_LANDING_URL ?? 'http://localhost:5173/verify-email',
+    },
   },
   // Deliberately NOT required at startup via requireEnv() — unrelated
   // parts of the app (auth, availability, etc.) shouldn't fail to boot

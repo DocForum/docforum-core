@@ -107,9 +107,12 @@ for status and issue links.
 - [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 and are being implemented now — each independent of the others and of Phases 3–7.**
+**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 and are being implemented now — each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
 
-- [ ] Admin account lifecycle: secure bootstrap CLI, admin invites, and account deactivation. `scripts/create-admin.mjs` (credentials via stdin, never argv; refuses when an admin already exists unless `--force`) — now the supported path in ADR 0003's renewal runbook; `AdminInvite` (hashed, expiring, single-use) issued by `POST /admin/invites` and redeemed at `POST /auth/signup-with-invite`; `User.deactivatedAt` + `sessionsInvalidatedAt` with `PATCH /admin/users/:id/{deactivate,reactivate}`, refusing login, refresh *and* already-issued access tokens, guarded so the last active admin can't be deactivated, and deleting nothing. Tracked as [issue #39](https://github.com/DocForum/docforum-core/issues/39) (High, 200 pts) — **in progress**, branch `feat/admin-account-lifecycle-secure-bootstrap-cli`.
+- [ ] Email verification on signup, with restricted access for unverified accounts. `User.emailVerifiedAt` + `EmailVerificationToken` (hashed, expiring, single-use), `POST /auth/verify-email`, `POST /auth/verify-email/resend`, and a `requireVerifiedEmail` guard on booking + payment mutations (never on login/browsing). Migration backfills existing rows as verified. Tracked as [issue #34](https://github.com/DocForum/docforum-core/issues/34) (High, 200 pts) — **in progress**, branch `feat/email-verification-on-signup-with-restricted`. Found a real dependency while building it: the email *provider* is still an open decision (Phase 6, issue #17), so links can't be delivered on a hosted deployment yet — see `backend/src/modules/auth/services/email-dispatcher.ts` and ARCHITECTURE.md §6.1.5.
+- [ ] Login brute-force protection: per-account and per-IP throttling with backoff. Tracked as [issue #35](https://github.com/DocForum/docforum-core/issues/35) (High, 200 pts) — **in progress**.
+- [ ] CSRF protection for cookie-authenticated refresh/logout endpoints, plus an explicit CORS allowlist per environment. Tracked as [issue #37](https://github.com/DocForum/docforum-core/issues/37) (High, 200 pts) — **in progress**.
+- [ ] Admin account lifecycle: secure bootstrap CLI, admin invites, and account deactivation. Tracked as [issue #39](https://github.com/DocForum/docforum-core/issues/39) (High, 200 pts) — **in progress**.
 - [ ] `AuditEvent` table + write path for referral/prescription/lab-order state transitions (ARCHITECTURE.md §6.2.4 — flagged as needed before real patient data). Still blocked — needs the Phase 3/4 models (referral, prescription, lab order) to exist first. Not yet scoped into an issue.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
@@ -347,13 +350,12 @@ for status and issue links.
   #34 (email verification), #35 (login brute-force throttling), #37 (CSRF
   for the cookie-authenticated endpoints + per-environment CORS allowlist)
   and #39 (admin account lifecycle). All four are independent of Phases
-  3–7 and of each other. #39 has landed as a PR: a supported
-  `scripts/create-admin.mjs` bootstrap CLI (credentials on stdin, never
-  argv; `--force` required once an admin exists) which now replaces the
-  hand-written SQL promotion in ADR 0003's renewal runbook, an
-  `AdminInvite` table (hashed/expiring/single-use) behind
-  `POST /admin/invites` + `POST /auth/signup-with-invite`, and soft
-  deactivation (`User.deactivatedAt` + `sessionsInvalidatedAt`) with
-  `PATCH /admin/users/:id/{deactivate,reactivate}` that refuses login,
-  refresh and already-issued access tokens, can't touch the last active
-  admin, and deletes no records.
+  3–7 and of each other. #34 has landed as a PR: `User.emailVerifiedAt` +
+  a hashed/expiring/single-use `EmailVerificationToken` table (backfilled
+  as verified for existing rows), `POST /auth/verify-email`,
+  `POST /auth/verify-email/resend` (account-scoped, rate-limited), and a
+  `requireVerifiedEmail` guard on booking + payment mutations — never on
+  login/browsing. Also added
+  `backend/scripts/mark-email-verified.mjs` as the documented interim for
+  operating a deployment before an email provider exists (issue #17), and
+  flagged that dependency in ARCHITECTURE.md §6.1.5.
