@@ -13,7 +13,15 @@ import { paymentsRouter } from './modules/payments/routes';
 export function createApp() {
   const app = express();
 
-  app.use(cors({ origin: config.corsOrigin, credentials: true }));
+  // Phase 8, issue #35: login throttling keys on the client IP, so the
+  // proxy chain has to be resolved deliberately rather than guessed. See
+  // config.trustProxy for why neither `true` nor the default is safe here.
+  app.set('trust proxy', config.trustProxy);
+
+  // Explicit allowlist per environment (Phase 8, issue #37) — see
+  // config.corsOrigins. `credentials: true` is required for the refresh
+  // cookie and is exactly why the allowlist can't be a wildcard.
+  app.use(cors({ origin: config.corsOrigins, credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
 

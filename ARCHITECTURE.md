@@ -68,7 +68,19 @@ Canonical source of truth: `backend/prisma/schema.prisma`. This section is the h
 ```
 User
   id, email, phone, password_hash, role (enum: patient|doctor|facility|admin)
+  email_verified_at (nullable — Phase 8 issue #34; null = unverified.
+    Backfilled to created_at for pre-existing rows in the
+    add_email_verification migration, so accounts from before this phase
+    are treated as verified)
   created_at, updated_at
+
+EmailVerificationToken (Phase 8 issue #34)
+  id, user_id (FK -> User), token_hash (unique, SHA-256 — raw token never stored)
+  expires_at, consumed_at (nullable), created_at
+  # Append-only-ish: issuing a new token marks any outstanding one consumed
+    ("latest link wins") rather than deleting it. Redemption is a conditional
+    UPDATE (consumed_at IS NULL), same single-use shape as §5.1's booking
+    guarantee, so two concurrent redemptions can't both win.
 
 PatientProfile (1:1 User)
   id, user_id, full_name, date_of_birth, guardian_user_id (nullable — see PRD edge case: minors)
@@ -196,6 +208,24 @@ Notification
   id, user_id, type, payload (jsonb), read_at (nullable), created_at
 ```
 
+### 4.9 Auth hardening state (Phase 8)
+```
+LoginAttempt (issue #35)
+  id, scope ('email' | 'ip'), key, failed_count, window_start, last_failed_at
+  lock_until (nullable), created_at, updated_at
+  # unique (scope, key). One bucket per normalised email and per client IP.
+  # Deliberately in Postgres, not process memory: the deployment is a single
+  # instance today but must not be designed as one forever, and a restart
+  # must not hand an attacker a fresh budget.
+  # Counters move only via a single conditional upsert (INSERT ... ON
+  # CONFLICT DO UPDATE) — never read-then-write — so N concurrent bad logins
+  # are counted as N (integration-tested).
+  # The lock is set once per window; hammering a locked account grows the
+  # count but never extends the deadline, so a lock is a bounded wait.
+```
+`User` fields added in Phase 8 live in §4.1; the `email_verified_at` /
+`EmailVerificationToken` pair (issue #34) is in §4.1 as well.
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)
@@ -223,12 +253,14 @@ Notification
 2. `Referral.target_doctor_id` left nullable with no fallback assignment logic — referrals to "a specialty" with no specific doctor need a real routing rule (round robin? load-based?) or they'll pile up unassigned. **Not designed yet — flag as open architecture gap.**
 3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final.
 4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
+5. **Discovered 2026-10-15 while building email verification (Phase 8, issue #34):** the email/SMS provider is still undecided (Phase 6, issue #17), so verification links can't actually be delivered in a hosted environment yet — `backend/src/modules/auth/services/email-dispatcher.ts` is a no-op seam until a provider is integrated. Until then `backend/scripts/mark-email-verified.mjs` is the documented out-of-band path for an operator with DB access. Not a reason to skip the guard: the guard is what makes the flow safe once delivery exists, and shipping it locked-off would just mean shipping it untested.
 
 ### 6.2 What edge cases are we missing (architecture-level)?
 1. What happens to `AvailabilitySlot.status = 'held'` if a booking transaction fails/times out mid-flight — is there a TTL to release the hold? (Needed or slots leak into permanent limbo.)
 2. Referral `expired` status exists in the enum but no expiry job is designed yet — orphaned referrals (PRD 8.1.3 sibling problem).
 3. No schema support yet for a doctor working across multiple facilities/locations (PRD edge case 6) — `AvailabilitySlot` currently assumes one calendar per doctor.
 4. No audit-log table — every FR around auditability (PRD §7) currently relies on `created_at/updated_at` timestamps only, which is not sufficient for "who changed what." A dedicated `AuditEvent` table is likely needed before this ships to real patients.
+5. CSRF on the cookie-authenticated routes — the refresh cookie has to be `SameSite=None; Secure` (the Pages frontend is a different site — see `docs/adr/0003`), which means any site the patient visits can make their browser send it to `/auth/refresh` and `/auth/logout`. **Resolved 2026-10-15 (issue #37):** a per-session CSRF token is bound into the refresh token and required in the `X-CSRF-Token` header, the `Origin` header is validated against an explicit allowlist, and CORS is now a per-environment allowlist (`CORS_ORIGINS`) instead of one configured string. The double-submit cookie pattern — the usual answer — is *not* usable here: a cookie set by this API is a third-party cookie to `docforum.github.io`, so the frontend's JavaScript can never read it; the token travels in the login/refresh response body instead. A request with no `Origin` (curl, server-to-server) is allowed through the Origin check but still needs the token. See `backend/src/middleware/csrf.ts`, and `docs/api/README.md` for what the client must send. Consequence: refresh cookies issued before this change carry no `csrf` claim and are rejected, i.e. existing sessions need one re-login.
 
 ### 6.3 What's overengineered (architecture-level, for v1)?
 1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is.
@@ -238,6 +270,7 @@ Notification
 ## 7. Non-functional / cross-cutting
 
 - **Testing**: unit tests per module (`backend/tests/unit`), integration tests for booking/referral/order flows specifically because those are the correctness-critical paths (`backend/tests/integration`).
+- **Security — login throttling (Phase 8, issue #35)**: `POST /auth/login` is throttled per normalised email *and* per client IP, in Postgres (`LoginAttempt`, §4.9): exponential backoff with `Retry-After` from `LOGIN_THROTTLE_BACKOFF_AFTER` failures, a temporary lock at `LOGIN_THROTTLE_LOCK_AFTER`, and a cleanup interval in `src/server.ts`. Two things this depends on operationally: (1) `TRUST_PROXY` must be set correctly in production — Render terminates TLS in front of exactly one hop, so `TRUST_PROXY=1`; leaving it unset makes every request look like Render's proxy (one shared bucket for everyone), and `true` lets a client spoof `X-Forwarded-For` for a fresh bucket per request; (2) the throttle deliberately does not reveal whether an account exists — locked, backoff and unknown-account responses are identical, and an absent account still pays the bcrypt comparison cost so response timing doesn't leak either.
 - **Migrations**: Prisma migrations are the only way schema changes happen — no manual DB edits, ever.
 - **Environments**: local (Docker Compose), staging, production — staging/production infra choice is an open item (see ROADMAP).
 
