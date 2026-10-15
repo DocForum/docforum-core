@@ -26,6 +26,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
+`User` → `PasswordResetToken` (SHA-256 hash only, single-use, expiring — Phase 8 #33). `User.token_version` is embedded in every access/refresh token as `tv` and checked at refresh; bumping it (password reset) kills all outstanding refresh tokens for that user.
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
 - **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule.
@@ -39,6 +40,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - No expiry/TTL job for held slots or pending referrals — currently just an enum value with no worker.
 - Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables.
 - No `AuditEvent` table yet, despite PRD requiring auditability — needed before real patient data.
+- Only a per-user token version, no per-session revocation store (issue #18). Password reset can kill every session for a user but not one device; and a bumped-away access token still works for the rest of its 15-min TTL.
+- The password-reset rate limiter is in-process memory (auth/services/rate-limit.ts) — correct for a single instance, wrong across replicas (needs a shared store).
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 
 ## Overengineering guardrails (things NOT to build yet)

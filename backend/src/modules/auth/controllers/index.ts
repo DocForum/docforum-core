@@ -1,6 +1,11 @@
 import type { Request, Response } from 'express';
 import * as authService from '../services';
-import { loginSchema, signupSchema } from '../validation';
+import {
+  loginSchema,
+  passwordResetConfirmSchema,
+  passwordResetRequestSchema,
+  signupSchema,
+} from '../validation';
 import { HttpError } from '../../../http-error';
 
 const REFRESH_COOKIE = 'docforum_refresh';
@@ -61,4 +66,26 @@ export async function refresh(req: Request, res: Response) {
 export function logout(_req: Request, res: Response) {
   res.clearCookie(REFRESH_COOKIE, REFRESH_COOKIE_OPTIONS);
   res.status(204).send();
+}
+
+// Both reset endpoints answer identically for known and unknown emails —
+// same status, same body, no branch on the result of the lookup. Rate
+// limiting is the one intentional exception (429), and it fires before any
+// account lookup, so it can't leak existence either.
+export async function requestPasswordReset(req: Request, res: Response) {
+  const { email } = passwordResetRequestSchema.parse(req.body);
+  await authService.requestPasswordReset({ email, ip: req.ip ?? 'unknown' });
+  res.status(202).json({
+    message: 'If an account exists for that email, a password reset link has been sent.',
+  });
+}
+
+export async function confirmPasswordReset(req: Request, res: Response) {
+  const input = passwordResetConfirmSchema.parse(req.body);
+  await authService.confirmPasswordReset(input);
+  // The reset already killed every refresh token for this user
+  // (tokenVersion bump) — clear the caller's cookie too so a browser that
+  // still holds the old one isn't left sending a dead token.
+  res.clearCookie(REFRESH_COOKIE, REFRESH_COOKIE_OPTIONS);
+  res.status(200).json({ message: 'Password updated. Please sign in with your new password.' });
 }

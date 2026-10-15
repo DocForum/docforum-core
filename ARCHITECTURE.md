@@ -64,6 +64,7 @@ Canonical source of truth: `backend/prisma/schema.prisma`. This section is the h
 ```
 User
   id, email, phone, password_hash, role (enum: patient|doctor|facility|admin)
+  token_version (int, default 0 — see 4.9)
   created_at, updated_at
 
 PatientProfile (1:1 User)
@@ -167,6 +168,27 @@ Notification
   id, user_id, type, payload (jsonb), read_at (nullable), created_at
 ```
 
+### 4.9 Auth hardening (Phase 8)
+```
+PasswordResetToken (issue #33)
+  id, user_id (FK -> User, cascade)
+  token_hash (unique — SHA-256 hex of the raw token; the raw token is
+              never stored, logged, or returned by the API)
+  expires_at, used_at (nullable), created_at
+```
+Design notes: `used_at` covers both "already used" and "superseded by a
+newer request" — requesting a second reset marks the first token used in the
+same transaction that creates the new row, so only one token per user is ever
+live. Consuming a token also sets the new `password_hash` and increments
+`User.token_version` (see §4.1) in one transaction: every refresh token issued
+before the reset carries the old `tv` and is rejected at `POST /auth/refresh`.
+`token_version` is the interim kill switch issue #33 asked for while the full
+revocation list (§6.1.4, issue #18) doesn't exist — it is a per-user counter,
+not a per-session store, so it can't revoke one device and leave others.
+On success, delivery goes through `notifications/services` — a
+provider-agnostic `NotificationChannel` interface with a console adapter, so
+no provider decision (issue #17) is needed for this to work.
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)
@@ -193,7 +215,7 @@ Notification
 1. Naive slot booking without the DB-level conditional update in §5.1 — the most likely first bug filed against this repo. **Resolved 2026-09-14:** implemented exactly as designed in §5.1 — see `backend/src/modules/availability/repositories/index.ts` (`claimOpenSlot`) and `backend/src/modules/appointments/services/index.ts` (`bookSlot`, the transaction wrapping it). Integration-tested with real concurrency in `backend/tests/integration/booking.test.mts`.
 2. `Referral.target_doctor_id` left nullable with no fallback assignment logic — referrals to "a specialty" with no specific doctor need a real routing rule (round robin? load-based?) or they'll pile up unassigned. **Not designed yet — flag as open architecture gap.**
 3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final.
-4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
+4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added. **Partially addressed 2026-10-15 (issue #33):** a per-user `token_version` claim is now checked at refresh time, so a password reset kills every outstanding refresh token for that user. Still open: per-session revocation (issue #18) and the fact that an access token stays valid for its remaining TTL (≤15 min) after a bump — there is no per-request revocation check.
 
 ### 6.2 What edge cases are we missing (architecture-level)?
 1. What happens to `AvailabilitySlot.status = 'held'` if a booking transaction fails/times out mid-flight — is there a TTL to release the hold? (Needed or slots leak into permanent limbo.)

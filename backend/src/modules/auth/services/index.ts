@@ -13,6 +13,17 @@ import type { Role } from '@prisma/client';
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
 
+// Password reset (Phase 8 #33) lives in its own file; re-exported here so
+// controllers keep calling a single service surface.
+export {
+  confirmPasswordReset,
+  hashResetToken,
+  requestPasswordReset,
+  resetPasswordResetRateLimits,
+  type ConfirmPasswordResetInput,
+  type RequestPasswordResetInput,
+} from './password-reset';
+
 export interface AuthenticatedUser {
   id: string;
   email: string;
@@ -37,8 +48,11 @@ function toPublicUser(user: {
   return { id: user.id, email: user.email, role: user.role, createdAt: user.createdAt, updatedAt: user.updatedAt };
 }
 
-function issueSession(user: { id: string; role: Role }): { accessToken: string; refreshToken: string } {
-  const payload = { sub: user.id, role: user.role };
+function issueSession(user: { id: string; role: Role; tokenVersion: number }): {
+  accessToken: string;
+  refreshToken: string;
+} {
+  const payload = { sub: user.id, role: user.role, tv: user.tokenVersion };
   return { accessToken: signAccessToken(payload), refreshToken: signRefreshToken(payload) };
 }
 
@@ -103,6 +117,15 @@ export async function refresh(refreshToken: string): Promise<AuthSession> {
 
   const user = await findUserById(payload.sub);
   if (!user) throw new HttpError(401, 'Invalid or expired refresh token.');
+
+  // `tv` check: a password reset (or anything else that bumps
+  // User.tokenVersion) kills every refresh token issued before it. Tokens
+  // predating this field carry no `tv` and read as version 0, which is
+  // exactly right — they stay valid only while the user has never had a
+  // version bump.
+  if ((payload.tv ?? 0) !== user.tokenVersion) {
+    throw new HttpError(401, 'Invalid or expired refresh token.');
+  }
 
   const tokens = issueSession(user);
   return { user: toPublicUser(user), ...tokens };

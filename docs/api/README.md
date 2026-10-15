@@ -16,13 +16,21 @@ spec yet — TBD, tracked informally, not blocking Phase 1.
 | `POST /auth/login` | none | `{ email, password }` | Same response shape as signup. |
 | `POST /auth/refresh` | refresh cookie | — | Reads the httpOnly cookie (not the body). Returns a fresh `{ user, accessToken }` and rotates the cookie. |
 | `POST /auth/logout` | none | — | Clears the refresh cookie. `204 No Content`. |
+| `POST /auth/password-reset/request` | none | `{ email }` | **Always `202`**, same body for a known and an unknown email — no account-existence signal. Sends a single-use link through the `notifications` module (console adapter today, provider TBD per issue #17). Rate-limited per email (3/h) and per IP (10/h) → `429`. |
+| `POST /auth/password-reset/confirm` | none | `{ token, newPassword }` | `200` on success. The token is single-use, expires after 30 min, and is stored only as a SHA-256 hash. `400` with the **same generic message** for unknown, expired, reused, and superseded tokens. Success invalidates every outstanding refresh token for that user (per-user `tokenVersion` bump) and clears the refresh cookie. |
 
-Access tokens: `Authorization: Bearer <token>`, 15-minute TTL, no
-revocation list yet (see `ARCHITECTURE_ESSENTIALS.md` known gaps —
-JWT refresh rotation without a revocation list). Refresh tokens: httpOnly
-cookie, 30-day TTL, `sameSite: 'lax'`/`secure: false` — **local-dev-only
-choice**, see the comment above `setRefreshCookie` in
+Access tokens: `Authorization: Bearer <token>`, 15-minute TTL. Refresh
+tokens: httpOnly cookie, 30-day TTL, `sameSite: 'lax'`/`secure: false` —
+**local-dev-only choice**, see the comment above `setRefreshCookie` in
 `backend/src/modules/auth/controllers/index.ts` for what production needs.
+
+Every token carries a `tv` claim (the user's `tokenVersion` at issue time).
+Bumping `User.tokenVersion` — which password reset does — invalidates every
+outstanding refresh token for that user at the next refresh. This is the
+interim kill switch for issue #33; the fuller revocation list (per-session
+revocation, #18) is still open, so a bumped-away **access** token keeps
+working until its 15-minute TTL elapses. Refresh tokens are checked
+against `tokenVersion` on every `POST /auth/refresh`.
 
 ## Doctors (`/doctors`) — `backend/src/modules/doctors`
 

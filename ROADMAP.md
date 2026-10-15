@@ -107,7 +107,8 @@ for status and issue links.
 - [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: Not started. Three of five items scoped into issues #18–#20 (independent of Phases 3–7); the other two remain blocked.**
+**Status: In progress. Three of five items scoped into issues #18–#20 (independent of Phases 3–7); three more opened since (#33 password reset, #36 TOTP 2FA, #38 session management) and all three now landed — see notes below. `AuditEvent` and the privacy audit remain blocked on Phases 3/4/5.**
+- [x] Password reset flow with single-use, hashed, expiring tokens — `POST /auth/password-reset/request` (always 202, rate-limited per email/per IP) and `POST /auth/password-reset/confirm`. New `PasswordResetToken` table (SHA-256 hash only, `used_at`, `expires_at` — ARCHITECTURE.md §4.9); a second request supersedes the first in the same transaction. Consuming a token rotates the password and bumps `User.token_version`, which kills every outstanding refresh token for that user — the interim revocation mechanism issue #33 specified while #18 is unbuilt. Link delivery goes through a provider-agnostic `NotificationChannel` (console adapter), so it did not depend on #17. Closes [issue #33](https://github.com/DocForum/docforum-core/issues/33). Integration-tested against a real Postgres: unknown-vs-known email response parity, expiry, reuse, supersession, and post-reset refresh rejection.
 - [ ] `AuditEvent` table + write path for referral/prescription/lab-order state transitions (ARCHITECTURE.md §6.2.4 — flagged as needed before real patient data). Still blocked — needs the Phase 3/4 models (referral, prescription, lab order) to exist first. Not yet scoped into an issue.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
@@ -341,3 +342,16 @@ for status and issue links.
   yet Accepted. Added to the docs site.
 - 2026-10-09 — Opened issue #32: upgrade to escrow SDK 0.3.0 and the
   current testnet contract.
+- 2026-10-15 — Landed Phase 8's password reset flow (issue #33):
+  `POST /auth/password-reset/request` (always `202`, rate-limited per
+  email and per IP, no account-existence signal) and
+  `POST /auth/password-reset/confirm`. New `PasswordResetToken` table
+  stores only a SHA-256 hash with `expires_at`/`used_at`; a second
+  request supersedes the first inside one transaction. Reset bumps a new
+  `User.token_version`, embedded in every token as `tv` and checked at
+  refresh — outstanding refresh tokens die immediately, which is the
+  interim kill switch #33 asked for while #18's revocation list is
+  unbuilt. Delivery goes through a provider-agnostic
+  `NotificationChannel` (console adapter), so #17 stayed unblocking.
+  ARCHITECTURE.md §4.1/§4.9 and ARCHITECTURE_ESSENTIALS.md updated;
+  the §6.1.4 revocation gap is now marked partially resolved.
