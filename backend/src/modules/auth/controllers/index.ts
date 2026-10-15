@@ -69,6 +69,18 @@ export async function clearLoginAttempts(req: Request, res: Response) {
   res.status(200).json({ cleared });
 }
 
+/**
+ * Admin invite redemption (Phase 8, issue #39). Lives in the auth module
+ * because it ends in a session, but the invite itself is the users module's
+ * business — see `authService.signupWithInvite`, which calls that module's
+ * service rather than touching its tables.
+ */
+export async function signupWithInvite(req: Request, res: Response) {
+  const input = signupWithInviteSchema.parse(req.body);
+  const session = await authService.signupWithInvite(input);
+  sessionResponse(res, session);
+}
+
 export async function refresh(req: Request, res: Response) {
   const token = (req.cookies as Record<string, string> | undefined)?.[REFRESH_COOKIE];
   if (!token) throw new HttpError(401, 'No refresh token provided.');
