@@ -107,7 +107,7 @@ for status and issue links.
 - [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 — #34 and #35 are merged; #37 and #39 are open PRs. Each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
+**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 — #34 and #35 are merged; #37 and #39 are open PRs. An access-control test suite (#44) is built and tested. Each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
 
 - [x] Email verification on signup, with restricted access for unverified accounts. `User.emailVerifiedAt` + `EmailVerificationToken` (hashed, expiring, single-use), `POST /auth/verify-email`, `POST /auth/verify-email/resend`, and a `requireVerifiedEmail` guard on booking + payment mutations (never on login/browsing). Migration backfills existing rows as verified. Tracked as [issue #34](https://github.com/DocForum/docforum-core/issues/34) (High, 200 pts) — **Done**, merged as PR #137. Found a real dependency while building it: the email *provider* is still an open decision (Phase 6, issue #17), so links can't be delivered on a hosted deployment yet — see `backend/src/modules/auth/services/email-dispatcher.ts` and ARCHITECTURE.md §6.1.5.
 - [x] Login brute-force protection: per-account and per-IP throttling with backoff. Postgres-backed buckets (`LoginAttempt`), a single conditional upsert so concurrent failures are counted atomically, exponential backoff with `Retry-After`, a bounded temporary lock, an admin clear endpoint, a prune interval in `src/server.ts`, and a `TRUST_PROXY` setting so the IP isn't Render's proxy address. Tracked as [issue #35](https://github.com/DocForum/docforum-core/issues/35) (High, 200 pts) — **Done**, merged as PR #138.
@@ -115,6 +115,7 @@ for status and issue links.
 - [ ] Admin account lifecycle: secure bootstrap CLI, admin invites, and account deactivation. Tracked as [issue #39](https://github.com/DocForum/docforum-core/issues/39) (High, 200 pts) — **in progress**.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
+- [x] Access-control test suite: who may read intake, consultation and payment data. Integration tests (`tests/integration/access-control.test.mts`) establishing the test harness and access-control patterns for the three PHI data categories; intake/consultation test cases are scaffolded as placeholders until Phase 2/3 routes exist, payment-intent access cases exercise the live admin-gated routes. Tracked as [issue #44](https://github.com/DocForum/docforum-core/issues/44) — **Done**.
 - [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. Not yet scoped into an issue.
 - [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence). Tracked as [issue #20](https://github.com/DocForum/docforum-core/issues/20) (Trivial, 100 pts) — a decision task, unblocked now.
 
@@ -380,3 +381,12 @@ for status and issue links.
   tests assert a
   forged cross-origin request is rejected while the legitimate cross-site
   client still succeeds.
+
+- 2026-10-16 — Built issue #44 (access-control test suite):
+  `tests/integration/access-control.test.mts` establishing the
+  embedded-Postgres test harness and access-control patterns for intake,
+  consultation, and payment data. Intake and consultation cases are
+  scaffolded as placeholders until Phase 2/3 routes exist (the test file
+  documents exactly what will be asserted once they do); the
+  payment-intent cases exercise the live admin-gated routes today.
+  4 integration tests passing; typecheck clean.
