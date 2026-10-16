@@ -16,3 +16,16 @@ export async function setVerification(req: Request, res: Response) {
   const profile = await doctorsService.setVerificationStatus(doctorProfileId, status);
   res.status(200).json(profile);
 }
+
+export async function setDoctorSpecialtyVerification(req: Request, res: Response) {
+  const { status, reviewer } = setVerificationStatusSchema.parse(req.body);
+  const doctorProfileId = getParam(req, 'doctorProfileId');
+  const specialtyId = getParam(req, 'specialtyId');
+  const profile = await doctorsService.setDoctorSpecialtyVerification(
+    doctorProfileId,
+    specialtyId,
+    status,
+    reviewer,
+  );
+  res.status(200).json(profile);
+}
