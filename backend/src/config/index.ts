@@ -28,6 +28,17 @@ function parseCorsOrigins(raw: string | undefined, isProduction: boolean): strin
     .filter((origin) => origin.length > 0);
 }
 
+/** Issue #78: the date after which funding refuses facility wallet links
+ * that were never SEP-10 verified. Defaults to 2027-01-01 (UTC) — a
+ * deliberate fail-closed default: legacy links keep working for a
+ * defined grace window without any deployment needing to remember to
+ * set the variable, but "never enforce" is never the default. Returns
+ * NaN for a malformed value so startup validation can name the var. */
+function parseWalletLinkCutoff(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return Date.parse('2027-01-01T00:00:00Z');
+  return Date.parse(raw);
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: requireEnv('DATABASE_URL'),
@@ -117,5 +128,49 @@ export const config = {
     platformReleaserSecret: process.env.PLATFORM_RELEASER_SECRET,
     escrowContractId: process.env.ESCROW_CONTRACT_ID,
     escrowTokenId: process.env.ESCROW_TOKEN_ID,
+    // Issue #78 — after this instant, funding only accepts facility
+    // wallet links with verificationMethod = 'sep10'; before it, links
+    // backfilled from the old typed-in form (`unverified_legacy`) still
+    // work. Parsed leniently here (invalid input yields NaN); startup
+    // validation (validateWalletLinkConfig, server.ts) rejects a
+    // malformed value by env var NAME, and the funding service refuses
+    // to guess if it somehow sees NaN (fail-closed 500, not a silent
+    // pass).
+    walletLinkUnverifiedFundingCutoff: parseWalletLinkCutoff(
+      process.env.WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF,
+    ),
+  },
+  // SEP-10 Stellar Web Authentication (issue #77, ADR 0005 step 4).
+  //
+  // The SEP-10 signing key is deliberately its own identity — never
+  // PLATFORM_PAYER_SECRET or PLATFORM_RELEASER_SECRET. It exists only to
+  // sign/verify web-auth challenges, so if it ever leaks the blast radius
+  // is "someone can mint challenge transactions we would accept", not
+  // "someone can move platform funds". Rotating it doesn't touch the
+  // money-moving keys and vice versa.
+  //
+  // Unlike the payer/releaser keys above, this block IS validated at
+  // process startup (server.ts calls validateSep10Config()): issue #77
+  // explicitly asks for startup validation, and a typo'd/missing web-auth
+  // key would otherwise only surface on the first challenge request. The
+  // money keys stay lazily validated per ADR 0004 — booting the app for
+  // auth/booking work must not require payments to be configured.
+  //
+  // Secrets are never logged: startup validation reports the ENV VAR NAME
+  // only, and no code path prints the secret value.
+  sep10: {
+    signingSecret: process.env.SEP10_SIGNING_SECRET,
+    homeDomain: process.env.SEP10_HOME_DOMAIN,
+    webAuthDomain: process.env.SEP10_WEB_AUTH_DOMAIN,
+    // Testnet defaults, matching this repo's testnet-only payments
+    // constraint (docforum-escrow hard rule 4). Overridable per
+    // environment when a deployment points elsewhere.
+    networkPassphrase: process.env.SEP10_NETWORK_PASSPHRASE ?? 'Test SDF Network ; September 2015',
+    horizonUrl: process.env.SEP10_HORIZON_URL ?? 'https://horizon-testnet.stellar.org',
+    // Challenge time bounds. SEP-10's listed verification step only
+    // requires *bounded* timebounds; 300s is @stellar/stellar-sdk's own
+    // default and what issue #77 asks for. (SEP-10's prose recommends
+    // 900s — 300s is the stricter choice and is what we build and test.)
+    challengeTimeoutSeconds: Number(process.env.SEP10_CHALLENGE_TIMEOUT_SECONDS ?? 300),
   },
 } as const;

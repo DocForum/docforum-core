@@ -7,8 +7,25 @@
 type EscrowSdkModule = typeof import('@docforum/escrow-sdk', { with: { 'resolution-mode': 'import' } });
 
 let modulePromise: Promise<EscrowSdkModule> | undefined;
+let override: EscrowSdkModule | undefined;
 
 export function loadEscrowSdk(): Promise<EscrowSdkModule> {
+  if (override) return Promise.resolve(override);
   modulePromise ??= import('@docforum/escrow-sdk');
   return modulePromise;
+}
+
+// Test seam (issue #78) — same pattern as auth's setEmailSender and the
+// SEP-10 Horizon fetcher override: lets the offline integration suite
+// exercise the real funding flow (guard, snapshot, status transition)
+// without reaching the escrow contract on testnet. Never set outside
+// tests.
+export type EscrowSdkForTests = EscrowSdkModule;
+
+export function setEscrowSdkOverride(sdk: EscrowSdkForTests): void {
+  override = sdk;
+}
+
+export function resetEscrowSdkOverride(): void {
+  override = undefined;
 }

@@ -87,6 +87,8 @@ for status and issue links.
 - [ ] Idempotent escrow funding + on-chain reconcile job (`fundPaymentIntent` is check-then-act — docforum-escrow threat model §5). Tracked as [issue #24](https://github.com/DocForum/docforum-core/issues/24) (High, 200 pts).
 - [ ] ADR: releaser key custody — multisig, KMS, or per-period rotation (threat model T1/T2). Tracked as [issue #25](https://github.com/DocForum/docforum-core/issues/25) (Medium, 150 pts).
 - [ ] Checksum-validate facility wallet keys, not just regex. Tracked as [issue #26](https://github.com/DocForum/docforum-core/issues/26) (Trivial, 100 pts).
+- [x] SEP-10 Stellar Web Authentication server (ADR 0005 step 4): `GET /payments/sep10/challenge` + `POST /payments/sep10/verify`, full SEP-10 server verification list (incl. multisig thresholds from Horizon and the unfunded-account master-key rule), a single-use `Sep10Challenge` nonce ledger consumed atomically, and a dedicated `SEP10_SIGNING_SECRET` separate from the payer/releaser keys. Generic infrastructure the non-custodial wallet linking builds on — the endpoints themselves issue no session and change no custodial behaviour. Tracked as [issue #77](https://github.com/DocForum/docforum-core/issues/77) (High, 200 pts) — **Done**.
+- [x] Verified wallet links for patients and facilities (ADR 0005 step 4, replaces typed-in addresses): generalized owner-scoped `WalletLink` (patient | facility) with `verificationMethod`/`verifiedAt`, one ACTIVE link per owner DB-enforced, re-link deactivates instead of mutating, `POST /payments/wallet-link` accepts only a signed SEP-10 challenge (link + nonce consume in one transaction), patient responses carry ADR 0005's privacy notice verbatim, funding refuses unverified legacy links after a configurable `WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF`, and `PaymentIntent.fundedWalletAddress` snapshots the funded payee. Tracked as [issue #78](https://github.com/DocForum/docforum-core/issues/78) (High, 200 pts) — **Done** (stacked on #77's branch).
 - [ ] Non-custodial patient payments (v2): patients fund escrows from their own Stellar wallet, custodial kept as fallback. **Proposed** in `docs/adr/0005-non-custodial-patient-payments.md`; implementation issues to be opened once it's Accepted.
 - [ ] Upgrade to `@docforum/escrow-sdk` 0.3.0 and the current testnet contract (`refund_after`, balance-delta check, `getEscrow`) — step 1 of ADR 0005's plan, but worth doing regardless. Tracked as [issue #32](https://github.com/DocForum/docforum-core/issues/32) (Medium, 150 pts); depends on `docforum-escrow` publishing `sdk-v0.3.0`.
 - [ ] Doc reconciliation: PRD §8.1.6 (facility fulfillment integrity) — not marked resolved; this phase proves the payment *mechanism* works, not the fulfillment-integrity question, which still needs real `FulfillmentRecord`/facility-matching (Phase 5) to actually address.
@@ -344,11 +346,42 @@ for status and issue links.
   sponsorship. Custodial v1 stays as a fallback. Status: Proposed, not
   yet Accepted. Added to the docs site.
 - 2026-10-09 — Opened issue #32: upgrade to escrow SDK 0.3.0 and the
-  current testnet contract.
-- 2026-10-15 — Started Phase 8's auth-hardening work, scoped as issues
-  #34 (email verification), #35 (login brute-force throttling), #37 (CSRF
-  for the cookie-authenticated endpoints + per-environment CORS allowlist)
-  and #39 (admin account lifecycle). All four are independent of Phases
+  current testnet contract.- 2026-10-16 — Implemented issue #77 (SEP-10 Stellar Web Authentication server, Phase 5.5 / ADR 0005 step 4): `GET
+  /payments/sep10/challenge` builds a server-signed challenge (SDK
+  helper — Manage Data nonce, 5-minute time bounds, home domain +
+  web_auth_domain) and records the issuance binding; `POST
+  /payments/sep10/verify` walks the full SEP-10 server verification
+  list (structure, time bounds, server signature, client signatures
+  with multisig weight thresholds loaded from Horizon, and the
+  spec's master-key rule for unfunded accounts), then consumes the
+  nonce with ONE conditional UPDATE so concurrent replays can't both
+  succeed — same DB-level pattern as booking. New `Sep10Challenge`
+  model (unique nonce, userId, account, expiry) with a migration; a
+  dedicated `SEP10_SIGNING_SECRET` (never the payer/releaser keys,
+  validated at startup, never logged). Horizon is behind an injectable
+  seam so the 15 unit + 18 integration tests run with zero network.
+  Docs updated: ARCHITECTURE §4.10, essentials data-model map,
+  docs/api/README.md (endpoints + errors + unfunded behaviour).
+- 2026-10-16 — Implemented issue #78 (verified wallet links, stacked on
+  #77's branch): `WalletLink` generalized from facility-only/typed-in to
+  an owner (patient | facility) with `verificationMethod` /
+  `verifiedAt` / `replacedAt`, one active link per owner enforced by a
+  DB unique sentinel (Prisma can't express a partial index — noted in
+  the schema), and the migration backfills existing facility rows as
+  `unverified_legacy` (proven by a real migration test that inserts an
+  old-shape row first). `POST /payments/wallet-link` now takes only a
+  signed SEP-10 challenge (strict body — a raw address is a 400) and
+  creates the link inside the same transaction that consumes the nonce;
+  the only `sep10`-row writer is that flow. Patient link responses
+  carry ADR 0005's on-chain privacy notice verbatim (unit-tested
+  against the ADR file). Funding refuses unverified legacy links after
+  `WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF` (default 2027-01-01,
+  startup-validated, `409 WALLET_LINK_UNVERIFIED`) and snapshots
+  `PaymentIntent.fundedWalletAddress` so re-linking can't rewrite an
+  escrow's payee. 8 unit + 12 integration tests (fake Horizon + fake
+  escrow SDK — no network). ADR 0005 unchanged (no factual conflict).
+- 2026-10-15 — Started Phase 8's auth-hardening work, scoped as issues #34 (email verification), #35 (login brute-force throttling), #37 (CSRF
+  for the cookie-authenticated endpoints + per-environment CORS allowlist) and #39 (admin account lifecycle). All four are independent of Phases
   3–7 and of each other. #34 merged as PR #137: `User.emailVerifiedAt` +
   a hashed/expiring/single-use `EmailVerificationToken` table (backfilled
   as verified for existing rows), `POST /auth/verify-email`,

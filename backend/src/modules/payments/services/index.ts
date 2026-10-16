@@ -13,6 +13,36 @@ import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
 import { loadEscrowSdk } from './escrow-sdk-loader';
+import { assertWalletLinkFundingAllowed } from './wallet-link';
+
+// SEP-10 Stellar Web Authentication (issue #77). Re-exported through
+// this module's service surface (not imported file-by-file from outside)
+// per the AGENTS.md module-boundary rule — same pattern as the auth
+// module's token/throttle re-exports.
+export {
+  createSep10Challenge,
+  verifySep10Challenge,
+  resetSep10AccountFetcher,
+  setSep10AccountFetcher,
+  validateSep10Config,
+} from './sep10';
+export type { Sep10AccountFetcher, Sep10AccountInfo, Sep10ChallengeResponse, Sep10Signer, Sep10VerifyResult } from './sep10';
+
+// Verified wallet links (issue #78) — SEP-10-only link creation,
+// owner-scoped reads, the funding-cutoff guard, and the ADR 0005
+// privacy notice constant, all through this module's service surface.
+export {
+  PATIENT_WALLET_LINK_PRIVACY_NOTICE,
+  assertWalletLinkFundingAllowed,
+  getOwnWalletLink,
+  linkWalletViaSep10,
+  validateWalletLinkConfig,
+  walletLinkFundingAllowed,
+} from './wallet-link';
+export type { WalletLinkOwner } from './wallet-link';
+// Test seam for the escrow SDK (offline funding tests, issue #78).
+export { resetEscrowSdkOverride, setEscrowSdkOverride } from './escrow-sdk-loader';
+export type { EscrowSdkForTests } from './escrow-sdk-loader';
 
 async function requirePaymentsConfig() {
   const { platformPayerSecret, platformReleaserSecret, escrowContractId, escrowTokenId } = config.payments;
@@ -34,20 +64,6 @@ async function requirePaymentsConfig() {
 async function escrowClient(contractId: string) {
   const { EscrowClient } = await loadEscrowSdk();
   return new EscrowClient({ contractId });
-}
-
-export async function getOwnFacilityProfileId(userId: string): Promise<string> {
-  const profile = await paymentsRepo.findFacilityProfileByUserId(userId);
-  if (!profile) throw new HttpError(403, 'No facility profile is associated with this account.');
-  return profile.id;
-}
-
-export function linkWallet(facilityId: string, stellarPublicKey: string) {
-  return paymentsRepo.upsertWalletLink(facilityId, stellarPublicKey);
-}
-
-export function getWalletLink(facilityId: string) {
-  return paymentsRepo.findWalletLinkByFacilityId(facilityId);
 }
 
 export interface CreatePaymentIntentInput {
@@ -76,8 +92,15 @@ export async function fundPaymentIntent(id: string) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
   }
 
-  const walletLink = await paymentsRepo.findWalletLinkByFacilityId(intent.facilityId);
+  // The facility's ACTIVE link (issue #78: one per owner; replaced rows
+  // are history and must never be picked up here).
+  const walletLink = await paymentsRepo.findActiveWalletLink('facility', intent.facilityId);
   if (!walletLink) throw new HttpError(409, 'The facility for this payment has no linked wallet.');
+
+  // Funding guard (issue #78 requirement 4) — in the SERVICE, so scripts,
+  // future controllers or internal callers all hit it. Unverified legacy
+  // links fund only before WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF.
+  assertWalletLinkFundingAllowed(walletLink);
 
   const { platformPayer, platformReleaser, escrowContractId, escrowTokenId } = await requirePaymentsConfig();
   const client = await escrowClient(escrowContractId);
@@ -94,7 +117,15 @@ export async function fundPaymentIntent(id: string) {
     releaser: platformReleaser.publicKey(),
   });
 
-  return paymentsRepo.markEscrowed(id, { escrowId, stellarTxHash: txHash, sorobanContractId: escrowContractId });
+  return paymentsRepo.markEscrowed(id, {
+    escrowId,
+    stellarTxHash: txHash,
+    sorobanContractId: escrowContractId,
+    // Snapshot the payee this escrow was actually funded to (issue #78
+    // requirement 5): a later re-link of the facility's wallet must not
+    // rewrite which address this intent references.
+    fundedWalletAddress: walletLink.stellarPublicKey,
+  });
 }
 
 /** Releases the escrow to the facility's linked wallet. v1: admin-triggered (see ADR 0004 "Consequences") — no automatic FulfillmentRecord trigger yet, since that model doesn't exist. */
