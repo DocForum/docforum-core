@@ -33,6 +33,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | Realtime (messaging/notifications) | WebSocket gateway (or managed pub/sub, e.g. Pusher/Ably) behind an internal `notifications` interface | Swappable; not custom infra from day one. |
 | Video/voice (if/when needed) | Third-party embed (Twilio/Daily/Agora) behind an interface, not built in-house | PRD §8.3.1 — explicitly flagged as overengineering risk if built custom. |
 | File/result storage | Object storage (S3-compatible) for lab result attachments | Never store clinical files directly in Postgres rows. |
+| Field-level encryption | AES-256-GCM envelope encryption (`backend/src/utils/field-encryption.ts`, Phase 8 issue #46) for clinical free text (`Consultation.notes`, `Referral.snapshotNotes`) | Limits blast radius of a leaked DB dump / over-broad read replica — encryption at rest doesn't protect against those. Versioned key-id prefix enables rotation without rewriting every row. **Constraint: encrypted fields cannot be searched or indexed** — they're write-once/read-decrypt blobs. |
 | Background jobs | Simple queue (BullMQ on Redis) for reminders, order-expiry checks, notification delivery | Needed for FR-15/16 and the "orphaned order" hard question (PRD §8.1.3). |
 | Infra | Docker Compose for local dev; containerized deploy target TBD (not decided — see Open Questions in ROADMAP) | Keep infra decisions deferred until a real deploy target is chosen; don't overbuild CI/CD for a repo with no code yet. |
 
@@ -121,9 +122,11 @@ IntakeForm
 ```
 Consultation
   id, appointment_id (FK, unique)
-  notes, outcome (enum: resolved|referred|follow_up_needed)
+  notes [ENCRYPTED — Phase 8 issue #46, see §2 field-level encryption row]
+  outcome (enum: resolved|referred|follow_up_needed)
   created_at
 ```
+**Encryption note:** `notes` is stored as an AES-256-GCM envelope (`v1:<iv>:<tag>:<data>`) via `backend/src/utils/field-encryption.ts`. Because it's encrypted, it **cannot be searched or indexed** — any future full-text search over consultation notes must decrypt in the application layer or use a separate searchable index, not a Postgres index on this column. Key rotation: `backend/scripts/rotate-field-keys.mjs` re-encrypts in batches.
 
 ### 4.4 Referral
 ```
@@ -131,7 +134,7 @@ Referral
   id, source_consultation_id (FK)
   referring_doctor_id, target_specialty_id, target_doctor_id (nullable)
   snapshot_intake_id (FK -> IntakeForm, copy reference, immutable)
-  snapshot_notes (text copy of the referring consultation notes at time of referral — immutable)
+  snapshot_notes [ENCRYPTED — Phase 8 issue #46] (text copy of the referring consultation notes at time of referral — immutable)
   status (enum: pending|accepted|declined|completed|expired)
   resulting_appointment_id (nullable FK -> Appointment)
   created_at, updated_at
