@@ -34,3 +34,26 @@ export async function setVerificationStatus(doctorProfileId: string, status: Ver
   await getDoctorProfileById(doctorProfileId); // 404s if missing
   return doctorsRepo.updateVerificationStatus(doctorProfileId, status);
 }
+
+export async function setDoctorSpecialtyVerification(
+  doctorProfileId: string,
+  specialtyId: string,
+  status: VerificationStatus,
+  reviewer: string,
+  rejectionReason?: string,
+) {
+  const doctorSpecialty = await doctorsRepo.findDoctorSpecialtyByDoctorAndSpecialty(
+    doctorProfileId,
+    specialtyId,
+  );
+  if (!doctorSpecialty) {
+    throw new HttpError(404, 'Doctor does not have this specialty assigned.');
+  }
+  return doctorsRepo.updateDoctorSpecialtyVerification(
+    doctorProfileId,
+    specialtyId,
+    status,
+    reviewer,
+    rejectionReason,
+  );
+}

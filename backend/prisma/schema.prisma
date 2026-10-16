@@ -207,9 +207,13 @@ model Specialty {
 }
 
 model DoctorSpecialty {
-  id              String @id @default(uuid())
-  doctorProfileId String
-  specialtyId     String
+  id                      String                    @id @default(uuid())
+  doctorProfileId         String
+  specialtyId             String
+  verificationStatus      VerificationStatus?
+  reviewer                String?
+  reviewDate              DateTime?
+  rejectionReason         String?
 
   doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
   specialty     Specialty     @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
@@ -362,6 +366,18 @@ model FulfillmentRecord {
   // NOTE: this polymorphic (orderType, orderId) pair is flagged in
   // ARCHITECTURE.md §6.1.3 as a design smell to revisit — may be split
   // into PrescriptionFulfillment / LabOrderFulfillment before implementation.
+}
+
+model RateLimitRecord {
+  id        String   @id @default(uuid())
+  key       String
+  scope     String // 'user' | 'ip'
+  cost      Int      @default(1)
+  consumedAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([key, scope, consumedAt])
 }
 
 model Notification {

@@ -11,3 +11,9 @@ doctorsRouter.patch(
   requireRole('admin'),
   doctorsController.setVerification,
 );
+doctorsRouter.patch(
+  '/:doctorProfileId/specialties/:specialtyId/verification',
+  authenticate,
+  requireRole('admin'),
+  doctorsController.setDoctorSpecialtyVerification,
+);
