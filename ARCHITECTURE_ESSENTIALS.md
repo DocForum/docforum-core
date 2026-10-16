@@ -4,7 +4,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 
 ## Stack (don't relitigate without an ADR in docs/adr/)
 - Backend: Node.js + TypeScript + Express/Fastify — **modular monolith**, not microservices.
-- DB: PostgreSQL via Prisma (`backend/prisma/schema.prisma` = source of truth for models).
+- DB: PostgreSQL via **Prisma 7** (`backend/prisma/schema.prisma` = source of truth for models). v7 has no Rust query engine: the client is built with a driver adapter (`@prisma/adapter-pg` + node-postgres) in `backend/src/db/prisma-client.ts` — bare `new PrismaClient()` throws — and the CLI's datasource URL lives in `backend/prisma.config.ts`, not in the schema. Keep the `prisma-client-js` generator: it still writes to `node_modules/@prisma/client`, so imports and this backend's CommonJS runtime are unchanged (see `docs/adr/0006`). Requires Node >= 20.19.
 - Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`. The refresh cookie is `SameSite=None` cross-site, so `/auth/refresh` + `/auth/logout` require an `X-CSRF-Token` header (a per-session token bound into the refresh JWT) and an allowlisted `Origin` — see `backend/src/middleware/csrf.ts`. CORS is an explicit per-environment allowlist (`CORS_ORIGINS`).
 - Frontend: React + TypeScript + Vite, React Query + Zustand.
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
