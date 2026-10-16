@@ -28,12 +28,14 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
+`User` → `Sep10Challenge` (SEP-10 wallet-ownership proofs, issue #77 — single-use nonce binding a signed challenge to the issuing user + Stellar account; consumed atomically)
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
 - **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule.
 - `WalletLink` is scoped to the **facility** (the on-chain payee), not the patient.
 - `PaymentIntent.orderType`/`orderId` are opaque, unvalidated — `Prescription`/`LabOrder` aren't real records yet (Phase 4). Don't build on top of these assuming they're FK-validated.
 - `release`/`refund` are admin-triggered HTTP actions in v1 (`POST /payments/intents/:id/{release,refund}`) — there's no `FulfillmentRecord.status == fulfilled` to trigger off of yet. Don't treat this as the final design.
+- **SEP-10 wallet-ownership proof** (issue #77): `GET /payments/sep10/challenge` + `POST /payments/sep10/verify` (see docs/api/README.md) with a dedicated `SEP10_SIGNING_SECRET` (never the payer/releaser keys). The `Sep10Challenge` nonce ledger is single-use via one conditional UPDATE — no app-level check-then-write. This is generic infrastructure for ADR 0005's wallet linking; it issues no session, DocForum's own JWT still authenticates the caller.
 - The actual Stellar contract calls go through `@docforum/escrow-sdk` (`backend/src/modules/payments/services/escrow-sdk-loader.ts` — dynamic `import()`, the SDK is ESM-only and this backend is CommonJS). Never reimplement contract-calling logic in this repo.
 
 ## Known unresolved design gaps (do not silently "fix" without flagging in PR description)
