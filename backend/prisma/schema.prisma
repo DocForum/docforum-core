@@ -114,6 +114,7 @@ model User {
   facilityProfile FacilityProfile?
 
   emailVerificationTokens EmailVerificationToken[]
+  accessLogs AccessLog[]
 
   @@index([role])
 }
@@ -180,6 +181,9 @@ model PatientProfile {
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
+
+  // Phase 8 (issue #45): who viewed this patient's records.
+  accessLogs AccessLog[]
 }
 
 model DoctorProfile {
@@ -285,6 +289,44 @@ model Appointment {
   // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
   // existing. Flagged, not silently dropped.
   // TODO Phase 3: referralId (nullable FK -> Referral).
+}
+
+// =========================================================================
+// Phase 8 (issue #45): PHI read-access logging — AccessLog
+//
+// Answers "who looked at this" (distinct from AuditEvent's "who changed
+// this"). Written asynchronously off the read path so it never adds to
+// p95 latency. Fail-open: a logging failure never fails the read, but is
+// counted and surfaced for alerting.
+//
+// patientProfileId is the record owner (whose data was viewed) — used by
+// GET /patients/me/access-log. accessedBy is the viewer.
+// =========================================================================
+
+model AccessLog {
+  id             String   @id @default(uuid())
+  // Who viewed. SetNull on user delete keeps the log row (timestamp +
+  // entity remain) while removing the PII pointer.
+  accessedBy     String?
+  // Which patient's records were viewed (the record owner, not the viewer).
+  patientProfileId String?
+  // Entity that was read: 'IntakeForm' | 'Consultation' | 'Prescription' |
+  // 'LabOrder' | 'LabResult' | 'Referral' | 'PaymentIntent' | 'PatientProfile'
+  entityType     String
+  entityId       String
+  // The HTTP route that returned the payload (for correlating with access logs).
+  route          String?
+  // Free-text detail — no PHI here, just context like "GET /appointments/mine".
+  detail         String?
+  accessedAt     DateTime @default(now())
+
+  accessedByUser User?            @relation(fields: [accessedBy], references: [id], onDelete: SetNull)
+  patientProfile PatientProfile?  @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+
+  @@index([accessedAt])
+  @@index([accessedBy])
+  @@index([patientProfileId, accessedAt])
+  @@index([entityType, entityId])
 }
 
 // =========================================================================
