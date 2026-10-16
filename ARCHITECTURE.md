@@ -227,6 +227,46 @@ Sep10Challenge
 SEP-10 ledger is the first payments model added directly here because it
 is a user-identity-adjacent table with a FK to `User`.)
 
+### 4.11 Verified wallet links (Phase 5.5, issue #78)
+```
+WalletLink
+  id, owner_type (enum: patient|facility), owner_id (PatientProfile.id or
+    FacilityProfile.id — polymorphic, deliberately NO FK relation, same
+    shape as §4.7's FulfillmentRecord; caller ownership is validated in
+    the payments service before any write)
+  stellar_address, verification_method (enum: sep10 | unverified_legacy),
+    verified_at (null iff unverified_legacy), replaced_at (null while
+    this is the owner's active link), active_owner_key (unique sentinel),
+    created_at, updated_at
+  # ONE ACTIVE LINK PER OWNER, DB-level: active_owner_key =
+    "<owner_type>:<owner_id>" while active, NULL once replaced — the
+    unique index on it is the constraint (Prisma's schema DSL cannot
+    express a partial unique index WHERE replaced_at IS NULL, and a
+    raw-SQL one would be dropped as drift by the next `prisma migrate
+    dev`).
+  # Re-linking DEACTIVATES (replaced_at) instead of mutating or
+    deleting, so history survives. stellar_address and
+    verification_method are write-once. `sep10` rows are created ONLY
+    by POST /payments/wallet-link's verification flow (inside the same
+    transaction that consumes the SEP-10 nonce); there is no seed,
+    script, admin route or service method that can create one — the
+    `unverified_legacy` value only ever comes from the
+    add_verified_wallet_links migration backfill of old typed-in rows.
+  # Patient link responses carry ADR 0005's on-chain privacy notice
+    VERBATIM (constant in services/wallet-link.ts, unit-tested against
+    the ADR file itself so it can't drift into a paraphrase).
+
+PaymentIntent (base fields documented in ADR 0004 §4 context)
+  funded_wallet_address — NEW (issue #78): snapshot of the payee address
+    the escrow was actually funded to, written exactly once with the
+    `escrowed` transition. A later re-link cannot rewrite which address
+    an already-funded escrow references.
+```
+Funding guard: after `WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF` (config,
+validated at startup), `fundPaymentIntent` refuses facility links whose
+`verification_method` is not `sep10` with `409 WALLET_LINK_UNVERIFIED` —
+enforced in the funding service, not the controller.
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)

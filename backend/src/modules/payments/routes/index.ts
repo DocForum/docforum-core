@@ -4,15 +4,28 @@ import * as paymentsController from '../controllers';
 
 export const paymentsRouter = Router();
 
-// Facility manages its own payout wallet.
+// Wallet links (issue #78): patients link the wallet they pay FROM
+// (ADR 0005 v2 payer), facilities the wallet they are paid TO. Only
+// these two roles can own a link — resolved to the caller's OWN profile
+// in the service, so linking for an owner you don't control is a 403.
+//
+// The body is a signed SEP-10 challenge, never an address (see
+// validation.ts); still verified-email-gated like every payments
+// mutation here (issue #34 — and ADR 0005's replacement for the old
+// typed-in endpoint, which was gated the same way).
 paymentsRouter.post(
   '/wallet-link',
   authenticate,
-  requireRole('facility'),
+  requireRole('patient', 'facility'),
   requireVerifiedEmail,
   paymentsController.linkWallet,
 );
-paymentsRouter.get('/wallet-link', authenticate, requireRole('facility'), paymentsController.getOwnWallet);
+paymentsRouter.get(
+  '/wallet-link',
+  authenticate,
+  requireRole('patient', 'facility'),
+  paymentsController.getOwnWallet,
+);
 
 // v1 (custodial, admin-triggered — see docs/adr/0004-custodial-payments-v1.md
 // "Consequences"): Phase 4/5 (Orders/Fulfillment) don't exist yet, so

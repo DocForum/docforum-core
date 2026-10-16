@@ -1,7 +1,7 @@
 import { createApp } from './app';
 import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
-import { validateSep10Config } from './modules/payments/services';
+import { validateSep10Config, validateWalletLinkConfig } from './modules/payments/services';
 
 const app = createApp();
 
@@ -12,6 +12,9 @@ const app = createApp();
 // only build the app, aren't forced to boot with payments configured.
 async function start(): Promise<void> {
   await validateSep10Config();
+  // Issue #78: a malformed WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF must
+  // stop boot too — naming the env var, never a value.
+  validateWalletLinkConfig();
   app.listen(config.port, () => {
     // eslint-disable-next-line no-console
     console.log(`docforum-core backend listening on :${config.port}`);

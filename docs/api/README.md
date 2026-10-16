@@ -153,11 +153,62 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 
 ## Payments (`/payments`) — `backend/src/modules/payments`
 
-Custodial v1 escrow actions (`POST /payments/wallet-link`,
-`GET/POST /payments/intents/...`) exist and are admin/facility-gated —
-see `docs/adr/0004-custodial-payments-v1.md` for why. The table below
-covers the SEP-10 endpoints added for the non-custodial flow
-(`docs/adr/0005`, issue #77).
+Custodial v1 escrow actions (`GET/POST /payments/intents/...`) are
+admin/facility-gated — see `docs/adr/0004-custodial-payments-v1.md` for
+why. Wallet linking and SEP-10 (below) are the non-custodial building
+blocks from `docs/adr/0005` (issues #77/#78).
+
+### Wallet links (issue #78)
+
+Wallet links are **owner-scoped and verified**: a patient links the
+wallet they will pay FROM, a facility the wallet they are paid TO. The
+endpoint never accepts an address — only a signed SEP-10 challenge —
+and the address is derived server-side from the account that challenge
+was verified for.
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /payments/wallet-link` | access token, role `patient` or `facility`, + verified email | `{ transaction }` (signed SEP-10 challenge XDR) | Creates (or replaces) the caller's OWN active link: `200 { id, ownerType, ownerId, stellarPublicKey, verificationMethod: 'sep10', verifiedAt, replacedAt: null, createdAt, updatedAt }`. Patient responses additionally carry `privacyNotice` (see below). Link creation and the SEP-10 nonce consumption commit in one transaction — a failed verification creates no link and burns no nonce. |
+| `GET /payments/wallet-link` | access token, role `patient` or `facility` | — | The caller's active link, or `404 { message: 'No wallet linked yet.' }`. Replaced links are history and are not returned. |
+
+**Rules:**
+
+- **One active link per owner**, enforced by a DB unique constraint —
+  concurrent creates race it (`409 WALLET_LINK_CONFLICT` for the loser)
+  rather than ever producing two. Re-linking deactivates the previous
+  link (`replacedAt` set) instead of mutating or deleting it, so history
+  survives; already-funded escrows keep referencing their own address
+  (snapshot in `PaymentIntent.fundedWalletAddress`).
+- **Patient privacy notice:** every patient link response includes
+  `privacyNotice` — ADR 0005's on-chain privacy risk text **verbatim**
+  (word-for-word; a unit test checks it against the ADR file), so a
+  client cannot render the success screen without carrying it:
+  > **Privacy risk: health information can leak on-chain.** A payment
+  > from a patient's wallet to a facility's wallet is public forever. …
+  (full text in the response body / `services/wallet-link.ts`).
+  The ADR mandates the *display* but is silent on an acknowledgement
+  field — none is required (open design decision in the PR).
+
+**Errors:**
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 400 | — | Malformed body, or **any raw-address field** (`stellarPublicKey`, `account`, …) — the schema is strict on purpose. |
+| 401 | `SEP10_*` | Challenge invalid/untrusted/replayed/expired — same codes as `POST /payments/sep10/verify`; no link is created and the nonce is not consumed. |
+| 403 | `SEP10_CHALLENGE_NOT_FOR_CALLER` | Challenge was issued to a different user/account. |
+| 403 | — | Role cannot own a link (doctor/admin), no profile, or email not verified (`EMAIL_NOT_VERIFIED`). |
+| 409 | `WALLET_LINK_CONFLICT` | A concurrent request created the owner's link first. |
+| 404 | — | `GET` with no active link. |
+
+**Legacy links & the funding cutoff:** existing facility links
+(typed-in before this change) migrated to `verificationMethod:
+'unverified_legacy'`, `verifiedAt: null`. Escrow funding keeps accepting
+them **before** `WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF` (ISO date,
+validated at startup, default `2027-01-01T00:00:00Z`, see
+`.env.example`); **after** it, funding a facility whose link is not
+`sep10` fails with `409 { code: 'WALLET_LINK_UNVERIFIED' }` (enforced in
+the funding service — re-link with a SEP-10-verified wallet to resume).
+Verified links fund normally before and after the cutoff.
 
 ### SEP-10 Stellar Web Authentication (issue #77)
 
