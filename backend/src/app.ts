@@ -8,6 +8,7 @@ import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
 import { paymentsRouter } from './modules/payments/routes';
+import { adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
 
 export function createApp() {
   const app = express();
@@ -31,6 +32,11 @@ export function createApp() {
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
   app.use('/payments', paymentsRouter);
+
+  // PHI read-access logging (Phase 8, issue #45). Mounted at root so the
+  // paths match the issue's spec exactly: /admin/access-logs, /patients/me/access-log.
+  app.use('/admin', adminAuditRouter);
+  app.use('/patients', patientAuditRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.
