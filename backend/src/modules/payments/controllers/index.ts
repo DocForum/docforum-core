@@ -72,3 +72,6 @@ export async function refundIntent(req: Request, res: Response) {
   const intent = await paymentsService.refundPaymentIntent(id);
   res.status(200).json(serializeIntent(intent));
 }
+
+// SEP-10 Stellar Web Authentication (issue #77) — see ./sep10.ts.
+export { sep10Challenge, sep10Verify } from './sep10';
