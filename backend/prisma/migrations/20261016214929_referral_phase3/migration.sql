@@ -1,3 +1,16 @@
+-- Phase 3 referral core (issues #5/#65/#66/#67/#68).
+--
+-- Scope note: this migration only owns what Phase 3 actually adds. Two
+-- things it used to add are owned by other migrations and are deliberately
+-- NOT created here, because `prisma migrate deploy` runs them in timestamp
+-- order and a duplicate column/index/table is a hard failure:
+--   * "Consultation"."appointmentId" (+ its unique index and FK) is created
+--     by 20261020000000_order_payment_intents (issue #9), which runs later.
+--   * The "AuditEvent" table is created by 20261017212335_add_audit_event
+--     (issue #43) — the one append-only audit trail in this schema. Referral
+--     admin actions are written into it as `entity_type = 'Referral'` rows
+--     through the audit module, not into a second table.
+
 -- AlterEnum
 ALTER TYPE "ReferralStatus" ADD VALUE 'cancelled';
 
@@ -5,12 +18,16 @@ ALTER TYPE "ReferralStatus" ADD VALUE 'cancelled';
 ALTER TABLE "Appointment" DROP CONSTRAINT "Appointment_availabilitySlotId_fkey";
 
 -- AlterTable
+-- A CANCELLED appointment releases its slot back to `open` (referral
+-- cascade / patient cancel), so the appointment must stop holding the
+-- unique claim on the slot. The row keeps its history; only the slot link
+-- is cleared. The booking guarantee itself is unchanged — the conditional
+-- UPDATE on SlotStatus is what prevents double-booking.
 ALTER TABLE "Appointment" ADD COLUMN     "referralId" TEXT,
 ALTER COLUMN "availabilitySlotId" DROP NOT NULL;
 
 -- AlterTable
-ALTER TABLE "Consultation" ADD COLUMN     "appointmentId" TEXT,
-ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL;
+ALTER TABLE "Consultation" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL;
 
 -- AlterTable
 ALTER TABLE "Referral" ADD COLUMN     "cancelledReason" TEXT,
@@ -25,32 +42,6 @@ ADD COLUMN     "resultingAppointmentId" TEXT,
 ADD COLUMN     "sourceConsultationId" TEXT NOT NULL,
 ADD COLUMN     "targetDoctorId" TEXT NOT NULL,
 ADD COLUMN     "targetSpecialtyId" TEXT;
-
--- CreateTable
-CREATE TABLE "AuditEvent" (
-    "id" TEXT NOT NULL,
-    "actorUserId" TEXT NOT NULL,
-    "actorRole" TEXT NOT NULL,
-    "action" TEXT NOT NULL,
-    "referralId" TEXT,
-    "reason" TEXT,
-    "metadata" JSONB,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "AuditEvent_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE INDEX "AuditEvent_referralId_idx" ON "AuditEvent"("referralId");
-
--- CreateIndex
-CREATE INDEX "AuditEvent_action_idx" ON "AuditEvent"("action");
-
--- CreateIndex
-CREATE INDEX "AuditEvent_createdAt_idx" ON "AuditEvent"("createdAt");
-
--- CreateIndex
-CREATE UNIQUE INDEX "Consultation_appointmentId_key" ON "Consultation"("appointmentId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Referral_resultingAppointmentId_key" ON "Referral"("resultingAppointmentId");
@@ -77,9 +68,6 @@ ALTER TABLE "Appointment" ADD CONSTRAINT "Appointment_availabilitySlotId_fkey" F
 ALTER TABLE "Appointment" ADD CONSTRAINT "Appointment_referralId_fkey" FOREIGN KEY ("referralId") REFERENCES "Referral"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "Consultation" ADD CONSTRAINT "Consultation_appointmentId_fkey" FOREIGN KEY ("appointmentId") REFERENCES "Appointment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
 ALTER TABLE "Referral" ADD CONSTRAINT "Referral_sourceConsultationId_fkey" FOREIGN KEY ("sourceConsultationId") REFERENCES "Consultation"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -96,7 +84,3 @@ ALTER TABLE "Referral" ADD CONSTRAINT "Referral_parentReferralId_fkey" FOREIGN K
 
 -- AddForeignKey
 ALTER TABLE "Referral" ADD CONSTRAINT "Referral_resultingAppointmentId_fkey" FOREIGN KEY ("resultingAppointmentId") REFERENCES "Appointment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "AuditEvent" ADD CONSTRAINT "AuditEvent_referralId_fkey" FOREIGN KEY ("referralId") REFERENCES "Referral"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
