@@ -151,9 +151,69 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 | `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
 
+## Patients (`/patients`) — `backend/src/modules/patients`
+
+### Data export — right of access (Phase 8, issue #40)
+
+| Method & path | Auth | Notes |
+|---|---|---|
+| `POST /patients/me/export` | patient | Starts an export of the **caller's own** data. `202` with the export status object and a `Location: /patients/me/export/:id` header. If one is already `pending`/`processing`, returns that one instead of queuing a second. No body is read — there is no way to name another patient. |
+| `GET /patients/me/export/:id` | patient (owner) | Status object (below). `404` for an id that isn't the caller's — the same response as one that doesn't exist. |
+| `GET /patients/me/export/:id/download` | patient (owner) | Streams the bundle as `application/json` (`Content-Disposition: attachment`, `Cache-Control: no-store`). `409 EXPORT_NOT_READY` while pending/processing/failed; `410 EXPORT_EXPIRED` at or after `expiresAt`, even before the cleanup job has run. |
+
+Doctors and admins get `403` on all three — there is no on-behalf-of export.
+
+Status object:
+
+```json
+{
+  "id": "uuid",
+  "status": "pending | processing | ready | failed | expired",
+  "schemaVersion": 1,
+  "createdAt": "…", "startedAt": "…", "generatedAt": "…", "expiresAt": "…",
+  "sizeBytes": 12345,
+  "failure": null,
+  "downloadUrl": "/patients/me/export/<id>/download"
+}
+```
+
+`downloadUrl` and `sizeBytes` are non-null only while `ready`. A failed
+export reports `failure: { code: 'SECTION_FAILED', section: '<name>' }` (or
+`GENERATION_FAILED` / `GENERATION_TIMEOUT`, with `section: null`) — request a
+new export to retry. Generation is asynchronous; poll the status object.
+
+Bundle (`schemaVersion` 1):
+
+```json
+{
+  "format": "docforum.patient-export",
+  "schemaVersion": 1,
+  "exportId": "uuid",
+  "generatedAt": "ISO-8601",
+  "sections": {
+    "account":      { "version": 1, "items": [{ "id", "email", "phone", "role", "emailVerifiedAt", "createdAt", "updatedAt" }] },
+    "appointments": { "version": 1, "items": [{ "id", "status", "origin", "slot": { "startTime", "endTime" }, "doctor": { "id", "fullName" }, "createdAt", "updatedAt" }] },
+    "payments":     { "version": 1, "items": [{ "id", "orderType", "orderId", "status", "amountStroops", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
+    "profile":      { "version": 1, "items": [{ "id", "fullName", "dateOfBirth", "createdAt", "updatedAt" }] }
+  }
+}
+```
+
+Sections are sorted by name; new modules add sections (ARCHITECTURE.md §3.1)
+without changing the envelope. `amountStroops`/`escrowId` are strings
+(bigint). No password hash, tokens, throttle state or platform secrets are
+ever included.
+
+Exports stay downloadable for `PATIENT_EXPORT_TTL_HOURS` (default 24), then
+the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZE`,
+`PATIENT_EXPORT_CHUNK_BYTES`, `PATIENT_EXPORT_WORKER_INTERVAL_SECONDS`,
+`PATIENT_EXPORT_CLEANUP_INTERVAL_SECONDS`, `PATIENT_EXPORT_STALE_AFTER_SECONDS`,
+`PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
+`backend/src/jobs/README.md`.
+
 ## Not yet implemented
 
-Everything else in `ARCHITECTURE.md` §3's module list (`patients`,
-`facilities`, `consultations`, `referrals`, `prescriptions`, `lab-orders`,
+Everything else in `ARCHITECTURE.md` §3's module list (`facilities`,
+`consultations`, `referrals`, `prescriptions`, `lab-orders`,
 `pharmacy-orders`, `payments`, `notifications`) has no routes yet — Phase
 2 onward, see `ROADMAP.md`.

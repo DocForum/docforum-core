@@ -3,6 +3,7 @@ import { HttpError } from '../../../http-error';
 import * as appointmentsRepo from '../repositories';
 import * as availabilityService from '../../availability/services';
 import * as patientsService from '../../patients/services';
+import * as doctorsService from '../../doctors/services';
 
 /**
  * Books a slot for the calling patient. This is the correctness-critical
@@ -48,3 +49,32 @@ export async function listMyAppointments(userId: string) {
   const patientProfile = await patientsService.getMyPatientProfile(userId);
   return appointmentsRepo.findAppointmentsForPatient(patientProfile.id);
 }
+
+/** This module's contribution to the patient data export (issue #40).
+ * Slot times and the doctor's name are fetched per page through the
+ * availability and doctors services — never by joining their tables. */
+export const appointmentsExportSection: patientsService.PatientExportSection = {
+  name: 'appointments',
+  version: 1,
+  pages(subject, pageSize) {
+    return patientsService.paginate(
+      pageSize,
+      (cursor, take) => appointmentsRepo.findAppointmentsPageForPatient(subject.patientProfileId, cursor, take),
+      async (rows) => {
+        const [slots, doctors] = await Promise.all([
+          availabilityService.getSlotTimesByIds(rows.map((row) => row.availabilitySlotId)),
+          doctorsService.getDoctorSummariesByIds(rows.map((row) => row.doctorProfileId)),
+        ]);
+        return rows.map((row) => ({
+          id: row.id,
+          status: row.status,
+          origin: row.origin,
+          slot: slots.get(row.availabilitySlotId) ?? null,
+          doctor: doctors.get(row.doctorProfileId) ?? null,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        }));
+      },
+    );
+  },
+};
