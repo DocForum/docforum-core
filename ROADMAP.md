@@ -2,10 +2,13 @@
 
 Last updated: 2026-10-17
 Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
-`docs/adr/0004-custodial-payments-v1.md`) built and tested. Phases 2-6
-and 8-9 scoped into GitHub issues (#1-#22, #21 closed); Phase 7 is
-superseded by `docforum-web`'s own roadmap. See each phase section below
-for status and issue links.
+`docs/adr/0004-custodial-payments-v1.md`) built and tested. Phase 3
+(Referrals) is **in progress**: #5, #7 and #65–#68 implemented and
+tested on branch `feat/referral-phase3-cascade-multi-loop-admin`, #6 and
+#8 open. Phase 2 is partially unblocked by that work (#3/#4 minimal
+slices). Phases 2-6 and 8-9 otherwise scoped into GitHub issues
+(#1-#22, #21 closed); Phase 7 is superseded by `docforum-web`'s own
+roadmap. See each phase section below for status and issue links.
 
 > **Org note:** this repo (`docforum-core`) is the hub of a 3-repo `DocForum` org. Frontend work is tracked in `docforum-web`'s own roadmap. Stellar contract/SDK work is tracked in `docforum-escrow`'s own roadmap. This file tracks only what runs inside `docforum-core` — including the `payments` module, which *consumes* `docforum-escrow`'s published package but doesn't implement contract logic itself.
 
@@ -42,23 +45,27 @@ for status and issue links.
 - [x] Doc reconciliation: PRD §8.1.1 and ARCHITECTURE §6.1.1 marked resolved in place.
 
 ## Phase 2 — Intake, appointments, consultations
-**Status: Not started — unblocked (Phase 1 is done). Scoped into issues #1–#4 and #23.**
+**Status: In progress — issues #3 and #4 carry a minimal slice landed as Phase 3's prerequisite; intake (#1/#2) and discovery (#23) still Not started. Scoped into issues #1–#4 and #23.**
 - [ ] `IntakeForm` model + structured symptom entry (not free-text-only, per PRD FR-5). Tracked as [issue #1](https://github.com/DocForum/docforum-core/issues/1) (Medium, 150 pts).
 - [ ] Booking flow requires intake before confirmation. Tracked as [issue #2](https://github.com/DocForum/docforum-core/issues/2) (Medium, 150 pts) — depends on #1.
-- [ ] `Appointment` lifecycle (`scheduled → completed/cancelled/no_show`) + doctor's today view. Tracked as [issue #3](https://github.com/DocForum/docforum-core/issues/3) (Medium, 150 pts).
-- [ ] `Consultation` record + outcome (`resolved | referred | follow_up_needed`). Tracked as [issue #4](https://github.com/DocForum/docforum-core/issues/4) (High, 200 pts).
+- [ ] `Appointment` lifecycle (`scheduled → completed/cancelled/no_show`) + doctor's today view. Tracked as [issue #3](https://github.com/DocForum/docforum-core/issues/3) (Medium, 150 pts) — **partially done** as part of Phase 3's referral work: `PATCH /appointments/:id/status` (treating doctor only) and `PATCH /appointments/:id/cancel` (patient, own appointment), with slot release on cancellation and the referral cascade hook. Remaining: the doctor's today view and any admin-on-behalf transition.
+- [ ] `Consultation` record + outcome (`resolved | referred | follow_up_needed`). Tracked as [issue #4](https://github.com/DocForum/docforum-core/issues/4) (High, 200 pts) — **minimal slice done** for Phase 3: `POST /consultations` against one's own completed appointment (one per appointment), `GET /consultations/:id` scoped to that doctor + the patient. Remaining: sign-off, addenda / post-hoc note editing.
 - [ ] Doctor discovery: specialty catalog, doctor ↔ specialty assignment, public `GET /doctors?specialty=` (verified doctors only). Nothing in `backend/src` touched `Specialty`/`DoctorSpecialty` before this; `docforum-web` issue #1 depends on it. Tracked as [issue #23](https://github.com/DocForum/docforum-core/issues/23) (Medium, 150 pts).
 - [ ] Patient-facing view: my intake history. Not yet split into its own issue — small enough to fold into whichever of the above lands last, or split out later if it grows.
 
 ## Phase 3 — Referrals
-**Status: Not started (blocked by Phase 2). Scoped into issues #5–#8.**
-- [ ] `Referral` model with **immutable snapshot** of intake + notes (ARCHITECTURE.md §4.4 design note — do not implement as a live pointer), plus the "zero verified doctors in target specialty" edge case (PRD §8.2.2). Tracked as [issue #5](https://github.com/DocForum/docforum-core/issues/5) (Medium, 150 pts).
-- [ ] Referral creation from a `Consultation` with outcome `referred` — folded into issue #5 above.
-- [ ] Routing rule for referrals with no specific `target_doctor_id` (ARCHITECTURE.md §6.1.2 — currently an unresolved design gap; this phase must resolve or explicitly re-scope it). Tracked as [issue #6](https://github.com/DocForum/docforum-core/issues/6) (High, 200 pts) — an ADR.
-- [ ] Patient accept/decline flow (PRD OQ-3 resolved: patient must confirm). Tracked as [issue #7](https://github.com/DocForum/docforum-core/issues/7) (Medium, 150 pts) — depends on #5.
-- [ ] Accepted referral auto-generates a pre-populated `Appointment` against the target doctor/specialty — patient does not re-enter intake (PRD FR-8, the core value prop) — folded into issue #7 above.
-- [ ] Referral expiry job (addresses PRD §8.1.3 "orphaned" pattern for referrals specifically). Tracked as [issue #8](https://github.com/DocForum/docforum-core/issues/8) (Medium, 150 pts) — depends on #5.
-- [ ] Doc reconciliation: update ARCHITECTURE_ESSENTIALS.md "Known unresolved design gaps" once routing rule + expiry exist — part of issue #6's DoD.
+**Status: In progress — issues #5, #7 and #65–#68 are implemented and tested (unit + 5 self-contained integration suites); #6 (routing ADR) and #8 (time-based expiry job) remain open. Original scope was #5–#8; #65–#68 were opened later against the same phase for loop detection, multi-referral, cascade and admin overrides.**
+- [x] `Referral` model with **immutable snapshot** of intake + notes (ARCHITECTURE.md §4.4 design note — do not implement as a live pointer), plus the "zero verified doctors in target specialty" edge case (PRD §8.2.2). Tracked as [issue #5](https://github.com/DocForum/docforum-core/issues/5) (Medium, 150 pts) — **done with two flagged deviations for review**: (a) `snapshot_notes` is a real copy written in the creation transaction and unreachable by any consultation-edit path, but `snapshotIntakeId` has no column because `IntakeForm` doesn't exist yet (issue #1) — the intake half of the snapshot is not yet enforceable; (b) the zero-verified-doctors case is **unreachable by construction** rather than surfaced as the distinct "waiting for a specialist" state the DoD asked for — v1 requires a concrete verified `target_doctor_id` (see #6 below). Creation is an explicit `POST /referrals` from a consultation rather than an implicit trigger on outcome `referred`; the outcome still records intent and the API enforces a completed appointment.
+- [x] Referral creation from a `Consultation` with outcome `referred` — folded into issue #5 above.
+- [ ] Routing rule for referrals with no specific `target_doctor_id` (ARCHITECTURE.md §6.1.2 — currently an unresolved design gap; this phase must resolve or explicitly re-scope it). Tracked as [issue #6](https://github.com/DocForum/docforum-core/issues/6) (High, 200 pts) — an ADR. **Explicitly re-scoped, not resolved:** `target_doctor_id` is required in v1 so unassigned referrals cannot exist; the ADR for specialty-only routing (and the "waiting for a specialist" state it would unlock) is still owed, and the gap stays open until it lands.
+- [x] Patient accept/decline flow (PRD OQ-3 resolved: patient must confirm). Tracked as [issue #7](https://github.com/DocForum/docforum-core/issues/7) (Medium, 150 pts) — depends on #5. **Done:** `POST /referrals/:id/accept` (conditional `pending → accepted`, one winner under concurrency) and `POST /referrals/:id/decline` (pending-only, terminal).
+- [x] Accepted referral auto-generates a pre-populated `Appointment` against the target doctor/specialty — patient does not re-enter intake (PRD FR-8, the core value prop) — folded into issue #7 above. **Done:** accept books through `appointments`' `bookForReferral` → the same `claimOpenSlot` conditional UPDATE as a direct booking (`origin: 'referral'`), with the slot belonging to the target doctor enforced; no shortcut writes an `Appointment` row.
+- [ ] Referral expiry job (addresses PRD §8.1.3 "orphaned" pattern for referrals specifically). Tracked as [issue #8](https://github.com/DocForum/docforum-core/issues/8) (Medium, 150 pts) — depends on #5. **Still open:** only the no-show-driven path reaches `expired` (issue #67 below); nothing expires a referral by age, so an accepted-never / ignored referral needs an admin to find it in the queue.
+- [x] Referral loop detection + max-hop limit (PRD §8.1.2). Tracked as [issue #65](https://github.com/DocForum/docforum-core/issues/65) (High, 200 pts). **Done:** lineage via `parent_referral_id`, bounded CTE walk, strict rule (repeat doctor/specialty anywhere in the chain — including the GP return — flags for the admin queue), hard `422` on self-referral and on chains over `REFERRAL_MAX_HOPS` (default 4).
+- [x] Multiple simultaneous referrals from one consultation (PRD §8.2.4). Tracked as [issue #66](https://github.com/DocForum/docforum-core/issues/66) (High, 200 pts). **Done, including its ADR:** [`docs/adr/0006-multiple-referrals-per-consultation.md`](docs/adr/0006-multiple-referrals-per-consultation.md) records the decision (allowed; independent lifecycles, atomic all-or-none creation, grouped only for the patient view; no bundle table). Implementation: one snapshot copy per target, duplicate-specialty/doctor rejection, independent per-referral acceptance, patient list grouped by source consultation.
+- [x] Cascade rules when a referral-origin appointment is cancelled or no-shows (PRD §8.2.3). Tracked as [issue #67](https://github.com/DocForum/docforum-core/issues/67) (High, 200 pts). **Done:** run inside the appointment's status transaction; cancelled → referral back to `pending` with the slot released, first no-show → `pending` + `noShowCount`, second → `expired` + `referringDoctorNotifiedAt` (threshold is a v1 default, not a tuned value); all writes conditional so a doubled hook no-ops.
+- [x] Admin referral operations: queue, reassign stuck referrals, override routing, audited. Tracked as [issue #68](https://github.com/DocForum/docforum-core/issues/68) (Medium, 150 pts). **Done:** `GET /referrals/admin/queue` (status / `olderThan` / `loopFlagged` filters, derived reason + age), `POST /referrals/admin/:id/reassign` (pending only, target column only — snapshot untouched), `POST /referrals/admin/:id/cancel` (closes a live appointment through the appointments service), `GET /referrals/admin/:id/audit-events`; reassign/cancel write the first `AuditEvent` rows (new table — ARCHITECTURE.md §4.10).
+- [x] Doc reconciliation: ARCHITECTURE.md §4.2/§4.3/§4.4/§4.10/§5.2/§6, ARCHITECTURE_ESSENTIALS.md data model map + known gaps, PRD §8.1.2/§8.1.3/§8.1.4/§8.2.1–§8.2.4, `docs/api/README.md`. Done in this change — #6's ADR is *not* part of it and the gap is deliberately left noted.
 
 ## Phase 4 — Orders: prescriptions & lab orders
 **Status: Partially implemented by issues #9 and #85; remaining issue work is tracked in #10–#12.**
@@ -120,7 +127,7 @@ for status and issue links.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
 - [x] Access-control test suite: who may read intake, consultation and payment data. Integration tests (`tests/integration/access-control.test.mts`) establishing the test harness and access-control patterns for the three PHI data categories; intake/consultation test cases are scaffolded as placeholders until Phase 2/3 routes exist, payment-intent access cases exercise the live admin-gated routes. Tracked as [issue #44](https://github.com/DocForum/docforum-core/issues/44) — **Done**.
-- [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. Not yet scoped into an issue.
+- [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. **One Phase 3 access path is now worth auditing (`GET /consultations/:id` — treating doctor + that appointment's patient only, and referral snapshot exposure on `GET /referrals/mine` / `/created`), but intake and orders remain unbuilt, so the audit as scoped stays blocked.** Not yet scoped into an issue.
 - [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence). Tracked as [issue #20](https://github.com/DocForum/docforum-core/issues/20) (Trivial, 100 pts) — a decision task, unblocked now.
 
 ## Phase 9 — Deploy & CI
@@ -410,3 +417,45 @@ for status and issue links.
   overwriting). Rollback coupling proven with a real injected DB failure,
   not a mock. Phase 3/4 wiring explicitly left pending.
 - 2026-10-20 — Added the PR conflict notifier workflow (see the CI item above): maintainers no longer need to manually ask authors to rebase after each merge.
+- 2026-10-17 — Built the Phase 3 referral core on branch
+  `feat/referral-phase3-cascade-multi-loop-admin`: issues #5, #7 and
+  #65–#68 (plus the minimal #3/#4 slices they depend on — appointment
+  status transitions and a one-per-appointment `Consultation` record).
+  Schema: `Referral` filled in from its sketch, `Consultation` linked to
+  its appointment, `Appointment.availabilitySlotId` made nullable so a
+  cancellation can release a slot. The referral↔appointments cycle is
+  service-to-service in both directions (accept books through
+  `bookForReferral` → `claimOpenSlot`; status transitions call back into
+  `applyAppointmentOutcome` inside the same transaction) — never a
+  repository import across the boundary. 42 unit tests + 55 integration
+  tests pass, including 8 genuinely concurrent accepts on one referral
+  (exactly one wins — the same proof shape as the booking test), batch
+  rollback, loop chains, cascade idempotency and admin-role gating.
+
+  **One deliberate re-scope to review, not silently absorbed:** (1)
+  `target_doctor_id` is required, so the routing gap (ARCHITECTURE.md
+  §6.1.2 / issue #6) is closed for v1 by making unassigned referrals
+  impossible — and with it, PRD §8.2.2's distinct "waiting for a
+  specialist" state is unreachable rather than implemented. The ADR is
+  still owed. (2) `Referral.snapshotIntakeId` has no column, because
+  `IntakeForm` (issue #1) doesn't exist yet — the notes half of the
+  snapshot rule is real and enforced, the intake half is structurally
+  impossible to enforce and is noted as such rather than faked.
+  Issue #8 (time-based expiry) remains open: only the no-show cascade
+  reaches `expired`. The multi-referral decision (#66's ADR requirement)
+  is recorded as `docs/adr/0006-multiple-referrals-per-consultation.md`,
+  and the referral status machine is drawn out in ARCHITECTURE.md §4.4
+  (#67's state-diagram DoD). Docs reconciled in the same change:
+  ARCHITECTURE.md §4.2–§4.4/§4.10/§5.2/§6.1.2/§6.2.2/§6.2.4,
+  ARCHITECTURE_ESSENTIALS.md data-model map + known gaps, PRD
+  §8.1.2–§8.1.4 and §8.2.1–§8.2.4, `docs/api/README.md` (which also still
+  listed `payments` as unimplemented — corrected), and this file's
+  Phase 2/3 status.
+
+  **Audit trail (re-scoped 2026-10-20):** the referral admin actions are
+  recorded in the *existing* `AuditEvent` table (issue #43) as
+  `entity_type = 'Referral'` rows written through `auditService.record()`
+  in the same transaction as the referral change — not in a second,
+  referral-specific table. One audit trail, one set of append-only
+  triggers, one writer; `GET /referrals/admin/:id/audit-events` reads the
+  same rows the admin-wide `GET /admin/audit-events` serves.
