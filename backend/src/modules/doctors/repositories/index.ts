@@ -12,3 +12,10 @@ export function findDoctorProfileById(id: string) {
 export function updateVerificationStatus(id: string, status: VerificationStatus) {
   return prisma.doctorProfile.update({ where: { id }, data: { verificationStatus: status } });
 }
+
+export function findDoctorSpecialties(doctorProfileId: string) {
+  return prisma.doctorSpecialty.findMany({
+    where: { doctorProfileId },
+    include: { specialty: true },
+  });
+}

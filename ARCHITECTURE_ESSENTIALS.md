@@ -21,11 +21,12 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` → `PatientProfile | DoctorProfile | FacilityProfile`
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
-`AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
-`Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
+`AvailabilitySlot` (doctor's calendar) → `Appointment` (`availability_slot_id` nullable — a cancelled appointment releases its slot; booking safety is `claimOpenSlot`, not that column) → `IntakeForm`, `Consultation`
+`Consultation` → (outcome=referred) → `Referral` (snapshot! required `target_doctor_id`, self-FK lineage `parent_referral_id`, no-show/loop/admin flags) → new `Appointment`
+`Referral` → `AuditEvent` (append-only, referral admin actions only so far)
 `Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
-`User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
+`User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking, consultation/referral mutations and payment mutations, never login/browsing).
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
 
@@ -37,10 +38,11 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - The actual Stellar contract calls go through `@docforum/escrow-sdk` (`backend/src/modules/payments/services/escrow-sdk-loader.ts` — dynamic `import()`, the SDK is ESM-only and this backend is CommonJS). Never reimplement contract-calling logic in this repo.
 
 ## Known unresolved design gaps (do not silently "fix" without flagging in PR description)
-- No routing rule yet for a referral with no specific target doctor (which specialist gets it?).
-- No expiry/TTL job for held slots or pending referrals — currently just an enum value with no worker.
+- No routing rule yet for a referral with no specific target doctor (which specialist gets it?). **v1 re-scope (2026-10-17): `target_doctor_id` is required, so unassigned referrals can't exist — but that makes PRD §8.2.2's "waiting for a specialist" state unreachable rather than implemented. ADR still owed (issue #6).**
+- No time-based expiry/TTL job for held slots or pending referrals — the referral *no-show* cascade (#67) now reaches `expired`, but nothing expires a referral (or a held slot) purely by age. Issue #8 / #19.
+- `AuditEvent` exists (§4.10 of ARCHITECTURE.md) but only referral admin actions are recorded — auth, payments, booking and (later) orders mutations are still unaudited. PRD §7 is not satisfied yet.
+- `Referral.snapshotIntakeId` has no column — `IntakeForm` doesn't exist yet (issue #1); the notes half of the snapshot rule is real and enforced.
 - Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables.
-- No `AuditEvent` table yet, despite PRD requiring auditability — needed before real patient data.
 - No email/SMS provider integrated yet (Phase 6, issue #17) — email verification (issue #34) therefore can't deliver its link on a hosted deployment; `backend/scripts/mark-email-verified.mjs` is the interim operator path.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 

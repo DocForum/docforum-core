@@ -15,3 +15,19 @@ appointmentsRouter.post(
   appointmentsController.book,
 );
 appointmentsRouter.get('/mine', authenticate, requireRole('patient'), appointmentsController.listMine);
+
+// Lifecycle (issue #3 + the cascade trigger for issue #67): only the
+// treating doctor moves an appointment through completed/cancelled/
+// no_show; the patient may cancel their own — nothing else.
+appointmentsRouter.patch(
+  '/:appointmentId/status',
+  authenticate,
+  requireRole('doctor'),
+  appointmentsController.updateStatus,
+);
+appointmentsRouter.patch(
+  '/:appointmentId/cancel',
+  authenticate,
+  requireRole('patient'),
+  appointmentsController.cancelMine,
+);

@@ -48,9 +48,10 @@ export async function generateSlots(input: GenerateSlotsInput) {
 }
 
 /** Re-exported for appointments/services — the only cross-module entry
- * points into this module's booking-concurrency primitive and slot reads.
- * Never import availability/repositories from another module directly. */
-export { claimOpenSlot, findSlotById as getSlot } from '../repositories';
+ * points into this module's booking-concurrency primitive, slot reads and
+ * slot release. Never import availability/repositories from another
+ * module directly. */
+export { claimOpenSlot, findSlotById as getSlot, releaseBookedSlotIfFuture } from '../repositories';
 
 export async function assertCanGenerateFor(userId: string, doctorProfileId: string) {
   await doctorsService.assertOwnsDoctorProfile(userId, doctorProfileId);
