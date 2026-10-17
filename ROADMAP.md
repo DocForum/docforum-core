@@ -1,6 +1,6 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-09-26
+Last updated: 2026-10-17
 Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
 `docs/adr/0004-custodial-payments-v1.md`) built and tested. Phases 2-6
 and 8-9 scoped into GitHub issues (#1-#22, #21 closed); Phase 7 is
@@ -69,12 +69,14 @@ for status and issue links.
 - [ ] Order expiry/reminder logic (PRD §8.1.3 "orphaned orders" — general case, beyond referrals). Tracked as [issue #12](https://github.com/DocForum/docforum-core/issues/12) (Medium, 150 pts) — depends on #9.
 
 ## Phase 5 — Facilities & fulfillment
-**Status: Not started (blocked by Phase 4). Scoped into issues #13–#16.**
+**Status: In progress — not done. Issues #13–#16 (the original breakdown) are still open; #13's FulfillmentRecord ADR remains the prerequisite for the rest of the phase. Two independently-scoped items added later — #73 (partial fulfillment) and #74 (facility distance sorting) — have landed ahead of them, built on the current polymorphic `FulfillmentRecord` shape, so #13's keep-vs-split decision must explicitly account for the new `FulfillmentItem` rows.**
 - [ ] Resolve the polymorphic `FulfillmentRecord` design smell flagged in ARCHITECTURE.md §6.1.3 **before** building this phase — decide: keep polymorphic with constraints, or split into `PrescriptionFulfillment` / `LabOrderFulfillment`. Record the decision as an ADR in `docs/adr/`. Tracked as [issue #13](https://github.com/DocForum/docforum-core/issues/13) (High, 200 pts) — the prerequisite for the rest of this phase.
 - [ ] Facility account creation (admin-invited only per PRD OQ-2 — no self-serve facility signup in v1) + `FacilityCapability` matching (patient sees only qualified facilities for their specific order, PRD FR-13). Tracked as [issue #14](https://github.com/DocForum/docforum-core/issues/14) (Medium, 150 pts) — depends on #13.
 - [ ] Facility fulfillment UI: view assigned orders, mark in-progress/fulfilled/rejected, enforcing that `status` transitions to `fulfilled` **only** via the facility-confirmed path (ARCHITECTURE.md §5.3 step 5 — patient/doctor cannot self-mark). Tracked as [issue #15](https://github.com/DocForum/docforum-core/issues/15) (Medium, 150 pts) — depends on #13/#14.
 - [ ] Lab result attachment (object storage integration — ARCHITECTURE.md §2 File/result storage row). Tracked as [issue #16](https://github.com/DocForum/docforum-core/issues/16) (Medium, 150 pts) — depends on #13.
 - [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1 — addressed by issue #14's admin-only gating; document any remaining gap in that issue's PR.
+- [x] **Partial fulfillment: item-level dispensing for multi-item prescriptions.** Tracked as [issue #73](https://github.com/DocForum/docforum-core/issues/73) — **Done**. `FulfillmentItem` rows under a `FulfillmentRecord` now carry dispensed quantity + status per routed item; order status derives from items (`partially_fulfilled` / `fulfilled`) via a forward-only conditional update applied through the prescriptions/lab-orders module services; the patient can route remaining items to a second facility; a DB unique index on `(orderType, dispensedKey)` makes double-dispense by two facilities a constraint-level 409 (proven under concurrency in `backend/tests/integration/fulfillment.test.mts`). Payment-release rule documented in ARCHITECTURE.md §5.3: no release until the whole order derives `fulfilled`. Built on the current polymorphic shape — #13's ADR is untouched and still owed.
+- [x] **Facility location and distance-sorted facility selection.** Tracked as [issue #74](https://github.com/DocForum/docforum-core/issues/74) — **Done**. `FacilityProfile.address/latitude/longitude` (nullable) + composite index; `GET /facilities/eligible?near=lat,lng&radiusKm=` with an indexed bounding box + haversine (PostGIS rejected — justification and the privacy/no-storage rule in ARCHITECTURE.md §5.4); facilities without coordinates appear, sorted last; seeded fictional coordinates via `npx prisma db seed`; measured p50 ≈ 5 ms / p95 ≈ 7 ms over ~3 000 facilities in `backend/tests/integration/facility-distance.test.mts`.
 
 ## Phase 5.5 — Payments (consumer side)
 **Status: Built, decoupled from Phase 4/5 rather than blocked by them — see docs/adr/0004-custodial-payments-v1.md.** `docforum-escrow` issues #4/#5 (SDK + distribution decision) closed, so the original blocker cleared; rather than wait further on Phase 4/5 (Orders/Facilities, still not built), `PaymentIntent`/`WalletLink` were designed with opaque, unvalidated `orderType`/`orderId` fields instead of hard FKs to `Prescription`/`LabOrder`, so this phase didn't have to wait on two more unbuilt phases. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
@@ -380,3 +382,17 @@ for status and issue links.
   tests assert a
   forged cross-origin request is rejected while the legitimate cross-site
   client still succeeds.
+- 2026-10-17 — Phase 5: landed issues #73 (partial fulfillment,
+  item-level dispensing for multi-item prescriptions) and #74 (facility
+  location + distance-sorted eligible-facility query) together. New
+  `FulfillmentItem` model + `partially_fulfilled` order/record statuses,
+  `PrescriptionItem.prescriptionId` FK and `FulfillmentRecord.facilityId`
+  FK filled in (both were already in ARCHITECTURE §4/§4.5, schema was
+  behind), `FacilityProfile` location fields + index, new
+  `/pharmacy-orders` and `/facilities` routes, a dev seed of fictional
+  facility coordinates (`npx prisma db seed`), and two new integration
+  test files (11 tests). Payment-release rule decided and documented in
+  ARCHITECTURE.md §5.3 (no release until full fulfillment; proration
+  logged as an open question in §6.2), two new §6.2 gaps recorded, and a
+  new §5.4 documents the distance query + its privacy rule. Still owed by
+  this phase: #13–#16.
