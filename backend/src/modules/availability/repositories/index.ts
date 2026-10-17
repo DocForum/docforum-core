@@ -46,3 +46,18 @@ export async function claimOpenSlot(db: DbClient, slotId: string): Promise<boole
   });
   return result.count === 1;
 }
+
+/**
+ * Inverse of claimOpenSlot, used when a FUTURE booked slot is freed by a
+ * cancellation (direct booking or the referral cascade). Conditional on
+ * both `booked` and `startTime > now` — a slot whose time has passed is
+ * left alone: the visit happened (or didn't) either way, and re-opening
+ * it would put unbookable time back on the calendar.
+ */
+export async function releaseBookedSlotIfFuture(db: DbClient, slotId: string): Promise<boolean> {
+  const result = await db.availabilitySlot.updateMany({
+    where: { id: slotId, status: 'booked', startTime: { gt: new Date() } },
+    data: { status: 'open' },
+  });
+  return result.count === 1;
+}
