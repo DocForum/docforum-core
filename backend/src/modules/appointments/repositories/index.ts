@@ -17,3 +17,8 @@ export function findAppointmentsForPatient(patientProfileId: string) {
     orderBy: { createdAt: 'desc' },
   });
 }
+
+/** Existence check for the account-deletion retention hold (issue #41). */
+export async function patientHasAppointments(patientProfileId: string): Promise<boolean> {
+  return (await prisma.appointment.findFirst({ where: { patientProfileId }, select: { id: true } })) !== null;
+}

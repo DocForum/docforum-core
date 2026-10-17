@@ -1,6 +1,7 @@
 import { createApp } from './app';
 import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
+import { startAccountPurgeJob } from './jobs/account-purge';
 
 const app = createApp();
 
@@ -28,3 +29,6 @@ const pruneTimer = setInterval(() => {
     });
 }, config.loginThrottle.pruneIntervalSeconds * 1000);
 pruneTimer.unref();
+
+// Deleted-account tombstone purge (Phase 8, issue #41, docs/adr/0007).
+startAccountPurgeJob();

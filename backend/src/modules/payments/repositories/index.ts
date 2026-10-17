@@ -46,3 +46,8 @@ export function markEscrowed(id: string, input: { escrowId: bigint; stellarTxHas
 export function markStatus(id: string, status: PaymentIntentStatus) {
   return prisma.paymentIntent.update({ where: { id }, data: { status } });
 }
+
+/** Existence check for the account-deletion retention hold (issue #41). */
+export async function patientHasPaymentIntents(patientProfileId: string): Promise<boolean> {
+  return (await prisma.paymentIntent.findFirst({ where: { patientProfileId }, select: { id: true } })) !== null;
+}
