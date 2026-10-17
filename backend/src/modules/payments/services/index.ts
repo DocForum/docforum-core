@@ -126,3 +126,9 @@ export async function refundPaymentIntent(id: string) {
 
   return paymentsRepo.markStatus(id, 'refunded');
 }
+
+/** Retention hold (issue #41, docs/adr/0007): payment records are kept, so
+ * a patient who has any is never purged after deletion. */
+export function hasPaymentIntentsForPatient(patientProfileId: string): Promise<boolean> {
+  return paymentsRepo.patientHasPaymentIntents(patientProfileId);
+}

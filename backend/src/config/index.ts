@@ -86,6 +86,14 @@ export const config = {
     pruneIntervalSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_INTERVAL_SECONDS ?? 60 * 60),
     pruneAfterSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_AFTER_SECONDS ?? 24 * 60 * 60),
   },
+  // Account deletion purge (Phase 8, issue #41, docs/adr/0007). Only
+  // tombstones with no retained records are ever purged; the grace period is
+  // operational (lets requests in flight under a still-valid access token
+  // finish), not a legal retention period — that one is an open decision.
+  accountPurge: {
+    graceHours: Number(process.env.ACCOUNT_PURGE_GRACE_HOURS ?? 24),
+    intervalSeconds: Number(process.env.ACCOUNT_PURGE_INTERVAL_SECONDS ?? 6 * 60 * 60),
+  },
   // Explicit, per-environment CORS allowlist (Phase 8, issue #37). A single
   // configured origin string was one typo away from "reflect whatever origin
   // asked"; an allowlist makes every permitted frontend a deliberate entry.

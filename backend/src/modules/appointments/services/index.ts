@@ -48,3 +48,9 @@ export async function listMyAppointments(userId: string) {
   const patientProfile = await patientsService.getMyPatientProfile(userId);
   return appointmentsRepo.findAppointmentsForPatient(patientProfile.id);
 }
+
+/** Retention hold (issue #41, docs/adr/0007): appointments are clinical
+ * records, so a patient who has any is never purged after deletion. */
+export function hasAppointmentsForPatient(patientProfileId: string): Promise<boolean> {
+  return appointmentsRepo.patientHasAppointments(patientProfileId);
+}

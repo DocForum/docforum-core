@@ -9,8 +9,8 @@ export function findUserByEmail(email: string) {
   return prisma.user.findUnique({ where: { email } });
 }
 
-export function findUserById(id: string) {
-  return prisma.user.findUnique({ where: { id } });
+export function findUserById(id: string, db: typeof prisma | Prisma.TransactionClient = prisma) {
+  return db.user.findUnique({ where: { id } });
 }
 
 export interface CreateSelfServeUserInput {
@@ -183,4 +183,46 @@ export function clearLoginAttempts(buckets: { scope: string; key: string }[]) {
 /** Cleanup: drop buckets whose last failure is older than `before`. */
 export function pruneStaleLoginAttempts(before: Date) {
   return prisma.loginAttempt.deleteMany({ where: { lastFailedAt: { lt: before } } }).then((result) => result.count);
+}
+
+// --- Account deletion (Phase 8, issue #41, docs/adr/0007) ----------------
+// Called inside the patients module's deletion transaction, so every write
+// here takes the caller's transaction client.
+
+type DbClient = typeof prisma | Prisma.TransactionClient;
+
+/** Anonymises the User row in place. Conditional on `deletedAt IS NULL`, so
+ * of two concurrent deletions exactly one does the work; returns whether
+ * this call did. */
+export async function anonymizeUser(
+  db: DbClient,
+  userId: string,
+  data: { tombstoneEmail: string; unusablePasswordHash: string; deletedAt: Date },
+): Promise<boolean> {
+  const result = await db.user.updateMany({
+    where: { id: userId, deletedAt: null },
+    data: {
+      email: data.tombstoneEmail,
+      phone: null,
+      passwordHash: data.unusablePasswordHash,
+      emailVerifiedAt: null,
+      deletedAt: data.deletedAt,
+    },
+  });
+  return result.count === 1;
+}
+
+export function deleteVerificationTokensForUser(db: DbClient, userId: string) {
+  return db.emailVerificationToken.deleteMany({ where: { userId } }).then((result) => result.count);
+}
+
+export function deleteLoginAttemptBucket(db: DbClient, scope: 'email' | 'ip', key: string) {
+  return db.loginAttempt.deleteMany({ where: { scope, key } }).then((result) => result.count);
+}
+
+/** Hard-deletes an already-anonymised User (tombstone purge). Conditional
+ * on `deletedAt` being set, so a live account can never be removed here. */
+export async function deleteAnonymizedUser(db: DbClient, userId: string): Promise<boolean> {
+  const result = await db.user.deleteMany({ where: { id: userId, deletedAt: { not: null } } });
+  return result.count === 1;
 }
