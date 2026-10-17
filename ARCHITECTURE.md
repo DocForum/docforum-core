@@ -187,6 +187,21 @@ again, same snapshot, no re-intake), `accepted → expired` (second
 no-show, threshold `NO_SHOW_EXPIRY_THRESHOLD = 2`), and
 `pending|accepted → cancelled` (admin, audited — `AuditEvent`, §4.10).
 
+```
+pending ──accept──▶ accepted ──appointment completed──▶ completed
+   │                   │
+   │                   ├─appointment cancelled──▶ pending   (slot released; same snapshot)
+   │                   ├─no-show #1─────────────▶ pending   (no_show_count = 1)
+   │                   ├─no-show #2 (=threshold)─▶ expired   (referring_doctor_notified_at set)
+   │                   └─admin cancel────────────▶ cancelled (reason; audited; live appt closed)
+   ├─decline──────────▶ declined
+   └─admin cancel──────▶ cancelled
+```
+Every arrow into `pending`/`completed`/`expired` from `accepted` is a
+conditional UPDATE that only matches a referral still `accepted` *and
+still pointing at the appointment that triggered it*, so a doubled hook
+is a no-op (issue #67, integration-tested).
+
 ### 4.5 Prescriptions (versioned, append-only)
 ```
 Prescription
@@ -269,7 +284,7 @@ what still isn't audited.
 3. On success, `Appointment` is created referencing the now-`booked` slot.
 
 ### 5.2 Referral (Phase 3 — issues #5/#7/#65–#68)
-1. Doctor records a `Consultation` against their own **completed** appointment, then creates one or more `Referral`s from it (`POST /referrals`, or the atomic batch `POST /referrals/from-consultation/:id` / `POST /consultations/:id/referrals`) — each target gets its own `snapshot_notes` copy. v1 requires a **concrete, verified** `target_doctor_id`; a "specialty, no doctor" referral is the still-open routing gap (§6.1.2), not something this path silently defaults.
+1. Doctor records a `Consultation` against their own **completed** appointment, then creates one or more `Referral`s from it (`POST /referrals`, or the atomic batch `POST /referrals/from-consultation/:id` / `POST /consultations/:id/referrals`) — each target gets its own `snapshot_notes` copy. Multi-referral is a deliberate decision recorded in `docs/adr/0006-multiple-referrals-per-consultation.md`: independent lifecycles born in one transaction, grouped only for presentation. v1 requires a **concrete, verified** `target_doctor_id`; a "specialty, no doctor" referral is the still-open routing gap (§6.1.2), not something this path silently defaults.
 2. Creation is one transaction: gates (own consultation, completed appointment, no self-referral, target verified [+ in specialty], no duplicate target in this consultation), lineage lookup (`parent_referral_id` via consultation → appointment → referral), then the loop walk (PRD §8.1.2 / issue #65) — a repeat doctor/specialty in the chain **flags** the referral for the admin queue rather than blocking it; exceeding the hop limit (`REFERRAL_MAX_HOPS`, default 4) hard-rejects with 422.
 3. Patient must **accept** (PRD OQ-3): `POST /referrals/:id/accept` does a conditional `pending → accepted` UPDATE (exactly one concurrent accept wins) and books a real `Appointment` against the target doctor through the appointments service — same `claimOpenSlot` path as a direct booking, `origin: 'referral'`, patient picks the slot, and no re-intake happens because the snapshot travels on the referral. Decline is `pending → declined`, terminal.
 4. The appointment's own status transition then cascades back into the referral inside the same transaction (issue #67): `completed →` referral `completed`; `cancelled →` referral back to `pending` (slot released, re-bookable, same snapshot); `no_show →` count++ and back to `pending`, except at `NO_SHOW_EXPIRY_THRESHOLD` (2) where it becomes `expired` with `referring_doctor_notified_at` set. Every one of these writes is conditional on the referral still being `accepted` and still pointing at that appointment, so a hook firing twice is a no-op.
