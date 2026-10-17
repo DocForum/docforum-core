@@ -27,6 +27,7 @@ import {
 } from './login-throttle';
 import { csrfTokensMatch, generateCsrfToken } from '../../../middleware/csrf';
 import type { Role } from '@prisma/client';
+import type { PatientExportSection } from '../../patients/services';
 
 // Re-exported so middleware/auth.ts (shared infra, not a peer module) can
 // verify tokens through this module's service surface rather than
@@ -326,3 +327,26 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   const tokens = issueSession(user);
   return { user: toPublicUser(user), ...tokens };
 }
+
+/** This module's contribution to the patient data export (issue #40): the
+ * login identity itself. Explicit allowlist — never the password hash, and
+ * no verification/throttle bookkeeping. */
+export const accountExportSection: PatientExportSection = {
+  name: 'account',
+  version: 1,
+  async *pages(subject) {
+    const user = await findUserById(subject.userId);
+    if (!user) return;
+    yield [
+      {
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        emailVerifiedAt: user.emailVerifiedAt,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+    ];
+  },
+};

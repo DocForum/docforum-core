@@ -9,6 +9,10 @@ export function findDoctorProfileById(id: string) {
   return prisma.doctorProfile.findUnique({ where: { id } });
 }
 
+export function findDoctorSummariesByIds(ids: string[]) {
+  return prisma.doctorProfile.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true } });
+}
+
 export function updateVerificationStatus(id: string, status: VerificationStatus) {
   return prisma.doctorProfile.update({ where: { id }, data: { verificationStatus: status } });
 }

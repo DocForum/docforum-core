@@ -14,6 +14,13 @@ export function findSlotById(db: DbClient, slotId: string) {
   return db.availabilitySlot.findUnique({ where: { id: slotId } });
 }
 
+export function findSlotTimesByIds(slotIds: string[]) {
+  return prisma.availabilitySlot.findMany({
+    where: { id: { in: slotIds } },
+    select: { id: true, startTime: true, endTime: true },
+  });
+}
+
 export function findExistingSlotRanges(doctorProfileId: string, startTime: Date, endTime: Date) {
   return prisma.availabilitySlot.findMany({
     where: { doctorProfileId, startTime: { gte: startTime }, endTime: { lte: endTime } },

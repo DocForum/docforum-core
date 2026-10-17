@@ -8,9 +8,14 @@ import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
 import { paymentsRouter } from './modules/payments/routes';
+import { patientsRouter } from './modules/patients/routes';
+import { registerPatientExportSections } from './export-sections';
 
 export function createApp() {
   const app = express();
+
+  // Phase 8, issue #40: idempotent, so building the app twice is harmless.
+  registerPatientExportSections();
 
   // Phase 8, issue #35: login throttling keys on the client IP, so the
   // proxy chain has to be resolved deliberately rather than guessed. See
@@ -31,6 +36,7 @@ export function createApp() {
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
   app.use('/payments', paymentsRouter);
+  app.use('/patients', patientsRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.

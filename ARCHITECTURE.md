@@ -54,6 +54,41 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
 
+### 3.1 Patient data export registry (Phase 8, issue #40)
+
+Right of access (`POST /patients/me/export`) is coordinated by `patients`,
+but **each module contributes its own section through its own `services/`
+interface** — `patients` never reads another module's tables to build an
+export. The pieces:
+
+- `modules/patients/services/export-registry.ts` — the `PatientExportSection`
+  contract (`name`, `version`, `pages(subject, pageSize)` yielding pages of
+  plain JSON items), `registerExportSection`, and a `paginate` keyset helper.
+- `src/export-sections.ts` — the one explicit list of registered sections,
+  called from `createApp()`. It's wiring, outside `modules/`, so `patients`
+  doesn't have to import every module that already imports `patients`.
+- Current sections: `account` (auth: email/phone/role, never the password
+  hash), `profile` (patients), `appointments` (appointments, with slot times
+  from `availability` and the doctor's name from `doctors`, both via their
+  services), `payments` (payments: amounts, status, on-chain tx hash /
+  escrow id / contract id; the platform's signing secrets never live in a
+  row and can't reach an export).
+
+**Adding a module with patient data (referrals, prescriptions, lab orders,
+…):** export a `PatientExportSection` from that module's `services/` and add
+it to `src/export-sections.ts`. Rules for a section: an explicit field
+allowlist (never spread a Prisma row — a column added later must not leak by
+default); page through your own tables with `paginate` (at most `pageSize`
+rows in memory); batch any cross-module lookups per page through the other
+module's service; JSON-safe values only (BigInt → string). Bump `version`
+when the item shape changes. A section that throws fails the whole export —
+there is no "partial" bundle.
+
+Generation runs in `src/jobs/patient-exports.ts` (plain intervals, woken
+immediately by a new request). Sections run one at a time and the bundle is
+flushed in bounded chunks to `PatientExportChunk` (§4.10), so memory is
+bounded by one page of rows plus one chunk regardless of history length.
+
 ## 4. Data models
 
 Canonical source of truth: `backend/prisma/schema.prisma`. This section is the human-readable mirror — if they drift, the schema file wins and this doc should be corrected in the same PR.
@@ -197,6 +232,33 @@ LoginAttempt (issue #35)
 `User` fields added in Phase 8 live in §4.1; the `email_verified_at` /
 `EmailVerificationToken` pair (issue #34) is in §4.1 as well.
 
+### 4.10 Patient data export (Phase 8, issue #40)
+```
+PatientExport
+  id, patient_profile_id (FK -> PatientProfile, cascade — a derived copy)
+  status (enum: pending|processing|ready|failed|expired)
+  schema_version (nullable int — bundle format written), attempt (int, fencing token)
+  started_at, generated_at, expires_at (nullable)
+  size_bytes, chunk_count (nullable — set on ready)
+  failure_code, failed_section (nullable — machine-readable only, never an error message)
+  created_at, updated_at
+  # Every transition is a conditional UPDATE on the expected status (and
+    attempt), so two workers can't both generate one job and a stale claim
+    can't publish over a newer one. One in-flight job per patient (request
+    locks the PatientProfile row FOR UPDATE).
+  # The row is kept after expiry (no patient data in it) so status reads
+    answer "expired" rather than 404.
+
+PatientExportChunk
+  export_id (FK -> PatientExport, cascade), attempt, seq — composite PK
+  data (text — one slice of the JSON bundle, ~PATIENT_EXPORT_CHUNK_BYTES)
+  # Only chunks of the export's current attempt are ever served; the cleanup
+    job deletes other attempts' and expired/failed exports' chunks.
+```
+Bundle format (schemaVersion 1): `{ format: "docforum.patient-export",
+schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }`
+— see §3.1 for where sections come from.
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)
@@ -237,6 +299,7 @@ LoginAttempt (issue #35)
 1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is.
 2. BullMQ/Redis job queue before there's a single job that needs it — fine to stub with a simple cron/interval check initially and introduce a real queue when reminder/expiry logic actually exists.
 3. Designing for horizontal service extraction (module boundary purity, §3) before there's a single reason to split — worth doing lightly (it's cheap discipline), but not worth extra ceremony (e.g., separate repos, separate CI, internal API versioning) yet.
+4. **Added 2026-10-17 (issue #40):** export bundles are stored as text chunks in Postgres (`PatientExportChunk`, §4.10), not in object storage as §2's file-storage row prescribes — no object-storage provider is integrated yet, and a filesystem store would break on Render's ephemeral disk and on any second instance. The chunks are read/written only by `patients/repositories`, are short-lived (`PATIENT_EXPORT_TTL_HOURS`, default 24) and are deleted by the cleanup job, so moving to S3 later swaps one storage seam rather than the design. Revisit when lab-result storage (Phase 5, issue #16) picks a provider.
 
 ## 7. Non-functional / cross-cutting
 
