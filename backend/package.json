@@ -15,6 +15,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
   "dependencies": {
     "@docforum/escrow-sdk": "https://github.com/DocForum/docforum-escrow/releases/download/sdk-v0.2.0/docforum-escrow-sdk-0.2.0.tgz",
     "@prisma/client": "^6.19.3",

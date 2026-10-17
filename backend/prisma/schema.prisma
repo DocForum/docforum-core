@@ -73,6 +73,12 @@ enum ReferralStatus {
 
 enum OrderStatus {
   issued
+  // Phase 5 (issue #73): order-level status is DERIVED from item-level
+  // fulfillment rows, so a partially dispensed multi-item prescription
+  // doesn't have to lie ('fulfilled') or refuse the whole order. Written
+  // only by this order's own module service after a fulfillment item
+  // changes — never by a facility directly (hard rule 5).
+  partially_fulfilled
   fulfilled
   expired
   superseded
@@ -81,8 +87,27 @@ enum OrderStatus {
 enum FulfillmentStatus {
   pending
   in_progress
+  // Phase 5 (issue #73): every item under this record was dispensed.
   fulfilled
+  // Every item under this record reached a terminal state, at least one
+  // was dispensed, and at least one could not be dispensed. The order as
+  // a whole may still reach `fulfilled` if the patient routes the
+  // remaining items to a second facility.
+  partially_fulfilled
+  // Facility rejected the whole record without dispensing anything.
   rejected
+}
+
+// Phase 5 (issue #73): per-item dispensing state. One row per
+// (fulfillment record, order item).
+enum FulfillmentItemStatus {
+  // Routed to this facility, awaiting dispensing.
+  pending
+  // Facility dispensed it (quantityDispensed > 0).
+  dispensed
+  // Facility confirmed it cannot dispense it (e.g. out of stock) — the
+  // patient may route this item to a different facility afterwards.
+  unfulfilled
 }
 
 enum Urgency {
@@ -222,6 +247,14 @@ model FacilityProfile {
   userId    String       @unique
   name      String
   type      FacilityType
+  // Phase 5 (issue #74): physical location so patients can find the
+  // nearest qualified facility (PRD FR-13). All three nullable on
+  // purpose — a facility that hasn't filled them in still appears in
+  // eligible-facility queries, just sorted last (see
+  // facilities/repositories).
+  address   String?
+  latitude  Float?
+  longitude Float?
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
@@ -229,6 +262,14 @@ model FacilityProfile {
   capabilities   FacilityCapability[]
   paymentIntents PaymentIntent[]
   walletLink     WalletLink?
+  fulfillmentRecords FulfillmentRecord[]
+
+  // Composite b-tree index backing the "indexed bounding box" prefilter
+  // of the distance query (issue #74). Chosen over PostGIS: no extension
+  // dependency on every deployment (incl. the Render free-tier preview),
+  // and a bounding box + haversine is exact for the ORDER BY once the box
+  // is a superset of the radius. See ARCHITECTURE.md §5.4.
+  @@index([latitude, longitude])
 }
 
 model FacilityCapability {
@@ -323,6 +364,8 @@ model Prescription {
   status                 OrderStatus @default(issued)
   createdAt              DateTime    @default(now())
   // TODO: consultationId, patientProfileId, prescribingDoctorId, supersedesPrescriptionId (nullable, self-relation)
+
+  items PrescriptionItem[]
 }
 
 model PrescriptionItem {
@@ -331,7 +374,15 @@ model PrescriptionItem {
   dosage   String
   frequency String
   duration String
-  // TODO: prescriptionId
+  // Phase 5 (issue #73): items must be addressable under their
+  // prescription for item-level fulfillment (partial dispensing, split
+  // routing). Matches ARCHITECTURE.md §4.5, which has always listed this
+  // FK — the schema placeholder was behind the doc.
+  prescriptionId String
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  @@index([prescriptionId])
 }
 
 model LabOrder {
@@ -355,13 +406,72 @@ model FulfillmentRecord {
   id        String            @id @default(uuid())
   orderType String // "prescription" | "lab_order" — see ARCHITECTURE.md §6.1.3 caveat on this polymorphic design
   orderId   String
+  // Which facility owns this record. A facility may only ever write to
+  // records it owns (hard rule 5) — the ownership check lives in
+  // pharmacy-orders/services.
+  facilityId String
   status    FulfillmentStatus @default(pending)
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
-  // TODO: facilityId
+
+  facility FacilityProfile     @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  items    FulfillmentItem[]
+
   // NOTE: this polymorphic (orderType, orderId) pair is flagged in
   // ARCHITECTURE.md §6.1.3 as a design smell to revisit — may be split
   // into PrescriptionFulfillment / LabOrderFulfillment before implementation.
+  // Issue #73 (item-level fulfillment) deliberately builds on the current
+  // polymorphic shape rather than resolving that question, which stays
+  // with issue #13.
+
+  @@index([facilityId])
+  @@index([orderType, orderId])
+}
+
+// Phase 5 (issue #73): item-level fulfillment rows under a
+// FulfillmentRecord. A prescription with three items gets one row per
+// routed item, so one out-of-stock drug doesn't force the pharmacy to
+// either lie ("fulfilled") or refuse the whole order.
+model FulfillmentItem {
+  id                  String   @id @default(uuid())
+  fulfillmentRecordId String
+  // Mirrors the parent record's polymorphic shape: "prescription" |
+  // "lab_order" (a lab order is a single-item order, so orderItemId = the
+  // LabOrder's own id).
+  orderType           String
+  orderItemId         String // PrescriptionItem.id | LabOrder.id
+  // How many units the order asked for (nullable — the Phase 4 item
+  // models don't carry quantities yet; a lab order has no quantity at
+  // all). null = "not tracked", not zero.
+  quantityOrdered     Int?
+  quantityDispensed   Int      @default(0)
+  status              FulfillmentItemStatus @default(pending)
+  // Derived enforcement column for the "one dispenser per item" DB
+  // constraint below. Equals orderItemId exactly when status =
+  // 'dispensed', NULL otherwise, so the plain unique index
+  // (orderType, dispensedKey) only ever collides on non-NULL values —
+  // i.e. two facilities trying to dispense the SAME item.
+  //
+  // This is a partial unique index (`WHERE status = 'dispensed'`)
+  // expressed with a nullable column on purpose: Prisma cannot represent
+  // partial indexes in schema.prisma, and migrate diff would try to drop
+  // one it found in the database. Set/cleared only inside the dispense
+  // transaction in pharmacy-orders/services.
+  dispensedKey        String?
+  dispensedAt         DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  fulfillmentRecord FulfillmentRecord @relation(fields: [fulfillmentRecordId], references: [id], onDelete: Cascade)
+
+  // The same item can't be routed twice under one record.
+  @@unique([fulfillmentRecordId, orderType, orderItemId])
+  // Hard constraint: a single order item can't be dispensed by two
+  // facilities (issue #73 edge case). Multiple pending/unfulfilled rows
+  // for the same item across records are allowed — that's exactly what
+  // "route the remaining items to a second facility" needs.
+  @@unique([orderType, dispensedKey])
+  @@index([orderType, orderItemId])
 }
 
 model Notification {

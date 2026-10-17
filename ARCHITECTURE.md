@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — DocForum
 
 Status: Draft v0.1
-Last updated: 2026-09-09
+Last updated: 2026-10-17
 
 > **Contribution rule:** Any PR that changes a data model, a service boundary, or the tech stack must update this file in the same PR, and reflect the essentials in `ARCHITECTURE_ESSENTIALS.md`. Also update `ROADMAP.md` status if the change closes/opens roadmap work.
 
@@ -93,6 +93,11 @@ DoctorSpecialty (join table)
 
 FacilityProfile (1:1 User)
   id, user_id, name, type (enum: lab|pharmacy), capabilities: FacilityCapability[]
+  address (nullable), latitude (nullable), longitude (nullable)
+    # Added Phase 5 (issue #74) for PRD FR-13 distance sorting. All three
+    # nullable: a facility that hasn't registered coordinates still appears
+    # in eligible-facility queries, sorted last. Composite b-tree index on
+    # (latitude, longitude) backs the bounding-box prefilter — see §5.4.
 
 FacilityCapability
   id, facility_profile_id, capability_type (enum: lab_test|medication_dispense), detail (e.g. test category)
@@ -142,7 +147,9 @@ Design note: `snapshot_notes` and `snapshot_intake_id` deliberately duplicate da
 ```
 Prescription
   id, consultation_id (FK), patient_profile_id, prescribing_doctor_id
-  status (enum: issued|fulfilled|expired|superseded)
+  status (enum: issued|partially_fulfilled|fulfilled|expired|superseded)
+    # `partially_fulfilled` added Phase 5 (issue #73): the status is
+    # DERIVED from item-level fulfillment rows (see §4.7), never asserted.
   supersedes_prescription_id (nullable, self-FK — corrections create a new row)
   created_at
 
@@ -155,7 +162,7 @@ PrescriptionItem
 LabOrder
   id, consultation_id (FK), patient_profile_id, ordering_doctor_id
   test_type, urgency (enum: routine|urgent), notes
-  status (enum: issued|fulfilled|expired|superseded)
+  status (enum: issued|partially_fulfilled|fulfilled|expired|superseded)
   supersedes_lab_order_id (nullable, self-FK)
   created_at
 
@@ -167,9 +174,46 @@ LabResult
 ### 4.7 Fulfillment (facility-side)
 ```
 FulfillmentRecord
-  id, order_type (enum: prescription|lab_order), order_id (polymorphic ref)
-  facility_id, status (enum: pending|in_progress|fulfilled|rejected)
+  id, order_type (enum-ish string: prescription|lab_order), order_id (polymorphic ref)
+  facility_id (FK -> FacilityProfile) — the owner; a facility may only ever
+    # write rows it owns (hard rule 5)
+  status (enum: pending|in_progress|partially_fulfilled|fulfilled|rejected)
+    # derived from FulfillmentItem rows — see below; `fulfilled` is never
+    # settable by the facility directly
   created_at, updated_at
+  items: FulfillmentItem[]
+
+FulfillmentItem  (Phase 5, issue #73 — item-level / partial fulfillment)
+  id, fulfillment_record_id (FK, cascade)
+  order_type (prescription|lab_order), order_item_id
+      # PrescriptionItem.id, or LabOrder.id itself for a lab order
+      # (a lab order is a single-item order)
+  quantity_ordered (nullable int — Phase 4 item models have no quantity
+    # column yet; null = "not tracked", never fake a zero)
+  quantity_dispensed (int, default 0)
+  status (enum: pending|dispensed|unfulfilled)
+  dispensed_key (nullable) — equals order_item_id exactly when
+    # status = 'dispensed', NULL otherwise. This is how the hard
+    # constraint "one item can never be dispensed by two facilities" is
+    # expressed as a plain partial unique index
+    # (order_type, dispensed_key): NULLs don't collide in Postgres, two
+    # non-NULL dispenses of the same item violate the index. A real
+    # `WHERE status = 'dispensed'` partial index would be equivalent SQL
+    # but Prisma cannot represent it in schema.prisma and `migrate diff`
+    # would try to drop one it finds in the database.
+  dispensed_at (nullable), created_at, updated_at
+  uniqueness: (fulfillment_record_id, order_type, order_item_id) — the
+    # same item can't be routed twice under one record
+
+Order-status derivation (issue #73):
+  dispensed_items == items_of_order  -> order.status = fulfilled
+  0 < dispensed_items < items_of_order -> order.status = partially_fulfilled
+  no dispensed items -> unchanged (issued)
+  Applied by the prescriptions/lab-orders module services (forward-only,
+  conditional update — an expired/superseded order is never resurrected)
+  called from pharmacy-orders AFTER its item rows commit. Field updates on
+  an issued order's lifecycle `status` are the ONE sanctioned mutation of
+  an issued order (§5.3 step 5); clinical content stays append-only.
 ```
 Design note: kept separate from `Prescription`/`LabOrder` so a facility's operational status doesn't need write access to the clinical order record itself — it only writes to its own fulfillment row. Reduces blast radius of a compromised/misbehaving facility account.
 
@@ -212,17 +256,39 @@ LoginAttempt (issue #35)
 
 ### 5.3 Order issuance and fulfillment
 1. Specialist issues `Prescription` and/or `LabOrder` from a `Consultation`.
-2. Patient views eligible facilities filtered by `FacilityCapability` matching the order.
-3. Patient selects a facility → `FulfillmentRecord` created (`pending`).
-4. Facility updates its own `FulfillmentRecord` status; for labs, attaches `LabResult`.
-5. Order's own `status` field is updated to `fulfilled` only via this facility-confirmed path — patient/doctor cannot self-mark it.
+2. Patient views eligible facilities filtered by `FacilityCapability` matching the order — optionally sorted by distance from a patient-supplied point (§5.4).
+3. Patient selects a facility → `FulfillmentRecord` created (`pending`) with one `FulfillmentItem` per routed item. Splitting a partially dispensed order across a second facility is the same call scoped to the remaining items (issue #73).
+4. Facility updates its own `FulfillmentRecord` status; for labs, attaches `LabResult`. An item becomes `dispensed` only through `PATCH /pharmacy-orders/fulfillments/:id/items/:itemId`, a one-shot conditional update backed by the `(orderType, dispensedKey)` unique index — a second facility dispensing the same item is a constraint violation (409), even under concurrency.
+5. Order's own `status` field is updated to `fulfilled` only via this facility-confirmed path — patient/doctor cannot self-mark it. Since issue #73 this includes `partially_fulfilled`, and the write happens as a post-commit derivation in `pharmacy-orders/services` through the prescriptions/lab-orders module services (rules 4 and 5): facilities never touch `Prescription`/`LabOrder` rows, pharmacy-orders never writes those tables directly, and the update is conditional and forward-only.
+
+**Payment release rule under partial fulfillment (issue #73 — decided):**
+partial fulfillment **never** releases escrow. Release eligibility requires
+the order to derive `fulfilled` — every item of the order dispensed,
+wherever it was routed. A `partially_fulfilled` order holds the escrow no
+matter how many items the dispensing facility already delivered. Rationale:
+v1 has one `PaymentIntent` per order (ADR 0004), so releasing on partial
+state would either over-pay a single facility for goods not delivered or
+need a proration model that doesn't exist yet. Consequence: a patient who
+walks away from the deliberately-un-routed remainder keeps the escrow held
+until the admin refund path (`POST /payments/intents/:id/refund`) resolves
+it. Prorated/partial release is an open question, logged in §6.2 — the
+rule is "no release until the decided rule is met", and the decided rule
+is *all items dispensed*. (Release itself remains admin-triggered in v1
+per ADR 0004; this rule is what makes that action's eligibility check
+honest once wired.)
+
+### 5.4 Facility discovery by distance (Phase 5, issue #74)
+1. Patient calls `GET /facilities/eligible?capabilityType=…&near=lat,lng&radiusKm=…`.
+2. The repository applies an **indexed bounding box** prefilter (`(latitude, longitude)` composite index) that is provably a superset of the radius circle, then computes exact haversine distance in SQL over those rows and sorts ascending (`NULLS LAST` — facilities without coordinates stay discoverable, just last).
+3. The patient's `near` point never leaves the request: it is only ever a bind parameter in that statement — not stored, not logged, not echoed back (the response carries per-facility `distanceKm` only).
+4. **Why not PostGIS:** it needs an extension on every deployment (CI's throwaway DBs, the Render free-tier preview, bare local Postgres) to order one column, which is exactly the ceremony §6.3 warns against; bounding-box + haversine is exact here because the box is a superset. Measured in `backend/tests/integration/facility-distance.test.mts` (p50 ≈ 5 ms over ~3 000 facilities).
 
 ## 6. Hard questions (architecture-level — see PRD §8 for product-level)
 
 ### 6.1 What do we think would break?
 1. Naive slot booking without the DB-level conditional update in §5.1 — the most likely first bug filed against this repo. **Resolved 2026-09-14:** implemented exactly as designed in §5.1 — see `backend/src/modules/availability/repositories/index.ts` (`claimOpenSlot`) and `backend/src/modules/appointments/services/index.ts` (`bookSlot`, the transaction wrapping it). Integration-tested with real concurrency in `backend/tests/integration/booking.test.mts`.
 2. `Referral.target_doctor_id` left nullable with no fallback assignment logic — referrals to "a specialty" with no specific doctor need a real routing rule (round robin? load-based?) or they'll pile up unassigned. **Not designed yet — flag as open architecture gap.**
-3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final.
+3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final. *Still open.* Note (issue #73): item-level fulfillment (`FulfillmentItem`) was deliberately built *on top of* the current polymorphic shape rather than resolving this question — issue #13 owns the split-or-keep decision.
 4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
 5. **Discovered 2026-10-15 while building email verification (Phase 8, issue #34):** the email/SMS provider is still undecided (Phase 6, issue #17), so verification links can't actually be delivered in a hosted environment yet — `backend/src/modules/auth/services/email-dispatcher.ts` is a no-op seam until a provider is integrated. Until then `backend/scripts/mark-email-verified.mjs` is the documented out-of-band path for an operator with DB access. Not a reason to skip the guard: the guard is what makes the flow safe once delivery exists, and shipping it locked-off would just mean shipping it untested.
 
@@ -232,6 +298,8 @@ LoginAttempt (issue #35)
 3. No schema support yet for a doctor working across multiple facilities/locations (PRD edge case 6) — `AvailabilitySlot` currently assumes one calendar per doctor.
 4. No audit-log table — every FR around auditability (PRD §7) currently relies on `created_at/updated_at` timestamps only, which is not sufficient for "who changed what." A dedicated `AuditEvent` table is likely needed before this ships to real patients.
 5. CSRF on the cookie-authenticated routes — the refresh cookie has to be `SameSite=None; Secure` (the Pages frontend is a different site — see `docs/adr/0003`), which means any site the patient visits can make their browser send it to `/auth/refresh` and `/auth/logout`. **Resolved 2026-10-15 (issue #37):** a per-session CSRF token is bound into the refresh token and required in the `X-CSRF-Token` header, the `Origin` header is validated against an explicit allowlist, and CORS is now a per-environment allowlist (`CORS_ORIGINS`) instead of one configured string. The double-submit cookie pattern — the usual answer — is *not* usable here: a cookie set by this API is a third-party cookie to `docforum.github.io`, so the frontend's JavaScript can never read it; the token travels in the login/refresh response body instead. A request with no `Origin` (curl, server-to-server) is allowed through the Origin check but still needs the token. See `backend/src/middleware/csrf.ts`, and `docs/api/README.md` for what the client must send. Consequence: refresh cookies issued before this change carry no `csrf` claim and are rejected, i.e. existing sessions need one re-login.
+6. **Discovered 2026-10-17 (issue #73): payment proration under partial fulfillment is undecided.** The release rule (§5.3) is "all items dispensed or nothing" — safe, but it means a facility that dispensed 2 of 3 items gets nothing until the last item lands, and an abandoned remainder holds the whole escrow until an admin refunds it. Alternatives (prorated release per facility, split intents per routed record) need a product decision; deliberately not designed here.
+7. **Discovered 2026-10-17 (issue #73): a patient can't yet read their own order's fulfillment record.** The pharmacy-orders read path gates on owning facility / admin, because `PatientProfile ↔ Prescription/LabOrder` linkage doesn't exist until Phase 4 (issue #9). The derived `GET /pharmacy-orders/orders/:id/fulfillment-status` is intentionally coarse-grained so patients get an honest status before that linkage lands; record-level patient reads are blocked on Phase 4, not forgotten.
 
 ### 6.3 What's overengineered (architecture-level, for v1)?
 1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is.

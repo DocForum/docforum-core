@@ -8,6 +8,8 @@ import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
 import { paymentsRouter } from './modules/payments/routes';
+import { facilitiesRouter } from './modules/facilities/routes';
+import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
 
 export function createApp() {
   const app = express();
@@ -31,6 +33,8 @@ export function createApp() {
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
   app.use('/payments', paymentsRouter);
+  app.use('/facilities', facilitiesRouter);
+  app.use('/pharmacy-orders', pharmacyOrdersRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.
