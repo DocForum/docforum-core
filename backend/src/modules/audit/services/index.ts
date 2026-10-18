@@ -1,0 +1,152 @@
+// audit services (Phase 8, issue #43) — the write helper every module calls
+// when it changes the state of an accountable record, plus the admin query.
+// Other modules import from here only, never from audit/repositories.
+//
+// The contract of record():
+//   - it runs INSIDE the transaction of the change it describes (it refuses
+//     the root client), so an event exists if and only if its change
+//     committed;
+//   - it carries only what's needed to attribute the transition — actor,
+//     entity, action, from/to state, request id — plus a small, flat,
+//     validated metadata map of ids/codes. Never PHI, never request bodies.
+import type { Prisma, Role } from '@prisma/client';
+import { HttpError } from '../../../http-error';
+import * as auditRepo from '../repositories';
+
+/** Who caused a transition. Controllers build it from the request with
+ * `auditActor(req)` (src/middleware/request-id.ts). `userId`/`role` are null
+ * only for system-initiated changes. */
+export interface AuditActor {
+  userId: string | null;
+  role: Role | null;
+  requestId: string | null;
+}
+
+export const SYSTEM_ACTOR: AuditActor = { userId: null, role: null, requestId: null };
+
+export type AuditEntityType = 'Appointment' | 'DoctorProfile' | 'PaymentIntent';
+
+export type AuditMetadataValue = string | number | boolean | null;
+export type AuditMetadata = Record<string, AuditMetadataValue>;
+
+export interface AuditEventInput {
+  entityType: AuditEntityType;
+  entityId: string;
+  action: string;
+  fromState: string | null;
+  toState: string | null;
+  metadata?: AuditMetadata;
+}
+
+const ACTION = /^[a-z][a-z_]*(\.[a-z][a-z_]*)+$/;
+const METADATA_KEY = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
+const MAX_METADATA_KEYS = 16;
+const MAX_METADATA_STRING = 200;
+/** Defence in depth against a caller passing personal or secret data: any
+ * key that *looks* like it could carry it is refused outright. Callers
+ * should only ever pass ids and codes. */
+const FORBIDDEN_METADATA_KEY =
+  /(name|email|phone|dob|birth|address|note|intake|symptom|diagnos|password|secret|token|key|credential|body|payload)/i;
+
+export class AuditMetadataError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuditMetadataError';
+  }
+}
+
+/** Validates metadata: flat scalars only, bounded, no suspicious keys.
+ * Exported for tests. Throws AuditMetadataError — a programming error, so
+ * it aborts the surrounding transaction rather than being swallowed. */
+export function validateAuditMetadata(metadata: AuditMetadata | undefined): AuditMetadata | undefined {
+  if (metadata === undefined) return undefined;
+  if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    throw new AuditMetadataError('Audit metadata must be a flat object.');
+  }
+  const entries = Object.entries(metadata);
+  if (entries.length > MAX_METADATA_KEYS) throw new AuditMetadataError('Audit metadata has too many keys.');
+  for (const [key, value] of entries) {
+    if (!METADATA_KEY.test(key)) throw new AuditMetadataError(`Invalid audit metadata key: ${key}`);
+    if (FORBIDDEN_METADATA_KEY.test(key) && !/Id$/.test(key)) {
+      throw new AuditMetadataError(`Audit metadata key not allowed (could carry personal or secret data): ${key}`);
+    }
+    const ok =
+      value === null ||
+      typeof value === 'boolean' ||
+      (typeof value === 'number' && Number.isFinite(value)) ||
+      (typeof value === 'string' && value.length <= MAX_METADATA_STRING);
+    if (!ok) throw new AuditMetadataError(`Audit metadata value for ${key} must be a short scalar.`);
+  }
+  return metadata;
+}
+
+/**
+ * Records one state transition, inside the caller's transaction. Passing
+ * the root Prisma client (which would commit the event on its own, before
+ * — or without — the change) is refused at runtime.
+ */
+export async function record(tx: Prisma.TransactionClient, actor: AuditActor, event: AuditEventInput): Promise<void> {
+  if (typeof (tx as { $transaction?: unknown }).$transaction === 'function') {
+    throw new Error('audit.record() must run inside the transaction of the change it describes.');
+  }
+  if (!ACTION.test(event.action)) throw new Error(`Invalid audit action: ${event.action}`);
+  const metadata = validateAuditMetadata(event.metadata);
+  await auditRepo.insertAuditEvent(tx, {
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    entityType: event.entityType,
+    entityId: event.entityId,
+    action: event.action,
+    fromState: event.fromState,
+    toState: event.toState,
+    requestId: actor.requestId,
+    metadata,
+  });
+}
+
+// --- Admin query -----------------------------------------------------------
+
+export interface AuditEventFilters {
+  entityType?: string;
+  entityId?: string;
+  actorUserId?: string;
+  from?: Date;
+  to?: Date;
+  cursor?: string;
+  limit: number;
+}
+
+/** Opaque cursor: base64url of "<createdAt ISO>|<id>" of the last item. */
+export function encodeAuditCursor(event: { createdAt: Date; id: string }): string {
+  return Buffer.from(`${event.createdAt.toISOString()}|${event.id}`, 'utf8').toString('base64url');
+}
+
+export function decodeAuditCursor(cursor: string): { createdAt: Date; id: string } {
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const separator = raw.indexOf('|');
+  const createdAt = new Date(raw.slice(0, separator));
+  const id = raw.slice(separator + 1);
+  if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
+    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+  }
+  return { createdAt, id };
+}
+
+export async function listAuditEvents(filters: AuditEventFilters) {
+  if (filters.from && filters.to && filters.from.getTime() > filters.to.getTime()) {
+    throw new HttpError(400, '`from` must not be after `to`.');
+  }
+  const rows = await auditRepo.findAuditEvents({
+    entityType: filters.entityType,
+    entityId: filters.entityId,
+    actorUserId: filters.actorUserId,
+    from: filters.from,
+    to: filters.to,
+    before: filters.cursor ? decodeAuditCursor(filters.cursor) : undefined,
+    // One extra row tells us whether there's a next page without a count.
+    take: filters.limit + 1,
+  });
+  const items = rows.slice(0, filters.limit);
+  const last = items[items.length - 1];
+  return { items, nextCursor: rows.length > filters.limit && last ? encodeAuditCursor(last) : null };
+}

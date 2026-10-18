@@ -115,6 +115,7 @@ for status and issue links.
 - [x] Login brute-force protection: per-account and per-IP throttling with backoff. Postgres-backed buckets (`LoginAttempt`), a single conditional upsert so concurrent failures are counted atomically, exponential backoff with `Retry-After`, a bounded temporary lock, an admin clear endpoint, a prune interval in `src/server.ts`, and a `TRUST_PROXY` setting so the IP isn't Render's proxy address. Tracked as [issue #35](https://github.com/DocForum/docforum-core/issues/35) (High, 200 pts) — **Done**, merged as PR #138.
 - [ ] CSRF protection for the cookie-authenticated refresh/logout endpoints, plus an explicit per-environment CORS allowlist. A per-session CSRF token bound into the refresh token (not a double-submit cookie — a cookie set by this API is third-party to `docforum.github.io`, so the web client can't read it), a required `X-CSRF-Token` header on `/auth/refresh` + `/auth/logout`, an `Origin` allowlist check, and `CORS_ORIGINS` replacing the single configured origin. Tracked as [issue #37](https://github.com/DocForum/docforum-core/issues/37) (High, 200 pts) — **in progress**, branch `feat/csrf-protection-for-cookie-authenticated-refresh`.
 - [ ] Admin account lifecycle: secure bootstrap CLI, admin invites, and account deactivation. Tracked as [issue #39](https://github.com/DocForum/docforum-core/issues/39) (High, 200 pts) — **in progress**.
+- [ ] `AuditEvent` table and write path — **foundation done, Phase 3/4 wiring pending.** Append-only `AuditEvent` (DB triggers reject UPDATE/DELETE/TRUNCATE), `auditService.record()` that must run inside the state change's own transaction, request ids on every response, and `GET /admin/audit-events` (entity/actor/date filters, keyset cursor). Wired into appointment booking, doctor verification and payment fund/release/refund. Referrals, prescriptions, lab orders and fulfillment (Phases 3–5) must call `record()` when they land; the login-throttle admin clear still logs to console only. Tracked as [issue #43](https://github.com/DocForum/docforum-core/issues/43) (High, 200 pts) — **in review**, branch `feat/43-auditevent-foundation`.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
 - [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. Not yet scoped into an issue.
@@ -382,17 +383,14 @@ for status and issue links.
   tests assert a
   forged cross-origin request is rejected while the legitimate cross-site
   client still succeeds.
-- 2026-10-17 — Phase 5: landed issues #73 (partial fulfillment,
-  item-level dispensing for multi-item prescriptions) and #74 (facility
-  location + distance-sorted eligible-facility query) together. New
-  `FulfillmentItem` model + `partially_fulfilled` order/record statuses,
-  `PrescriptionItem.prescriptionId` FK and `FulfillmentRecord.facilityId`
-  FK filled in (both were already in ARCHITECTURE §4/§4.5, schema was
-  behind), `FacilityProfile` location fields + index, new
-  `/pharmacy-orders` and `/facilities` routes, a dev seed of fictional
-  facility coordinates (`npx prisma db seed`), and two new integration
-  test files (11 tests). Payment-release rule decided and documented in
-  ARCHITECTURE.md §5.3 (no release until full fulfillment; proration
-  logged as an open question in §6.2), two new §6.2 gaps recorded, and a
-  new §5.4 documents the distance query + its privacy rule. Still owed by
-  this phase: #13–#16.
+- 2026-10-17 — Issue #43 (AuditEvent foundation) opened as a PR: the
+  `AuditEvent` table (append-only, enforced by DB triggers; no FKs on
+  purpose), an `audit` module whose `record()` refuses to run outside a
+  transaction, an `X-Request-Id` middleware, and `GET /admin/audit-events`
+  with a keyset cursor. Wired into booking (inside `bookSlot`'s existing
+  transaction, after the slot claim — the concurrency guarantee is
+  unchanged), doctor verification (previous status read `FOR UPDATE`) and
+  payment fund/release/refund (status writes now conditional on the
+  observed state, so a racing second action gets 409 instead of silently
+  overwriting). Rollback coupling proven with a real injected DB failure,
+  not a mock. Phase 3/4 wiring explicitly left pending.

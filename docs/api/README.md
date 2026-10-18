@@ -112,8 +112,8 @@ account also pays bcrypt's comparison cost, so timing doesn't leak either).
 user is stuck behind: body `{ email?, ip? }` (at least one), returns
 `{ cleared }`. Clear **both** when a lock was taken out via the account's IP,
 or the IP bucket will keep refusing them. It's logged to the server console
-— there is no `AuditEvent` table yet (known gap), so that's the interim
-record.
+— it isn't wired into `AuditEvent` yet (issue #43 covered booking, doctor
+verification and payments), so that's the interim record.
 
 Under the hood this uses Express's `trust proxy` setting via the
 `TRUST_PROXY` env var: `1` behind Render's single proxy hop, `false` (the
@@ -151,29 +151,33 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 | `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
 
-## Facilities (`/facilities`) — `backend/src/modules/facilities`
+## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
 
-| Method & path | Auth | Query | Notes |
-|---|---|---|---|
-| `GET /facilities/eligible` | any signed-in user | `capabilityType?` (`lab_test`\|`medication_dispense`), `detail?`, `near=lat,lng`, `radiusKm?`, `limit?` (1–200, default 50) | PRD FR-13 / Phase 5 issue #74. Qualified facilities, optionally sorted ascending by distance from `near` (haversine, default radius 50 km when `near` is given without `radiusKm`). Facilities without coordinates are **never dropped** — they appear with `distanceKm: null`, sorted last. `radiusKm` without `near` → 400. **The patient's `near` point is never stored or logged** — it is only ever a query parameter in the SQL statement. Response rows: `{ id, name, type, address, distanceKm }`. Auth required because a location query is patient context; no role gate (the point itself isn't persisted anywhere it could leak from). |
+Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
+well-formed inbound `X-Request-Id` (8–128 chars of `[A-Za-z0-9._:-]`) is
+kept, anything else is replaced with a UUID. Audit events store it, so an
+event can be traced to the request (and logs) that caused it.
 
-## Pharmacy orders (`/pharmacy-orders`) — `backend/src/modules/pharmacy-orders`
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /admin/audit-events` | admin | Newest first. Query: `entityType`, `entityId` (requires `entityType`), `actorUserId`, `from` / `to` (ISO-8601 date or date-time, inclusive), `limit` (1–200, default 50), `cursor`. Unknown parameters are `400`. Returns `{ items, nextCursor }`; pass `nextCursor` back as `cursor` for the next page (`null` = last page). |
 
-Item-level (partial) fulfillment — Phase 5 issue #73, see
-`ARCHITECTURE.md` §5.3.
+Item shape: `{ id, actorUserId, actorRole, entityType, entityId, action,
+fromState, toState, requestId, metadata, createdAt }`. `metadata` is a small
+flat map of ids/codes (never personal data). Ordering is
+`(createdAt DESC, id DESC)` and the cursor is a keyset position on that
+pair, so paging never skips or repeats an event; events written after a scan
+started appear at the front of a new scan, not mid-way through the old one.
+`400 INVALID_CURSOR` for a malformed cursor; `400` if `from` is after `to`.
 
-| Method & path | Auth | Body | Notes |
-|---|---|---|---|
-| `POST /pharmacy-orders/fulfillments` | patient or admin (verified email) | `{ orderType, orderId, facilityId, orderItemIds? }` | Routes items to a facility: one `FulfillmentRecord` + one `FulfillmentItem` per item. Omit `orderItemIds` to route every item; pass only the remaining items to split a partially dispensed order across a second facility. `409` if any requested item was already dispensed elsewhere, `400` if an item doesn't belong to the order. |
-| `GET /pharmacy-orders/fulfillments/:id` | owning facility or admin | — | Record + item rows. Patients are excluded until Phase 4 links `PatientProfile` to orders (known gap, `ARCHITECTURE.md` §6.2). |
-| `PATCH /pharmacy-orders/fulfillments/:id` | owning facility (verified email) | `{ status: 'in_progress'\|'rejected' }` | `fulfilled` is **not settable** — it is derived from the record's dispensed items. Hard rule 5: a facility may only ever write records it owns (`403` otherwise). |
-| `PATCH /pharmacy-orders/fulfillments/:id/items/:itemId` | owning facility (verified email) | `{ status: 'dispensed'\|'unfulfilled', quantityDispensed? }` | The only path to `dispensed`. One-shot (`409` on replay) and race-safe: the `(orderType, dispensedKey)` unique index makes a second facility's dispense of the same item a `409`, even under concurrency (`backend/tests/integration/fulfillment.test.mts`). After each item change the record status and the order-level status are re-derived. |
-| `GET /pharmacy-orders/orders/:orderId/fulfillment-status?orderType=` | any signed-in user | — | Derived order state: `{ totalItems, dispensedItems, status: 'issued'\|'partially_fulfilled'\|'fulfilled' }`. Computed from item rows — never a hand-set flag. |
+Recorded today: `appointment.booked`, `doctor.verification_status_changed`,
+`payment_intent.{funded,released,refunded}` — see ARCHITECTURE.md §4.10.
+There is no write or delete endpoint, and the table rejects UPDATE/DELETE
+in the database.
 
-Payment release rule (documented in `ARCHITECTURE.md` §5.3): partial
-fulfillment never releases escrow — release eligibility requires the
-order to derive `fulfilled`. Release itself is still admin-triggered
-(ADR 0004 v1).
+Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
+return `409` when the intent changed state concurrently between the check
+and the write (previously the second write silently overwrote the first).
 
 ## Not yet implemented
 
