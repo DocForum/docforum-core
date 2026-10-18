@@ -556,3 +556,41 @@ model WalletLink {
   // Lookups by owner (active-link read path, deactivation sweep).
   @@index([ownerType, ownerId])
 }
+
+// --- Audit trail (Phase 8, issue #43) -------------------------------------
+// One row per state transition on a record that matters for clinical,
+// legal or financial accountability (PRD §7: "who, when"). Written by the
+// audit module's record(), always inside the same transaction as the
+// change it describes — if the change rolls back, so does its event.
+//
+// APPEND-ONLY. There is no update or delete path in code, and a database
+// trigger (see the add_audit_event migration) rejects UPDATE, DELETE and
+// TRUNCATE outright. Deliberately no foreign keys: an FK's ON DELETE action
+// would have to rewrite or remove audit rows (which the trigger forbids),
+// and RESTRICT would let the audit trail block account lifecycle. Ids are
+// recorded as facts about the past.
+//
+// No PHI, ever: `metadata` is a small flat map of ids/codes validated by
+// record() — never names, contact details, DOB, intake text, or copies of
+// request/response bodies.
+model AuditEvent {
+  id          String   @id @default(uuid())
+  // Null only for system-initiated transitions (none exist yet).
+  actorUserId String?
+  actorRole   Role?
+  // e.g. 'Appointment', 'DoctorProfile', 'PaymentIntent'.
+  entityType  String
+  entityId    String
+  // e.g. 'appointment.booked', 'payment_intent.released'.
+  action      String
+  fromState   String?
+  toState     String?
+  // X-Request-Id of the HTTP request that caused it (src/middleware/request-id.ts).
+  requestId   String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([createdAt, id])
+}

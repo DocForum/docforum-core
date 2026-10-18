@@ -2,13 +2,7 @@
 // Never store PHI here. Never call docforum-escrow directly from here —
 // go through services/.
 import { prisma } from '../../../db/prisma-client';
-import type { PaymentIntentStatus, Prisma, WalletLinkOwnerType } from '@prisma/client';
-
-// A Prisma client OR an open interactive transaction. Every function
-// that participates in the wallet-link <-> SEP-10 nonce transaction
-// takes this (defaulting to the shared client) so callers can compose
-// atomicity without each function hardcoding `prisma`.
-type Db = Prisma.TransactionClient;
+import type { PaymentIntentStatus, Prisma } from '@prisma/client';
 
 /** Reads FacilityProfile directly — a Phase 1 core identity model, not
  * something the (still-placeholder) facilities module exclusively owns. */
@@ -82,18 +76,34 @@ export function findPaymentIntentById(id: string) {
   return prisma.paymentIntent.findUnique({ where: { id } });
 }
 
-export function markEscrowed(
+/**
+ * Status writes are conditional on the state the caller observed (issue
+ * #43): `created -> escrowed`, `escrowed -> released|refunded`. They run in
+ * the caller's transaction alongside the AuditEvent, and return null if the
+ * row was no longer in the expected state (a concurrent action won), so an
+ * audit event can never claim a transition that didn't happen. The
+ * check-then-act gap before the on-chain call is issue #24's to close.
+ */
+export async function markEscrowed(
+  tx: Prisma.TransactionClient,
   id: string,
-  input: { escrowId: bigint; stellarTxHash: string; sorobanContractId: string; fundedWalletAddress: string },
+  input: { escrowId: bigint; stellarTxHash: string; sorobanContractId: string },
 ) {
-  return prisma.paymentIntent.update({
-    where: { id },
+  const result = await tx.paymentIntent.updateMany({
+    where: { id, status: 'created' },
     data: { status: 'escrowed', ...input },
   });
+  return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
 }
 
-export function markStatus(id: string, status: PaymentIntentStatus) {
-  return prisma.paymentIntent.update({ where: { id }, data: { status } });
+export async function markStatus(
+  tx: Prisma.TransactionClient,
+  id: string,
+  from: PaymentIntentStatus,
+  to: PaymentIntentStatus,
+) {
+  const result = await tx.paymentIntent.updateMany({ where: { id, status: from }, data: { status: to } });
+  return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
 }
 
 // --- SEP-10 (Stellar Web Authentication) — issue #77 ----------------------

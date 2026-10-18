@@ -15,17 +15,11 @@ export function loadEscrowSdk(): Promise<EscrowSdkModule> {
   return modulePromise;
 }
 
-// Test seam (issue #78) — same pattern as auth's setEmailSender and the
-// SEP-10 Horizon fetcher override: lets the offline integration suite
-// exercise the real funding flow (guard, snapshot, status transition)
-// without reaching the escrow contract on testnet. Never set outside
-// tests.
-export type EscrowSdkForTests = EscrowSdkModule;
-
-export function setEscrowSdkOverride(sdk: EscrowSdkForTests): void {
-  override = sdk;
+/** Test seam (issue #43): integration tests that exercise the DB side of
+ * fund/release/refund substitute a fake SDK instead of calling testnet.
+ * `undefined` restores the real one. Never called by application code. */
+export function setEscrowSdkForTests(sdk: EscrowSdkModule | undefined): void {
+  modulePromise = sdk ? Promise.resolve(sdk) : undefined;
 }
 
-export function resetEscrowSdkOverride(): void {
-  override = undefined;
-}
+export type { EscrowSdkModule };

@@ -43,6 +43,11 @@ const pg = new EmbeddedPostgres({
 });
 const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_payments_test`;
 
+// Phase 8, issue #43: fund/release/refund now take the audit actor. This
+// suite calls the services directly (no HTTP request), so it acts as a
+// system actor.
+const TEST_ACTOR = { userId: null, role: null, requestId: `testnet-${runId}` };
+
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
   const res = await fetch(`https://friendbot.stellar.org?addr=${encodeURIComponent(kp.publicKey())}`);
@@ -127,12 +132,12 @@ describe('payments module against live testnet', () => {
     });
     expect(intent.status).toBe('created');
 
-    const funded = await paymentsService.fundPaymentIntent(intent.id);
+    const funded = await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
     expect(funded.status).toBe('escrowed');
     expect(funded.escrowId).not.toBeNull();
     expect(funded.stellarTxHash).toBeTruthy();
 
-    const released = await paymentsService.releasePaymentIntent(intent.id);
+    const released = await paymentsService.releasePaymentIntent(TEST_ACTOR, intent.id);
     expect(released.status).toBe('released');
   }, 60_000);
 
@@ -145,8 +150,8 @@ describe('payments module against live testnet', () => {
       amountStroops: 500_000n,
     });
 
-    await paymentsService.fundPaymentIntent(intent.id);
-    const refunded = await paymentsService.refundPaymentIntent(intent.id);
+    await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
+    const refunded = await paymentsService.refundPaymentIntent(TEST_ACTOR, intent.id);
     expect(refunded.status).toBe('refunded');
   }, 60_000);
 
@@ -166,6 +171,6 @@ describe('payments module against live testnet', () => {
       amountStroops: 500_000n,
     });
 
-    await expect(paymentsService.fundPaymentIntent(intent.id)).rejects.toThrow(/no linked wallet/);
+    await expect(paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id)).rejects.toThrow(/no linked wallet/);
   }, 30_000);
 });
