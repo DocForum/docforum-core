@@ -41,10 +41,32 @@ describe('validateAuditMetadata', () => {
 
 describe('record()', () => {
   it('refuses the root client — it must run inside the transaction of the change', async () => {
-    const rootLike = { $transaction: () => undefined, auditEvent: { create: () => undefined } } as unknown as Prisma.TransactionClient;
+    // A real root client (Prisma 7) exposes its lifecycle methods; that —
+    // not `$transaction`, which v7's transaction client also has — is what
+    // the guard keys on. See the doc comment on record().
+    const rootLike = {
+      $transaction: () => undefined,
+      $connect: () => undefined,
+      $disconnect: () => undefined,
+      auditEvent: { create: () => undefined },
+    } as unknown as Prisma.TransactionClient;
     await expect(
       record(rootLike, SYSTEM_ACTOR, { entityType: 'Appointment', entityId: 'a', action: 'appointment.booked', fromState: null, toState: 'scheduled' }),
     ).rejects.toThrow(/inside the transaction/);
+  });
+
+  it('accepts a Prisma 7 transaction client even though it carries $transaction', async () => {
+    // Regression: since prisma@7 the interactive-transaction client has a
+    // $transaction method identical to the root client's (issue #47's
+    // upgrade). Guarding on it refused every legitimate call and aborted
+    // the surrounding change; this shape must be accepted and must write.
+    let wrote = false;
+    const v7TransactionClient = {
+      $transaction: () => undefined,
+      auditEvent: { create: async () => { wrote = true; } },
+    } as unknown as Prisma.TransactionClient;
+    await record(v7TransactionClient, SYSTEM_ACTOR, { entityType: 'Appointment', entityId: 'a', action: 'appointment.booked', fromState: null, toState: 'scheduled' });
+    expect(wrote).toBe(true);
   });
 
   it('refuses a malformed action name before writing anything', async () => {

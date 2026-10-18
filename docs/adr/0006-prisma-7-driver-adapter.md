@@ -93,6 +93,15 @@ that ships the patched `deepmerge-ts` — and adopt the v7 client shape:
   --exit-code` → "No difference detected").
 - **Client middleware (`$use`) was removed in v7.** This repo uses no client
   middleware.
+- **The interactive-transaction client now exposes `$transaction`** — identical
+  to the root client's — which v6's transaction client did not. The
+  runtime guard in `audit.record()` used to refuse the root client by checking
+  for `$transaction`, so the upgrade made it refuse *every legitimate*
+  in-transaction call, aborting each audited change with it (surfaced as 16
+  failing integration tests). The guard now recognises the root client by its
+  lifecycle methods (`$connect`/`$disconnect` — present on the root client,
+  absent on the transaction client in both v6 and v7), keeping the guarantee
+  that an audit event exists iff its change committed.
 
 ## Alternatives considered
 

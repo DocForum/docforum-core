@@ -84,9 +84,18 @@ export function validateAuditMetadata(metadata: AuditMetadata | undefined): Audi
  * Records one state transition, inside the caller's transaction. Passing
  * the root Prisma client (which would commit the event on its own, before
  * — or without — the change) is refused at runtime.
+ *
+ * The root client is recognised by its lifecycle methods ($connect /
+ * $disconnect): they exist on the root client and never on the
+ * interactive-transaction client. It used to be recognised by
+ * `$transaction` instead, but Prisma 7 (the issue #47 upgrade) gives the
+ * transaction client a `$transaction` method too — identical to the root
+ * client's — so that check started refusing every *legitimate* in-transaction
+ * call, aborting the change with it. Verified against prisma@7.10.1.
  */
 export async function record(tx: Prisma.TransactionClient, actor: AuditActor, event: AuditEventInput): Promise<void> {
-  if (typeof (tx as { $transaction?: unknown }).$transaction === 'function') {
+  const client = tx as unknown as { $connect?: unknown; $disconnect?: unknown };
+  if (typeof client.$connect === 'function' || typeof client.$disconnect === 'function') {
     throw new Error('audit.record() must run inside the transaction of the change it describes.');
   }
   if (!ACTION.test(event.action)) throw new Error(`Invalid audit action: ${event.action}`);
