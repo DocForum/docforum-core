@@ -352,9 +352,21 @@ describe('AuditEvent foundation', () => {
   });
 
   describe('append-only', () => {
-    it('has no update or delete path in the audit module', async () => {
+    it('has no update path, and no delete beyond access-log retention', async () => {
       const repo = await import('../../src/modules/audit/repositories/index.js');
-      expect(Object.keys(repo).sort()).toEqual(['findAuditEvents', 'insertAuditEvent']);
+      // AuditEvent: INSERT + SELECT only (the DB triggers below enforce the
+      // rest). AccessLog (issue #45) is a different table with its own
+      // retention: `pruneAccessLogs` is the one deliberate delete, bounded
+      // to rows older than the retention window — never an arbitrary one.
+      expect(Object.keys(repo).sort()).toEqual([
+        'findAccessByEntity',
+        'findAccessByUser',
+        'findAccessForPatient',
+        'findAuditEvents',
+        'insertAuditEvent',
+        'pruneAccessLogs',
+        'recordAccess',
+      ]);
     });
 
     it('rejects UPDATE, DELETE and TRUNCATE at the database level', async () => {

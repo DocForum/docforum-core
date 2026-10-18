@@ -1,6 +1,7 @@
 import { createApp } from './app';
 import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
+import { pruneOldAccessLogs } from './modules/audit/services';
 
 const app = createApp();
 
@@ -25,6 +26,22 @@ const pruneTimer = setInterval(() => {
     .catch((err) => {
       // eslint-disable-next-line no-console
       console.error('[jobs] login-throttle prune failed:', err);
+    });
+
+  // Access-log retention (Phase 8, issue #45): drop rows older than
+  // config.accessLog.retentionDays. Same interval as the throttle prune —
+  // hourly is far more often than a 365-day window needs, but a second
+  // timer for one cheap DELETE is not worth the complexity.
+  void pruneOldAccessLogs()
+    .then((removed) => {
+      if (removed > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[jobs] pruned ${removed} expired access-log row(s)`);
+      }
+    })
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[jobs] access-log prune failed:', err);
     });
 }, config.loginThrottle.pruneIntervalSeconds * 1000);
 pruneTimer.unref();

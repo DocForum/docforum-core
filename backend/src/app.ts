@@ -8,7 +8,7 @@ import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
 import { paymentsRouter } from './modules/payments/routes';
-import { auditRouter } from './modules/audit/routes';
+import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
 import { requestId } from './middleware/request-id';
 
 export function createApp() {
