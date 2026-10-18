@@ -13,7 +13,14 @@ import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
 import { loadEscrowSdk } from './escrow-sdk-loader';
-import { paginate, type PatientExportSection } from '../../patients/services';
+import { prisma } from '../../../db/prisma-client';
+import * as auditService from '../../audit/services';
+import type { PaymentIntent, PaymentIntentStatus, Prisma } from '@prisma/client';
+
+// Test seam re-exported through the service surface (same convention as the
+// auth module's setEmailSender) — see escrow-sdk-loader.ts.
+export { setEscrowSdkForTests } from './escrow-sdk-loader';
+export type { EscrowSdkModule } from './escrow-sdk-loader';
 
 async function requirePaymentsConfig() {
   const { platformPayerSecret, platformReleaserSecret, escrowContractId, escrowTokenId } = config.payments;
@@ -70,8 +77,42 @@ export async function getPaymentIntent(id: string) {
   return intent;
 }
 
+/** Commits a status change and its AuditEvent together (issue #43). If the
+ * row moved on concurrently, nothing is written and the caller gets 409. */
+async function commitTransition(
+  actor: auditService.AuditActor,
+  intent: PaymentIntent,
+  action: string,
+  to: PaymentIntentStatus,
+  write: (tx: Prisma.TransactionClient) => Promise<PaymentIntent | null>,
+): Promise<PaymentIntent> {
+  return prisma.$transaction(async (tx) => {
+    const updated = await write(tx);
+    if (!updated) {
+      throw new HttpError(409, `PaymentIntent changed concurrently — it is no longer '${intent.status}'.`);
+    }
+    await auditService.record(tx, actor, {
+      entityType: 'PaymentIntent',
+      entityId: intent.id,
+      action,
+      fromState: intent.status,
+      toState: to,
+      // Public, non-identifying references only: the escrow is on a public
+      // ledger anyway. No patient data, no secrets.
+      metadata: {
+        orderType: updated.orderType,
+        amountStroops: updated.amountStroops.toString(),
+        escrowId: updated.escrowId?.toString() ?? null,
+        stellarTxHash: updated.stellarTxHash,
+        sorobanContractId: updated.sorobanContractId,
+      },
+    });
+    return updated;
+  });
+}
+
 /** Funds the escrow from the platform's own payer identity. The intent must be `created` and its facility must have a linked wallet (the on-chain payee). */
-export async function fundPaymentIntent(id: string) {
+export async function fundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (intent.status !== 'created') {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
@@ -95,11 +136,13 @@ export async function fundPaymentIntent(id: string) {
     releaser: platformReleaser.publicKey(),
   });
 
-  return paymentsRepo.markEscrowed(id, { escrowId, stellarTxHash: txHash, sorobanContractId: escrowContractId });
+  return commitTransition(actor, intent, 'payment_intent.funded', 'escrowed', (tx) =>
+    paymentsRepo.markEscrowed(tx, id, { escrowId, stellarTxHash: txHash, sorobanContractId: escrowContractId }),
+  );
 }
 
 /** Releases the escrow to the facility's linked wallet. v1: admin-triggered (see ADR 0004 "Consequences") — no automatic FulfillmentRecord trigger yet, since that model doesn't exist. */
-export async function releasePaymentIntent(id: string) {
+export async function releasePaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (intent.status !== 'escrowed' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
@@ -110,11 +153,13 @@ export async function releasePaymentIntent(id: string) {
 
   await client.release({ escrowId: intent.escrowId, caller: platformReleaser });
 
-  return paymentsRepo.markStatus(id, 'released');
+  return commitTransition(actor, intent, 'payment_intent.released', 'released', (tx) =>
+    paymentsRepo.markStatus(tx, id, 'escrowed', 'released'),
+  );
 }
 
 /** Refunds the escrow back toward the platform payer. v1: admin-triggered, same reasoning as release. */
-export async function refundPaymentIntent(id: string) {
+export async function refundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (intent.status !== 'escrowed' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot refund.`);
@@ -125,7 +170,9 @@ export async function refundPaymentIntent(id: string) {
 
   await client.refund({ escrowId: intent.escrowId, caller: platformReleaser });
 
-  return paymentsRepo.markStatus(id, 'refunded');
+  return commitTransition(actor, intent, 'payment_intent.refunded', 'refunded', (tx) =>
+    paymentsRepo.markStatus(tx, id, 'escrowed', 'refunded'),
+  );
 }
 
 /**

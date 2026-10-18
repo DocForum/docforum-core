@@ -1,4 +1,6 @@
 import { HttpError } from '../../../http-error';
+import { prisma } from '../../../db/prisma-client';
+import * as auditService from '../../audit/services';
 import * as doctorsRepo from '../repositories';
 import type { VerificationStatus } from '@prisma/client';
 
@@ -37,8 +39,30 @@ export async function assertOwnsDoctorProfile(userId: string, doctorProfileId: s
  * workflow is manual/admin-gated in v1"). No automated verification
  * pipeline exists or is planned for v1; this is intentionally just a
  * status flip an admin performs after some out-of-band check.
+ *
+ * Phase 8, issue #43: the flip and its AuditEvent (who, from, to) commit
+ * together. Setting the status it already has is not a transition — it
+ * returns the profile unchanged and records nothing.
  */
-export async function setVerificationStatus(doctorProfileId: string, status: VerificationStatus) {
-  await getDoctorProfileById(doctorProfileId); // 404s if missing
-  return doctorsRepo.updateVerificationStatus(doctorProfileId, status);
+export async function setVerificationStatus(
+  actor: auditService.AuditActor,
+  doctorProfileId: string,
+  status: VerificationStatus,
+) {
+  return prisma.$transaction(async (tx) => {
+    const current = await doctorsRepo.lockVerificationStatus(tx, doctorProfileId);
+    if (current === null) throw new HttpError(404, 'Doctor profile not found.');
+    if (current === status) {
+      return (await doctorsRepo.findDoctorProfileById(doctorProfileId, tx))!;
+    }
+    const profile = await doctorsRepo.updateVerificationStatus(tx, doctorProfileId, status);
+    await auditService.record(tx, actor, {
+      entityType: 'DoctorProfile',
+      entityId: doctorProfileId,
+      action: 'doctor.verification_status_changed',
+      fromState: current,
+      toState: status,
+    });
+    return profile;
+  });
 }

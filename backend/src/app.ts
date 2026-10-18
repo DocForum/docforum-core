@@ -8,8 +8,8 @@ import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
 import { paymentsRouter } from './modules/payments/routes';
-import { patientsRouter } from './modules/patients/routes';
-import { registerPatientExportSections } from './export-sections';
+import { auditRouter } from './modules/audit/routes';
+import { requestId } from './middleware/request-id';
 
 export function createApp() {
   const app = express();
@@ -25,6 +25,9 @@ export function createApp() {
   // Explicit allowlist per environment (Phase 8, issue #37) — see
   // config.corsOrigins. `credentials: true` is required for the refresh
   // cookie and is exactly why the allowlist can't be a wildcard.
+  // Phase 8, issue #43: first, so every response (errors included) carries
+  // an X-Request-Id and audit events can be tied back to it.
+  app.use(requestId);
   app.use(cors({ origin: config.corsOrigins, credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
@@ -36,7 +39,7 @@ export function createApp() {
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
   app.use('/payments', paymentsRouter);
-  app.use('/patients', patientsRouter);
+  app.use('/admin', auditRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.
