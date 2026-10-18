@@ -4,6 +4,7 @@ import * as appointmentsRepo from '../repositories';
 import * as availabilityService from '../../availability/services';
 import * as patientsService from '../../patients/services';
 import * as doctorsService from '../../doctors/services';
+import * as auditService from '../../audit/services';
 
 /**
  * Books a slot for the calling patient. This is the correctness-critical
@@ -20,9 +21,15 @@ import * as doctorsService from '../../doctors/services';
  *
  * See backend/tests/integration/booking.test.ts for the concurrency proof
  * this is built to satisfy.
+ *
+ * Phase 8, issue #43: the booking's AuditEvent is written as a third step
+ * of the same transaction, after the Appointment row exists — so an event
+ * exists if and only if the booking committed. A caller that loses the
+ * race fails at step 1 and never reaches it.
  */
-export async function bookSlot(userId: string, availabilitySlotId: string) {
-  const patientProfile = await patientsService.getMyPatientProfile(userId);
+export async function bookSlot(actor: auditService.AuditActor, availabilitySlotId: string) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
 
   return prisma.$transaction(async (tx) => {
     const claimed = await availabilityService.claimOpenSlot(tx, availabilitySlotId);
@@ -37,11 +44,22 @@ export async function bookSlot(userId: string, availabilitySlotId: string) {
       throw new HttpError(404, 'Slot not found.');
     }
 
-    return appointmentsRepo.createAppointment(tx, {
+    const appointment = await appointmentsRepo.createAppointment(tx, {
       patientProfileId: patientProfile.id,
       doctorProfileId: slot.doctorProfileId,
       availabilitySlotId,
     });
+
+    await auditService.record(tx, actor, {
+      entityType: 'Appointment',
+      entityId: appointment.id,
+      action: 'appointment.booked',
+      fromState: null,
+      toState: appointment.status,
+      metadata: { availabilitySlotId, doctorProfileId: slot.doctorProfileId, origin: appointment.origin },
+    });
+
+    return appointment;
   });
 }
 

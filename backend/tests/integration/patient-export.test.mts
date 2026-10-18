@@ -3,7 +3,7 @@
 // (sections from each module's service, tx hashes, no secrets), bounded
 // streaming, failure handling, stale-claim recovery, and expiry/cleanup.
 // Self-contained, same embedded-Postgres pattern as booking.test.mts — see
-// that file's header for why. Own port (5438) so it runs alongside the
+// that file's header for why. Own port (5442) so it runs alongside the
 // other integration files.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -16,7 +16,7 @@ import jwt from 'jsonwebtoken';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5438;
+const PORT = 5442;
 const runId = Date.now();
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-export-pg-'));
