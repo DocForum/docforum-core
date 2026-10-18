@@ -3,6 +3,7 @@ import * as paymentsService from '../services';
 import { linkWalletSchema, createPaymentIntentSchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
+import { auditActor } from '../../../middleware/request-id';
 
 // BigInt doesn't serialize via JSON.stringify by default — every response
 // here that carries one converts to a string explicitly.
@@ -57,19 +58,19 @@ export async function getIntent(req: Request, res: Response) {
 
 export async function fundIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
-  const intent = await paymentsService.fundPaymentIntent(id);
+  const intent = await paymentsService.fundPaymentIntent(auditActor(req), id);
   res.status(200).json(serializeIntent(intent));
 }
 
 export async function releaseIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
-  const intent = await paymentsService.releasePaymentIntent(id);
+  const intent = await paymentsService.releasePaymentIntent(auditActor(req), id);
   res.status(200).json(serializeIntent(intent));
 }
 
 export async function refundIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
-  const intent = await paymentsService.refundPaymentIntent(id);
+  const intent = await paymentsService.refundPaymentIntent(auditActor(req), id);
   res.status(200).json(serializeIntent(intent));
 }
 

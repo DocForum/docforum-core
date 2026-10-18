@@ -3,6 +3,7 @@ import * as doctorsService from '../services';
 import { setVerificationStatusSchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
+import { auditActor } from '../../../middleware/request-id';
 
 export async function getMe(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
@@ -13,6 +14,6 @@ export async function getMe(req: Request, res: Response) {
 export async function setVerification(req: Request, res: Response) {
   const { status } = setVerificationStatusSchema.parse(req.body);
   const doctorProfileId = getParam(req, 'doctorProfileId');
-  const profile = await doctorsService.setVerificationStatus(doctorProfileId, status);
+  const profile = await doctorsService.setVerificationStatus(auditActor(req), doctorProfileId, status);
   res.status(200).json(profile);
 }

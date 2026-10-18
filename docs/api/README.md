@@ -112,8 +112,8 @@ account also pays bcrypt's comparison cost, so timing doesn't leak either).
 user is stuck behind: body `{ email?, ip? }` (at least one), returns
 `{ cleared }`. Clear **both** when a lock was taken out via the account's IP,
 or the IP bucket will keep refusing them. It's logged to the server console
-— there is no `AuditEvent` table yet (known gap), so that's the interim
-record.
+— it isn't wired into `AuditEvent` yet (issue #43 covered booking, doctor
+verification and payments), so that's the interim record.
 
 Under the hood this uses Express's `trust proxy` setting via the
 `TRUST_PROXY` env var: `1` behind Render's single proxy hop, `false` (the
@@ -151,71 +151,33 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 | `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
 
-## Payments (`/payments`) — `backend/src/modules/payments`
+## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
 
-Custodial v1 escrow actions (`POST /payments/wallet-link`,
-`GET/POST /payments/intents/...`) exist and are admin/facility-gated —
-see `docs/adr/0004-custodial-payments-v1.md` for why. The table below
-covers the SEP-10 endpoints added for the non-custodial flow
-(`docs/adr/0005`, issue #77).
+Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
+well-formed inbound `X-Request-Id` (8–128 chars of `[A-Za-z0-9._:-]`) is
+kept, anything else is replaced with a UUID. Audit events store it, so an
+event can be traced to the request (and logs) that caused it.
 
-### SEP-10 Stellar Web Authentication (issue #77)
-
-Proves the caller controls a Stellar address before it can ever be
-trusted as a payer or payee. **Both endpoints require a verified-email
-account** (same guard as every payments mutation — issue #34), and
-neither issues a DocForum session: your normal access token
-authenticates the *user*; SEP-10 proves control of the *wallet*.
-
-| Method & path | Auth | Body/query | Notes |
-|---|---|---|---|
-| `GET /payments/sep10/challenge` | access token (+ verified email) | `?account=G…` | Returns `200 { transaction, expires_in, network_passphrase }` — the base64 XDR of a server-signed SEP-10 challenge (5-minute time bounds by default, `SEP10_CHALLENGE_TIMEOUT_SECONDS`). Hand `transaction` to the user's wallet for signing (build/sign/submit all stay server-side per `docforum-web`'s hard rule — the browser only relays XDR). `400` if `account` is missing, malformed, or fails the Stellar strkey checksum (`code: 'SEP10_INVALID_ACCOUNT'`). |
-| `POST /payments/sep10/verify` | access token (+ verified email) | `{ transaction }` (signed challenge XDR) | Runs the full SEP-10 server verification list plus this server's own single-use/binding rules. Returns `200 { account, signers, userId }` on success, and the nonce is consumed — a challenge is single-use, even concurrently. |
-
-**What verify checks, in order** (SEP-10's server verification list):
-
-1. XDR deserializes as a transaction; sequence number is 0; source is
-   the server's SEP-10 signing account; time bounds are present, bounded
-   and unexpired.
-2. The first operation is Manage Data, sourced by `account`, keyed
-   `<home domain> auth`, with a spec-sized (48-random-bytes base64)
-   nonce; later operations are server-sourced Manage Data including
-   `web_auth_domain` equal to this server's configured domain.
-3. The server's signature on the challenge is valid.
-4. The nonce exists in this server's issuance ledger (`Sep10Challenge`),
-   is still unconsumed and unexpired, and is bound to **the calling user
-   and the exact account in the challenge** — a signed challenge is
-   never redeemable by another user or for another account.
-5. Client signatures: for a **funded** account, signer weights loaded
-   from Horizon must meet the account's **medium threshold**;
-   for an **unfunded account** (not yet created on the network — no
-   signers/thresholds exist to weigh), the challenge must be signed by
-   the account's **master key**, per the SEP-10 spec. A Horizon outage is
-   a `502`, never silently treated as "unfunded".
-6. The nonce is consumed with a single conditional UPDATE — of several
-   concurrent submissions of the same signed challenge, exactly one
-   succeeds.
-
-**Errors from `POST /payments/sep10/verify`** (all also carry a `message`):
-
-| Status | `code` | Meaning |
+| Method & path | Auth | Notes |
 |---|---|---|
-| 400 | `SEP10_INVALID_CHALLENGE` | Not a valid/well-formed SEP-10 challenge: bad XDR, wrong source, non-zero sequence, expired time bounds, wrong home domain or `web_auth_domain`, extra operations, or a missing/wrong server signature. |
-| 401 | `SEP10_INVALID_SIGNATURE` | Well-formed challenge, but the client signature is missing, from a non-signer, or below the account's medium threshold (incl. the unfunded-account master-key rule). A failed verification does NOT burn the nonce. |
-| 401 | `SEP10_CHALLENGE_UNKNOWN` | The challenge's nonce was never issued by this server (or its record was pruned). |
-| 401 | `SEP10_CHALLENGE_EXPIRED` | The issued nonce record is past its expiry (stricter than the transaction time bounds). |
-| 401 | `SEP10_CHALLENGE_ALREADY_USED` | Replay — the nonce is already consumed. |
-| 403 | `SEP10_CHALLENGE_NOT_FOR_CALLER` | The challenge was issued to a different user or for a different account. |
-| 401 / 403 | — | Standard auth failures: no/invalid access token (`401`), unverified email (`403 EMAIL_NOT_VERIFIED`). |
+| `GET /admin/audit-events` | admin | Newest first. Query: `entityType`, `entityId` (requires `entityType`), `actorUserId`, `from` / `to` (ISO-8601 date or date-time, inclusive), `limit` (1–200, default 50), `cursor`. Unknown parameters are `400`. Returns `{ items, nextCursor }`; pass `nextCursor` back as `cursor` for the next page (`null` = last page). |
 
-**Configuration** (see `.env.example`; the first three are required at
-server startup — the server refuses to boot without them, and secrets
-are never logged): `SEP10_SIGNING_SECRET` (a dedicated key, separate
-from `PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` — it only signs
-web-auth challenges, so it can be rotated without touching money-moving
-keys), `SEP10_HOME_DOMAIN`, `SEP10_WEB_AUTH_DOMAIN`, plus optional
-`SEP10_NETWORK_PASSPHRASE`, `SEP10_HORIZON_URL` (both default to
-testnet) and `SEP10_CHALLENGE_TIMEOUT_SECONDS` (default 300).
+Item shape: `{ id, actorUserId, actorRole, entityType, entityId, action,
+fromState, toState, requestId, metadata, createdAt }`. `metadata` is a small
+flat map of ids/codes (never personal data). Ordering is
+`(createdAt DESC, id DESC)` and the cursor is a keyset position on that
+pair, so paging never skips or repeats an event; events written after a scan
+started appear at the front of a new scan, not mid-way through the old one.
+`400 INVALID_CURSOR` for a malformed cursor; `400` if `from` is after `to`.
+
+Recorded today: `appointment.booked`, `doctor.verification_status_changed`,
+`payment_intent.{funded,released,refunded}` — see ARCHITECTURE.md §4.10.
+There is no write or delete endpoint, and the table rejects UPDATE/DELETE
+in the database.
+
+Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
+return `409` when the intent changed state concurrently between the check
+and the write (previously the second write silently overwrote the first).
 
 ## Not yet implemented
 
