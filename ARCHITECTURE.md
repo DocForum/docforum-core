@@ -33,6 +33,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | Realtime (messaging/notifications) | WebSocket gateway (or managed pub/sub, e.g. Pusher/Ably) behind an internal `notifications` interface | Swappable; not custom infra from day one. |
 | Video/voice (if/when needed) | Third-party embed (Twilio/Daily/Agora) behind an interface, not built in-house | PRD §8.3.1 — explicitly flagged as overengineering risk if built custom. |
 | File/result storage | Object storage (S3-compatible) for lab result attachments | Never store clinical files directly in Postgres rows. |
+| Field-level encryption | AES-256-GCM envelope encryption (`backend/src/utils/field-encryption.ts`, Phase 8 issue #46) for clinical free text (`Consultation.notes`, `Referral.snapshotNotes`) | Limits blast radius of a leaked DB dump / over-broad read replica — encryption at rest doesn't protect against those. Versioned key-id prefix enables rotation without rewriting every row. **Constraint: encrypted fields cannot be searched or indexed** — they're write-once/read-decrypt blobs. |
 | Background jobs | Simple queue (BullMQ on Redis) for reminders, order-expiry checks, notification delivery | Needed for FR-15/16 and the "orphaned order" hard question (PRD §8.1.3). |
 | Infra | Docker Compose for local dev; containerized deploy target TBD (not decided — see Open Questions in ROADMAP) | Keep infra decisions deferred until a real deploy target is chosen; don't overbuild CI/CD for a repo with no code yet. |
 
@@ -53,6 +54,7 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `lab-orders` — lab order issuance and versioning.
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
+- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking, doctor verification, payment fund/release/refund. **Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here.
 
 ## 4. Data models
 
@@ -121,9 +123,11 @@ IntakeForm
 ```
 Consultation
   id, appointment_id (FK, unique)
-  notes, outcome (enum: resolved|referred|follow_up_needed)
+  notes [ENCRYPTED — Phase 8 issue #46, see §2 field-level encryption row]
+  outcome (enum: resolved|referred|follow_up_needed)
   created_at
 ```
+**Encryption note:** `notes` is stored as an AES-256-GCM envelope (`v1:<iv>:<tag>:<data>`) via `backend/src/utils/field-encryption.ts`. Because it's encrypted, it **cannot be searched or indexed** — any future full-text search over consultation notes must decrypt in the application layer or use a separate searchable index, not a Postgres index on this column. Key rotation: `backend/scripts/rotate-field-keys.mjs` re-encrypts in batches.
 
 ### 4.4 Referral
 ```
@@ -131,7 +135,7 @@ Referral
   id, source_consultation_id (FK)
   referring_doctor_id, target_specialty_id, target_doctor_id (nullable)
   snapshot_intake_id (FK -> IntakeForm, copy reference, immutable)
-  snapshot_notes (text copy of the referring consultation notes at time of referral — immutable)
+  snapshot_notes [ENCRYPTED — Phase 8 issue #46] (text copy of the referring consultation notes at time of referral — immutable)
   status (enum: pending|accepted|declined|completed|expired)
   resulting_appointment_id (nullable FK -> Appointment)
   created_at, updated_at
@@ -197,6 +201,36 @@ LoginAttempt (issue #35)
 `User` fields added in Phase 8 live in §4.1; the `email_verified_at` /
 `EmailVerificationToken` pair (issue #34) is in §4.1 as well.
 
+### 4.10 Audit trail (Phase 8, issue #43)
+```
+AuditEvent
+  id, actor_user_id (nullable — null = system), actor_role (nullable Role)
+  entity_type ('Appointment' | 'DoctorProfile' | 'PaymentIntent' so far), entity_id
+  action (dotted, e.g. 'appointment.booked'), from_state, to_state (nullable)
+  request_id (X-Request-Id of the causing request), metadata (jsonb, nullable)
+  created_at
+  # APPEND-ONLY: no update/delete path in code, and BEFORE UPDATE/DELETE
+    (row) + BEFORE TRUNCATE (statement) triggers reject mutation in the
+    database. A future retention policy must drop/recreate them in its own
+    reviewed migration.
+  # No foreign keys on purpose: an ON DELETE action would have to rewrite
+    audit rows (forbidden), and RESTRICT would let the trail block account
+    lifecycle (e.g. issue #41's purge). Ids are recorded as facts.
+  # Written only by audit.record() inside the transaction of the change it
+    describes — the event exists iff the change committed.
+  # metadata: <= 16 flat scalar keys, strings <= 200 chars; keys that look
+    like personal/secret data (name, email, phone, dob, notes, intake,
+    password, secret, token, key, body, payload, …) are refused. Never PHI.
+  # created_at is stamped by Prisma on the app server per row (ms
+    precision); same-millisecond rows are ordered by id.
+  # indexes: (entity_type, entity_id, created_at), (actor_user_id,
+    created_at), (created_at, id) — the last backs the admin cursor.
+```
+Transitions recorded (action: from → to):
+- `appointment.booked`: `null → scheduled` (metadata: slot id, doctor profile id, origin)
+- `doctor.verification_status_changed`: previous → new verification status (read under `FOR UPDATE`; a no-op set records nothing)
+- `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)
@@ -230,7 +264,7 @@ LoginAttempt (issue #35)
 1. What happens to `AvailabilitySlot.status = 'held'` if a booking transaction fails/times out mid-flight — is there a TTL to release the hold? (Needed or slots leak into permanent limbo.)
 2. Referral `expired` status exists in the enum but no expiry job is designed yet — orphaned referrals (PRD 8.1.3 sibling problem).
 3. No schema support yet for a doctor working across multiple facilities/locations (PRD edge case 6) — `AvailabilitySlot` currently assumes one calendar per doctor.
-4. No audit-log table — every FR around auditability (PRD §7) currently relies on `created_at/updated_at` timestamps only, which is not sufficient for "who changed what." A dedicated `AuditEvent` table is likely needed before this ships to real patients.
+4. No audit-log table — every FR around auditability (PRD §7) currently relies on `created_at/updated_at` timestamps only, which is not sufficient for "who changed what." A dedicated `AuditEvent` table is likely needed before this ships to real patients. **Foundation resolved 2026-10-17 (issue #43):** `AuditEvent` (§4.10) + `audit.record()` in the same transaction as the change, append-only at the DB level, wired into booking, doctor verification and payment fund/release/refund. **Still open:** Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must be wired as they're built; the admin login-throttle clear (`/auth/login-attempts/clear`) still only logs to the console; the app connects as the database owner, which could disable the triggers — enforcing append-only against the owner needs a separate least-privilege DB role (deployment work, issue #22).
 5. CSRF on the cookie-authenticated routes — the refresh cookie has to be `SameSite=None; Secure` (the Pages frontend is a different site — see `docs/adr/0003`), which means any site the patient visits can make their browser send it to `/auth/refresh` and `/auth/logout`. **Resolved 2026-10-15 (issue #37):** a per-session CSRF token is bound into the refresh token and required in the `X-CSRF-Token` header, the `Origin` header is validated against an explicit allowlist, and CORS is now a per-environment allowlist (`CORS_ORIGINS`) instead of one configured string. The double-submit cookie pattern — the usual answer — is *not* usable here: a cookie set by this API is a third-party cookie to `docforum.github.io`, so the frontend's JavaScript can never read it; the token travels in the login/refresh response body instead. A request with no `Origin` (curl, server-to-server) is allowed through the Origin check but still needs the token. See `backend/src/middleware/csrf.ts`, and `docs/api/README.md` for what the client must send. Consequence: refresh cookies issued before this change carry no `csrf` claim and are rejected, i.e. existing sessions need one re-login.
 
 ### 6.3 What's overengineered (architecture-level, for v1)?

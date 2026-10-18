@@ -1,6 +1,6 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-09-26
+Last updated: 2026-10-17
 Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
 `docs/adr/0004-custodial-payments-v1.md`) built and tested. Phases 2-6
 and 8-9 scoped into GitHub issues (#1-#22, #21 closed); Phase 7 is
@@ -107,15 +107,16 @@ for status and issue links.
 - [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 — #34 and #35 are merged; #37 and #39 are open PRs — plus one dependency-hardening item (#47, Prisma upgrade), which is done. Each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
+**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 — #34 and #35 are merged; #37 and #39 are open PRs. An access-control test suite (#44) is built and tested. Each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
 
 - [x] Email verification on signup, with restricted access for unverified accounts. `User.emailVerifiedAt` + `EmailVerificationToken` (hashed, expiring, single-use), `POST /auth/verify-email`, `POST /auth/verify-email/resend`, and a `requireVerifiedEmail` guard on booking + payment mutations (never on login/browsing). Migration backfills existing rows as verified. Tracked as [issue #34](https://github.com/DocForum/docforum-core/issues/34) (High, 200 pts) — **Done**, merged as PR #137. Found a real dependency while building it: the email *provider* is still an open decision (Phase 6, issue #17), so links can't be delivered on a hosted deployment yet — see `backend/src/modules/auth/services/email-dispatcher.ts` and ARCHITECTURE.md §6.1.5.
 - [x] Login brute-force protection: per-account and per-IP throttling with backoff. Postgres-backed buckets (`LoginAttempt`), a single conditional upsert so concurrent failures are counted atomically, exponential backoff with `Retry-After`, a bounded temporary lock, an admin clear endpoint, a prune interval in `src/server.ts`, and a `TRUST_PROXY` setting so the IP isn't Render's proxy address. Tracked as [issue #35](https://github.com/DocForum/docforum-core/issues/35) (High, 200 pts) — **Done**, merged as PR #138.
 - [ ] CSRF protection for the cookie-authenticated refresh/logout endpoints, plus an explicit per-environment CORS allowlist. A per-session CSRF token bound into the refresh token (not a double-submit cookie — a cookie set by this API is third-party to `docforum.github.io`, so the web client can't read it), a required `X-CSRF-Token` header on `/auth/refresh` + `/auth/logout`, an `Origin` allowlist check, and `CORS_ORIGINS` replacing the single configured origin. Tracked as [issue #37](https://github.com/DocForum/docforum-core/issues/37) (High, 200 pts) — **in progress**, branch `feat/csrf-protection-for-cookie-authenticated-refresh`.
 - [ ] Admin account lifecycle: secure bootstrap CLI, admin invites, and account deactivation. Tracked as [issue #39](https://github.com/DocForum/docforum-core/issues/39) (High, 200 pts) — **in progress**.
-- [x] Upgrade Prisma to clear the high-severity `deepmerge-ts` advisory (`npm audit --omit=dev`). `prisma` + `@prisma/client` 6.19.3 → **7.10.1**, the lowest *stable* release whose `@prisma/config` depends on the patched `deepmerge-ts@8.0.2` — there is no 6.x backport (every stable 6.x pins `deepmerge-ts@7.1.5`), and npm's `latest` tag is still a `8.0.0-rc` prerelease. That means taking v7's mandatory **driver adapter**: `pg` + `@prisma/adapter-pg` are new runtime dependencies, `src/db/prisma-client.ts` constructs the client with one (bare `new PrismaClient()` now throws), and the CLI's datasource URL moved into the new `backend/prisma.config.ts` (v7 rejects `url` in the schema and no longer loads `.env` implicitly). The `prisma-client-js` generator was kept on purpose, so the client still generates into `node_modules/@prisma/client` and the backend stays CommonJS — no import churn across the 14 call sites. Also pinned `engines.node` (v7 needs >= 20.19), added a high-severity production-dependency CI gate (`backend/scripts/audit-gate.mjs`), and added `backend/scripts/check-migration-drift.mjs`, which proved the migration history still reproduces the schema exactly. Full reasoning and rejected alternatives in `docs/adr/0006`. Tracked as [issue #47](https://github.com/DocForum/docforum-core/issues/47) (High, 200 pts) — **Done**.
+- [ ] `AuditEvent` table and write path — **foundation done, Phase 3/4 wiring pending.** Append-only `AuditEvent` (DB triggers reject UPDATE/DELETE/TRUNCATE), `auditService.record()` that must run inside the state change's own transaction, request ids on every response, and `GET /admin/audit-events` (entity/actor/date filters, keyset cursor). Wired into appointment booking, doctor verification and payment fund/release/refund. Referrals, prescriptions, lab orders and fulfillment (Phases 3–5) must call `record()` when they land; the login-throttle admin clear still logs to console only. Tracked as [issue #43](https://github.com/DocForum/docforum-core/issues/43) (High, 200 pts) — **in review**, branch `feat/43-auditevent-foundation`.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
+- [x] Access-control test suite: who may read intake, consultation and payment data. Integration tests (`tests/integration/access-control.test.mts`) establishing the test harness and access-control patterns for the three PHI data categories; intake/consultation test cases are scaffolded as placeholders until Phase 2/3 routes exist, payment-intent access cases exercise the live admin-gated routes. Tracked as [issue #44](https://github.com/DocForum/docforum-core/issues/44) — **Done**.
 - [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. Not yet scoped into an issue.
 - [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence). Tracked as [issue #20](https://github.com/DocForum/docforum-core/issues/20) (Trivial, 100 pts) — a decision task, unblocked now.
 
@@ -381,35 +382,14 @@ for status and issue links.
   tests assert a
   forged cross-origin request is rejected while the legitimate cross-site
   client still succeeds.
-
-- 2026-10-16 — Phase 8, issue #47 (dependency hardening): `prisma` +
-  `@prisma/client` upgraded 6.19.3 → **7.10.1**, the lowest stable release
-  that clears the high-severity `deepmerge-ts` advisory reported by
-  `npm audit --omit=dev`. No 6.x backport exists (every stable 6.x pins
-  `deepmerge-ts@7.1.5`), and npm's `latest` tag is still a `8.0.0-rc`
-  prerelease, so clearing it meant taking v7's breaking changes: a **driver
-  adapter is now mandatory** (`pg` + `@prisma/adapter-pg` added;
-  `src/db/prisma-client.ts` builds the client with one — bare
-  `new PrismaClient()` throws), the CLI's datasource URL moved from the
-  schema into a new `backend/prisma.config.ts` (which also loads `.env`
-  itself, since v7 stopped doing that), and `prisma migrate diff`'s flags
-  changed (`--to-schema-datamodel` → `--to-schema`,
-  `--shadow-database-url` removed; `scripts/gen-migration.mjs` updated). The
-  `prisma-client-js` generator was kept deliberately so the client still
-  generates into `node_modules/@prisma/client` and this backend stays
-  CommonJS — zero import churn across the 14 existing call sites. Also pinned
-  `engines.node` (`^20.19.0 || ^22.12.0 || >=24.0.0`, required by v7), added
-  a high-severity production-dependency CI gate
-  (`backend/scripts/audit-gate.mjs`, `npm run audit:prod`) and a repeatable
-  migration-drift check (`backend/scripts/check-migration-drift.mjs`), and
-  added `tests/integration/payments-bigint.test.mts` to cover the
-  `amountStroops` (BigInt) risk hermetically, since the testnet test that was
-  guarding it cannot run without credentials. Full reasoning and rejected
-  alternatives (including an `overrides` pin and the `8.0.0-rc` tag) in
-  `docs/adr/0006`; Render deploy notes in `docs/adr/0003`. Verified:
-  migration drift empty ("No difference detected"), typecheck and `build`
-  clean, 30 unit + 25 integration tests passing, and the audit gate confirmed
-  to fail when a knowingly vulnerable package is added. One item left
-  unverified: the testnet payment test needs
-  `PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` and a funded payer
-  identity, none of which exist in the contributor environment.
+- 2026-10-17 — Issue #43 (AuditEvent foundation) opened as a PR: the
+  `AuditEvent` table (append-only, enforced by DB triggers; no FKs on
+  purpose), an `audit` module whose `record()` refuses to run outside a
+  transaction, an `X-Request-Id` middleware, and `GET /admin/audit-events`
+  with a keyset cursor. Wired into booking (inside `bookSlot`'s existing
+  transaction, after the slot claim — the concurrency guarantee is
+  unchanged), doctor verification (previous status read `FOR UPDATE`) and
+  payment fund/release/refund (status writes now conditional on the
+  observed state, so a racing second action gets 409 instead of silently
+  overwriting). Rollback coupling proven with a real injected DB failure,
+  not a mock. Phase 3/4 wiring explicitly left pending.

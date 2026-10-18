@@ -40,7 +40,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - No routing rule yet for a referral with no specific target doctor (which specialist gets it?).
 - No expiry/TTL job for held slots or pending referrals — currently just an enum value with no worker.
 - Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables.
-- No `AuditEvent` table yet, despite PRD requiring auditability — needed before real patient data.
+- `AuditEvent` foundation exists (Phase 8, issue #43 — ARCHITECTURE.md §4.10): append-only (DB triggers), written by `auditService.record(tx, …)` **inside the same transaction** as the change. Wired for booking, doctor verification and payment fund/release/refund only — **Phase 3/4 transitions must call it when they're built.** Never put PHI in `metadata`.
 - No email/SMS provider integrated yet (Phase 6, issue #17) — email verification (issue #34) therefore can't deliver its link on a hosted deployment; `backend/scripts/mark-email-verified.mjs` is the interim operator path.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 
