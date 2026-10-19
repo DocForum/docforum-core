@@ -123,6 +123,15 @@ describe('payments module against live testnet', () => {
     expect(funded.escrowId).not.toBeNull();
     expect(funded.stellarTxHash).toBeTruthy();
 
+    const transactionResponse = await fetch(`https://horizon-testnet.stellar.org/transactions/${funded.stellarTxHash}`);
+    if (!transactionResponse.ok) {
+      throw new Error(`Unable to retrieve testnet fee measurement: HTTP ${transactionResponse.status}`);
+    }
+    const transaction = (await transactionResponse.json()) as { fee_charged: string };
+    console.log(
+      `[payout privacy testnet] ${process.env.PAYOUT_PRIVACY_MODE ?? 'facility'} funding fee: ${transaction.fee_charged} stroops`,
+    );
+
     const released = await paymentsService.releasePaymentIntent(TEST_ACTOR, intent.id);
     expect(released.status).toBe('released');
   }, 60_000);

@@ -13,6 +13,7 @@ import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
 import { loadEscrowSdk } from './escrow-sdk-loader';
+import { resolveEscrowPayee } from './payout-privacy';
 import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
@@ -125,11 +126,17 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   if (!walletLink) throw new HttpError(409, 'The facility for this payment has no linked wallet.');
 
   const { platformPayer, platformReleaser, escrowContractId, escrowTokenId } = await requirePaymentsConfig();
+  const payee = resolveEscrowPayee({
+    facilityAddress: walletLink.stellarPublicKey,
+    mode: config.payments.payoutPrivacyMode,
+    poolAddress: config.payments.payoutPrivacyPoolAddress,
+    production: process.env.NODE_ENV === 'production',
+  });
   const client = await escrowClient(escrowContractId);
 
   const { escrowId, txHash } = await client.createEscrow({
     payer: platformPayer,
-    payee: walletLink.stellarPublicKey,
+    payee,
     token: escrowTokenId,
     amount: intent.amountStroops,
     // The PaymentIntent's own id is the opaque condition_ref — the
