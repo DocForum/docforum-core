@@ -12,9 +12,19 @@
 // Idempotent: upserts by email / (facilityProfileId, capabilityType,
 // detail), so re-running it doesn't duplicate anything.
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import bcrypt from 'bcryptjs';
 
-const prisma = new PrismaClient();
+// Prisma 7 (issue #47/ADR 0006): the client requires a driver adapter —
+// the bare `new PrismaClient()` of Prisma 6 throws at connect time. Same
+// construction as src/db/prisma-client.ts, reading the connection string
+// from DATABASE_URL.
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({
+    connectionString: process.env.DATABASE_URL,
+    connectionTimeoutMillis: 5_000,
+  }),
+});
 
 // Dev-only password. The seed never runs in production; these accounts
 // exist so a developer can log in as a facility without an admin-invite
