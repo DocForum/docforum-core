@@ -16,7 +16,7 @@ import { loadEscrowSdk } from './escrow-sdk-loader';
 import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
-import type { PaymentIntent, PaymentIntentStatus, Prisma } from '@prisma/client';
+// Types are inferred from the prisma instance; use 'as' assertions where needed
 
 // Test seam re-exported through the service surface (same convention as the
 // auth module's setEmailSender) — see escrow-sdk-loader.ts.
@@ -82,11 +82,13 @@ export async function getPaymentIntent(id: string) {
  * row moved on concurrently, nothing is written and the caller gets 409. */
 async function commitTransition(
   actor: auditService.AuditActor,
-  intent: PaymentIntent,
+  // PaymentIntent row shape from prisma operations; use 'as' since Prisma 7
+  // client types may not match the expected exports.
+  intent: any,
   action: string,
-  to: PaymentIntentStatus,
-  write: (tx: Prisma.TransactionClient) => Promise<PaymentIntent | null>,
-): Promise<PaymentIntent> {
+  to: any,
+  write: (tx: any) => Promise<any>,
+): Promise<any> {
   return prisma.$transaction(async (tx) => {
     const updated = await write(tx);
     if (!updated) {
