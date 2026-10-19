@@ -54,6 +54,7 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `lab-orders` — lab order issuance and versioning.
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
+- `payments` — `PaymentIntent`, the facility payee `WalletLink`, and the patient payer `PatientWalletLink` (§4.12). Relational metadata only; every Stellar call goes through `@docforum/escrow-sdk` via `services/escrow-sdk-loader.ts`. Assets are allowlisted per environment (issue #79), and the prepare half of ADR 0005 (issue #80) builds the unsigned patient transaction without moving funds.
 - `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking, doctor verification, payment fund/release/refund. **Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here.
 
 ### 3.1 Patient data export registry (Phase 8, issue #40)
@@ -72,9 +73,9 @@ export. The pieces:
 - Current sections: `account` (auth: email/phone/role, never the password
   hash), `profile` (patients), `appointments` (appointments, with slot times
   from `availability` and the doctor's name from `doctors`, both via their
-  services), `payments` (payments: amounts, status, on-chain tx hash /
-  escrow id / contract id; the platform's signing secrets never live in a
-  row and can't reach an export).
+  services), `payments` (version 2: amount in the asset's smallest unit,
+  asset code, status, on-chain tx hash / escrow id / contract id; the
+  platform's signing secrets never live in a row and can't reach an export).
 
 **Adding a module with patient data (referrals, prescriptions, lab orders,
 …):** export a `PatientExportSection` from that module's `services/` and add
@@ -264,7 +265,8 @@ AuditEvent
 Transitions recorded (action: from → to):
 - `appointment.booked`: `null → scheduled` (metadata: slot id, doctor profile id, origin)
 - `doctor.verification_status_changed`: previous → new verification status (read under `FOR UPDATE`; a no-op set records nothing)
-- `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
+- `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, asset code, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
+- `payment_intent.prepared` `created → awaiting_signature`, `payment_intent.prepare_expired` `awaiting_signature → created` (issue #80). Actor is the patient for prepare and the system for expiry; metadata adds the prepared transaction hash.
 ### 4.11 Patient data export (Phase 8, issue #40)
 ```
 PatientExport
@@ -291,6 +293,44 @@ PatientExportChunk
 Bundle format (schemaVersion 1): `{ format: "docforum.patient-export",
 schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }`
 — see §3.1 for where sections come from.
+
+### 4.12 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
+```
+PaymentIntent
+  id, order_type/order_id (opaque, unvalidated until Phase 4 exists)
+  status (enum: created|awaiting_signature|submitting|escrowed|released|refunded|failed)
+  patient_profile_id (FK), facility_id (FK)
+  amount (bigint — smallest unit of asset_code; never scaled in this repo)
+  asset_code, token_contract_id (SAC address; token_contract_id is nullable
+    only for pre-#79 rows, which resolve ESCROW_TOKEN_ID as native XLM)
+  escrow_id, stellar_tx_hash, soroban_contract_id (nullable — set on fund)
+  prepared_tx_hash, prepared_xdr, prepared_expiry_ledger, prepared_expires_at,
+    refund_after (nullable — live only in awaiting_signature; cleared on expiry)
+  created_at, updated_at
+  # Every status write is a conditional UPDATE on the observed state, in the
+    same transaction as its AuditEvent (§4.10). Prepare is
+    created -> awaiting_signature; expiry is awaiting_signature -> created.
+    `submitting` is reserved for ADR 0005's submit half (not built).
+
+PatientWalletLink
+  patient_profile_id (unique FK -> PatientProfile, cascade)
+  stellar_public_key, verified_at
+  # The PAYER wallet (ADR 0005). Only prepared rows are written by the
+    SEP-10 flow, which is not built yet; prepare requires one and returns
+    409 WALLET_NOT_LINKED otherwise.
+
+WalletLink
+  facility_id (unique FK -> FacilityProfile, cascade)
+  stellar_public_key
+  # The PAYEE/payout wallet, facility-managed (ADR 0004). Unchanged by #79.
+```
+Assets are an environment allowlist (`PAYMENT_ASSETS`; testnet defaults XLM +
+USDC SACs) rather than a fixed enum: an intent in any other asset is
+rejected at creation. Before funding (and preparing) an issued asset, the
+payee's Horizon account is checked for an authorised trustline
+(`PAYEE_TRUSTLINE_MISSING`); native XLM needs none. Only assets without
+clawback/transfer fees/rebasing belong on the list — escrow threat model
+T5, enforced as a curated config policy.
 
 ## 5. Key flows (sequence-level, not code)
 

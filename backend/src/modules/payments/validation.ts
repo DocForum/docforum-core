@@ -16,12 +16,20 @@ export const createPaymentIntentSchema = z.object({
   orderId: z.string().min(1),
   patientProfileId: z.string().min(1),
   facilityId: z.string().min(1),
-  // Stroops (native XLM's smallest unit), matching
-  // @docforum/escrow-sdk's bigint amount exactly. Sent as a string over
-  // JSON (a raw number can't safely carry bigint precision) and parsed
-  // here.
-  amountStroops: z
+  // Asset code, matched against the environment's allowlist in the
+  // service (issue #79). Defaults to XLM so pre-#79 clients that only
+  // rename `amountStroops` keep working.
+  assetCode: z
     .string()
-    .regex(/^[1-9][0-9]*$/, 'amountStroops must be a positive integer string.')
+    .regex(/^[A-Z0-9]{1,12}$/, 'assetCode must be 1-12 uppercase alphanumeric characters.')
+    .default('XLM'),
+  // Smallest unit of `assetCode` (stroops for XLM, 7-decimal units for
+  // USDC), matching @docforum/escrow-sdk's bigint amount exactly. Sent as a
+  // string over JSON (a raw number can't safely carry bigint precision)
+  // and parsed here. The server never scales it, so it never assumes a
+  // particular asset's decimals.
+  amount: z
+    .string()
+    .regex(/^[1-9][0-9]*$/, 'amount must be a positive integer string.')
     .transform((value) => BigInt(value)),
 });

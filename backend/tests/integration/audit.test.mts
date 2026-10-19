@@ -83,7 +83,7 @@ describe('AuditEvent foundation', () => {
 
   async function createIntent() {
     return prisma.paymentIntent.create({
-      data: { orderType: 'lab_order', orderId: `order-${Math.random()}`, patientProfileId: (await prisma.patientProfile.findFirstOrThrow()).id, facilityId, amountStroops: 5000n },
+      data: { orderType: 'lab_order', orderId: `order-${Math.random()}`, patientProfileId: (await prisma.patientProfile.findFirstOrThrow()).id, facilityId, assetCode: 'XLM', amount: 5000n },
     });
   }
 
@@ -296,7 +296,7 @@ describe('AuditEvent foundation', () => {
         actorUserId: admin.id,
         actorRole: 'admin',
         requestId: `pay-fund-${runId}`,
-        metadata: { orderType: 'lab_order', amountStroops: '5000', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
+        metadata: { orderType: 'lab_order', amount: '5000', assetCode: 'XLM', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
       });
       expect((events[0]!.metadata as Record<string, unknown>).escrowId).toMatch(/^\d+$/);
       const serialized = JSON.stringify(events);

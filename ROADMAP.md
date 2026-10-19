@@ -1,6 +1,6 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-10-17
+Last updated: 2026-10-19
 Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
 `docs/adr/0004-custodial-payments-v1.md`) built and tested. Phases 2-6
 and 8-9 scoped into GitHub issues (#1-#22, #21 closed); Phase 7 is
@@ -78,7 +78,8 @@ for status and issue links.
 
 ## Phase 5.5 — Payments (consumer side)
 **Status: Built, decoupled from Phase 4/5 rather than blocked by them — see docs/adr/0004-custodial-payments-v1.md.** `docforum-escrow` issues #4/#5 (SDK + distribution decision) closed, so the original blocker cleared; rather than wait further on Phase 4/5 (Orders/Facilities, still not built), `PaymentIntent`/`WalletLink` were designed with opaque, unvalidated `orderType`/`orderId` fields instead of hard FKs to `Prescription`/`LabOrder`, so this phase didn't have to wait on two more unbuilt phases. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
-- [x] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — no PHI). `WalletLink` scoped to the **facility** (payee), not the patient — see ADR 0004. Amount is raw stroops (`BigInt`), not the originally-scaffolded `Decimal`+`"USDC"` — matches what's actually proven end-to-end on testnet; multi-asset support is future work, not assumed.
+- [x] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — no PHI). `WalletLink` scoped to the **facility** (payee), not the patient — see ADR 0004. Amount is a token-agnostic `BigInt` in the asset's smallest unit (renamed from `amountStroops` by #79).
+- [x] Payment asset support — USDC + native XLM per `PaymentIntent`, with a per-environment allowlist, payee trustline check, and a lossless `amountStroops → amount` migration. Tracked as [issue #79](https://github.com/DocForum/docforum-core/issues/79). Adds `assetCode`/`tokenContractId` to `PaymentIntent`; `PAYMENT_ASSETS` is the allowlist (testnet defaults: XLM + USDC SACs). Funding a non-native asset now fails with `409 PAYEE_TRUSTLINE_MISSING` before any on-chain call if the facility's linked wallet can't hold it.
 - [x] Added `@docforum/escrow-sdk` as a real dependency (via the GitHub Release tarball URL — see `docforum-escrow`'s ADR 0003); wired `payments/services` to call it through a dynamic `import()` (`escrow-sdk-loader.ts` — the SDK is ESM-only, this backend is CommonJS).
 - [ ] On order issuance, create a `PaymentIntent` (`created` status) — still manual/admin-triggered (`POST /payments/intents`) since Phase 4 order issuance doesn't exist yet to trigger it automatically.
 - [x] On patient funding action, call SDK to move funds into escrow (`escrowed` status), store `stellarTxHash` — except it's not a *patient* action in this design (custodial v1, ADR 0004): `POST /payments/intents/:id/fund`, admin-triggered, funds from `docforum-core`'s own platform payer identity.
@@ -87,8 +88,9 @@ for status and issue links.
 - [ ] Idempotent escrow funding + on-chain reconcile job (`fundPaymentIntent` is check-then-act — docforum-escrow threat model §5). Tracked as [issue #24](https://github.com/DocForum/docforum-core/issues/24) (High, 200 pts).
 - [ ] ADR: releaser key custody — multisig, KMS, or per-period rotation (threat model T1/T2). Tracked as [issue #25](https://github.com/DocForum/docforum-core/issues/25) (Medium, 150 pts).
 - [ ] Checksum-validate facility wallet keys, not just regex. Tracked as [issue #26](https://github.com/DocForum/docforum-core/issues/26) (Trivial, 100 pts).
-- [ ] Non-custodial patient payments (v2): patients fund escrows from their own Stellar wallet, custodial kept as fallback. **Proposed** in `docs/adr/0005-non-custodial-patient-payments.md`; implementation issues to be opened once it's Accepted.
-- [ ] Upgrade to `@docforum/escrow-sdk` 0.3.0 and the current testnet contract (`refund_after`, balance-delta check, `getEscrow`) — step 1 of ADR 0005's plan, but worth doing regardless. Tracked as [issue #32](https://github.com/DocForum/docforum-core/issues/32) (Medium, 150 pts); depends on `docforum-escrow` publishing `sdk-v0.3.0`.
+- [ ] Non-custodial patient payments (v2): patients fund escrows from their own Stellar wallet, custodial kept as fallback. **Proposed** in `docs/adr/0005-non-custodial-patient-payments.md`; implementation has started (see the prepare item below).
+- [x] Prepare endpoint — `POST /payments/intents/:id/prepare` builds + simulates the patient-as-payer `create_escrow` transaction, returns unsigned XDR + expiry ledger, and moves the intent to `awaiting_signature` via a conditional update. Adds `awaiting_signature`/`submitting` statuses and a prepared-transaction expiry sweep back to `created` (a normal case, not an error). Tracked as [issue #80](https://github.com/DocForum/docforum-core/issues/80). Patient ownership is service-enforced (someone else's intent is `404`); a missing verified payer wallet is `409 WALLET_NOT_LINKED`. The real SDK call is pending docforum-escrow #58 (SDK 0.3.0) — until then the endpoint returns `503 ESCROW_SDK_PREPARE_UNSUPPORTED`, and integration tests use a mocked SDK.
+- [ ] Upgrade to `@docforum/escrow-sdk` 0.3.0 and the current testnet contract (`refund_after`, balance-delta check, `getEscrow`, plus the prepare/submit calls #80 needs) — step 1 of ADR 0005's plan, but worth doing regardless. Tracked as [issue #32](https://github.com/DocForum/docforum-core/issues/32) (Medium, 150 pts); depends on `docforum-escrow` publishing `sdk-v0.3.0` (#58). This is now the blocker for a real (non-mocked) prepare.
 - [ ] Doc reconciliation: PRD §8.1.6 (facility fulfillment integrity) — not marked resolved; this phase proves the payment *mechanism* works, not the fulfillment-integrity question, which still needs real `FulfillmentRecord`/facility-matching (Phase 5) to actually address.
 
 ## Phase 6 — Notifications
@@ -405,3 +407,20 @@ for status and issue links.
   observed state, so a racing second action gets 409 instead of silently
   overwriting). Rollback coupling proven with a real injected DB failure,
   not a mock. Phase 3/4 wiring explicitly left pending.
+- 2026-10-19 — Issues #79 and #80 opened as one PR:
+  PaymentIntent now carries `assetCode` + `tokenContractId` and stores its
+  amount as a token-agnostic `amount` (migration is a plain column rename,
+  so no row loses its value; pre-#79 rows resolve native XLM from
+  `ESCROW_TOKEN_ID`). `PAYMENT_ASSETS` is the per-environment allowlist
+  (testnet defaults XLM + USDC SACs); unknown assets are `400
+  UNSUPPORTED_PAYMENT_ASSET`, and fund/prepare check the payee's Horizon
+  trustline first (`409 PAYEE_TRUSTLINE_MISSING`). The prepare half of ADR
+  0005 adds `POST /payments/intents/:id/prepare` (patient-only, service
+  ownership check, `404` for someone else's intent), `awaiting_signature`/
+  `submitting` statuses, a stored prepared hash/XDR/expiry, `refundAfter`
+  from the order-expiry proxy + grace, and an expiry sweep back to
+  `created`. `PatientWalletLink` is the new patient payer address model
+  (SEP-10 flow still not built). Real prepare still waits on
+  `@docforum/escrow-sdk` 0.3.0 (docforum-escrow #58) — the endpoint returns
+  `503 ESCROW_SDK_PREPARE_UNSUPPORTED` against 0.2.0, and the new
+  integration tests mock the SDK/RPC.

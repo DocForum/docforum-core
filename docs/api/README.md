@@ -29,7 +29,7 @@ depend on a trustworthy contact address:
 
 - `POST /appointments` (booking)
 - `POST /payments/wallet-link`, `POST /payments/intents`,
-  `POST /payments/intents/:id/{fund,release,refund}`
+  `POST /payments/intents/:id/{prepare,fund,release,refund}`
 
 That guard reads the database rather than trusting a claim in the access
 token, so verifying in one tab unblocks the caller immediately instead of
@@ -220,16 +220,17 @@ Bundle (`schemaVersion` 1):
   "sections": {
     "account":      { "version": 1, "items": [{ "id", "email", "phone", "role", "emailVerifiedAt", "createdAt", "updatedAt" }] },
     "appointments": { "version": 1, "items": [{ "id", "status", "origin", "slot": { "startTime", "endTime" }, "doctor": { "id", "fullName" }, "createdAt", "updatedAt" }] },
-    "payments":     { "version": 1, "items": [{ "id", "orderType", "orderId", "status", "amountStroops", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
+    "payments":     { "version": 2, "items": [{ "id", "orderType", "orderId", "status", "amount", "assetCode", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
     "profile":      { "version": 1, "items": [{ "id", "fullName", "dateOfBirth", "createdAt", "updatedAt" }] }
   }
 }
 ```
 
 Sections are sorted by name; new modules add sections (ARCHITECTURE.md §3.1)
-without changing the envelope. `amountStroops`/`escrowId` are strings
-(bigint). No password hash, tokens, throttle state or platform secrets are
-ever included.
+without changing the envelope. `amount`/`escrowId` are strings (bigint),
+and `amount` is in the smallest unit of `assetCode` (payments section
+version 2 — issue #79; version 1 used `amountStroops`). No password hash,
+tokens, throttle state or platform secrets are ever included.
 
 Exports stay downloadable for `PATIENT_EXPORT_TTL_HOURS` (default 24), then
 the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZE`,
@@ -238,9 +239,59 @@ the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZ
 `PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
 `backend/src/jobs/README.md`.
 
+## Payments (`/payments`) — `backend/src/modules/payments`
+
+Phase 5.5: custodial funding v1 (`docs/adr/0004`) plus the prepare half of
+the non-custodial flow (`docs/adr/0005`, issue #80). Every Stellar call is
+made by this backend through `@docforum/escrow-sdk`; the browser only ever
+receives an unsigned XDR to hand to the patient's wallet.
+
+**Amounts are JSON strings in the smallest unit of the intent's asset**
+(stroops for XLM, 7-decimal units for USDC). The server never scales or
+converts them, so it never assumes an asset's decimals.
+
+| Method & path | Auth | Body / notes |
+|---|---|---|
+| `POST /payments/wallet-link` | facility | `{ stellarPublicKey }`. Sets the facility's payout (payee) address. |
+| `GET /payments/wallet-link` | facility | The caller's own link; `404` if none. |
+| `POST /payments/intents` | admin | `{ orderType: 'prescription'\|'lab_order', orderId, patientProfileId, facilityId, assetCode?, amount }`. `assetCode` defaults to `XLM`; it must be on the environment allowlist (`PAYMENT_ASSETS`) or the response is `400 UNSUPPORTED_PAYMENT_ASSET`. Returns the intent with `amount` as a string. |
+| `GET /payments/intents/:id` | admin | Intent status, asset, prepared hash/expiry, `refundAfter`. |
+| `POST /payments/intents/:id/prepare` | patient (owner) | Builds and simulates the patient-signed `create_escrow`, returns `{ ...intent, status: 'awaiting_signature', xdr, txHash, expiryLedger }`. `404` for an intent that isn't the caller's (owned in the service, not just role-gated); `409 WALLET_NOT_LINKED` without a verified patient wallet; `409 FACILITY_WALLET_NOT_LINKED` if the payee hasn't linked one; `409 PAYEE_TRUSTLINE_MISSING` if the payee can't hold the asset. Calling it again while the prepared transaction is live returns the **same** transaction; expiry is a normal case (`awaiting_signature → created`, swept by a job) and a later prepare builds a fresh one. |
+| `POST /payments/intents/:id/fund` | admin | Custodial funding from the platform payer. Requires the facility wallet, and (for issued assets) an authorised payee trustline — checked against Horizon before any on-chain call. |
+| `POST /payments/intents/:id/release` | admin | `escrowed → released`. |
+| `POST /payments/intents/:id/refund` | admin | `escrowed → refunded`. |
+
+State machine: `created → awaiting_signature → (expiry) created` and
+`created → escrowed → released | refunded`. `submitting` is reserved for
+the submit half of ADR 0005 and is not written yet. All transitions are
+conditional UPDATEs in the same transaction as their `AuditEvent`, so a
+racing second action gets `409` instead of overwriting.
+
+**Assets (issue #79).** The allowlist is `PAYMENT_ASSETS`, a JSON array of
+`{ code, tokenContractId, decimals, issuer? }`. Testnet defaults are native
+XLM and USDC
+(`CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` /
+`CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`, issuer
+`GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5`). Production
+must set it explicitly to mainnet contract ids. Only assets without
+clawback, transfer fees or rebasing belong on the list (escrow threat model
+T5); entries that opt into clawback/rebasing are rejected at startup.
+
+**Prepare uses SDK 0.3.0.** The repo currently pins escrow SDK 0.2.0, which
+has no prepare call (docforum-escrow #58). Until that ships, prepare returns
+`503 ESCROW_SDK_PREPARE_UNSUPPORTED` rather than fabricating a transaction;
+the integration tests substitute a mocked SDK. `PatientWalletLink` rows
+(the payer addresses prepare requires) are written by the SEP-10 flow,
+which is not built yet, so there is no HTTP route to create one.
+
+Env knobs: `PAYMENT_ASSETS`, `HORIZON_URL` (trustline lookups only),
+`PAYMENT_PREPARE_TTL_SECONDS` (default 300), `PAYMENT_ORDER_EXPIRY_HOURS`
+(default 72) + `PAYMENT_REFUND_GRACE_HOURS` (default 24) for `refundAfter`,
+and `PAYMENT_PREPARE_EXPIRY_SWEEP_INTERVAL_SECONDS` (default 60).
+
 ## Not yet implemented
 
 Everything else in `ARCHITECTURE.md` §3's module list (`facilities`,
 `consultations`, `referrals`, `prescriptions`, `lab-orders`,
-`pharmacy-orders`, `payments`, `notifications`) has no routes yet — Phase
-2 onward, see `ROADMAP.md`.
+`pharmacy-orders`, `notifications`) has no routes yet — Phase 2 onward, see
+`ROADMAP.md`.

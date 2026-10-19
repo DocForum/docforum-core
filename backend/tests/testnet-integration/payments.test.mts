@@ -33,6 +33,14 @@ const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const PORT = 5435; // distinct from booking.test.mts's 5433 and gen-migration.mjs's 5434
 const runId = Date.now();
 
+const USDC_SAC = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
+// Opt-in: funding a real USDC escrow needs the platform payer to hold both
+// testnet USDC and a trustline to its issuer. There is no automated faucet
+// for testnet USDC, so the positive case only runs when an operator has
+// prepared the payer and sets this flag. The trustline-rejection case below
+// always runs against live Horizon and needs no USDC.
+const USDC_FUNDING_ENABLED = process.env.PAYMENT_TESTNET_USDC === 'true';
+
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-payments-test-pg-'));
 const pg = new EmbeddedPostgres({
   databaseDir: dataDir,
@@ -114,7 +122,8 @@ describe('payments module against live testnet', () => {
       orderId: 'test-order-release',
       patientProfileId,
       facilityId,
-      amountStroops: 500_000n, // 0.05 XLM
+      assetCode: 'XLM',
+      amount: 500_000n, // 0.05 XLM
     });
     expect(intent.status).toBe('created');
 
@@ -133,12 +142,45 @@ describe('payments module against live testnet', () => {
       orderId: 'test-order-refund',
       patientProfileId,
       facilityId,
-      amountStroops: 500_000n,
+      assetCode: 'XLM',
+      amount: 500_000n,
     });
 
     await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
     const refunded = await paymentsService.refundPaymentIntent(TEST_ACTOR, intent.id);
     expect(refunded.status).toBe('refunded');
+  }, 60_000);
+
+  it('rejects a USDC escrow when the payee has no trustline, before any on-chain call', async () => {
+    const intent = await paymentsService.createPaymentIntent({
+      orderType: 'lab_order',
+      orderId: 'test-order-usdc-no-trustline',
+      patientProfileId,
+      facilityId,
+      assetCode: 'USDC',
+      amount: 100_000n,
+    });
+
+    // The friendbot-funded payout wallet exists but has no USDC trustline.
+    await expect(paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id)).rejects.toThrow(/trustline for USDC/);
+  }, 30_000);
+
+  it.skipIf(!USDC_FUNDING_ENABLED)('funds and releases a USDC escrow end-to-end on testnet', async () => {
+    const intent = await paymentsService.createPaymentIntent({
+      orderType: 'lab_order',
+      orderId: 'test-order-usdc-release',
+      patientProfileId,
+      facilityId,
+      assetCode: 'USDC',
+      amount: 500_000n, // 0.05 USDC (both testnet SACs use 7 decimals)
+    });
+    expect(intent.assetCode).toBe('USDC');
+    expect(intent.tokenContractId).toBe(USDC_SAC);
+
+    const funded = await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
+    expect(funded.status).toBe('escrowed');
+    const released = await paymentsService.releasePaymentIntent(TEST_ACTOR, intent.id);
+    expect(released.status).toBe('released');
   }, 60_000);
 
   it('rejects funding a payment intent for a facility with no linked wallet', async () => {
@@ -154,7 +196,8 @@ describe('payments module against live testnet', () => {
       orderId: 'test-order-unlinked',
       patientProfileId,
       facilityId: unlinkedFacility.id,
-      amountStroops: 500_000n,
+      assetCode: 'XLM',
+      amount: 500_000n,
     });
 
     await expect(paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id)).rejects.toThrow(/no linked wallet/);

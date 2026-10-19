@@ -184,6 +184,7 @@ model PatientProfile {
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
   dataExports    PatientExport[]
+  walletLink     PatientWalletLink?
 }
 
 // Phase 8 (issue #40): right-of-access export jobs. One row per request;
@@ -462,6 +463,12 @@ model Notification {
 
 enum PaymentIntentStatus {
   created
+  // ADR 0005 steps 2-4: a prepared (unsigned) create_escrow transaction
+  // exists, then is being submitted with the patient's signature. The
+  // submit half is not built yet (issue #80 only covers prepare), so
+  // `submitting` is reserved by the state machine but not written today.
+  awaiting_signature
+  submitting
   escrowed
   released
   refunded
@@ -486,14 +493,38 @@ model PaymentIntent {
   facilityId       String
   facility         FacilityProfile @relation(fields: [facilityId], references: [id])
 
-  // Raw stroops (native XLM's smallest unit) — matches
-  // @docforum/escrow-sdk's `amount: bigint` exactly. v1 is native-XLM
-  // only, no decimal/currency-conversion layer: an earlier scaffold draft
-  // of this model used a Decimal amount + "USDC" currency default,
-  // dropped here in favor of what's actually proven end-to-end on
-  // testnet (see ADR 0004). Multi-asset support is a future addition,
-  // not assumed by this field.
-  amountStroops BigInt
+  // Amount in the smallest unit of `assetCode` (stroops for XLM, 7-decimal
+  // units for USDC) — matches @docforum/escrow-sdk's `amount: bigint`
+  // exactly. Renamed from `amountStroops` by issue #79; the migration is a
+  // plain column rename, so existing rows keep their value. This module
+  // never scales or converts amounts, so it never assumes an asset's
+  // decimals (the allowlist carries them for clients only).
+  amount BigInt
+  // The asset this intent is denominated in — `XLM` or `USDC` in the
+  // default testnet allowlist. Assets are identified on-chain by the SAC
+  // contract id, not by the code, so a new intent must name an allowlisted
+  // asset (see config.payments.assets and issue #79).
+  assetCode       String
+  // The Stellar Asset Contract address the escrow pulls from. Nullable only
+  // for rows created before issue #79: those were funded against
+  // `ESCROW_TOKEN_ID` (native XLM), which the service falls back to when it
+  // sees a null here. New rows always store it.
+  tokenContractId String?
+
+  // ADR 0005 step 2 (issue #80). `preparedTxHash` is the hash of the
+  // unsigned create_escrow transaction the patient must sign;
+  // `preparedXdr` lets a retry return exactly the same transaction instead
+  // of building a second one. Both are cleared when the preparation
+  // expires back to `created`.
+  preparedTxHash    String?
+  preparedXdr       String?
+  preparedExpiryLedger Int?
+  preparedExpiresAt DateTime?
+  // ADR 0005: escrow refund deadline = order expiry + grace. Orders don't
+  // exist as real records yet (Phase 4), so the service uses the intent's
+  // createdAt as the order-expiry anchor — see
+  // config.payments.orderExpiryHours / refundGraceHours.
+  refundAfter DateTime?
 
   // Set once funded (create_escrow succeeds) — needed to later call
   // release/refund against the right on-chain escrow.
@@ -509,6 +540,27 @@ model PaymentIntent {
 
   @@index([facilityId])
   @@index([status])
+  @@index([status, preparedExpiresAt])
+}
+
+// ADR 0005 step 1: a patient's verified Stellar address, used as the payer
+// of a non-custodial escrow. Verification is SEP-10 (a signed challenge),
+// not the type-the-address form used for facilities — but the SEP-10
+// endpoints are not built yet, so nothing in this repo creates these rows
+// today. Prepare (issue #80) requires one and returns 409 WALLET_NOT_LINKED
+// otherwise. Deliberately a separate model from WalletLink: that one is
+// the facility payee (unique per facility), this one is the patient payer
+// (unique per patient), and conflating the two would make a facility's
+// payout address eligible as a patient payer.
+model PatientWalletLink {
+  id               String   @id @default(uuid())
+  patientProfileId String   @unique
+  stellarPublicKey String
+  verifiedAt       DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  patientProfile PatientProfile @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
 }
 
 model WalletLink {

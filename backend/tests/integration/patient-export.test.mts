@@ -176,7 +176,8 @@ describe('patient data export', () => {
         orderId: 'order-1',
         patientProfileId: alice.profileId,
         facilityId,
-        amountStroops: 12_345_678_901n,
+        assetCode: 'XLM',
+        amount: 12_345_678_901n,
         status: 'escrowed',
         escrowId: 42n,
         stellarTxHash: 'a'.repeat(64),
@@ -184,7 +185,7 @@ describe('patient data export', () => {
       },
     });
     await prisma.paymentIntent.create({
-      data: { orderType: 'prescription', orderId: 'order-2', patientProfileId: alice.profileId, facilityId, amountStroops: 5n },
+      data: { orderType: 'prescription', orderId: 'order-2', patientProfileId: alice.profileId, facilityId, assetCode: 'XLM', amount: 5n },
     });
     // Bob's payment must never show up in Alice's export.
     await prisma.paymentIntent.create({
@@ -193,7 +194,8 @@ describe('patient data export', () => {
         orderId: 'bob-order',
         patientProfileId: bob.profileId,
         facilityId,
-        amountStroops: 9n,
+        assetCode: 'XLM',
+        amount: 9n,
         stellarTxHash: 'b'.repeat(64),
       },
     });
@@ -314,7 +316,8 @@ describe('patient data export', () => {
     expect(payments[0]).toMatchObject({
       orderType: 'lab_order',
       status: 'escrowed',
-      amountStroops: '12345678901',
+      amount: '12345678901',
+      assetCode: 'XLM',
       escrowId: '42',
       stellarTxHash: 'a'.repeat(64),
       sorobanContractId: 'CCONTRACT',

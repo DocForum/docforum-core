@@ -2,6 +2,7 @@ import { createApp } from './app';
 import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
+import { startPaymentIntentJobs } from './jobs/payment-intents';
 
 const app = createApp();
 
@@ -32,3 +33,8 @@ pruneTimer.unref();
 
 // Patient data export worker + expiry cleanup (Phase 8, issue #40).
 startPatientExportJobs();
+
+// Prepared-transaction expiry (Phase 5.5, issue #80): an unsigned
+// create_escrow transaction that outlives its window moves the intent back
+// to `created` so the patient can prepare again.
+startPaymentIntentJobs();

@@ -17,6 +17,77 @@ function parseTrustProxy(raw: string | undefined, isProduction: boolean): boolea
   return raw;
 }
 
+/** A payment asset the escrow may be denominated in (issue #79). The
+ * contract id is the Stellar Asset Contract address the escrow pulls from;
+ * `decimals` is informational for clients (every amount in this API is
+ * already in the asset's smallest unit, so the server never scales one). */
+export interface PaymentAsset {
+  code: string;
+  tokenContractId: string;
+  decimals: number;
+  /** Set for issued assets (e.g. USDC). Native XLM has none and needs no
+   * trustline; every issued asset's payee must have one before funding. */
+  issuer?: string;
+}
+
+// Testnet defaults. Override per environment with PAYMENT_ASSETS; production
+// must set it explicitly (mainnet contract ids differ). Only assets without
+// clawback, transfer fees or rebasing belong in the allowlist — escrow
+// threat model T5 — and the parser refuses entries that opt into clawback or
+// rebasing. This is a curated policy list, not an on-chain capability probe.
+const TESTNET_NATIVE_SAC = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+const TESTNET_USDC_SAC = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
+const TESTNET_USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+
+const STELLAR_CONTRACT_ID = /^C[A-Z2-7]{55}$/;
+const STELLAR_PUBLIC_KEY = /^G[A-Z2-7]{55}$/;
+
+function parsePaymentAssets(raw: string | undefined): PaymentAsset[] {
+  const fallback: PaymentAsset[] = [
+    { code: 'XLM', tokenContractId: process.env.ESCROW_TOKEN_ID ?? TESTNET_NATIVE_SAC, decimals: 7 },
+    {
+      code: 'USDC',
+      tokenContractId: TESTNET_USDC_SAC,
+      decimals: 7,
+      issuer: TESTNET_USDC_ISSUER,
+    },
+  ];
+  if (!raw) return fallback;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('PAYMENT_ASSETS must be a JSON array of { code, tokenContractId, decimals, issuer? }.');
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error('PAYMENT_ASSETS must be a non-empty JSON array.');
+  }
+  const seen = new Set<string>();
+  return parsed.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) throw new Error(`PAYMENT_ASSETS[${index}] must be an object.`);
+    const { code, tokenContractId, decimals, issuer, clawback, rebase } = entry as Record<string, unknown>;
+    if (clawback === true || rebase === true) {
+      throw new Error(`PAYMENT_ASSETS[${index}] opts into clawback/rebasing, which the escrow allowlist forbids (T5).`);
+    }
+    if (typeof code !== 'string' || !/^[A-Z0-9]{1,12}$/.test(code)) {
+      throw new Error(`PAYMENT_ASSETS[${index}].code must be 1-12 uppercase alphanumeric characters.`);
+    }
+    if (seen.has(code)) throw new Error(`PAYMENT_ASSETS contains duplicate asset code ${code}.`);
+    seen.add(code);
+    if (typeof tokenContractId !== 'string' || !STELLAR_CONTRACT_ID.test(tokenContractId)) {
+      throw new Error(`PAYMENT_ASSETS[${index}].tokenContractId must be a Stellar contract id.`);
+    }
+    if (typeof decimals !== 'number' || !Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+      throw new Error(`PAYMENT_ASSETS[${index}].decimals must be an integer between 0 and 18.`);
+    }
+    if (issuer !== undefined && (typeof issuer !== 'string' || !STELLAR_PUBLIC_KEY.test(issuer))) {
+      throw new Error(`PAYMENT_ASSETS[${index}].issuer must be a Stellar public key.`);
+    }
+    return { code, tokenContractId, decimals, ...(issuer ? { issuer } : {}) };
+  });
+}
+
 const PRODUCTION_CORS_ORIGINS = ['https://docforum.github.io'];
 const LOCAL_DEV_CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
 
@@ -139,6 +210,24 @@ export const config = {
     platformPayerSecret: process.env.PLATFORM_PAYER_SECRET,
     platformReleaserSecret: process.env.PLATFORM_RELEASER_SECRET,
     escrowContractId: process.env.ESCROW_CONTRACT_ID,
+    // Legacy native-XLM token id (ADR 0004). Still used as the fallback for
+    // PaymentIntent rows created before issue #79, whose tokenContractId is
+    // null, and as the default XLM entry in the allowlist.
     escrowTokenId: process.env.ESCROW_TOKEN_ID,
+    // Per-environment asset allowlist (issue #79). See parsePaymentAssets.
+    assets: parsePaymentAssets(process.env.PAYMENT_ASSETS),
+    // Horizon is only read for payee trustlines — never for contract calls,
+    // which go through the SDK.
+    horizonUrl: process.env.HORIZON_URL ?? 'https://horizon-testnet.stellar.org',
+    // Issue #80: how long a prepared, unsigned create_escrow transaction is
+    // considered live before the expiry job returns the intent to `created`.
+    prepareTtlSeconds: Number(process.env.PAYMENT_PREPARE_TTL_SECONDS ?? 5 * 60),
+    // ADR 0005: refund_after = order expiry + grace. Orders are still
+    // placeholders without an expiry field (Phase 4), so the intent's own
+    // createdAt is the order-expiry anchor today.
+    orderExpiryHours: Number(process.env.PAYMENT_ORDER_EXPIRY_HOURS ?? 72),
+    refundGraceHours: Number(process.env.PAYMENT_REFUND_GRACE_HOURS ?? 24),
+    // Expiry sweep cadence (src/jobs/payment-intents.ts).
+    prepareExpirySweepIntervalSeconds: Number(process.env.PAYMENT_PREPARE_EXPIRY_SWEEP_INTERVAL_SECONDS ?? 60),
   },
 } as const;

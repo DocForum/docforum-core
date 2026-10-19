@@ -8,7 +8,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`. The refresh cookie is `SameSite=None` cross-site, so `/auth/refresh` + `/auth/logout` require an `X-CSRF-Token` header (a per-session token bound into the refresh JWT) and an allowlisted `Origin` — see `backend/src/middleware/csrf.ts`. CORS is an explicit per-environment allowlist (`CORS_ORIGINS`).
 - Frontend: React + TypeScript + Vite, React Query + Zustand.
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
-- Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue. Existing interval jobs: login-throttle prune (`src/server.ts`) and patient-export worker/cleanup (`src/jobs/patient-exports.ts`), both started only from `server.ts`.
+- Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue. Existing interval jobs: login-throttle prune (`src/server.ts`), patient-export worker/cleanup (`src/jobs/patient-exports.ts`), and prepared-payment expiry (`src/jobs/payment-intents.ts`), all started only from `server.ts`.
 - New module holding patient data? Register a patient-export section (ARCHITECTURE.md §3.1) — right of access must stay complete.
 
 ## Hard rules (violating these = request changes on the PR)
@@ -29,14 +29,16 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
-`FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
+`FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile` → `PatientWalletLink` (patient payer address, ADR 0005) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId`, allowlisted `assetCode` + `tokenContractId`, prepare fields — see docs/adr/0004/0005)
 
-## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
-- **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule.
-- `WalletLink` is scoped to the **facility** (the on-chain payee), not the patient.
+## Payments (Phase 5.5 — see docs/adr/0004 and docs/adr/0005)
+- **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). The patient-wallet path (ADR 0005) is being added alongside it; custodial stays as the fallback.
+- `WalletLink` is the **facility payee**; `PatientWalletLink` (ADR 0005) is the **patient payer**. Don't conflate them — a facility payout address must never be usable as a patient payer.
+- Asset is per intent, not per deployment (issue #79): `PaymentIntent.amount` is the smallest unit of `assetCode` (XLM or USDC by default), `tokenContractId` is the SAC address, and only `PAYMENT_ASSETS` allowlist entries may be used. Amounts are never scaled/converted in this repo, so don't assume 7 decimals. Issued assets need an authorised payee trustline before fund/prepare (`PAYEE_TRUSTLINE_MISSING`); XLM needs none.
 - `PaymentIntent.orderType`/`orderId` are opaque, unvalidated — `Prescription`/`LabOrder` aren't real records yet (Phase 4). Don't build on top of these assuming they're FK-validated.
+- `POST /payments/intents/:id/prepare` (issue #80) is patient-only and ownership-checked in the service (someone else's id is a 404). It builds+simulates via the SDK, stores the transaction hash/XDR, and moves `created → awaiting_signature`; re-prepare while live is idempotent, and expiry (`awaiting_signature → created`) is a normal case handled by a sweep, not an error. Only one prepared transaction may be live per intent — enforce with the conditional UPDATE, never a read-then-write.
 - `release`/`refund` are admin-triggered HTTP actions in v1 (`POST /payments/intents/:id/{release,refund}`) — there's no `FulfillmentRecord.status == fulfilled` to trigger off of yet. Don't treat this as the final design.
-- The actual Stellar contract calls go through `@docforum/escrow-sdk` (`backend/src/modules/payments/services/escrow-sdk-loader.ts` — dynamic `import()`, the SDK is ESM-only and this backend is CommonJS). Never reimplement contract-calling logic in this repo.
+- The actual Stellar contract calls go through `@docforum/escrow-sdk` (`backend/src/modules/payments/services/escrow-sdk-loader.ts` — dynamic `import()`, the SDK is ESM-only and this backend is CommonJS). Never reimplement contract-calling logic in this repo. The SDK used today (0.2.0) has no prepare call, so prepare returns `503 ESCROW_SDK_PREPARE_UNSUPPORTED` until the 0.3.0 prepare/submit call (docforum-escrow #58) lands.
 
 ## Known unresolved design gaps (do not silently "fix" without flagging in PR description)
 - No routing rule yet for a referral with no specific target doctor (which specialist gets it?).
@@ -45,6 +47,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - `AuditEvent` foundation exists (Phase 8, issue #43 — ARCHITECTURE.md §4.10): append-only (DB triggers), written by `auditService.record(tx, …)` **inside the same transaction** as the change. Wired for booking, doctor verification and payment fund/release/refund only — **Phase 3/4 transitions must call it when they're built.** Never put PHI in `metadata`.
 - No email/SMS provider integrated yet (Phase 6, issue #17) — email verification (issue #34) therefore can't deliver its link on a hosted deployment; `backend/scripts/mark-email-verified.mjs` is the interim operator path.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
+- Non-custodial payments are only half-built: prepare exists (issue #80), submit/fee-bump does not, and the SEP-10 patient-wallet link flow that creates `PatientWalletLink` rows is not implemented. `PaymentIntent.refundAfter` uses the intent's `createdAt` as the order-expiry anchor because orders have no expiry field yet (Phase 4).
+- `@docforum/escrow-sdk` 0.2.0 has no prepare call, so `/payments/intents/:id/prepare` returns `503 ESCROW_SDK_PREPARE_UNSUPPORTED` against the real SDK until docforum-escrow publishes SDK 0.3.0 (docforum-core #32 / docforum-escrow #58). Integration tests exercise the endpoint with a mocked SDK.
 
 ## Overengineering guardrails (things NOT to build yet)
 - No custom video/WebRTC.
