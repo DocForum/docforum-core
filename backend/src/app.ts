@@ -10,7 +10,7 @@ import { appointmentsRouter } from './modules/appointments/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
 import { registerPatientExportSections } from './export-sections';
-import { auditRouter } from './modules/audit/routes';
+import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
 import { requestId } from './middleware/request-id';
 
 export function createApp() {
