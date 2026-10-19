@@ -1,6 +1,12 @@
 import type { Request, Response } from 'express';
 import * as authService from '../services';
-import { clearLoginAttemptsSchema, loginSchema, signupSchema, verifyEmailSchema } from '../validation';
+import {
+  clearLoginAttemptsSchema,
+  loginSchema,
+  signupSchema,
+  signupWithInviteSchema,
+  verifyEmailSchema,
+} from '../validation';
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import { readCsrfHeader } from '../../../middleware/csrf';

@@ -12,6 +12,14 @@ export const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+// Phase 8, issue #39 — admin invite redemption. No `fullName`: an admin
+// account has no Patient/Doctor profile row.
+export const signupWithInviteSchema = z.object({
+  token: z.string().min(1),
+  email: z.string().email(),
+  password: z.string().min(8),
+});
+
 // Phase 8, issue #34. No `email` field on the resend body on purpose — the
 // resend endpoint is authenticated and targets the caller's own account,
 // so it can't be used to probe which addresses exist.

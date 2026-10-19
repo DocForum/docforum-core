@@ -265,6 +265,13 @@ describe('admin account lifecycle', () => {
     expect(reactivated.status).toBe(200);
     expect(reactivated.body.deactivatedAt).toBeNull();
 
+    // `iat` is second-precision and `isSessionRevoked` deliberately counts a
+    // token minted in the same second as the invalidation as revoked (the
+    // safe direction). A login immediately after reactivation can therefore
+    // mint a same-second token that is correctly refused — wait out the
+    // second boundary so the fresh token is genuinely fresh.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
     const freshLogin = await loginAs(patient.email);
     const withFreshToken = await request(app)
       .get('/appointments/mine')
@@ -326,6 +333,14 @@ describe('admin account lifecycle', () => {
     const slots = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
 
     const patient = await signupPatient('records');
+    // Booking is gated on a verified email (Phase 8, issue #34 — merged in
+    // from main after this test was written). Deletion-resistance is the
+    // subject here, not verification, so the fixture marks the patient
+    // verified directly rather than replaying the emailed-token flow.
+    await prisma.user.update({
+      where: { email: patient.email },
+      data: { emailVerifiedAt: new Date() },
+    });
     const booking = await request(app)
       .post('/appointments')
       .set('Authorization', `Bearer ${patient.accessToken}`)

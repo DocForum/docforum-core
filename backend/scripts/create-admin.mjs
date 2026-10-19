@@ -23,11 +23,19 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 const SALT_ROUNDS = 12;
 const MIN_PASSWORD_LENGTH = 8;
 
-const prisma = new PrismaClient();
+// Prisma 7 (ADR 0006) requires a driver adapter — `new PrismaClient()` with
+// no adapter throws. Same shape as src/db/prisma-client.ts, minus the
+// server-only config import (this script runs standalone from the shell).
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL,
+  connectionTimeoutMillis: 5_000,
+});
+const prisma = new PrismaClient({ adapter });
 
 function fail(message) {
   console.error(`create-admin: ${message}`);

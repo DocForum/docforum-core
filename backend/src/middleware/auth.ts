@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { assertEmailVerified, verifyAccessToken } from '../modules/auth/services';
+import { assertActiveSession, assertEmailVerified, verifyAccessToken } from '../modules/auth/services';
 import { HttpError } from '../http-error';
 import type { Role } from '@prisma/client';
 
