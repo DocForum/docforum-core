@@ -112,8 +112,8 @@ account also pays bcrypt's comparison cost, so timing doesn't leak either).
 user is stuck behind: body `{ email?, ip? }` (at least one), returns
 `{ cleared }`. Clear **both** when a lock was taken out via the account's IP,
 or the IP bucket will keep refusing them. It's logged to the server console
-— there is no `AuditEvent` table yet (known gap), so that's the interim
-record.
+— it isn't wired into `AuditEvent` yet (issue #43 covered booking, doctor
+verification and payments), so that's the interim record.
 
 Under the hood this uses Express's `trust proxy` setting via the
 `TRUST_PROXY` env var: `1` behind Render's single proxy hop, `false` (the
@@ -151,32 +151,96 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 | `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
 
-## Admin account lifecycle (`/admin`) — `backend/src/modules/users`
+## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
 
-Phase 8, issue #39. Every route here is admin-only (`authenticate` +
-`requireRole('admin')`); a non-admin gets `403`.
+Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
+well-formed inbound `X-Request-Id` (8–128 chars of `[A-Za-z0-9._:-]`) is
+kept, anything else is replaced with a UUID. Audit events store it, so an
+event can be traced to the request (and logs) that caused it.
 
-| Method & path | Body | Notes |
+| Method & path | Auth | Notes |
 |---|---|---|
-| `POST /admin/invites` | `{ email }` | `201` with `{ id, email, expiresAt, token, inviteUrl }`. The raw `token` is returned **once** — only its SHA-256 hash is stored, so it can never be fetched again, and it is never logged. The inviting admin passes the link on out of band (there's no email provider yet — issue #17). `409` if the address already has an account. Issuing a new invite for the same address retires the previous one. |
-| `PATCH /admin/users/:id/deactivate` | — | Soft deactivation: sets `deactivatedAt`, refuses login/refresh/existing access tokens. `409 Cannot deactivate the last active admin.` Idempotent. **Deletes nothing** — no clinical or payment record is keyed to this flag. |
-| `PATCH /admin/users/:id/reactivate` | — | Clears `deactivatedAt`. Returns the user; the pre-deactivation session tokens stay revoked. |
+| `GET /admin/audit-events` | admin | Newest first. Query: `entityType`, `entityId` (requires `entityType`), `actorUserId`, `from` / `to` (ISO-8601 date or date-time, inclusive), `limit` (1–200, default 50), `cursor`. Unknown parameters are `400`. Returns `{ items, nextCursor }`; pass `nextCursor` back as `cursor` for the next page (`null` = last page). |
 
-Admins are created either by the bootstrap CLI
-(`node backend/scripts/create-admin.mjs`, see `scripts/README.md`) or by
-invite. `POST /auth/signup` still refuses `role: 'admin'` server-side.
+Item shape: `{ id, actorUserId, actorRole, entityType, entityId, action,
+fromState, toState, requestId, metadata, createdAt }`. `metadata` is a small
+flat map of ids/codes (never personal data). Ordering is
+`(createdAt DESC, id DESC)` and the cursor is a keyset position on that
+pair, so paging never skips or repeats an event; events written after a scan
+started appear at the front of a new scan, not mid-way through the old one.
+`400 INVALID_CURSOR` for a malformed cursor; `400` if `from` is after `to`.
 
-Who-did-what is written to the server console (`[users] admin <id>
-deactivated user <id>`): there is no `AuditEvent` table yet (see
-`ARCHITECTURE_ESSENTIALS.md` known gaps), so that's the interim record.
+Recorded today: `appointment.booked`, `doctor.verification_status_changed`,
+`payment_intent.{funded,released,refunded}` — see ARCHITECTURE.md §4.10.
+There is no write or delete endpoint, and the table rejects UPDATE/DELETE
+in the database.
 
-Env: `ADMIN_INVITE_TTL_HOURS` (default 72),
-`ADMIN_INVITE_ACCEPT_URL` (where the invite link points — docforum-web owns
-that page).
+Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
+return `409` when the intent changed state concurrently between the check
+and the write (previously the second write silently overwrote the first).
+## Patients (`/patients`) — `backend/src/modules/patients`
+
+### Data export — right of access (Phase 8, issue #40)
+
+| Method & path | Auth | Notes |
+|---|---|---|
+| `POST /patients/me/export` | patient | Starts an export of the **caller's own** data. `202` with the export status object and a `Location: /patients/me/export/:id` header. If one is already `pending`/`processing`, returns that one instead of queuing a second. No body is read — there is no way to name another patient. |
+| `GET /patients/me/export/:id` | patient (owner) | Status object (below). `404` for an id that isn't the caller's — the same response as one that doesn't exist. |
+| `GET /patients/me/export/:id/download` | patient (owner) | Streams the bundle as `application/json` (`Content-Disposition: attachment`, `Cache-Control: no-store`). `409 EXPORT_NOT_READY` while pending/processing/failed; `410 EXPORT_EXPIRED` at or after `expiresAt`, even before the cleanup job has run. |
+
+Doctors and admins get `403` on all three — there is no on-behalf-of export.
+
+Status object:
+
+```json
+{
+  "id": "uuid",
+  "status": "pending | processing | ready | failed | expired",
+  "schemaVersion": 1,
+  "createdAt": "…", "startedAt": "…", "generatedAt": "…", "expiresAt": "…",
+  "sizeBytes": 12345,
+  "failure": null,
+  "downloadUrl": "/patients/me/export/<id>/download"
+}
+```
+
+`downloadUrl` and `sizeBytes` are non-null only while `ready`. A failed
+export reports `failure: { code: 'SECTION_FAILED', section: '<name>' }` (or
+`GENERATION_FAILED` / `GENERATION_TIMEOUT`, with `section: null`) — request a
+new export to retry. Generation is asynchronous; poll the status object.
+
+Bundle (`schemaVersion` 1):
+
+```json
+{
+  "format": "docforum.patient-export",
+  "schemaVersion": 1,
+  "exportId": "uuid",
+  "generatedAt": "ISO-8601",
+  "sections": {
+    "account":      { "version": 1, "items": [{ "id", "email", "phone", "role", "emailVerifiedAt", "createdAt", "updatedAt" }] },
+    "appointments": { "version": 1, "items": [{ "id", "status", "origin", "slot": { "startTime", "endTime" }, "doctor": { "id", "fullName" }, "createdAt", "updatedAt" }] },
+    "payments":     { "version": 1, "items": [{ "id", "orderType", "orderId", "status", "amountStroops", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
+    "profile":      { "version": 1, "items": [{ "id", "fullName", "dateOfBirth", "createdAt", "updatedAt" }] }
+  }
+}
+```
+
+Sections are sorted by name; new modules add sections (ARCHITECTURE.md §3.1)
+without changing the envelope. `amountStroops`/`escrowId` are strings
+(bigint). No password hash, tokens, throttle state or platform secrets are
+ever included.
+
+Exports stay downloadable for `PATIENT_EXPORT_TTL_HOURS` (default 24), then
+the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZE`,
+`PATIENT_EXPORT_CHUNK_BYTES`, `PATIENT_EXPORT_WORKER_INTERVAL_SECONDS`,
+`PATIENT_EXPORT_CLEANUP_INTERVAL_SECONDS`, `PATIENT_EXPORT_STALE_AFTER_SECONDS`,
+`PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
+`backend/src/jobs/README.md`.
 
 ## Not yet implemented
 
-Everything else in `ARCHITECTURE.md` §3's module list (`patients`,
-`facilities`, `consultations`, `referrals`, `prescriptions`, `lab-orders`,
+Everything else in `ARCHITECTURE.md` §3's module list (`facilities`,
+`consultations`, `referrals`, `prescriptions`, `lab-orders`,
 `pharmacy-orders`, `payments`, `notifications`) has no routes yet — Phase
 2 onward, see `ROADMAP.md`.

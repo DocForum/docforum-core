@@ -27,6 +27,7 @@ import {
 } from './login-throttle';
 import { csrfTokensMatch, generateCsrfToken } from '../../../middleware/csrf';
 import type { Role } from '@prisma/client';
+import type { PatientExportSection } from '../../patients/services';
 
 // Re-exported so middleware/auth.ts (shared infra, not a peer module) can
 // verify tokens through this module's service surface rather than
@@ -342,30 +343,25 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   return { user: toPublicUser(user), ...tokens };
 }
 
-/**
- * Guards every authenticated request (Phase 8, issue #39). The access token
- * is otherwise stateless, so a deactivated account's token would keep
- * working for up to 15 minutes; this is the DB read that closes that gap.
- *
- * Deliberately narrow: it answers "is this account still active, and was
- * this token issued after the last deactivation/reactivation", not "is this
- * token on a revocation list" — a general revocation list is issue #18 and
- * is still unbuilt. Because it's a per-request read, tokens carrying no
- * `iat` are treated as revoked once `sessionsInvalidatedAt` is set (fail
- * closed).
- */
-export async function assertActiveSession(userId: string, issuedAtSeconds?: number): Promise<void> {
-  const user = await findUserById(userId);
-  if (!user) throw new HttpError(401, 'Invalid or expired access token.');
-  if (user.deactivatedAt) throw new HttpError(401, 'This account has been deactivated.');
-  if (isSessionRevoked(user.sessionsInvalidatedAt, issuedAtSeconds)) {
-    throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
-  }
-}
-
-function isSessionRevoked(sessionsInvalidatedAt: Date | null, issuedAtSeconds: number | undefined): boolean {
-  if (!sessionsInvalidatedAt) return false;
-  // `iat` has second precision, so a token minted in the same second as the
-  // invalidation counts as revoked — the safe direction.
-  return (issuedAtSeconds ?? 0) * 1000 < sessionsInvalidatedAt.getTime();
-}
+/** This module's contribution to the patient data export (issue #40): the
+ * login identity itself. Explicit allowlist — never the password hash, and
+ * no verification/throttle bookkeeping. */
+export const accountExportSection: PatientExportSection = {
+  name: 'account',
+  version: 1,
+  async *pages(subject) {
+    const user = await findUserById(subject.userId);
+    if (!user) return;
+    yield [
+      {
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        emailVerifiedAt: user.emailVerifiedAt,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+    ];
+  },
+};

@@ -59,8 +59,9 @@ export async function login(req: Request, res: Response) {
 }
 
 /** Admin-only: clear a login lock/throttle bucket for an account or an IP.
- * Writes an audit line to the server log — there is no AuditEvent table yet
- * (ARCHITECTURE_ESSENTIALS.md known gaps), so this is the interim record. */
+ * Writes an audit line to the server log. Not wired into AuditEvent yet
+ * (issue #43 covered booking, doctor verification and payments only — see
+ * ARCHITECTURE.md §6.2.4), so this is the interim record. */
 export async function clearLoginAttempts(req: Request, res: Response) {
   const { email, ip } = clearLoginAttemptsSchema.parse(req.body);
   const cleared = await authService.clearLoginAttempts({ email, ip });
