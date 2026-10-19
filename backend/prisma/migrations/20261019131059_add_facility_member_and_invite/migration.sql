@@ -2,6 +2,14 @@
 -- Adds FacilityMember and FacilityInvite models,
 -- migrates existing 1:1 FacilityProfile/User links to FacilityMember with role=owner.
 -- Reversible: drops new tables and restores FacilityProfile.userId @unique.
+-- Idempotent: drops existing objects before creating (safe for re-deployment).
+
+DROP INDEX IF EXISTS "FacilityMember_userId_key";
+DROP TABLE IF EXISTS "FacilityMember";
+DROP INDEX IF EXISTS "FacilityInvite_facilityId_idx";
+DROP INDEX IF EXISTS "FacilityInvite_email_idx";
+DROP TABLE IF EXISTS "FacilityInvite";
+DROP TYPE IF EXISTS "FacilityRole";
 
 -- ── Create FacilityRole enum type ───────────────────────────────────────
 CREATE TYPE "FacilityRole" AS ENUM ('owner', 'staff');
@@ -18,9 +26,7 @@ CREATE TABLE "FacilityMember" (
     "facility"    TEXT NOT NULL REFERENCES "FacilityProfile"(id) ON DELETE CASCADE
 );
 
--- Create index for the unique constraint (explicit, though @@unique in Prisma
--- creates one; kept here for clarity and reversible migration).
-CREATE UNIQUE INDEX "FacilityMember_userId_key" ON "FacilityMember"("userId");
+
 
 -- Add foreign key constraint explicitly if not already handled by Prisma.
 -- (Prisma's `@relation` with `onDelete: Cascade` will be enforced by the DB trigger.)
@@ -63,6 +69,7 @@ DELETE FROM "FacilityInvite";
 
 -- Restore the original unique constraint on FacilityProfile.userId.
 -- Note: this re-creates the constraint; if data violates it the migration will fail.
+DROP INDEX IF EXISTS "FacilityProfile_userId_key";
 CREATE UNIQUE INDEX "FacilityProfile_userId_key" ON "FacilityProfile"("userId");
 
 DROP TABLE "FacilityInvite";

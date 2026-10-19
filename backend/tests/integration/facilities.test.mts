@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import bcryptjs from 'bcryptjs';
 import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
@@ -35,6 +36,20 @@ describe('Issue #75: multiple staff users per facility (fixed roles, no RBAC mat
     await pg.start();
     await pg.createDatabase('docforum_test');
 
+    // Reset migration tracking so we can re-deploy from clean state
+    // Prisma tracks applied migrations in _prisma_migrations table;
+    // dropping it ensures migrate deploy runs all migrations from scratch
+    const { Pool } = require('pg');
+    const resetPool = new Pool({
+      host: 'localhost',
+      port: PORT,
+      user: 'docforum',
+      password: 'docforum',
+      database: 'docforum_test',
+    });
+    await resetPool.query('DROP TABLE IF EXISTS "_prisma_migrations"');
+    await resetPool.end();
+
     execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
       cwd: BACKEND_ROOT,
       env: { ...process.env, DATABASE_URL: databaseUrl },
@@ -56,9 +71,12 @@ describe('Issue #75: multiple staff users per facility (fixed roles, no RBAC mat
   });
 
   // ── Helpers ──────────────────────────────────────────────────────
-  function createFacilityUser(email: string, password = 'longenough123') {
+  const SALT_ROUNDS = 4;
+
+  async function createFacilityUser(email: string, password = 'longenough123') {
+    const passwordHash = await bcryptjs.hash(password, SALT_ROUNDS);
     return prisma.user.create({
-      data: { email, passwordHash: password, role: 'facility' },
+      data: { email, passwordHash, role: 'facility' },
     });
   }
 
@@ -81,8 +99,11 @@ describe('Issue #75: multiple staff users per facility (fixed roles, no RBAC mat
   // ── Test: Migration: existing 1:1 links become owners ────────
   describe('Migration: existing 1:1 links become owners', () => {
     it('existing facility/user pairs become owners and can still log in', async () => {
+      // Create a facility user and profile first
       const facilityUser = await createFacilityUser('mig@example.com');
-      const facility = await prisma.facilityProfile.findFirst({ where: { userId: facilityUser.id } });
+      const facility = await prisma.facilityProfile.create({
+        data: { userId: facilityUser.id, name: `Facility ${runId}`, type: 'lab' },
+      });
       expect(facility).not.toBeNull();
 
       // After migration, every FacilityProfile becomes a FacilityMember with role=owner.
