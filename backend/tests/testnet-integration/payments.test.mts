@@ -41,6 +41,7 @@ const pg = new EmbeddedPostgres({
   port: PORT,
   persistent: false,
 });
+
 const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_payments_test`;
 
 // Phase 8, issue #43: fund/release/refund now take the audit actor. This
@@ -50,9 +51,22 @@ const TEST_ACTOR = { userId: null, role: null, requestId: `testnet-${runId}` };
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
-  const res = await fetch(`https://friendbot.stellar.org?addr=${encodeURIComponent(kp.publicKey())}`);
-  if (!res.ok) throw new Error(`Friendbot funding failed: ${res.status} ${await res.text()}`);
-  return kp;
+  let lastFailure: string | undefined;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const res = await fetch(`https://friendbot.stellar.org?addr=${encodeURIComponent(kp.publicKey())}`);
+      if (res.ok) return kp;
+      lastFailure = `HTTP ${res.status}`;
+      if (res.status !== 429 && res.status < 500) break;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.name : 'network error';
+    }
+    if (attempt < 4) {
+      const backoff = Math.min(1000 * 2 ** attempt, 16_000);
+      await new Promise((resolve) => setTimeout(resolve, backoff + Math.floor(Math.random() * 500)));
+    }
+  }
+  throw new Error(`Friendbot funding failed after 5 attempts (${lastFailure}).`);
 }
 
 describe('payments module against live testnet', () => {
@@ -106,6 +120,7 @@ describe('payments module against live testnet', () => {
   afterAll(async () => {
     await prisma?.$disconnect();
     await pg.stop();
+    fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
   it('funds and releases a payment intent end-to-end on testnet', async () => {
