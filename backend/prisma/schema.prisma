@@ -129,6 +129,9 @@ model User {
 
   emailVerificationTokens EmailVerificationToken[]
   adminInvitesSent AdminInvite[]
+  // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
+  // Opposite of AccessLog.accessedByUser.
+  accessLogs AccessLog[]
 
   @@index([role])
 }
