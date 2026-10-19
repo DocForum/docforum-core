@@ -26,7 +26,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | Request validation | Zod | Not originally listed here — added alongside Phase 1's real request bodies. Schemas live per-module (`modules/*/validation.ts`), thrown `ZodError`s are caught centrally by `middleware/error-handler.ts`. |
 | Password hashing | bcryptjs | Pure-JS, not a native bcrypt binding — one less native build dependency for a repo with no other native deps yet. |
 | Database | PostgreSQL | Relational integrity is critical (bookings, orders, referrals all have strict FK/state constraints); JSONB available for the flexible parts (intake payload). |
-| ORM / schema | Prisma | Schema-as-code, migrations, keeps `backend/prisma/schema.prisma` as the single source of truth for data models (mirrors §4 below). |
+| ORM / schema | Prisma 7, with the `@prisma/adapter-pg` (node-postgres) driver adapter — **upgraded 2026-10-16 to clear a high-severity advisory; see `docs/adr/0006`** | Schema-as-code, migrations, keeps `backend/prisma/schema.prisma` as the single source of truth for data models (mirrors §4 below). Two v7 facts that constrain where code goes: (a) there is no Rust query engine any more, so the client must be constructed with a driver adapter (`src/db/prisma-client.ts`) — bare `new PrismaClient()` throws; (b) the CLI's datasource URL lives in `backend/prisma.config.ts`, not in the schema's `datasource` block. The `prisma-client-js` generator is retained deliberately, so the client still generates into `node_modules/@prisma/client` and this backend stays CommonJS (see §3 note on `@docforum/escrow-sdk` being ESM-only). Requires Node >= 20.19. |
 | Auth | JWT access + refresh tokens, role claims (`patient` \| `doctor` \| `facility` \| `admin`) | Simple, stateless for API scaling; refresh rotation for security. |
 | Frontend | React + TypeScript, Vite | Fast dev loop, standard choice, no framework lock-in beyond React. |
 | Frontend state/data | React Query (server state) + lightweight store (Zustand) for client-only UI state | Avoids over-centralizing server data into a global store. |
@@ -55,6 +55,41 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
 - `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking, doctor verification, payment fund/release/refund. **Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here.
+
+### 3.1 Patient data export registry (Phase 8, issue #40)
+
+Right of access (`POST /patients/me/export`) is coordinated by `patients`,
+but **each module contributes its own section through its own `services/`
+interface** — `patients` never reads another module's tables to build an
+export. The pieces:
+
+- `modules/patients/services/export-registry.ts` — the `PatientExportSection`
+  contract (`name`, `version`, `pages(subject, pageSize)` yielding pages of
+  plain JSON items), `registerExportSection`, and a `paginate` keyset helper.
+- `src/export-sections.ts` — the one explicit list of registered sections,
+  called from `createApp()`. It's wiring, outside `modules/`, so `patients`
+  doesn't have to import every module that already imports `patients`.
+- Current sections: `account` (auth: email/phone/role, never the password
+  hash), `profile` (patients), `appointments` (appointments, with slot times
+  from `availability` and the doctor's name from `doctors`, both via their
+  services), `payments` (payments: amounts, status, on-chain tx hash /
+  escrow id / contract id; the platform's signing secrets never live in a
+  row and can't reach an export).
+
+**Adding a module with patient data (referrals, prescriptions, lab orders,
+…):** export a `PatientExportSection` from that module's `services/` and add
+it to `src/export-sections.ts`. Rules for a section: an explicit field
+allowlist (never spread a Prisma row — a column added later must not leak by
+default); page through your own tables with `paginate` (at most `pageSize`
+rows in memory); batch any cross-module lookups per page through the other
+module's service; JSON-safe values only (BigInt → string). Bump `version`
+when the item shape changes. A section that throws fails the whole export —
+there is no "partial" bundle.
+
+Generation runs in `src/jobs/patient-exports.ts` (plain intervals, woken
+immediately by a new request). Sections run one at a time and the bundle is
+flushed in bounded chunks to `PatientExportChunk` (§4.11), so memory is
+bounded by one page of rows plus one chunk regardless of history length.
 
 ## 4. Data models
 
@@ -230,6 +265,32 @@ Transitions recorded (action: from → to):
 - `appointment.booked`: `null → scheduled` (metadata: slot id, doctor profile id, origin)
 - `doctor.verification_status_changed`: previous → new verification status (read under `FOR UPDATE`; a no-op set records nothing)
 - `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
+### 4.11 Patient data export (Phase 8, issue #40)
+```
+PatientExport
+  id, patient_profile_id (FK -> PatientProfile, cascade — a derived copy)
+  status (enum: pending|processing|ready|failed|expired)
+  schema_version (nullable int — bundle format written), attempt (int, fencing token)
+  started_at, generated_at, expires_at (nullable)
+  size_bytes, chunk_count (nullable — set on ready)
+  failure_code, failed_section (nullable — machine-readable only, never an error message)
+  created_at, updated_at
+  # Every transition is a conditional UPDATE on the expected status (and
+    attempt), so two workers can't both generate one job and a stale claim
+    can't publish over a newer one. One in-flight job per patient (request
+    locks the PatientProfile row FOR UPDATE).
+  # The row is kept after expiry (no patient data in it) so status reads
+    answer "expired" rather than 404.
+
+PatientExportChunk
+  export_id (FK -> PatientExport, cascade), attempt, seq — composite PK
+  data (text — one slice of the JSON bundle, ~PATIENT_EXPORT_CHUNK_BYTES)
+  # Only chunks of the export's current attempt are ever served; the cleanup
+    job deletes other attempts' and expired/failed exports' chunks.
+```
+Bundle format (schemaVersion 1): `{ format: "docforum.patient-export",
+schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }`
+— see §3.1 for where sections come from.
 
 ## 5. Key flows (sequence-level, not code)
 
@@ -271,6 +332,7 @@ Transitions recorded (action: from → to):
 1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is.
 2. BullMQ/Redis job queue before there's a single job that needs it — fine to stub with a simple cron/interval check initially and introduce a real queue when reminder/expiry logic actually exists.
 3. Designing for horizontal service extraction (module boundary purity, §3) before there's a single reason to split — worth doing lightly (it's cheap discipline), but not worth extra ceremony (e.g., separate repos, separate CI, internal API versioning) yet.
+4. **Added 2026-10-17 (issue #40):** export bundles are stored as text chunks in Postgres (`PatientExportChunk`, §4.11), not in object storage as §2's file-storage row prescribes — no object-storage provider is integrated yet, and a filesystem store would break on Render's ephemeral disk and on any second instance. The chunks are read/written only by `patients/repositories`, are short-lived (`PATIENT_EXPORT_TTL_HOURS`, default 24) and are deleted by the cleanup job, so moving to S3 later swaps one storage seam rather than the design. Revisit when lab-result storage (Phase 5, issue #16) picks a provider.
 
 ## 7. Non-functional / cross-cutting
 

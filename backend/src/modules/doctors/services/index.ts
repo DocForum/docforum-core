@@ -16,6 +16,14 @@ export async function getDoctorProfileById(doctorProfileId: string) {
   return profile;
 }
 
+/** Batch id -> { id, fullName } lookup for other modules (patient data
+ * export, issue #40). Public-facing fields only. */
+export async function getDoctorSummariesByIds(ids: string[]): Promise<Map<string, { id: string; fullName: string }>> {
+  if (ids.length === 0) return new Map();
+  const rows = await doctorsRepo.findDoctorSummariesByIds([...new Set(ids)]);
+  return new Map(rows.map((row) => [row.id, { id: row.id, fullName: row.fullName }]));
+}
+
 /** Only a doctor acting on their own profile may generate slots for it —
  * no admin-on-behalf-of override in Phase 1. */
 export async function assertOwnsDoctorProfile(userId: string, doctorProfileId: string) {
