@@ -11,6 +11,10 @@ export function findDoctorProfileById(id: string, db: DbClient = prisma) {
   return db.doctorProfile.findUnique({ where: { id } });
 }
 
+export function findDoctorSummariesByIds(ids: string[]) {
+  return prisma.doctorProfile.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true } });
+}
+
 /** Reads the current verification status with a row lock, inside a
  * transaction (issue #43): two admins changing it at once are serialised,
  * so each audit event records the state that was really replaced. */
