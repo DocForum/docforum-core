@@ -3,7 +3,7 @@
 // (login + refresh + live access tokens all refused), the last-active-admin
 // guard, and the promise that deactivation deletes nothing.
 //
-// Self-contained embedded Postgres, own port (5438) so it runs alongside the
+// Self-contained embedded Postgres, own port (5439) so it runs alongside the
 // other integration files.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -15,7 +15,7 @@ import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5438;
+const PORT = 5439;
 const runId = Date.now();
 const PASSWORD = 'longenough123';
 
