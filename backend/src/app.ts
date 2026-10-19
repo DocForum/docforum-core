@@ -16,6 +16,7 @@ import { registerPatientExportSections } from './export-sections';
 import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
 import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
+import { notificationsRouter } from './modules/notifications/routes';
 import { referralsRouter } from './modules/referrals/routes';
 
 export function createApp() {
@@ -59,6 +60,7 @@ export function createApp() {
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);
+  app.use('/notifications', notificationsRouter);
   app.use('/admin', auditRouter);
   app.use('/admin/payments', escrowEventsRouter);
 

@@ -26,6 +26,12 @@ enum Role {
   admin
 }
 
+enum NotificationChannel {
+  in_app
+  email
+  sms
+}
+
 enum VerificationStatus {
   pending
   verified
@@ -148,6 +154,7 @@ model User {
   // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
   // Opposite of AccessLog.accessedByUser.
   accessLogs              AccessLog[]
+  notifications           Notification[]
 
   @@index([role])
 }
@@ -724,12 +731,18 @@ model FulfillmentRecord {
 }
 
 model Notification {
-  id        String    @id @default(uuid())
+  id        String              @id @default(uuid())
+  userId    String
   type      String
   payload   Json
+  channel   NotificationChannel @default(in_app)
   readAt    DateTime?
-  createdAt DateTime  @default(now())
-  // TODO: userId
+  createdAt DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt, id])
+  @@index([userId, readAt, createdAt, id])
 }
 
 // --- Stellar payments (docforum-org split) -------------------------------
