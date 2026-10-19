@@ -12,6 +12,7 @@ import { patientsRouter } from './modules/patients/routes';
 import { registerPatientExportSections } from './export-sections';
 import { auditRouter } from './modules/audit/routes';
 import { requestId } from './middleware/request-id';
+import { facilitiesRouter } from './modules/facilities/routes';
 
 export function createApp() {
   const app = express();
@@ -43,6 +44,7 @@ export function createApp() {
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
   app.use('/admin', auditRouter);
+  app.use('/facilities', facilitiesRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.

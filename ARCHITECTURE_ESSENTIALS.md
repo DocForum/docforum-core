@@ -20,7 +20,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
-`User` → `PatientProfile | DoctorProfile | FacilityProfile`
+`User` → `PatientProfile | DoctorProfile | FacilityProfile | FacilityMember`
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
 `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
@@ -30,6 +30,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
+`FacilityMember` (new — Phase 5, issue #75): user belongs to at most one facility (unique constraint on userId); role enum owner|staff; fixed roles, no RBAC matrix
+`FacilityInvite` (new — Phase 5, issue #75): owner can create/list/revoke single-use, expiring invites; token hash stored, never plaintext
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
 - **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule.
@@ -49,7 +51,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 ## Overengineering guardrails (things NOT to build yet)
 - No custom video/WebRTC.
 - No ML-based doctor-matching/recommendation.
-- No configurable RBAC matrix — 4 fixed roles only.
+- No configurable RBAC matrix — 4 fixed roles for User/Doctor (patient|doctor|facility|admin), and 2 fixed roles for FacilityMember (owner|staff).
 - No chat delivery receipts/typing indicators — plain message log.
 - No custom scheduling recurrence engine — fixed-length slot generation only.
 - No microservice split, no separate CI/repos per module.

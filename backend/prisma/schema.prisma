@@ -26,6 +26,13 @@ enum Role {
   admin
 }
 
+// Facility-specific roles for FacilityMember: owner or staff.
+// The global Role enum (patient|doctor|facility|admin) remains for User/Doctor/DoctorRole usage.
+enum FacilityRole {
+  owner
+  staff
+}
+
 enum VerificationStatus {
   pending
   verified
@@ -98,25 +105,30 @@ enum Urgency {
 // =========================================================================
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  phone        String?
-  passwordHash String
-  role         Role
+  id              String    @id @default(uuid())
+  email           String    @unique
+  phone           String?
+  passwordHash    String
+  role            Role
   // Phase 8 (issue #34): null = never verified. Self-serve signup leaves
   // this null; existing rows were backfilled to `createdAt` in the
   // add_email_verification migration. Distinct from
   // DoctorProfile.verificationStatus, which is the separate, manual
   // admin verification of a doctor's credentials — do not conflate.
   emailVerifiedAt DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  patientProfile  PatientProfile?
-  doctorProfile   DoctorProfile?
-  facilityProfile FacilityProfile?
+  patientProfile PatientProfile?
+  doctorProfile  DoctorProfile?
+
+  // Facility membership: a user can belong to at most one facility.
+  // Replaced the 1:1 FacilityProfile link; multiple staff accounts per
+  // facility share the same facility via FacilityMember rows.
+  facilityMember FacilityMember?
 
   emailVerificationTokens EmailVerificationToken[]
+  facilityProfiles        FacilityProfile[]
 
   @@index([role])
 }
@@ -168,17 +180,17 @@ model LoginAttempt {
 }
 
 model PatientProfile {
-  id          String    @id @default(uuid())
-  userId      String    @unique
-  fullName    String
-  dateOfBirth DateTime?
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  fullName       String
+  dateOfBirth    DateTime?
   // Nullable, no FK relation on purpose — the minor/dependent consent and
   // account-ownership model is an explicit open PRD question (§8.2.5), not
   // resolved here. Don't build on top of this field assuming it means
   // anything enforced yet.
   guardianUserId String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   appointments   Appointment[]
@@ -290,16 +302,52 @@ model DoctorSpecialty {
 
 model FacilityProfile {
   id        String       @id @default(uuid())
-  userId    String       @unique
+  userId    String
   name      String
   type      FacilityType
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  capabilities   FacilityCapability[]
-  paymentIntents PaymentIntent[]
-  walletLink     WalletLink?
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  capabilities    FacilityCapability[]
+  paymentIntents  PaymentIntent[]
+  walletLink      WalletLink?
+  facilityMembers FacilityMember[]
+  facilityInvites FacilityInvite[]
+}
+
+// FacilityMember links a user to a facility with a fixed role.
+// A user can belong to at most one facility (unique constraint on userId).
+// Roles are fixed: owner | staff. No configurable permissions matrix.
+model FacilityMember {
+  id         String       @id @default(uuid())
+  userId     String
+  facilityId String
+  role       FacilityRole // owner | staff
+  createdAt  DateTime     @default(now())
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  facility FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+
+  @@unique([userId])
+}
+
+// FacilityInvite represents a pending invitation for a user to join a facility.
+// Tokens are hashed, single-use, and expire after a configurable TTL.
+// Owners can create, list, and revoke invites.
+model FacilityInvite {
+  id         String       @id @default(uuid())
+  facilityId String
+  email      String
+  role       FacilityRole // owner | staff — the role the invitee will have if they accept
+  tokenHash  String       @unique // never plaintext
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime     @default(now())
+
+  facility FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+
+  @@unique([facilityId, email, tokenHash])
 }
 
 model FacilityCapability {
@@ -308,7 +356,7 @@ model FacilityCapability {
   capabilityType    CapabilityType
   // e.g. a lab test category, or a medication class — free text on purpose,
   // no controlled vocabulary decided yet (out of Phase 1 scope).
-  detail String?
+  detail            String?
 
   facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id], onDelete: Cascade)
 
@@ -370,19 +418,19 @@ model IntakeForm {
 }
 
 model Consultation {
-  id        String              @id @default(uuid())
+  id        String               @id @default(uuid())
   outcome   ConsultationOutcome?
   notes     String?
-  createdAt DateTime            @default(now())
+  createdAt DateTime             @default(now())
   // TODO: appointmentId (unique)
 }
 
 model Referral {
-  id             String         @id @default(uuid())
-  status         ReferralStatus @default(pending)
-  snapshotNotes  String
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  id            String         @id @default(uuid())
+  status        ReferralStatus @default(pending)
+  snapshotNotes String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
   // TODO: sourceConsultationId, referringDoctorId, targetSpecialtyId,
   // targetDoctorId (nullable), snapshotIntakeId, resultingAppointmentId (nullable)
   // IMPORTANT: snapshotNotes / snapshotIntakeId must be copies, not live
@@ -390,18 +438,18 @@ model Referral {
 }
 
 model Prescription {
-  id                     String      @id @default(uuid())
-  status                 OrderStatus @default(issued)
-  createdAt              DateTime    @default(now())
+  id        String      @id @default(uuid())
+  status    OrderStatus @default(issued)
+  createdAt DateTime    @default(now())
   // TODO: consultationId, patientProfileId, prescribingDoctorId, supersedesPrescriptionId (nullable, self-relation)
 }
 
 model PrescriptionItem {
-  id       String @id @default(uuid())
-  drugName String
-  dosage   String
+  id        String @id @default(uuid())
+  drugName  String
+  dosage    String
   frequency String
-  duration String
+  duration  String
   // TODO: prescriptionId
 }
 
@@ -423,12 +471,16 @@ model LabResult {
 }
 
 model FulfillmentRecord {
-  id        String            @id @default(uuid())
-  orderType String // "prescription" | "lab_order" — see ARCHITECTURE.md §6.1.3 caveat on this polymorphic design
-  orderId   String
-  status    FulfillmentStatus @default(pending)
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
+  id          String            @id @default(uuid())
+  orderType   String // "prescription" | "lab_order" — see ARCHITECTURE.md §6.1.3 caveat on this polymorphic design
+  orderId     String
+  status      FulfillmentStatus @default(pending)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  // Actor staff user who performed the fulfillment action.
+  // Null for legacy rows; set by the service layer when recording the action.
+  actorUserId String?
+
   // TODO: facilityId
   // NOTE: this polymorphic (orderType, orderId) pair is flagged in
   // ARCHITECTURE.md §6.1.3 as a design smell to revisit — may be split
@@ -436,11 +488,11 @@ model FulfillmentRecord {
 }
 
 model Notification {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   type      String
   payload   Json
   readAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
   // TODO: userId
 }
 
@@ -474,15 +526,15 @@ enum OrderTypeForPayment {
 }
 
 model PaymentIntent {
-  id         String              @id @default(uuid())
-  orderType  OrderTypeForPayment
+  id        String              @id @default(uuid())
+  orderType OrderTypeForPayment
   // Opaque — Prescription/LabOrder don't exist as real records yet
   // (Phase 4). Not validated against anything until then.
-  orderId    String
-  status     PaymentIntentStatus @default(created)
+  orderId   String
+  status    PaymentIntentStatus @default(created)
 
   patientProfileId String
-  patientProfile   PatientProfile @relation(fields: [patientProfileId], references: [id])
+  patientProfile   PatientProfile  @relation(fields: [patientProfileId], references: [id])
   facilityId       String
   facility         FacilityProfile @relation(fields: [facilityId], references: [id])
 

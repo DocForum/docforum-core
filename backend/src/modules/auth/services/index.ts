@@ -34,6 +34,7 @@ import type { PatientExportSection } from '../../patients/services';
 // reaching into services/tokens.ts directly.
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
+export { findUserByEmail, createSelfServeUser } from '../repositories';
 
 // Re-exported for the same reason: tests (and, at Phase 6, the provider
 // integration) replace the outbound email sender through this module's

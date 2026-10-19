@@ -240,7 +240,25 @@ the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZ
 
 ## Not yet implemented
 
-Everything else in `ARCHITECTURE.md` §3's module list (`facilities`,
-`consultations`, `referrals`, `prescriptions`, `lab-orders`,
+Facility API (Phase 5, issue #75):
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /facilities/:facilityId/members` | owner | List all members of a facility |
+| `DELETE /facilities/:facilityId/members/:userId` | owner | Remove a staff member (cannot remove last owner) |
+| `POST /facilities/:facilityId/invites` | owner | Invite staff by email; returns one-time token |
+| `GET /facilities/:facilityId/invites` | owner | List pending invites |
+| `DELETE /facilities/:facilityId/invites/:tokenHash` | owner | Revoke a pending invite |
+| `POST /facilities/invites/accept` | any | Accept invite: new user (create account) or existing user; rejects if user already in a facility |
+
+| Method & path | Auth | Notes |
+|---|---|---|
+| `DELETE /facilities/:facilityId/members/:userId` | staff | **403 Forbidden** — staff cannot remove members |
+| `POST /facilities/:facilityId/invites` | staff | **403 Forbidden** — staff cannot invite |
+| `GET /facilities/:facilityId/invites` | staff | **403 Forbidden** — staff cannot list invites |
+| `DELETE /facilities/:facilityId/invites/:tokenHash` | staff | **403 Forbidden** — staff cannot revoke invites |
+
+Staff of facility A cannot access facility B's routes.
+
+Everything else in `ARCHITECTURE.md` §3's module list (`consultations`, `referrals`, `prescriptions`, `lab-orders`,
 `pharmacy-orders`, `payments`, `notifications`) has no routes yet — Phase
 2 onward, see `ROADMAP.md`.

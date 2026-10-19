@@ -128,8 +128,21 @@ Specialty (controlled vocabulary, admin-managed)
 DoctorSpecialty (join table)
   id, doctor_profile_id, specialty_id
 
-FacilityProfile (1:1 User)
+FacilityProfile (1:1 User → via FacilityMember)
   id, user_id, name, type (enum: lab|pharmacy), capabilities: FacilityCapability[]
+
+FacilityMember (new — Phase 5, issue #75)
+  user_id (unique, FK -> User), facility_id (FK -> FacilityProfile), role (enum: owner|staff), created_at
+  # A user can belong to at most one facility (unique constraint on user_id).
+  # Roles are fixed: owner | staff. No configurable permissions matrix.
+  # Each facility must keep at least one owner (enforced in service layer + DB constraint).
+
+FacilityInvite (new — Phase 5, issue #75)
+  id, facility_id (FK -> FacilityProfile), email, role (enum: owner|staff),
+  token_hash (unique, never plaintext), expires_at, consumed_at (nullable), created_at
+  # Tokens are hashed, single-use, and expire after a configurable TTL.
+  # Owners can create, list, and revoke invites.
+```
 
 FacilityCapability
   id, facility_profile_id, capability_type (enum: lab_test|medication_dispense), detail (e.g. test category)
@@ -207,10 +220,11 @@ LabResult
 ```
 FulfillmentRecord
   id, order_type (enum: prescription|lab_order), order_id (polymorphic ref)
+  actor_user_id (nullable, FK -> User — staff user who performed the action)
   facility_id, status (enum: pending|in_progress|fulfilled|rejected)
   created_at, updated_at
 ```
-Design note: kept separate from `Prescription`/`LabOrder` so a facility's operational status doesn't need write access to the clinical order record itself — it only writes to its own fulfillment row. Reduces blast radius of a compromised/misbehaving facility account.
+Design note: kept separate from `Prescription`/`LabOrder` so a facility's operational status doesn't need write access to the clinical order record itself — it only writes to its own fulfillment row. Reduces blast radius of a compromised/misbehaving facility account. The `actorUserId` is set by the service layer when recording the fulfillment action, enabling attribution of who fulfilled each order. Existing rows have `actorUserId` null (marked as legacy).
 
 ### 4.8 Notifications
 ```
