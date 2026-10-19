@@ -77,10 +77,16 @@ export function listEligibleFacilities(filters: EligibleFacilityFilters): Promis
 
   const { lat, lng } = filters.near;
   const radiusKm = filters.radiusKm ?? null;
+  // NOTE (Prisma 7 / driver adapters): bound params travel with an
+  // unspecified type OID, so Postgres does the type inference. Expressions
+  // like `${lat} - ${boxLat}` are `unknown - unknown` — an operator Postgres
+  // refuses as ambiguous (42725). So: the box bounds are arithmetically
+  // precomputed here in JS, and every numeric param that reaches the SQL
+  // carries an explicit `::float8`.
   // Bounding-box half-extents in degrees. Guarded against division by
   // ~0 near the poles (box just becomes enormous — still a superset).
   const boxLat = (radiusKm ?? 0) / KM_PER_DEG_LAT;
-  const boxLng = radiusKm === null ? null : radiusKm / Math.max(Math.abs(Math.cos((lat * Math.PI) / 180)), 1e-9) / KM_PER_DEG_LNG;
+  const boxLng = (radiusKm ?? 0) / Math.max(Math.abs(Math.cos((lat * Math.PI) / 180)), 1e-9) / KM_PER_DEG_LNG;
 
   // When no radius is given the box can't be prefiltered either — the
   // full scan still computes exact distances and sorts, which is fine at
@@ -92,13 +98,13 @@ export function listEligibleFacilities(filters: EligibleFacilityFilters): Promis
       : Prisma.sql`AND (
           fp."latitude" IS NULL OR fp."longitude" IS NULL
           OR (
-            fp."latitude" BETWEEN ${lat} - ${boxLat} AND ${lat} + ${boxLat}
-            AND fp."longitude" BETWEEN ${lng} - ${boxLng} AND ${lng} + ${boxLng}
+            fp."latitude" BETWEEN ${lat - boxLat}::float8 AND ${lat + boxLat}::float8
+            AND fp."longitude" BETWEEN ${lng - boxLng}::float8 AND ${lng + boxLng}::float8
           )
         )`;
 
   const radiusFilter =
-    radiusKm === null ? Prisma.empty : Prisma.sql`WHERE "distanceKm" IS NULL OR "distanceKm" <= ${radiusKm}`;
+    radiusKm === null ? Prisma.empty : Prisma.sql`WHERE "distanceKm" IS NULL OR "distanceKm" <= ${radiusKm}::float8`;
 
   return prisma.$queryRaw<EligibleFacilityRow[]>(Prisma.sql`
     WITH scored AS (
@@ -106,10 +112,10 @@ export function listEligibleFacilities(filters: EligibleFacilityFilters): Promis
         fp."id", fp."name", fp."type"::text AS "type", fp."address",
         CASE
           WHEN fp."latitude" IS NULL OR fp."longitude" IS NULL THEN NULL
-          ELSE 2 * ${EARTH_RADIUS_KM} * asin(least(1.0, sqrt(
-            power(sin(radians(fp."latitude" - ${lat}) / 2), 2)
-            + cos(radians(${lat})) * cos(radians(fp."latitude"))
-              * power(sin(radians(fp."longitude" - ${lng}) / 2), 2)
+          ELSE 2 * ${EARTH_RADIUS_KM}::float8 * asin(least(1.0, sqrt(
+            power(sin(radians(fp."latitude" - ${lat}::float8) / 2), 2)
+            + cos(radians(${lat}::float8)) * cos(radians(fp."latitude"))
+              * power(sin(radians(fp."longitude" - ${lng}::float8) / 2), 2)
           )))
         END AS "distanceKm"
       FROM "FacilityProfile" fp
