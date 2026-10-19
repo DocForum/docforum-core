@@ -292,6 +292,10 @@ Bundle format (schemaVersion 1): `{ format: "docforum.patient-export",
 schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }`
 — see §3.1 for where sections come from.
 
+### 4.12 Escrow chain event observations (issue #86)
+
+EscrowEventCursor has one row per deployed escrow contract and persists the Soroban RPC pagination cursor and retention error. EscrowChainEvent is uniquely keyed by (contractId, eventId) and records the contract event, ledger, transaction hash, escrow id, match state, and alert timestamp. These are observations, not a source of payment state: matching checks the locally owned PaymentIntent; the poller never mutates a payment transition.
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)

@@ -244,3 +244,8 @@ Everything else in `ARCHITECTURE.md` §3's module list (`facilities`,
 `consultations`, `referrals`, `prescriptions`, `lab-orders`,
 `pharmacy-orders`, `payments`, `notifications`) has no routes yet — Phase
 2 onward, see `ROADMAP.md`.
+
+
+## Escrow chain events (/admin/payments/escrow-events)
+
+Admin-only read endpoint. Optional state filter accepts pending, matched, or unmatched; limit is 1�w^~)�w200 (default 50). It returns persisted Soroban events and per-contract cursors. Unmatched release/refund events produce a high-severity structured log, an optional JSON POST to ESCROW_EVENT_ALERT_WEBHOOK_URL, and an unmatched row visible here. A retention-window failure sets catchupError on the corresponding cursor; operators must reconcile the gap before changing the configured start ledger.

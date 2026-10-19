@@ -93,3 +93,8 @@ assigned to `facilityId`) as a follow-up, not assumed done by this ADR.
   the roadmap already flagged: "don't let it drift into a manual/admin-
   triggered release" is the target once Phase 4/5 exist; v1's admin-only
   gate is the honest interim, not the destination.
+
+
+## Event monitoring and releaser-key alerts (issue #86)
+
+The backend polls Soroban RPC getEvents independently for each configured contract deployment, persisting each page and its cursor together. Events are deduplicated by contract and RPC event id, then matched against the local PaymentIntent state. Unmatched release/refund events raise high-severity structured logs, can be forwarded to ESCROW_EVENT_ALERT_WEBHOOK_URL, and are visible through the admin endpoint. If the RPC retention window has advanced beyond a saved cursor, the poller records an explicit catch-up error and does not silently skip the gap. This detects unexpected terminal contract events; it does not itself protect the releaser key.

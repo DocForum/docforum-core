@@ -140,5 +140,17 @@ export const config = {
     platformReleaserSecret: process.env.PLATFORM_RELEASER_SECRET,
     escrowContractId: process.env.ESCROW_CONTRACT_ID,
     escrowTokenId: process.env.ESCROW_TOKEN_ID,
+    sorobanRpcUrl: process.env.SOROBAN_RPC_URL ?? 'https://soroban-testnet.stellar.org',
+    escrowContracts: (process.env.ESCROW_CONTRACTS ?? (process.env.ESCROW_CONTRACT_ID ? `${process.env.ESCROW_CONTRACT_ID}@${process.env.ESCROW_EVENT_START_LEDGER ?? '1'}` : ''))
+      .split(',')
+      .map((entry) => {
+        const [contractId, rawStartLedger = '1'] = entry.trim().split('@');
+        const startLedger = Number(rawStartLedger);
+        if (!contractId || !Number.isSafeInteger(startLedger) || startLedger < 1) throw new Error(`Invalid ESCROW_CONTRACTS entry: ${entry}`);
+        return { contractId, startLedger };
+      }),
+    escrowEventPollIntervalSeconds: Number(process.env.ESCROW_EVENT_POLL_INTERVAL_SECONDS ?? 15),
+    escrowEventAlertWebhookUrl: process.env.ESCROW_EVENT_ALERT_WEBHOOK_URL,
+
   },
 } as const;

@@ -21,6 +21,7 @@ import type { PaymentIntent, PaymentIntentStatus, Prisma } from '@prisma/client'
 // Test seam re-exported through the service surface (same convention as the
 // auth module's setEmailSender) — see escrow-sdk-loader.ts.
 export { setEscrowSdkForTests } from './escrow-sdk-loader';
+export { listEscrowEvents } from './escrow-events';
 export type { EscrowSdkModule } from './escrow-sdk-loader';
 
 async function requirePaymentsConfig() {

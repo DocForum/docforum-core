@@ -526,6 +526,42 @@ model WalletLink {
   updatedAt DateTime @updatedAt
 }
 
+// Soroban event ingestion (issue #86). Cursors are per contract deployment;
+// persisted events are immutable observations used for reconciliation/alerts.
+enum EscrowChainEventState {
+  pending
+  matched
+  unmatched
+}
+
+model EscrowEventCursor {
+  contractId   String   @id
+  startLedger  Int
+  cursor       String?
+  lastLedger   Int?
+  catchupError String?
+  updatedAt    DateTime @updatedAt
+}
+
+model EscrowChainEvent {
+  id               String                 @id @default(uuid())
+  eventId          String
+  contractId       String
+  ledger           Int
+  txHash           String?
+  escrowId         BigInt?
+  eventType        String
+  state            EscrowChainEventState  @default(pending)
+  paymentIntentId  String?
+  payload          Json?
+  detectedAt       DateTime               @default(now())
+  alertedAt        DateTime?
+
+  @@unique([contractId, eventId])
+  @@index([state, detectedAt])
+  @@index([contractId, ledger])
+}
+
 // --- Audit trail (Phase 8, issue #43) -------------------------------------
 // One row per state transition on a record that matters for clinical,
 // legal or financial accountability (PRD §7: "who, when"). Written by the

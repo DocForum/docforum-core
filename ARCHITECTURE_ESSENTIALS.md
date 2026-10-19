@@ -59,3 +59,9 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - Data model source of truth: `backend/prisma/schema.prisma`
 - Frontend: `frontend/src/{pages,components,features,hooks,services,store,types}`
 - Roadmap / status: `ROADMAP.md` — **must be updated on every contribution that changes scope or completes work**.
+
+
+## Escrow event monitoring (issue #86)
+- EscrowEventCursor stores one pagination cursor per contract deployment; configure each historical deployment as ESCROW_CONTRACTS=CONTRACT_ID@START_LEDGER,...
+- EscrowChainEvent stores deduplicated Soroban events. The admin endpoint is GET /admin/payments/escrow-events.
+- Unmatched release/refund events are high-severity alerts; RPC retention loss is surfaced as catchupError and must be reconciled explicitly.

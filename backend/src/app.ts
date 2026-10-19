@@ -11,6 +11,7 @@ import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
 import { registerPatientExportSections } from './export-sections';
 import { auditRouter } from './modules/audit/routes';
+import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 
 export function createApp() {
@@ -43,6 +44,7 @@ export function createApp() {
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
   app.use('/admin', auditRouter);
+  app.use('/admin/payments', escrowEventsRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.
