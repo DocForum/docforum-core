@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import EmbeddedPostgres from 'embedded-postgres';
+import { createOrderFixture, createPaymentIntentForFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5442;
@@ -170,33 +171,16 @@ describe('patient data export', () => {
     facilityId = (
       await prisma.facilityProfile.create({ data: { userId: facilityUser.id, name: 'Lagos Lab', type: 'lab' } })
     ).id;
-    await prisma.paymentIntent.create({
-      data: {
-        orderType: 'lab_order',
-        orderId: 'order-1',
-        patientProfileId: alice.profileId,
-        facilityId,
-        amountStroops: 12_345_678_901n,
-        status: 'escrowed',
-        escrowId: 42n,
-        stellarTxHash: 'a'.repeat(64),
-        sorobanContractId: 'CCONTRACT',
-      },
-    });
-    await prisma.paymentIntent.create({
-      data: { orderType: 'prescription', orderId: 'order-2', patientProfileId: alice.profileId, facilityId, amountStroops: 5n },
-    });
-    // Bob's payment must never show up in Alice's export.
-    await prisma.paymentIntent.create({
-      data: {
-        orderType: 'prescription',
-        orderId: 'bob-order',
-        patientProfileId: bob.profileId,
-        facilityId,
-        amountStroops: 9n,
-        stellarTxHash: 'b'.repeat(64),
-      },
-    });
+    const aliceLabOrder = await createOrderFixture(prisma, { patientProfileId: alice.profileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: 12_345_678_901n, tag: `alice-lab-${runId}` });
+    const aliceLabPayment = await createPaymentIntentForFixture(prisma, aliceLabOrder, 'escrowed');
+    await prisma.paymentIntent.update({ where: { id: aliceLabPayment.id }, data: { escrowId: 42n, stellarTxHash: 'a'.repeat(64), sorobanContractId: 'CCONTRACT' } });
+    const alicePrescription = await createOrderFixture(prisma, { patientProfileId: alice.profileId, facilityProfileId: facilityId, kind: 'prescription', amountStroops: 5n, tag: `alice-rx-${runId}` });
+    await createPaymentIntentForFixture(prisma, alicePrescription);
+    const bobPrescription = await createOrderFixture(prisma, { patientProfileId: bob.profileId, facilityProfileId: facilityId, kind: 'prescription', amountStroops: 9n, tag: `bob-rx-${runId}` });
+    await prisma.paymentIntent.create({ data: {
+      prescriptionId: bobPrescription.id, patientProfileId: bob.profileId, facilityId,
+      amountStroops: 9n, stellarTxHash: 'b'.repeat(64),
+    } });
   }, 180_000);
 
   afterAll(async () => {
@@ -291,7 +275,7 @@ describe('patient data export', () => {
     expect(bundle.schemaVersion).toBe(1);
     expect(bundle.exportId).toBe(exportId);
     expect(new Date(bundle.generatedAt).toISOString()).toBe(bundle.generatedAt);
-    expect(Object.keys(bundle.sections)).toEqual(['account', 'appointments', 'payments', 'profile']);
+    expect(Object.keys(bundle.sections)).toEqual(['account', 'appointments', 'lab_orders', 'payments', 'prescriptions', 'profile']);
 
     expect(bundle.sections.account.items).toEqual([
       expect.objectContaining({ id: alice.userId, email: alice.email, role: 'patient' }),
@@ -312,7 +296,7 @@ describe('patient data export', () => {
     const payments = bundle.sections.payments.items;
     expect(payments).toHaveLength(2);
     expect(payments[0]).toMatchObject({
-      orderType: 'lab_order',
+      labOrderId: aliceLabOrder.id,
       status: 'escrowed',
       amountStroops: '12345678901',
       escrowId: '42',
@@ -320,7 +304,7 @@ describe('patient data export', () => {
       sorobanContractId: 'CCONTRACT',
       facility: { id: facilityId, name: 'Lagos Lab' },
     });
-    expect(payments[1]).toMatchObject({ orderType: 'prescription', stellarTxHash: null, escrowId: null });
+    expect(payments[1]).toMatchObject({ prescriptionId: alicePrescription.id, stellarTxHash: null, escrowId: null });
 
     // Nothing that isn't Alice's, and nothing operational or secret.
     const passwordHash = (await prisma.user.findUniqueOrThrow({ where: { id: alice.userId } })).passwordHash;

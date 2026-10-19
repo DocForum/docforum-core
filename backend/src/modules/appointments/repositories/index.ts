@@ -29,3 +29,8 @@ export function findAppointmentsForPatient(patientProfileId: string) {
     orderBy: { createdAt: 'desc' },
   });
 }
+
+/** Minimal appointment context for a doctor-owned consultation. */
+export function findAppointmentDoctorContext(id: string) {
+  return prisma.appointment.findUnique({ where: { id }, include: { doctorProfile: { select: { id: true, userId: true, verificationStatus: true } } } });
+}

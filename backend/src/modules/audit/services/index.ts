@@ -24,7 +24,7 @@ export interface AuditActor {
 
 export const SYSTEM_ACTOR: AuditActor = { userId: null, role: null, requestId: null };
 
-export type AuditEntityType = 'Appointment' | 'DoctorProfile' | 'PaymentIntent';
+export type AuditEntityType = 'Appointment' | 'DoctorProfile' | 'PaymentIntent' | 'Consultation' | 'Prescription' | 'LabOrder';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;

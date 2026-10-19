@@ -180,10 +180,10 @@ Design note: `snapshot_notes` and `snapshot_intake_id` deliberately duplicate da
 ### 4.5 Prescriptions (versioned, append-only)
 ```
 Prescription
-  id, consultation_id (FK), patient_profile_id, prescribing_doctor_id
-  status (enum: issued|fulfilled|expired|superseded)
-  supersedes_prescription_id (nullable, self-FK — corrections create a new row)
-  created_at
+  id, consultation_id (FK), patient_profile_id (FK), prescribing_doctor_id (FK)
+  facility_profile_id (FK to pharmacy), amount_stroops (clinician-entered XLM total)
+  supersedes_prescription_id (nullable, unique self-FK), created_at
+  # Corrections create a child row and never update the issued row.
 
 PrescriptionItem
   id, prescription_id (FK), drug_name, dosage, frequency, duration
@@ -192,16 +192,20 @@ PrescriptionItem
 ### 4.6 Lab orders (versioned, append-only)
 ```
 LabOrder
-  id, consultation_id (FK), patient_profile_id, ordering_doctor_id
-  test_type, urgency (enum: routine|urgent), notes
-  status (enum: issued|fulfilled|expired|superseded)
-  supersedes_lab_order_id (nullable, self-FK)
-  created_at
+  id, consultation_id (FK), patient_profile_id (FK), ordering_doctor_id (FK)
+  facility_profile_id (FK to lab), amount_stroops (clinician-entered XLM total)
+  test_type, urgency (enum: routine|urgent), notes [ENCRYPTED]
+  supersedes_lab_order_id (nullable, unique self-FK), created_at
 
 LabResult
-  id, lab_order_id (FK, unique), fulfilling_facility_id, result_file_url, summary
+  id, lab_order_id (FK, unique), fulfilling_facility_id (FK), result_file_url, summary
   created_at
 ```
+The facility and total are captured at issuance. The issuing clinician supplies
+`amount_stroops` in native XLM stroops because v1 has no facility catalog or
+pricing service. Corrections create a new immutable row. A `created` payment
+intent moves to the correction; an already escrowed intent remains linked to
+the original and is refunded through the existing admin refund action.
 
 ### 4.7 Fulfillment (facility-side)
 ```
@@ -240,7 +244,7 @@ LoginAttempt (issue #35)
 ```
 AuditEvent
   id, actor_user_id (nullable — null = system), actor_role (nullable Role)
-  entity_type ('Appointment' | 'DoctorProfile' | 'PaymentIntent' so far), entity_id
+  entity_type ('Appointment' | 'DoctorProfile' | 'PaymentIntent' | 'Consultation' | 'Prescription' | 'LabOrder'), entity_id
   action (dotted, e.g. 'appointment.booked'), from_state, to_state (nullable)
   request_id (X-Request-Id of the causing request), metadata (jsonb, nullable)
   created_at

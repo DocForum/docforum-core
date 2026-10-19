@@ -26,6 +26,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import EmbeddedPostgres from 'embedded-postgres';
+import { createOrderFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5438;
@@ -99,13 +100,13 @@ describe('PaymentIntent BigInt round-trip (Prisma 7 driver adapter)', () => {
   async function roundTrip(amountStroops: bigint, orderId: string) {
     // Goes through the module's own service, so this exercises the real write
     // path rather than a hand-built query.
-    const created = await paymentsService.createPaymentIntent({
-      orderType: 'lab_order',
-      orderId,
-      patientProfileId,
-      facilityId,
-      amountStroops,
+    const order = await createOrderFixture(prisma, {
+      patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops, tag: orderId,
     });
+    const created = await prisma.$transaction((tx) => paymentsService.createIntentForIssuedOrder(tx, {
+      kind: 'lab_order', orderId: order.id, patientProfileId, doctorProfileId: order.doctorProfileId,
+      facilityProfileId: facilityId, amountStroops, supersedesId: null,
+    }));
     expect(created.amountStroops).toBe(amountStroops);
 
     // Re-read from the database, bypassing the in-memory object the create

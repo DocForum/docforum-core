@@ -68,15 +68,21 @@ not modeled or assumed by this ADR either.
   are answered. If DocForum ever needs genuine non-custodial patient
   wallets, that's a v2 architectural change, not an extension of this one.
 
-## Known gap
+## Order linkage (resolved by issue #85)
 
-`PaymentIntent.orderType`/`orderId` are opaque, unvalidated fields (see
-`schema.prisma` comment) — `Prescription`/`LabOrder`/`FulfillmentRecord`
-are still Phase 0 placeholders (Phase 4/5 aren't built). This phase is
-deliberately buildable independently of those; once they're real, add
-proper validation (does `orderId` actually exist, is it actually
-assigned to `facilityId`) as a follow-up, not assumed done by this ADR.
+`PaymentIntent` has nullable `prescriptionId` and `labOrderId` foreign keys;
+a PostgreSQL check constraint requires exactly one. Each order snapshots its
+patient, issuing doctor, selected pharmacy/lab, and total amount. V1 has no
+facility catalog or price service, so the issuing clinician supplies the total
+in native XLM stroops at issuance. This is an explicit manual pricing source,
+not a currency conversion or estimate.
 
+Issuing a correction creates a new order row. An unpaid (`created`) intent is
+moved to the new row in the same transaction. An escrowed intent remains with
+the original row and uses the existing admin-triggered refund action; this
+preserves the current custodial v1 refund policy. The migration removes only
+orphaned preview intents in `created` state and aborts if any funded or
+terminal intent has no matching order.
 ## Consequences
 
 - The platform payer identity needs real funding to do anything (testnet

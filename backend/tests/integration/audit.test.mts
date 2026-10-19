@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import EmbeddedPostgres from 'embedded-postgres';
+import { createOrderFixture, createPaymentIntentForFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5441;
@@ -82,9 +83,9 @@ describe('AuditEvent foundation', () => {
     request(app).get('/admin/audit-events').query(query).set(adminAuth());
 
   async function createIntent() {
-    return prisma.paymentIntent.create({
-      data: { orderType: 'lab_order', orderId: `order-${Math.random()}`, patientProfileId: (await prisma.patientProfile.findFirstOrThrow()).id, facilityId, amountStroops: 5000n },
-    });
+    const patientProfileId = (await prisma.patientProfile.findFirstOrThrow()).id;
+    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: 5000n, tag: `audit-${Math.random()}` });
+    return createPaymentIntentForFixture(prisma, order);
   }
 
   beforeAll(async () => {
@@ -296,7 +297,7 @@ describe('AuditEvent foundation', () => {
         actorUserId: admin.id,
         actorRole: 'admin',
         requestId: `pay-fund-${runId}`,
-        metadata: { orderType: 'lab_order', amountStroops: '5000', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
+        metadata: { order: { type: 'lab_order', id: intent.labOrderId }, amountStroops: '5000', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
       });
       expect((events[0]!.metadata as Record<string, unknown>).escrowId).toMatch(/^\d+$/);
       const serialized = JSON.stringify(events);

@@ -1,0 +1,6 @@
+import { z } from 'zod';
+const amountStroops = z.string().regex(/^[1-9][0-9]*$/, 'amountStroops must be a positive integer string.').transform(BigInt);
+const item = z.object({ drugName: z.string().trim().min(1).max(200), dosage: z.string().trim().min(1).max(200), frequency: z.string().trim().min(1).max(200), duration: z.string().trim().min(1).max(200) });
+export const consultationSchema = z.object({ appointmentId: z.string().uuid(), outcome: z.enum(['resolved', 'referred', 'follow_up_needed']).nullable().optional(), notes: z.string().max(20000).nullable().optional() });
+export const prescriptionSchema = z.object({ facilityProfileId: z.string().uuid(), amountStroops, supersedesPrescriptionId: z.string().uuid().optional(), items: z.array(item).min(1).max(100) });
+export const labOrderSchema = z.object({ facilityProfileId: z.string().uuid(), amountStroops, testType: z.string().trim().min(1).max(200), urgency: z.enum(['routine', 'urgent']).default('routine'), notes: z.string().max(20000).optional(), supersedesLabOrderId: z.string().uuid().optional() });
