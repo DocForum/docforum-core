@@ -47,6 +47,25 @@ GitHub Pages UI preview has a real backend to call, nothing more.
   signup/login/refresh in memory and send it on those two calls — see
   `docs/api/README.md`. Sessions created before that change get one forced
   re-login (their refresh token has no `csrf` claim).
+- **Phase 8, issue #47 (Prisma 7 upgrade):** the build and start commands
+  above are unchanged and still correct, so **no manual step is needed here**.
+  `npx prisma generate` and `npx prisma migrate deploy` now read the datasource
+  URL from `backend/prisma.config.ts` (v7 removed `url` from the schema's
+  `datasource` block and stopped loading `.env` implicitly); Render already
+  injects `DATABASE_URL`, which is all that file needs. Two consequences worth
+  knowing before the next deploy:
+  - Render derives the web service's Node version from
+    `backend/package.json`, which now declares
+    `engines.node: ^20.19.0 || ^22.12.0 || >=24.0.0`. Prisma 7 requires it; an
+    older Node will fail the build rather than run degraded.
+  - Prisma 7 (node-postgres) validates TLS certificates, where the v6 Rust
+    engine ignored invalid ones. If a deploy starts logging
+    `P1010: User was denied access on the database`, that is this change, not
+    a bad password — `docs/adr/0006` gives the remedy (`ssl: {
+    rejectUnauthorized: false }` on the adapter to match v6 behaviour, or a
+    trusted CA via `NODE_EXTRA_CA_CERTS`). Confirming this against the live
+    preview is the one outstanding post-deploy check; it could not be verified
+    from the contributor environment.
 
 ## Consequences
 

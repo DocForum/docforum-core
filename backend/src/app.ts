@@ -10,11 +10,16 @@ import { appointmentsRouter } from './modules/appointments/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { facilitiesRouter } from './modules/facilities/routes';
 import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
+import { patientsRouter } from './modules/patients/routes';
+import { registerPatientExportSections } from './export-sections';
 import { auditRouter } from './modules/audit/routes';
 import { requestId } from './middleware/request-id';
 
 export function createApp() {
   const app = express();
+
+  // Phase 8, issue #40: idempotent, so building the app twice is harmless.
+  registerPatientExportSections();
 
   // Phase 8, issue #35: login throttling keys on the client IP, so the
   // proxy chain has to be resolved deliberately rather than guessed. See
@@ -38,11 +43,10 @@ export function createApp() {
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
   app.use('/payments', paymentsRouter);
-  // Phase 5 (issues #73/#74): restored after the merge with main dropped
-  // them — without these mounts every /facilities and /pharmacy-orders
-  // route 404s.
+  // Phase 5 (issues #73/#74): /facilities and /pharmacy-orders mounts.
   app.use('/facilities', facilitiesRouter);
   app.use('/pharmacy-orders', pharmacyOrdersRouter);
+  app.use('/patients', patientsRouter);
   app.use('/admin', auditRouter);
 
   // Must be registered last — Express only routes errors here once every

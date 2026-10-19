@@ -10,6 +10,18 @@ export function createAppointment(
   return db.appointment.create({ data });
 }
 
+/** One keyset page of a patient's appointments, oldest first (patient data
+ * export, issue #40). Appointment columns only — slot/doctor details come
+ * from those modules' services, not a join. */
+export function findAppointmentsPageForPatient(patientProfileId: string, cursor: string | undefined, take: number) {
+  return prisma.appointment.findMany({
+    where: { patientProfileId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  });
+}
+
 export function findAppointmentsForPatient(patientProfileId: string) {
   return prisma.appointment.findMany({
     where: { patientProfileId },
