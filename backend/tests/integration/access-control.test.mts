@@ -62,6 +62,9 @@ const KNOWN_ROUTES = [
   'POST /payments/intents/:id/fund',
   'POST /payments/intents/:id/release',
   'POST /payments/intents/:id/refund',
+  'POST /patients/me/export',
+  'GET /patients/me/export/:exportId',
+  'GET /patients/me/export/:exportId/download',
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -110,6 +113,12 @@ const ACCESS_MATRIX: MatrixRow[] = [
   { method: 'POST', path: '/payments/intents/:id/fund', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
   { method: 'POST', path: '/payments/intents/:id/release', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
   { method: 'POST', path: '/payments/intents/:id/refund', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
+
+  // Patient data export (issue #40) — patient-only and self-only; no
+  // on-behalf-of route for doctors/admins. A placeholder id is "not yours" → 404.
+  { method: 'POST', path: '/patients/me/export', expected: { anon: 401, patient: 202, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'GET', path: '/patients/me/export/:exportId', expected: { anon: 401, patient: 404, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'GET', path: '/patients/me/export/:exportId/download', expected: { anon: 401, patient: 404, doctor: 403, facility: 403, admin: 403 } },
 ];
 
 const ACTORS: Actor[] = ['anon', 'patient', 'doctor', 'facility', 'admin'];

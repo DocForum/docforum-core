@@ -4,11 +4,12 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 
 ## Stack (don't relitigate without an ADR in docs/adr/)
 - Backend: Node.js + TypeScript + Express/Fastify — **modular monolith**, not microservices.
-- DB: PostgreSQL via Prisma (`backend/prisma/schema.prisma` = source of truth for models).
+- DB: PostgreSQL via **Prisma 7** (`backend/prisma/schema.prisma` = source of truth for models). v7 has no Rust query engine: the client is built with a driver adapter (`@prisma/adapter-pg` + node-postgres) in `backend/src/db/prisma-client.ts` — bare `new PrismaClient()` throws — and the CLI's datasource URL lives in `backend/prisma.config.ts`, not in the schema. Keep the `prisma-client-js` generator: it still writes to `node_modules/@prisma/client`, so imports and this backend's CommonJS runtime are unchanged (see `docs/adr/0006`). Requires Node >= 20.19.
 - Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`. The refresh cookie is `SameSite=None` cross-site, so `/auth/refresh` + `/auth/logout` require an `X-CSRF-Token` header (a per-session token bound into the refresh JWT) and an allowlisted `Origin` — see `backend/src/middleware/csrf.ts`. CORS is an explicit per-environment allowlist (`CORS_ORIGINS`).
 - Frontend: React + TypeScript + Vite, React Query + Zustand.
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
-- Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue.
+- Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue. Existing interval jobs: login-throttle prune (`src/server.ts`) and patient-export worker/cleanup (`src/jobs/patient-exports.ts`), both started only from `server.ts`.
+- New module holding patient data? Register a patient-export section (ARCHITECTURE.md §3.1) — right of access must stay complete.
 
 ## Hard rules (violating these = request changes on the PR)
 1. **Never mutate a `Prescription` or `LabOrder` after issuance.** Corrections = new row with `supersedes_*_id`.
@@ -28,6 +29,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
 `User` → `AccessLog` (Phase 8, issue #45 — PHI read-access log: who viewed which clinical record, when; fire-and-forget writes, fail-open).
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
+`PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
