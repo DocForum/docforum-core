@@ -8,6 +8,8 @@ import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
 import { paymentsRouter } from './modules/payments/routes';
+import { facilitiesRouter } from './modules/facilities/routes';
+import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
 import { auditRouter } from './modules/audit/routes';
 import { requestId } from './middleware/request-id';
 
@@ -36,6 +38,11 @@ export function createApp() {
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
   app.use('/payments', paymentsRouter);
+  // Phase 5 (issues #73/#74): restored after the merge with main dropped
+  // them — without these mounts every /facilities and /pharmacy-orders
+  // route 404s.
+  app.use('/facilities', facilitiesRouter);
+  app.use('/pharmacy-orders', pharmacyOrdersRouter);
   app.use('/admin', auditRouter);
 
   // Must be registered last — Express only routes errors here once every

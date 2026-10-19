@@ -179,6 +179,30 @@ Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
 return `409` when the intent changed state concurrently between the check
 and the write (previously the second write silently overwrote the first).
 
+## Facilities (`/facilities`) — `backend/src/modules/facilities`
+
+| Method & path | Auth | Query | Notes |
+|---|---|---|---|
+| `GET /facilities/eligible` | any signed-in user | `capabilityType?` (`lab_test`\|`medication_dispense`), `detail?`, `near=lat,lng`, `radiusKm?`, `limit?` (1–200, default 50) | PRD FR-13 / Phase 5 issue #74. Qualified facilities, optionally sorted ascending by distance from `near` (haversine, default radius 50 km when `near` is given without `radiusKm`). Facilities without coordinates are **never dropped** — they appear with `distanceKm: null`, sorted last. `radiusKm` without `near` → 400. **The patient's `near` point is never stored or logged** — it is only ever a query parameter in the SQL statement. Response rows: `{ id, name, type, address, distanceKm }`. Auth required because a location query is patient context; no role gate (the point itself isn't persisted anywhere it could leak from). |
+
+## Pharmacy orders (`/pharmacy-orders`) — `backend/src/modules/pharmacy-orders`
+
+Item-level (partial) fulfillment — Phase 5 issue #73, see
+`ARCHITECTURE.md` §5.3.
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /pharmacy-orders/fulfillments` | patient or admin (verified email) | `{ orderType, orderId, facilityId, orderItemIds? }` | Routes items to a facility: one `FulfillmentRecord` + one `FulfillmentItem` per item. Omit `orderItemIds` to route every item; pass only the remaining items to split a partially dispensed order across a second facility. `409` if any requested item was already dispensed elsewhere, `400` if an item doesn't belong to the order. |
+| `GET /pharmacy-orders/fulfillments/:id` | owning facility or admin | — | Record + item rows. Patients are excluded until Phase 4 links `PatientProfile` to orders (known gap, `ARCHITECTURE.md` §6.2). |
+| `PATCH /pharmacy-orders/fulfillments/:id` | owning facility (verified email) | `{ status: 'in_progress'\|'rejected' }` | `fulfilled` is **not settable** — it is derived from the record's dispensed items. Hard rule 5: a facility may only ever write records it owns (`403` otherwise). |
+| `PATCH /pharmacy-orders/fulfillments/:id/items/:itemId` | owning facility (verified email) | `{ status: 'dispensed'\|'unfulfilled', quantityDispensed? }` | The only path to `dispensed`. One-shot (`409` on replay) and race-safe: the `(orderType, dispensedKey)` unique index makes a second facility's dispense of the same item a `409`, even under concurrency (`backend/tests/integration/fulfillment.test.mts`). After each item change the record status and the order-level status are re-derived. |
+| `GET /pharmacy-orders/orders/:orderId/fulfillment-status?orderType=` | any signed-in user | — | Derived order state: `{ totalItems, dispensedItems, status: 'issued'\|'partially_fulfilled'\|'fulfilled' }`. Computed from item rows — never a hand-set flag. |
+
+Payment release rule (documented in `ARCHITECTURE.md` §5.3): partial
+fulfillment never releases escrow — release eligibility requires the
+order to derive `fulfilled`. Release itself is still admin-triggered
+(ADR 0004 v1).
+
 ## Not yet implemented
 
 Everything else in `ARCHITECTURE.md` §3's module list (`patients`,

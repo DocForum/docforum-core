@@ -394,3 +394,17 @@ for status and issue links.
   observed state, so a racing second action gets 409 instead of silently
   overwriting). Rollback coupling proven with a real injected DB failure,
   not a mock. Phase 3/4 wiring explicitly left pending.
+- 2026-10-17 — Phase 5: landed issues #73 (partial fulfillment,
+  item-level dispensing for multi-item prescriptions) and #74 (facility
+  location + distance-sorted eligible-facility query) together. New
+  `FulfillmentItem` model + `partially_fulfilled` order/record statuses,
+  `PrescriptionItem.prescriptionId` FK and `FulfillmentRecord.facilityId`
+  FK filled in (both were already in ARCHITECTURE §4/§4.5, schema was
+  behind), `FacilityProfile` location fields + index, new
+  `/pharmacy-orders` and `/facilities` routes, a dev seed of fictional
+  facility coordinates (`npx prisma db seed`), and two new integration
+  test files (11 tests). Payment-release rule decided and documented in
+  ARCHITECTURE.md §5.3 (no release until full fulfillment; proration
+  logged as an open question in §6.2), two new §6.2 gaps recorded, and a
+  new §5.4 documents the distance query + its privacy rule. Still owed by
+  this phase: #13–#16.
