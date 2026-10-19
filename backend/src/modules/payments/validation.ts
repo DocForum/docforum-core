@@ -25,3 +25,23 @@ export const createPaymentIntentSchema = z.object({
     .regex(/^[1-9][0-9]*$/, 'amountStroops must be a positive integer string.')
     .transform((value) => BigInt(value)),
 });
+
+const isoDate = z
+  .string()
+  .refine((value) => !Number.isNaN(new Date(value).getTime()) && /^\d{4}-\d{2}-\d{2}/.test(value), {
+    message: 'must be an ISO-8601 date or date-time',
+  })
+  .transform((value) => new Date(value));
+
+export const paymentHistoryQuerySchema = z
+  .object({
+    status: z.enum(['created', 'escrowed', 'released', 'refunded', 'failed']).optional(),
+    from: isoDate.optional(),
+    to: isoDate.optional(),
+    cursor: z.string().min(1).max(512).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .strict()
+  .refine((query) => !query.from || !query.to || query.from <= query.to, {
+    message: '`from` must not be after `to`.',
+  });

@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import * as paymentsService from '../services';
-import { linkWalletSchema, createPaymentIntentSchema } from '../validation';
+import { linkWalletSchema, createPaymentIntentSchema, paymentHistoryQuerySchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
@@ -72,4 +72,16 @@ export async function refundIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const intent = await paymentsService.refundPaymentIntent(auditActor(req), id);
   res.status(200).json(serializeIntent(intent));
+}
+
+export async function listMyPayments(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const filters = paymentHistoryQuerySchema.parse(req.query);
+  res.status(200).json(await paymentsService.listMyPayments(req.user.id, filters));
+}
+
+export async function listFacilityLedger(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const filters = paymentHistoryQuerySchema.parse(req.query);
+  res.status(200).json(await paymentsService.listFacilityPaymentLedger(req.user.id, filters));
 }

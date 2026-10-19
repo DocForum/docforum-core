@@ -87,6 +87,7 @@ for status and issue links.
 - [ ] Idempotent escrow funding + on-chain reconcile job (`fundPaymentIntent` is check-then-act — docforum-escrow threat model §5). Tracked as [issue #24](https://github.com/DocForum/docforum-core/issues/24) (High, 200 pts).
 - [ ] ADR: releaser key custody — multisig, KMS, or per-period rotation (threat model T1/T2). Tracked as [issue #25](https://github.com/DocForum/docforum-core/issues/25) (Medium, 150 pts).
 - [ ] Checksum-validate facility wallet keys, not just regex. Tracked as [issue #26](https://github.com/DocForum/docforum-core/issues/26) (Trivial, 100 pts).
+- [x] Patient payment history and facility payout ledger APIs, with ownership-scoped pagination, on-chain references, and BigInt-safe SQL totals. Tracked as [issue #90](https://github.com/DocForum/docforum-core/issues/90) — **implemented; `refundAfter` remains null until a payment model/contract version supports deadlines**.
 - [ ] Non-custodial patient payments (v2): patients fund escrows from their own Stellar wallet, custodial kept as fallback. **Proposed** in `docs/adr/0005-non-custodial-patient-payments.md`; implementation issues to be opened once it's Accepted.
 - [ ] Upgrade to `@docforum/escrow-sdk` 0.3.0 and the current testnet contract (`refund_after`, balance-delta check, `getEscrow`) — step 1 of ADR 0005's plan, but worth doing regardless. Tracked as [issue #32](https://github.com/DocForum/docforum-core/issues/32) (Medium, 150 pts); depends on `docforum-escrow` publishing `sdk-v0.3.0`.
 - [ ] Doc reconciliation: PRD §8.1.6 (facility fulfillment integrity) — not marked resolved; this phase proves the payment *mechanism* works, not the fulfillment-integrity question, which still needs real `FulfillmentRecord`/facility-matching (Phase 5) to actually address.
@@ -405,3 +406,8 @@ for status and issue links.
   observed state, so a racing second action gets 409 instead of silently
   overwriting). Rollback coupling proven with a real injected DB failure,
   not a mock. Phase 3/4 wiring explicitly left pending.
+- 2026-10-19 — Implemented issue #90's patient payment-history and facility
+  ledger APIs. Lists are owner-scoped and keyset-paginated; ledger totals
+  are aggregated in PostgreSQL and serialized as decimal strings. The
+  existing custodial v1 model has no `refund_after` field, so the API
+  returns `refundAfter: null` rather than implying a deadline exists.

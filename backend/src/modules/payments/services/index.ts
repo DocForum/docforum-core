@@ -13,7 +13,7 @@ import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
 import { loadEscrowSdk } from './escrow-sdk-loader';
-import { paginate, type PatientExportSection } from '../../patients/services';
+import { getMyPatientProfile, paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
 import type { PaymentIntent, PaymentIntentStatus, Prisma } from '@prisma/client';
@@ -76,6 +76,91 @@ export async function getPaymentIntent(id: string) {
   const intent = await paymentsRepo.findPaymentIntentById(id);
   if (!intent) throw new HttpError(404, 'PaymentIntent not found.');
   return intent;
+}
+
+export interface PaymentHistoryFilters {
+  status?: PaymentIntentStatus;
+  from?: Date;
+  to?: Date;
+  cursor?: string;
+  limit: number;
+}
+
+function encodePaymentCursor(payment: { createdAt: Date; id: string }): string {
+  return Buffer.from(`${payment.createdAt.toISOString()}|${payment.id}`, 'utf8').toString('base64url');
+}
+
+function decodePaymentCursor(cursor: string): { createdAt: Date; id: string } {
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const separator = raw.indexOf('|');
+  const createdAt = new Date(raw.slice(0, separator));
+  const id = raw.slice(separator + 1);
+  if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
+    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+  }
+  return { createdAt, id };
+}
+
+function paymentPage(filters: PaymentHistoryFilters, owner: { patientProfileId: string } | { facilityId: string }) {
+  return paymentsRepo.findPaymentHistoryPage(owner, {
+    status: filters.status,
+    from: filters.from,
+    to: filters.to,
+    before: filters.cursor ? decodePaymentCursor(filters.cursor) : undefined,
+    take: filters.limit + 1,
+  });
+}
+
+function serializePayment(payment: PaymentIntent) {
+  return {
+    id: payment.id,
+    orderType: payment.orderType,
+    orderId: payment.orderId,
+    status: payment.status,
+    amountStroops: payment.amountStroops.toString(),
+    asset: { type: 'native', code: 'XLM' },
+    escrowId: payment.escrowId?.toString() ?? null,
+    stellarTxHash: payment.stellarTxHash,
+    sorobanContractId: payment.sorobanContractId,
+    refundAfter: null,
+    createdAt: payment.createdAt,
+    updatedAt: payment.updatedAt,
+  };
+}
+
+async function listPayments(filters: PaymentHistoryFilters, owner: { patientProfileId: string } | { facilityId: string }) {
+  const rows = await paymentPage(filters, owner);
+  const page = rows.slice(0, filters.limit);
+  const last = page[page.length - 1];
+  return {
+    items: page.map(serializePayment),
+    nextCursor: rows.length > filters.limit && last ? encodePaymentCursor(last) : null,
+  };
+}
+
+export async function listMyPayments(userId: string, filters: PaymentHistoryFilters) {
+  const profile = await getMyPatientProfile(userId);
+  return listPayments(filters, { patientProfileId: profile.id });
+}
+
+export async function listFacilityPaymentLedger(userId: string, filters: PaymentHistoryFilters) {
+  const facilityId = await getOwnFacilityProfileId(userId);
+  const [page, aggregates] = await Promise.all([
+    listPayments(filters, { facilityId }),
+    paymentsRepo.aggregateFacilityPayments(facilityId, filters.from, filters.to),
+  ]);
+  const totals = new Map(aggregates.map((row) => [row.status, row._sum.amountStroops ?? 0n]));
+  return {
+    ...page,
+    totals: [
+      {
+        asset: { type: 'native', code: 'XLM' },
+        escrowed: (totals.get('escrowed') ?? 0n).toString(),
+        released: (totals.get('released') ?? 0n).toString(),
+        refunded: (totals.get('refunded') ?? 0n).toString(),
+      },
+    ],
+  };
 }
 
 /** Commits a status change and its AuditEvent together (issue #43). If the
