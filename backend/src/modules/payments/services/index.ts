@@ -13,6 +13,7 @@ import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
 import { loadEscrowSdk } from './escrow-sdk-loader';
+import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
 import type { PaymentIntent, PaymentIntentStatus, Prisma } from '@prisma/client';
@@ -187,3 +188,38 @@ export async function refundPaymentIntent(actor: auditService.AuditActor, id: st
     paymentsRepo.markStatus(tx, id, 'escrowed', 'refunded'),
   );
 }
+
+/**
+ * This module's contribution to the patient data export (issue #40). An
+ * explicit field allowlist: on-chain references (tx hash, escrow id,
+ * contract id) are the patient's payment record and are included; the
+ * platform's signing secrets never touch a PaymentIntent row and can't
+ * appear here. BigInts are strings, matching the HTTP API.
+ */
+export const paymentsExportSection: PatientExportSection = {
+  name: 'payments',
+  version: 1,
+  pages(subject, pageSize) {
+    return paginate(
+      pageSize,
+      (cursor, take) => paymentsRepo.findPaymentIntentsPageForPatient(subject.patientProfileId, cursor, take),
+      async (rows) => {
+        const facilities = await paymentsRepo.findFacilityNamesByIds([...new Set(rows.map((row) => row.facilityId))]);
+        const facilityNames = new Map(facilities.map((facility) => [facility.id, facility.name]));
+        return rows.map((row) => ({
+          id: row.id,
+          orderType: row.orderType,
+          orderId: row.orderId,
+          status: row.status,
+          amountStroops: row.amountStroops.toString(),
+          facility: { id: row.facilityId, name: facilityNames.get(row.facilityId) ?? null },
+          escrowId: row.escrowId?.toString() ?? null,
+          stellarTxHash: row.stellarTxHash,
+          sorobanContractId: row.sorobanContractId,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        }));
+      },
+    );
+  },
+};

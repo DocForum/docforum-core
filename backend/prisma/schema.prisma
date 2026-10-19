@@ -11,9 +11,12 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Phase 8, issue #47: Prisma 7 no longer accepts `url` in the datasource
+// block — the connection is configured in prisma.config.ts (for the CLI:
+// migrate/generate/diff) and passed to PrismaClient as a driver adapter at
+// runtime (see src/db/prisma-client.ts).
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum Role {
@@ -181,6 +184,74 @@ model PatientProfile {
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
+  dataExports    PatientExport[]
+}
+
+// Phase 8 (issue #40): right-of-access export jobs. One row per request;
+// the generated bundle itself lives in PatientExportChunk (below), not in
+// this row. Lifecycle: pending -> processing -> ready -> expired, or
+// -> failed. A job only moves forward through conditional UPDATEs
+// (`WHERE status = ...`), the same shape as the booking guarantee, so two
+// workers can never both generate one export.
+enum PatientExportStatus {
+  pending
+  processing
+  ready
+  failed
+  expired
+}
+
+model PatientExport {
+  id               String              @id @default(uuid())
+  // The owner. Every read is scoped by this, never by the export id alone.
+  patientProfileId String
+  status           PatientExportStatus @default(pending)
+  // Bundle format version actually written (set when generation starts).
+  schemaVersion    Int?
+  // Fencing token: incremented on every claim. Chunks are keyed by it, and
+  // the final `ready` transition is conditional on it, so a worker whose
+  // claim went stale can never publish a half-written or superseded bundle.
+  attempt          Int                 @default(0)
+  startedAt        DateTime?
+  generatedAt      DateTime?
+  // Set when the job becomes `ready`; downloads are refused at or after it
+  // even if the cleanup job hasn't run yet.
+  expiresAt        DateTime?
+  sizeBytes        Int?
+  // How many chunks the published attempt wrote. A download that finds
+  // fewer (cleanup ran mid-stream) aborts instead of handing out a
+  // silently truncated JSON document.
+  chunkCount       Int?
+  // Machine-readable failure only (e.g. SECTION_FAILED + section name) —
+  // never an exception message, which could echo patient data.
+  failureCode      String?
+  failedSection    String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  patientProfile PatientProfile       @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+  chunks         PatientExportChunk[]
+
+  @@index([patientProfileId, createdAt])
+  @@index([status, expiresAt])
+}
+
+// The export bundle, stored as ordered text chunks of one JSON document
+// (issue #40). Written incrementally while sections are paged, read back
+// one chunk at a time on download, so neither side ever holds a whole
+// patient history in memory. Kept in Postgres rather than object storage
+// because no object-storage provider is integrated yet (ARCHITECTURE.md §2
+// and §6.3.4) — only patients/repositories reads or writes it, so moving to
+// S3 later replaces that storage seam, not the export design.
+model PatientExportChunk {
+  exportId String
+  attempt  Int
+  seq      Int
+  data     String
+
+  export PatientExport @relation(fields: [exportId], references: [id], onDelete: Cascade)
+
+  @@id([exportId, attempt, seq])
 }
 
 model DoctorProfile {

@@ -1,7 +1,7 @@
 import { createApp } from './app';
 import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
-import { validateSep10Config } from './modules/payments/services';
+import { startPatientExportJobs } from './jobs/patient-exports';
 
 const app = createApp();
 
@@ -43,3 +43,6 @@ const pruneTimer = setInterval(() => {
     });
 }, config.loginThrottle.pruneIntervalSeconds * 1000);
 pruneTimer.unref();
+
+// Patient data export worker + expiry cleanup (Phase 8, issue #40).
+startPatientExportJobs();
