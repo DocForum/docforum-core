@@ -17,6 +17,11 @@ safe.
 | Login-throttle prune (issue #35) | `src/server.ts` | Deletes stale `LoginAttempt` buckets. |
 | Patient-export worker (issue #40) | `patient-exports.ts` | Generates pending exports one at a time; woken immediately by a new request, plus every `PATIENT_EXPORT_WORKER_INTERVAL_SECONDS`. Requeues claims older than `PATIENT_EXPORT_STALE_AFTER_SECONDS` (up to `PATIENT_EXPORT_MAX_ATTEMPTS`). |
 | Patient-export cleanup (issue #40) | `patient-exports.ts` | Every `PATIENT_EXPORT_CLEANUP_INTERVAL_SECONDS`: expires `ready` exports past `expiresAt` and deletes their chunks, plus any chunk that can never be served. |
+| Transactional outbox (issue #94) | `outbox-events.ts` | Every 5 seconds, claims due events with `FOR UPDATE SKIP LOCKED`, calls handlers at least once, and retries with bounded exponential backoff; after five attempts events are dead-lettered. |
 
 Job logs carry error *types* only, never messages — a driver error can echo
 the patient data it was handling.
+
+Outbox handlers must be idempotent: a process can crash after a side effect
+but before marking an event processed. Admins can inspect dead-letter metadata
+at `GET /admin/outbox/dead-letters`; event payloads are not exposed.

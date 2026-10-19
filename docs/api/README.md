@@ -348,6 +348,17 @@ opaque entity identifiers only, never clinical details. Registered email/SMS
 adapter failures do not fail the persisted in-app notification. Provider
 integration and callbacks remain pending the provider decision in issue #17.
 
+## Outbox administration (`/admin/outbox`) — `backend/src/events`
+
+| Method & path | Auth | Query | Notes |
+|---|---|---|---|
+| `GET /admin/outbox/dead-letters` | admin | `limit` (1–100, default 50) | Returns dead-letter metadata only: id, type, attempts, stable error code, creation and dead-letter timestamps. Event payloads are never exposed. |
+
+Outbox events are published within the transaction for the domain change and
+delivered after commit. Delivery is at least once; handlers must be idempotent.
+Booking confirmation is the first producer. Failed events retry with bounded
+exponential backoff and are dead-lettered after five attempts.
+
 ## Not yet implemented
 
 `facilities`, `prescriptions`, `lab-orders` and `pharmacy-orders` have no

@@ -84,15 +84,22 @@ export function registerChannelAdapter(adapter: NotificationChannelAdapter): () 
   return () => adapters.delete(adapter);
 }
 
-export async function notify<T extends NotificationType>(userId: string, type: T, payload: unknown) {
+export async function notify<T extends NotificationType>(
+  userId: string,
+  type: T,
+  payload: unknown,
+  options: { sourceEventId?: string } = {},
+) {
   const parsed = notificationPayloadSchemas[type].safeParse(payload);
   if (!parsed.success) throw new HttpError(400, 'Invalid notification payload.', 'INVALID_NOTIFICATION_PAYLOAD');
 
-  const notification = await notificationsRepo.createNotification(
+  const persisted = await notificationsRepo.createNotification(
     userId,
     type,
     parsed.data as Prisma.InputJsonValue,
+    options.sourceEventId,
   );
+  const notification = persisted.notification;
   const dispatch: NotificationDispatch = {
     notificationId: notification.id,
     userId,
@@ -100,15 +107,17 @@ export async function notify<T extends NotificationType>(userId: string, type: T
     payload: parsed.data as NotificationPayload<NotificationType>,
   };
 
-  const registeredAdapters = [...adapters];
-  const results = await Promise.allSettled(
-    registeredAdapters.map((adapter) => Promise.resolve().then(() => adapter.send(dispatch))),
-  );
-  results.forEach((result, index) => {
-    if (result.status === 'rejected') {
-      console.error(`[notifications] ${registeredAdapters[index]?.channel ?? 'unknown'} adapter failed for notification ${notification.id}`);
-    }
-  });
+  if (persisted.created) {
+    const registeredAdapters = [...adapters];
+    const results = await Promise.allSettled(
+      registeredAdapters.map((adapter) => Promise.resolve().then(() => adapter.send(dispatch))),
+    );
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(`[notifications] ${registeredAdapters[index]?.channel ?? 'unknown'} adapter failed for notification ${notification.id}`);
+      }
+    });
+  }
   return notification;
 }
 

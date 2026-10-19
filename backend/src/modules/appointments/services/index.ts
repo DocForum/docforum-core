@@ -8,13 +8,15 @@ import * as doctorsService from '../../doctors/services';
 import * as patientsService from '../../patients/services';
 import * as auditService from '../../audit/services';
 import * as referralsService from '../../referrals/services';
+import { publish } from '../../../events';
 
 /**
  * Books a slot for the calling patient. This is the correctness-critical
  * path in the whole backend (ARCHITECTURE.md §5.1 / ROADMAP.md Phase 1 —
  * "the single highest-priority correctness item in the whole roadmap").
  *
- * Two steps, one transaction:
+ * The slot claim, Appointment row, AuditEvent, and outbox event share one
+ * transaction:
  *   1. `availabilityService.claimOpenSlot` — a conditional `UPDATE ...
  *      WHERE status = 'open'`, atomic at the DB level. Exactly one
  *      concurrent caller can ever see `count === 1` for a given slot.
@@ -60,6 +62,11 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
       fromState: null,
       toState: appointment.status,
       metadata: { availabilitySlotId, doctorProfileId: slot.doctorProfileId, origin: appointment.origin },
+    });
+
+    await publish(tx, 'appointment.booked', {
+      appointmentId: appointment.id,
+      patientUserId: actor.userId,
     });
 
     return appointment;
@@ -159,6 +166,7 @@ export async function bookForReferral(
   },
   actor: auditService.AuditActor,
 ) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
   const claimed = await availabilityService.claimOpenSlot(db, input.availabilitySlotId);
   if (!claimed) {
     throw new HttpError(409, 'This slot is no longer available.');
@@ -197,6 +205,11 @@ export async function bookForReferral(
       origin: appointment.origin,
       referralId: input.referralId,
     },
+  });
+
+  await publish(db, 'appointment.booked', {
+    appointmentId: appointment.id,
+    patientUserId: actor.userId,
   });
 
   return appointment;

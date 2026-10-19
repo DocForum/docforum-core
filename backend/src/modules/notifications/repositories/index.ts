@@ -7,9 +7,21 @@ export function createNotification(
 	userId: string,
 	type: string,
 	payload: Prisma.InputJsonValue,
+	sourceEventId?: string,
 	db: DbClient = prisma,
 ) {
-	return db.notification.create({ data: { userId, type, payload, channel: 'in_app' } });
+	if (!sourceEventId) {
+		return db.notification.create({ data: { userId, type, payload, channel: 'in_app' } }).then((notification) => ({ notification, created: true }));
+	}
+	return db.notification
+		.createMany({
+			data: { userId, type, payload, sourceEventId, channel: 'in_app' },
+			skipDuplicates: true,
+		})
+		.then(async ({ count }) => ({
+			notification: await db.notification.findUniqueOrThrow({ where: { sourceEventId } }),
+			created: count > 0,
+		}));
 }
 
 export function listNotifications(
