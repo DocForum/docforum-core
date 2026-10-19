@@ -513,3 +513,8 @@ roadmap. See each phase section below for status and issue links.
   retries Friendbot with bounded jitter, reports infrastructure/contract
   reset failures separately from assertion failures, and updates one open
   tracking issue instead of posting repeated reports.
+- 2026-10-19 — Implemented issue #92's pooled payout prototype. The call path
+  applies a testnet-only pool address override while keeping direct facility
+  payouts as the default in production and local environments, with the
+  configuration controlled by `PAYOUT_PRIVACY_MODE` and
+  `PAYOUT_PRIVACY_POOL_ADDRESS`.

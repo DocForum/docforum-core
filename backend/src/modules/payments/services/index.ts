@@ -14,6 +14,7 @@ import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
 import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
 import { getPlatformSigners } from './platform-signers';
+import { resolveEscrowPayee } from './payout-privacy';
 import { getMyPatientProfile, paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
@@ -256,11 +257,17 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   if (config.payments.assetAllowlist.length > 0 && !config.payments.assetAllowlist.includes(escrowTokenId)) {
     throw new HttpError(500, 'Configured escrow token is not in the payments asset allowlist.');
   }
+  const payee = resolveEscrowPayee({
+    facilityAddress: walletLink.stellarPublicKey,
+    mode: config.payments.payoutPrivacyMode,
+    poolAddress: config.payments.payoutPrivacyPoolAddress,
+    production: process.env.NODE_ENV === 'production',
+  });
   const client = await escrowClient(escrowContractId);
 
   const { escrowId, txHash } = await client.createEscrow({
     payer: platformPayer as unknown as EscrowSdkKeypair,
-    payee: walletLink.stellarPublicKey,
+    payee,
     token: escrowTokenId,
     amount: intent.amountStroops,
     // The PaymentIntent's own id is the opaque condition_ref — the
