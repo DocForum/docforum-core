@@ -129,6 +129,12 @@ export const config = {
     sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
     path: '/',
   },
+  // Admin invites (Phase 8, issue #39). `acceptUrl` is where the invite link
+  // points — docforum-web owns the page that consumes `?token=`.
+  adminInvites: {
+    ttlHours: Number(process.env.ADMIN_INVITE_TTL_HOURS ?? 72),
+    acceptUrl: process.env.ADMIN_INVITE_ACCEPT_URL ?? 'http://localhost:5173/accept-admin-invite',
+  },
   // Deliberately NOT required at startup via requireEnv() — unrelated
   // parts of the app (auth, availability, etc.) shouldn't fail to boot
   // just because payments isn't configured. The payments module itself

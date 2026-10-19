@@ -42,7 +42,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 Each module under `backend/src/modules/<name>/` owns its own `routes/`, `controllers/`, `services/`, `repositories/`. Cross-module access happens through a module's exported service interface only — **never reach into another module's repository directly.** This is the internal seam that would let us extract a module into its own service later without a rewrite.
 
 - `auth` — signup/login, tokens, role checks.
-- `users` — shared user profile fields common to all roles.
+- `users` — shared user profile fields common to all roles, plus the admin account lifecycle (invites, soft deactivation — issue #39). `auth` calls this module's services to create an invited admin; `users` never calls back into `auth`.
 - `patients` — patient-specific profile data.
 - `doctors` — doctor profile, specialties, verification status.
 - `facilities` — lab/pharmacy accounts, capability tags (what order types they can fulfill).
