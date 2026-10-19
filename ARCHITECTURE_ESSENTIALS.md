@@ -20,7 +20,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
-`User` → `PatientProfile | DoctorProfile | FacilityProfile | FacilityMember`
+`User` → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
 `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
