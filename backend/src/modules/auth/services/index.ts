@@ -37,6 +37,17 @@ import type { PatientExportSection } from '../../patients/services';
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
 
+// Password reset (Phase 8 #33) lives in its own file; re-exported here so
+// controllers keep calling a single service surface.
+export {
+  confirmPasswordReset,
+  hashResetToken,
+  requestPasswordReset,
+  resetPasswordResetRateLimits,
+  type ConfirmPasswordResetInput,
+  type RequestPasswordResetInput,
+} from './password-reset';
+
 export {
   assertSessionUsable,
   listSessions,
@@ -105,10 +116,10 @@ function toPublicUser(user: {
 }
 
 function issueTokensForSession(
-  user: { id: string; role: Role },
+  user: { id: string; role: Role; tokenVersion?: number },
   sessionId: string,
 ): { accessToken: string; refreshToken: string; csrfToken: string } {
-  const payload = { sub: user.id, role: user.role };
+  const payload = { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0 };
   // A fresh CSRF token per session, and per rotation — bound into the
   // refresh token so verifying it needs no server-side state (issue #37).
   const csrfToken = generateCsrfToken();
@@ -124,7 +135,7 @@ function issueTokensForSession(
 
 /** Starts a new session (one per login) and issues its first token pair. */
 async function issueNewSession(
-  user: { id: string; role: Role },
+  user: { id: string; role: Role; tokenVersion?: number },
   context: SessionContext,
 ): Promise<{ accessToken: string; refreshToken: string; csrfToken: string; sessionId: string }> {
   const session = await startSession({ userId: user.id, ...context });

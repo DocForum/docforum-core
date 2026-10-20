@@ -17,6 +17,8 @@ export interface AccessTokenPayload {
    * the access token stays stateless so protected requests don't need a
    * session lookup. */
   sid?: string;
+  /** User.tokenVersion at issue time. Compared at refresh time (Phase 8 #33). */
+  tv?: number;
 }
 
 /**
