@@ -11,9 +11,12 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Phase 8, issue #47: Prisma 7 no longer accepts `url` in the datasource
+// block — the connection is configured in prisma.config.ts (for the CLI:
+// migrate/generate/diff) and passed to PrismaClient as a driver adapter at
+// runtime (see src/db/prisma-client.ts).
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum Role {
@@ -95,17 +98,28 @@ enum Urgency {
 // =========================================================================
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  phone        String?
-  passwordHash String
-  role         Role
+  id              String    @id @default(uuid())
+  email           String    @unique
+  phone           String?
+  passwordHash    String
+  role            Role
   // Phase 8 (issue #34): null = never verified. Self-serve signup leaves
   // this null; existing rows were backfilled to `createdAt` in the
   // add_email_verification migration. Distinct from
   // DoctorProfile.verificationStatus, which is the separate, manual
   // admin verification of a doctor's credentials — do not conflate.
   emailVerifiedAt DateTime?
+  // Phase 8 (issue #39): null = active. Deactivating never deletes anything
+  // — no clinical or payment record is keyed to this flag, and none of the
+  // deactivation paths remove rows. Login, refresh and access tokens are all
+  // refused while this is set.
+  deactivatedAt DateTime?
+  // Phase 8 (issue #39): bumped when an account is deactivated/reactivated,
+  // so access tokens minted before that moment stop working immediately
+  // instead of living out their 15-minute TTL. There is still no general
+  // refresh-token revocation list (issue #18) — this is the narrow "revoke
+  // everything for one account" case that deactivation needs.
+  sessionsInvalidatedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -123,6 +137,10 @@ model User {
   passwordResetTokens PasswordResetToken[]
 
   emailVerificationTokens EmailVerificationToken[]
+  adminInvitesSent AdminInvite[]
+  // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
+  // Opposite of AccessLog.accessedByUser.
+  accessLogs AccessLog[]
 
   @@index([role])
 }
@@ -142,6 +160,20 @@ model EmailVerificationToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model AdminInvite {
+  id              String    @id @default(uuid())
+  email           String
+  tokenHash       String    @unique
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  invitedByUserId String
+  createdAt       DateTime  @default(now())
+
+  invitedBy User @relation(fields: [invitedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([email])
 }
 
 // Phase 8 (issue #35): login-throttle state. Deliberately in Postgres and
@@ -189,6 +221,79 @@ model PatientProfile {
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
+  prescriptions  Prescription[]
+  labOrders      LabOrder[]
+  dataExports    PatientExport[]
+
+  // Phase 8 (issue #45): who viewed this patient's records.
+  accessLogs AccessLog[]
+}
+
+// Phase 8 (issue #40): right-of-access export jobs. One row per request;
+// the generated bundle itself lives in PatientExportChunk (below), not in
+// this row. Lifecycle: pending -> processing -> ready -> expired, or
+// -> failed. A job only moves forward through conditional UPDATEs
+// (`WHERE status = ...`), the same shape as the booking guarantee, so two
+// workers can never both generate one export.
+enum PatientExportStatus {
+  pending
+  processing
+  ready
+  failed
+  expired
+}
+
+model PatientExport {
+  id               String              @id @default(uuid())
+  // The owner. Every read is scoped by this, never by the export id alone.
+  patientProfileId String
+  status           PatientExportStatus @default(pending)
+  // Bundle format version actually written (set when generation starts).
+  schemaVersion    Int?
+  // Fencing token: incremented on every claim. Chunks are keyed by it, and
+  // the final `ready` transition is conditional on it, so a worker whose
+  // claim went stale can never publish a half-written or superseded bundle.
+  attempt          Int                 @default(0)
+  startedAt        DateTime?
+  generatedAt      DateTime?
+  // Set when the job becomes `ready`; downloads are refused at or after it
+  // even if the cleanup job hasn't run yet.
+  expiresAt        DateTime?
+  sizeBytes        Int?
+  // How many chunks the published attempt wrote. A download that finds
+  // fewer (cleanup ran mid-stream) aborts instead of handing out a
+  // silently truncated JSON document.
+  chunkCount       Int?
+  // Machine-readable failure only (e.g. SECTION_FAILED + section name) —
+  // never an exception message, which could echo patient data.
+  failureCode      String?
+  failedSection    String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  patientProfile PatientProfile       @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+  chunks         PatientExportChunk[]
+
+  @@index([patientProfileId, createdAt])
+  @@index([status, expiresAt])
+}
+
+// The export bundle, stored as ordered text chunks of one JSON document
+// (issue #40). Written incrementally while sections are paged, read back
+// one chunk at a time on download, so neither side ever holds a whole
+// patient history in memory. Kept in Postgres rather than object storage
+// because no object-storage provider is integrated yet (ARCHITECTURE.md §2
+// and §6.3.4) — only patients/repositories reads or writes it, so moving to
+// S3 later replaces that storage seam, not the export design.
+model PatientExportChunk {
+  exportId String
+  attempt  Int
+  seq      Int
+  data     String
+
+  export PatientExport @relation(fields: [exportId], references: [id], onDelete: Cascade)
+
+  @@id([exportId, attempt, seq])
 }
 
 model DoctorProfile {
@@ -203,6 +308,8 @@ model DoctorProfile {
   specialties       DoctorSpecialty[]
   availabilitySlots AvailabilitySlot[]
   appointments      Appointment[]
+  prescriptions     Prescription[]
+  labOrders         LabOrder[]
 
   @@index([verificationStatus])
 }
@@ -236,6 +343,9 @@ model FacilityProfile {
 
   user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   capabilities   FacilityCapability[]
+  prescriptions  Prescription[]
+  labOrders      LabOrder[]
+  labResults     LabResult[]
   paymentIntents PaymentIntent[]
   walletLink     WalletLink?
 }
@@ -288,6 +398,7 @@ model Appointment {
   patientProfile   PatientProfile   @relation(fields: [patientProfileId], references: [id])
   doctorProfile    DoctorProfile    @relation(fields: [doctorProfileId], references: [id])
   availabilitySlot AvailabilitySlot @relation(fields: [availabilitySlotId], references: [id])
+  consultation     Consultation?
 
   // TODO Phase 2: intakeId (FK -> IntakeForm). PRD FR-5 requires intake
   // before confirmation, not enforced yet — booking works without it in
@@ -297,6 +408,32 @@ model Appointment {
 }
 
 // =========================================================================
+model AccessLog {
+  id               String   @id @default(uuid())
+  // Who viewed. SetNull on user delete keeps the log row (timestamp +
+  // entity remain) while removing the PII pointer.
+  accessedBy       String?
+  // Which patient's records were viewed (the record owner, not the viewer).
+  patientProfileId String?
+  // Entity that was read: 'IntakeForm' | 'Consultation' | 'Prescription' |
+  // 'LabOrder' | 'LabResult' | 'Referral' | 'PaymentIntent' | 'PatientProfile'
+  entityType       String
+  entityId         String
+  // The HTTP route that returned the payload (for correlating with access logs).
+  route            String?
+  // Free-text detail — no PHI here, just context like "GET /appointments/mine".
+  detail           String?
+  accessedAt       DateTime @default(now())
+
+  accessedByUser User?           @relation(fields: [accessedBy], references: [id], onDelete: SetNull)
+  patientProfile PatientProfile? @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+
+  @@index([accessedAt])
+  @@index([accessedBy])
+  @@index([patientProfileId, accessedAt])
+  @@index([entityType, entityId])
+}
+
 // Below this line: Phase 0 structural placeholders, not yet implemented.
 // See ROADMAP.md for phase order.
 // =========================================================================
@@ -308,11 +445,15 @@ model IntakeForm {
 }
 
 model Consultation {
-  id        String              @id @default(uuid())
-  outcome   ConsultationOutcome?
-  notes     String?
-  createdAt DateTime            @default(now())
-  // TODO: appointmentId (unique)
+  id            String              @id @default(uuid())
+  appointmentId String              @unique
+  outcome       ConsultationOutcome?
+  notes         String?
+  createdAt     DateTime            @default(now())
+
+  appointment  Appointment   @relation(fields: [appointmentId], references: [id])
+  prescriptions Prescription[]
+  labOrders     LabOrder[]
 }
 
 model Referral {
@@ -328,36 +469,81 @@ model Referral {
 }
 
 model Prescription {
-  id                     String      @id @default(uuid())
-  status                 OrderStatus @default(issued)
-  createdAt              DateTime    @default(now())
-  // TODO: consultationId, patientProfileId, prescribingDoctorId, supersedesPrescriptionId (nullable, self-relation)
+  id                       String      @id @default(uuid())
+  consultationId           String
+  patientProfileId         String
+  prescribingDoctorId      String
+  facilityProfileId        String
+  amountStroops            BigInt
+  status                   OrderStatus @default(issued)
+  supersedesPrescriptionId String?
+  createdAt                DateTime    @default(now())
+
+  consultation    Consultation   @relation(fields: [consultationId], references: [id])
+  patientProfile  PatientProfile @relation(fields: [patientProfileId], references: [id])
+  prescribingDoctor DoctorProfile @relation(fields: [prescribingDoctorId], references: [id])
+  facilityProfile  FacilityProfile @relation(fields: [facilityProfileId], references: [id])
+  supersedes      Prescription?  @relation("PrescriptionCorrections", fields: [supersedesPrescriptionId], references: [id])
+  correctedBy     Prescription?  @relation("PrescriptionCorrections")
+  items           PrescriptionItem[]
+  paymentIntent   PaymentIntent?
+
+  @@unique([supersedesPrescriptionId])
+  @@index([patientProfileId, createdAt])
+  @@index([consultationId])
 }
 
 model PrescriptionItem {
-  id       String @id @default(uuid())
-  drugName String
-  dosage   String
-  frequency String
-  duration String
-  // TODO: prescriptionId
+  id             String @id @default(uuid())
+  prescriptionId String
+  drugName       String
+  dosage         String
+  frequency      String
+  duration       String
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id])
+
+  @@index([prescriptionId])
 }
 
 model LabOrder {
-  id        String      @id @default(uuid())
-  testType  String
-  urgency   Urgency     @default(routine)
-  status    OrderStatus @default(issued)
-  createdAt DateTime    @default(now())
-  // TODO: consultationId, patientProfileId, orderingDoctorId, supersedesLabOrderId (nullable, self-relation)
+  id                  String      @id @default(uuid())
+  consultationId      String
+  patientProfileId    String
+  orderingDoctorId    String
+  facilityProfileId   String
+  amountStroops       BigInt
+  testType            String
+  urgency             Urgency     @default(routine)
+  notes               String?
+  status              OrderStatus @default(issued)
+  supersedesLabOrderId String?
+  createdAt           DateTime    @default(now())
+
+  consultation   Consultation   @relation(fields: [consultationId], references: [id])
+  patientProfile PatientProfile @relation(fields: [patientProfileId], references: [id])
+  orderingDoctor DoctorProfile  @relation(fields: [orderingDoctorId], references: [id])
+  facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id])
+  supersedes     LabOrder?      @relation("LabOrderCorrections", fields: [supersedesLabOrderId], references: [id])
+  correctedBy    LabOrder?      @relation("LabOrderCorrections")
+  result         LabResult?
+  paymentIntent  PaymentIntent?
+
+  @@unique([supersedesLabOrderId])
+  @@index([patientProfileId, createdAt])
+  @@index([consultationId])
 }
 
 model LabResult {
-  id            String   @id @default(uuid())
-  resultFileUrl String?
-  summary       String?
-  createdAt     DateTime @default(now())
-  // TODO: labOrderId (unique), fulfillingFacilityId
+  id                   String   @id @default(uuid())
+  labOrderId           String   @unique
+  fulfillingFacilityId String
+  resultFileUrl        String?
+  summary              String?
+  createdAt            DateTime @default(now())
+
+  labOrder           LabOrder        @relation(fields: [labOrderId], references: [id])
+  fulfillingFacility FacilityProfile @relation(fields: [fulfillingFacilityId], references: [id])
 }
 
 model FulfillmentRecord {
@@ -391,12 +577,8 @@ model Notification {
 // in this schema. See docs/adr/0002-stellar-escrow-for-fulfillment-payout.md
 // and docs/adr/0004-custodial-payments-v1.md.
 //
-// Deliberately decoupled from Prescription/LabOrder/FulfillmentRecord
-// below — those are still Phase 0 placeholders (Phase 4/5, not built).
-// `orderType`/`orderId` stay opaque, unvalidated references rather than
-// real foreign keys, so this phase is buildable independently rather than
-// blocked behind two unbuilt phases. Revisit once Phase 4/5 are real —
-// see ADR 0004's "Known gap."
+// One of prescriptionId/labOrderId is required by a PostgreSQL check
+// constraint. Amount and recipient are snapshotted from the issued order.
 
 enum PaymentIntentStatus {
   created
@@ -406,18 +588,15 @@ enum PaymentIntentStatus {
   failed
 }
 
-enum OrderTypeForPayment {
-  prescription
-  lab_order
-}
 
 model PaymentIntent {
-  id         String              @id @default(uuid())
-  orderType  OrderTypeForPayment
-  // Opaque — Prescription/LabOrder don't exist as real records yet
-  // (Phase 4). Not validated against anything until then.
-  orderId    String
-  status     PaymentIntentStatus @default(created)
+  id             String              @id @default(uuid())
+  prescriptionId String?             @unique
+  labOrderId     String?             @unique
+  status         PaymentIntentStatus @default(created)
+
+  prescription Prescription? @relation(fields: [prescriptionId], references: [id])
+  labOrder     LabOrder?     @relation(fields: [labOrderId], references: [id])
 
   patientProfileId String
   patientProfile   PatientProfile @relation(fields: [patientProfileId], references: [id])
@@ -462,4 +641,78 @@ model WalletLink {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// Soroban event ingestion (issue #86). Cursors are per contract deployment;
+// persisted events are immutable observations used for reconciliation/alerts.
+enum EscrowChainEventState {
+  pending
+  matched
+  unmatched
+}
+
+model EscrowEventCursor {
+  contractId   String   @id
+  startLedger  Int
+  cursor       String?
+  lastLedger   Int?
+  catchupError String?
+  updatedAt    DateTime @updatedAt
+}
+
+model EscrowChainEvent {
+  id               String                 @id @default(uuid())
+  eventId          String
+  contractId       String
+  ledger           Int
+  txHash           String?
+  escrowId         BigInt?
+  eventType        String
+  state            EscrowChainEventState  @default(pending)
+  paymentIntentId  String?
+  payload          Json?
+  detectedAt       DateTime               @default(now())
+  alertedAt        DateTime?
+
+  @@unique([contractId, eventId])
+  @@index([state, detectedAt])
+  @@index([contractId, ledger])
+}
+
+// --- Audit trail (Phase 8, issue #43) -------------------------------------
+// One row per state transition on a record that matters for clinical,
+// legal or financial accountability (PRD §7: "who, when"). Written by the
+// audit module's record(), always inside the same transaction as the
+// change it describes — if the change rolls back, so does its event.
+//
+// APPEND-ONLY. There is no update or delete path in code, and a database
+// trigger (see the add_audit_event migration) rejects UPDATE, DELETE and
+// TRUNCATE outright. Deliberately no foreign keys: an FK's ON DELETE action
+// would have to rewrite or remove audit rows (which the trigger forbids),
+// and RESTRICT would let the audit trail block account lifecycle. Ids are
+// recorded as facts about the past.
+//
+// No PHI, ever: `metadata` is a small flat map of ids/codes validated by
+// record() — never names, contact details, DOB, intake text, or copies of
+// request/response bodies.
+model AuditEvent {
+  id          String   @id @default(uuid())
+  // Null only for system-initiated transitions (none exist yet).
+  actorUserId String?
+  actorRole   Role?
+  // e.g. 'Appointment', 'DoctorProfile', 'PaymentIntent'.
+  entityType  String
+  entityId    String
+  // e.g. 'appointment.booked', 'payment_intent.released'.
+  action      String
+  fromState   String?
+  toState     String?
+  // X-Request-Id of the HTTP request that caused it (src/middleware/request-id.ts).
+  requestId   String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([createdAt, id])
 }

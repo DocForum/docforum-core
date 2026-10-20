@@ -9,8 +9,10 @@ import type { Role } from '@prisma/client';
 export interface AccessTokenPayload {
   sub: string; // user id
   role: Role;
-  /** User.tokenVersion at issue time. Compared at refresh time. */
-  tv?: number;
+  /** Issued-at, set by `jsonwebtoken` itself. Read by the auth middleware to
+   * compare against `User.sessionsInvalidatedAt` (Phase 8, issue #39) —
+   * tokens minted before a deactivation must stop working immediately. */
+  iat?: number;
 }
 
 /**

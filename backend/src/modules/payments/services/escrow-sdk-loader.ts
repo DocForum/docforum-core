@@ -12,3 +12,13 @@ export function loadEscrowSdk(): Promise<EscrowSdkModule> {
   modulePromise ??= import('@docforum/escrow-sdk');
   return modulePromise;
 }
+
+/** Test seam (issue #43): integration tests that exercise the DB side of
+ * fund/release/refund substitute a fake SDK instead of calling testnet.
+ * `undefined` restores the real one. Never called by application code. */
+export function setEscrowSdkForTests(sdk: EscrowSdkModule | undefined): void {
+  modulePromise = sdk ? Promise.resolve(sdk) : undefined;
+}
+
+export type EscrowSdkKeypair = InstanceType<EscrowSdkModule['Keypair']>;
+export type { EscrowSdkModule };

@@ -1,6 +1,6 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-09-26
+Last updated: 2026-10-17
 Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
 `docs/adr/0004-custodial-payments-v1.md`) built and tested. Phases 2-6
 and 8-9 scoped into GitHub issues (#1-#22, #21 closed); Phase 7 is
@@ -61,7 +61,7 @@ for status and issue links.
 - [ ] Doc reconciliation: update ARCHITECTURE_ESSENTIALS.md "Known unresolved design gaps" once routing rule + expiry exist — part of issue #6's DoD.
 
 ## Phase 4 — Orders: prescriptions & lab orders
-**Status: Not started (blocked by Phase 2, informed by Phase 3). Scoped into issues #9–#12.**
+**Status: Partially implemented by issues #9 and #85; remaining issue work is tracked in #10–#12.**
 - [ ] `Prescription` + `PrescriptionItem` models, **append-only** (issuance creates a row; corrections use `supersedes_prescription_id` — ARCHITECTURE.md §4.5, hard rule in ARCHITECTURE_ESSENTIALS.md). Tracked as [issue #9](https://github.com/DocForum/docforum-core/issues/9) (High, 200 pts), which also covers `LabOrder`/`LabResult` (same append-only rule).
 - [ ] `LabOrder` + `LabResult` models, same append-only rule — folded into issue #9 above.
 - [ ] Specialist UI: issue prescription/lab order from a consultation. Tracked as [issue #10](https://github.com/DocForum/docforum-core/issues/10) (Medium, 150 pts) — depends on #9.
@@ -77,10 +77,12 @@ for status and issue links.
 - [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1 — addressed by issue #14's admin-only gating; document any remaining gap in that issue's PR.
 
 ## Phase 5.5 — Payments (consumer side)
-**Status: Built, decoupled from Phase 4/5 rather than blocked by them — see docs/adr/0004-custodial-payments-v1.md.** `docforum-escrow` issues #4/#5 (SDK + distribution decision) closed, so the original blocker cleared; rather than wait further on Phase 4/5 (Orders/Facilities, still not built), `PaymentIntent`/`WalletLink` were designed with opaque, unvalidated `orderType`/`orderId` fields instead of hard FKs to `Prescription`/`LabOrder`, so this phase didn't have to wait on two more unbuilt phases. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
+**Status: Payment order linkage, automatic intent issuance, configuration hardening, and platform signer abstraction are implemented; fulfillment-triggered release remains pending.** See docs/adr/0004-custodial-payments-v1.md. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
 - [x] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — no PHI). `WalletLink` scoped to the **facility** (payee), not the patient — see ADR 0004. Amount is raw stroops (`BigInt`), not the originally-scaffolded `Decimal`+`"USDC"` — matches what's actually proven end-to-end on testnet; multi-asset support is future work, not assumed.
 - [x] Added `@docforum/escrow-sdk` as a real dependency (via the GitHub Release tarball URL — see `docforum-escrow`'s ADR 0003); wired `payments/services` to call it through a dynamic `import()` (`escrow-sdk-loader.ts` — the SDK is ESM-only, this backend is CommonJS).
-- [ ] On order issuance, create a `PaymentIntent` (`created` status) — still manual/admin-triggered (`POST /payments/intents`) since Phase 4 order issuance doesn't exist yet to trigger it automatically.
+- [x] On order issuance, create a `PaymentIntent` (`created` status) automatically with a typed order FK. Manual intent creation was removed. Corrections move created intents; funded intents remain attached to the immutable original.
+- [x] [Issue #88] Harden payments configuration: typed network/RPC/contract/asset settings, mainnet opt-in guard, startup reachability check, and intent-recorded contract ids for release/refund.
+- [x] Soroban contract-event poller, per-deployment persisted cursors, unmatched release/refund alerts, and admin event view (issue #86). Contract deployments must include their deployment ledger; RPC retention gaps are surfaced for operator reconciliation.
 - [x] On patient funding action, call SDK to move funds into escrow (`escrowed` status), store `stellarTxHash` — except it's not a *patient* action in this design (custodial v1, ADR 0004): `POST /payments/intents/:id/fund`, admin-triggered, funds from `docforum-core`'s own platform payer identity.
 - [x] On `FulfillmentRecord` reaching `fulfilled`, trigger SDK release call (`released` status) — except there's no `FulfillmentRecord` yet (Phase 5), so v1 exposes `POST /payments/intents/:id/release` as an admin-triggered action instead. ADR 0002's "don't let it drift into a manual/admin-triggered release" goal is **not yet met** — this is the honest interim, not the destination; revisit once Phase 5 exists.
 - [x] Refund path for rejected/expired orders — `POST /payments/intents/:id/refund`, same admin-triggered caveat as release.
@@ -107,24 +109,29 @@ for status and issue links.
 - [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 — #34 and #35 are merged; #37 and #39 are open PRs. Each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
+**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 — #34 and #35 are merged; #37 and #39 are open PRs. An access-control test suite (#44) is built and tested. Each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
 
 - [x] Email verification on signup, with restricted access for unverified accounts. `User.emailVerifiedAt` + `EmailVerificationToken` (hashed, expiring, single-use), `POST /auth/verify-email`, `POST /auth/verify-email/resend`, and a `requireVerifiedEmail` guard on booking + payment mutations (never on login/browsing). Migration backfills existing rows as verified. Tracked as [issue #34](https://github.com/DocForum/docforum-core/issues/34) (High, 200 pts) — **Done**, merged as PR #137. Found a real dependency while building it: the email *provider* is still an open decision (Phase 6, issue #17), so links can't be delivered on a hosted deployment yet — see `backend/src/modules/auth/services/email-dispatcher.ts` and ARCHITECTURE.md §6.1.5.
 - [x] Login brute-force protection: per-account and per-IP throttling with backoff. Postgres-backed buckets (`LoginAttempt`), a single conditional upsert so concurrent failures are counted atomically, exponential backoff with `Retry-After`, a bounded temporary lock, an admin clear endpoint, a prune interval in `src/server.ts`, and a `TRUST_PROXY` setting so the IP isn't Render's proxy address. Tracked as [issue #35](https://github.com/DocForum/docforum-core/issues/35) (High, 200 pts) — **Done**, merged as PR #138.
 - [ ] CSRF protection for the cookie-authenticated refresh/logout endpoints, plus an explicit per-environment CORS allowlist. A per-session CSRF token bound into the refresh token (not a double-submit cookie — a cookie set by this API is third-party to `docforum.github.io`, so the web client can't read it), a required `X-CSRF-Token` header on `/auth/refresh` + `/auth/logout`, an `Origin` allowlist check, and `CORS_ORIGINS` replacing the single configured origin. Tracked as [issue #37](https://github.com/DocForum/docforum-core/issues/37) (High, 200 pts) — **in progress**, branch `feat/csrf-protection-for-cookie-authenticated-refresh`.
 - [ ] Admin account lifecycle: secure bootstrap CLI, admin invites, and account deactivation. Tracked as [issue #39](https://github.com/DocForum/docforum-core/issues/39) (High, 200 pts) — **in progress**.
+- [ ] Patient data export (right of access) as a complete, machine-readable bundle. `POST /patients/me/export` + `GET /patients/me/export/:id` (+ `/download`), owner-only; an exporter registry where each module contributes its own section through its service (ARCHITECTURE.md §3.1 — `account`, `profile`, `appointments`, `payments` today); versioned JSON with `generatedAt`; generated by an interval worker in `src/jobs/patient-exports.ts` and stored as bounded chunks in Postgres (`PatientExport`/`PatientExportChunk`, §4.11 — no object-storage provider exists yet, see §6.3.4); expiry + cleanup after `PATIENT_EXPORT_TTL_HOURS`. Tracked as [issue #40](https://github.com/DocForum/docforum-core/issues/40) (High, 200 pts) — **in review**, branch `feat/40-patient-data-export`. Later modules (referrals, prescriptions, lab orders) must register their own section when they land; a verified guardian exporting a dependent's data is left to issue #42's model.
+- [ ] `AuditEvent` table and write path — **foundation done, Phase 3/4 wiring pending.** Append-only `AuditEvent` (DB triggers reject UPDATE/DELETE/TRUNCATE), `auditService.record()` that must run inside the state change's own transaction, request ids on every response, and `GET /admin/audit-events` (entity/actor/date filters, keyset cursor). Wired into appointment booking, doctor verification and payment fund/release/refund. Referrals, prescriptions, lab orders and fulfillment (Phases 3–5) must call `record()` when they land; the login-throttle admin clear still logs to console only. Tracked as [issue #43](https://github.com/DocForum/docforum-core/issues/43) (High, 200 pts) — **in review**, branch `feat/43-auditevent-foundation`.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
+- [x] Access-control test suite: who may read intake, consultation and payment data. Integration tests (`tests/integration/access-control.test.mts`) establishing the test harness and access-control patterns for the three PHI data categories; intake/consultation test cases are scaffolded as placeholders until Phase 2/3 routes exist, payment-intent access cases exercise the live admin-gated routes. Tracked as [issue #44](https://github.com/DocForum/docforum-core/issues/44) — **Done**.
 - [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. Not yet scoped into an issue.
 - [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence). Tracked as [issue #20](https://github.com/DocForum/docforum-core/issues/20) (Trivial, 100 pts) — a decision task, unblocked now.
 
 ## Phase 9 — Deploy & CI
 **Status: Not started for real production. A Render free-tier preview exists — see note. Remaining items scoped into issues #21–#22.**
+- [x] **PR malware scan** — `.github/workflows/pr-malware-scan.yml` + `.github/scripts/pr-malware-scan.cjs`, on every PR push. Flags editor/devcontainer autorun tasks, npm install hooks, typosquatted packages and Actions, non-registry dependency sources, payloads disguised as fonts/images, base64/whitespace obfuscation, exfiltration endpoints, reverse shells and miners. HIGH findings fail the `Malware scan` check, label the PR `security-review` and @mention the author; one comment per PR, updated in place. Reads the PR as data only (never checks out or runs it). Added 2026-10-20 after a VS Code autorun payload (escrow #163) and a typosquatted action (escrow #176). Manual backfill (Actions → PR malware scan → Run workflow, `prs: all`) scans PRs opened before the scanner and records a `Malware scan` commit status, which satisfies the required check.
 - [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Still not resolved.** A Render free-tier web service + Postgres now runs `backend/`, so `docforum-web`'s GitHub Pages preview has a live API to call — see `docs/adr/0003-render-preview-deployment.md`. This is explicitly a preview, not the production decision: no secrets manager, no backups, no staging/prod split, free-tier Postgres expires 2026-11-06 (renewed 2026-10-07; 30 days, 14-day grace period) unless recreated/upgraded before then — renewal steps in ADR 0003's "Renewing the free database" section. Tracked as [issue #22](https://github.com/DocForum/docforum-core/issues/22) (Medium, 150 pts).
-- [x] Real CI pipeline (replaced `.github/workflows/ci.yml` placeholder — was `pull_request`-only, `echo "TODO"`, never once run). Now runs on push to `main` and on PRs: `prisma:generate` → `typecheck` → unit tests → **integration tests (the self-contained embedded-Postgres double-booking proof)** → `build`. Verified locally end-to-end before pushing (14 unit + 1 integration test passing) and confirmed green in Actions. No lint script exists yet in `backend/package.json` — not added; `tsc --noEmit` is the closest static check currently available. Lint now tracked as [issue #28](https://github.com/DocForum/docforum-core/issues/28) (Trivial, 100 pts). Closes [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
+- [x] Real CI pipeline (replaced `.github/workflows/ci.yml` placeholder — was `pull_request`-only, `echo "TODO"`, never once run). Now runs on push to `main` and on PRs: `npm audit --omit=dev` at high severity (`audit:prod`, Phase 8 issue #47) → `prisma:generate` → `typecheck` → unit tests → **integration tests (the self-contained embedded-Postgres double-booking proof)** → `build`. Verified locally end-to-end before pushing (14 unit + 1 integration test passing) and confirmed green in Actions. No lint script exists yet in `backend/package.json` — not added; `tsc --noEmit` is the closest static check currently available. Lint now tracked as [issue #28](https://github.com/DocForum/docforum-core/issues/28) (Trivial, 100 pts). Closes [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
 - [ ] Staging environment. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [ ] Production environment + secrets management. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [x] Docs site deployed — `docs/site/` (VitePress) via `.github/workflows/deploy-docs.yml`, live at https://docforum.github.io/docforum-core/. Unrelated to the production-deploy decision above; this is a static site with no backend of its own.
+- [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
 
 ## Explicitly deferred (not on this roadmap, tracked so they aren't forgotten)
 - In-app video/voice consultation (PRD OQ-1 — v1 assumes in-person + async messaging).
@@ -380,3 +387,26 @@ for status and issue links.
   tests assert a
   forged cross-origin request is rejected while the legitimate cross-site
   client still succeeds.
+- 2026-10-17 — Issue #40 (patient data export, right of access) opened as a
+  PR: export job + status + streamed download routes under
+  `/patients/me/export`, owner-only (doctors/admins `403`, someone else's id
+  `404`). An exporter registry (`src/export-sections.ts`) where each module
+  contributes its own section through its service — documented in
+  ARCHITECTURE.md §3.1 so new modules know to register. Bundles are written
+  page by page into bounded Postgres chunks (no object-storage provider yet
+  — recorded as ARCHITECTURE.md §6.3.4), expire after 24 h by default, and
+  are deleted by an interval cleanup job. Job state moves only through
+  conditional UPDATEs with an attempt fencing token, so concurrent workers
+  and crashed claims can't publish a partial bundle.
+- 2026-10-17 — Issue #43 (AuditEvent foundation) opened as a PR: the
+  `AuditEvent` table (append-only, enforced by DB triggers; no FKs on
+  purpose), an `audit` module whose `record()` refuses to run outside a
+  transaction, an `X-Request-Id` middleware, and `GET /admin/audit-events`
+  with a keyset cursor. Wired into booking (inside `bookSlot`'s existing
+  transaction, after the slot claim — the concurrency guarantee is
+  unchanged), doctor verification (previous status read `FOR UPDATE`) and
+  payment fund/release/refund (status writes now conditional on the
+  observed state, so a racing second action gets 409 instead of silently
+  overwriting). Rollback coupling proven with a real injected DB failure,
+  not a mock. Phase 3/4 wiring explicitly left pending.
+- 2026-10-20 — Added the PR conflict notifier workflow (see the CI item above): maintainers no longer need to manually ask authors to rebase after each merge.
