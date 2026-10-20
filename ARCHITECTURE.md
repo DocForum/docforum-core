@@ -42,7 +42,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 Each module under `backend/src/modules/<name>/` owns its own `routes/`, `controllers/`, `services/`, `repositories/`. Cross-module access happens through a module's exported service interface only — **never reach into another module's repository directly.** This is the internal seam that would let us extract a module into its own service later without a rewrite.
 
 - `auth` — signup/login, tokens, role checks.
-- `users` — shared user profile fields common to all roles.
+- `users` — shared user profile fields common to all roles, plus the admin account lifecycle (invites, soft deactivation — issue #39). `auth` calls this module's services to create an invited admin; `users` never calls back into `auth`.
 - `patients` — patient-specific profile data.
 - `doctors` — doctor profile, specialties, verification status.
 - `facilities` — lab/pharmacy accounts, capability tags (what order types they can fulfill).
@@ -54,8 +54,7 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `lab-orders` — lab order issuance and versioning.
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
-- `payments` — `PaymentIntent`, the facility payee `WalletLink`, and the patient payer `PatientWalletLink` (§4.12). Relational metadata only; every Stellar call goes through `@docforum/escrow-sdk` via `services/escrow-sdk-loader.ts`. Assets are allowlisted per environment (issue #79), and the prepare half of ADR 0005 (issue #80) builds the unsigned patient transaction without moving funds.
-- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking, doctor verification, payment fund/release/refund. **Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here.
+- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking, doctor verification, payment fund/release/refund. **Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
 
 ### 3.1 Patient data export registry (Phase 8, issue #40)
 
@@ -181,10 +180,10 @@ Design note: `snapshot_notes` and `snapshot_intake_id` deliberately duplicate da
 ### 4.5 Prescriptions (versioned, append-only)
 ```
 Prescription
-  id, consultation_id (FK), patient_profile_id, prescribing_doctor_id
-  status (enum: issued|fulfilled|expired|superseded)
-  supersedes_prescription_id (nullable, self-FK — corrections create a new row)
-  created_at
+  id, consultation_id (FK), patient_profile_id (FK), prescribing_doctor_id (FK)
+  facility_profile_id (FK to pharmacy), amount_stroops (clinician-entered XLM total)
+  supersedes_prescription_id (nullable, unique self-FK), created_at
+  # Corrections create a child row and never update the issued row.
 
 PrescriptionItem
   id, prescription_id (FK), drug_name, dosage, frequency, duration
@@ -193,16 +192,20 @@ PrescriptionItem
 ### 4.6 Lab orders (versioned, append-only)
 ```
 LabOrder
-  id, consultation_id (FK), patient_profile_id, ordering_doctor_id
-  test_type, urgency (enum: routine|urgent), notes
-  status (enum: issued|fulfilled|expired|superseded)
-  supersedes_lab_order_id (nullable, self-FK)
-  created_at
+  id, consultation_id (FK), patient_profile_id (FK), ordering_doctor_id (FK)
+  facility_profile_id (FK to lab), amount_stroops (clinician-entered XLM total)
+  test_type, urgency (enum: routine|urgent), notes [ENCRYPTED]
+  supersedes_lab_order_id (nullable, unique self-FK), created_at
 
 LabResult
-  id, lab_order_id (FK, unique), fulfilling_facility_id, result_file_url, summary
+  id, lab_order_id (FK, unique), fulfilling_facility_id (FK), result_file_url, summary
   created_at
 ```
+The facility and total are captured at issuance. The issuing clinician supplies
+`amount_stroops` in native XLM stroops because v1 has no facility catalog or
+pricing service. Corrections create a new immutable row. A `created` payment
+intent moves to the correction; an already escrowed intent remains linked to
+the original and is refunded through the existing admin refund action.
 
 ### 4.7 Fulfillment (facility-side)
 ```
@@ -241,7 +244,7 @@ LoginAttempt (issue #35)
 ```
 AuditEvent
   id, actor_user_id (nullable — null = system), actor_role (nullable Role)
-  entity_type ('Appointment' | 'DoctorProfile' | 'PaymentIntent' so far), entity_id
+  entity_type ('Appointment' | 'DoctorProfile' | 'PaymentIntent' | 'Consultation' | 'Prescription' | 'LabOrder'), entity_id
   action (dotted, e.g. 'appointment.booked'), from_state, to_state (nullable)
   request_id (X-Request-Id of the causing request), metadata (jsonb, nullable)
   created_at
@@ -294,43 +297,41 @@ Bundle format (schemaVersion 1): `{ format: "docforum.patient-export",
 schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }`
 — see §3.1 for where sections come from.
 
-### 4.12 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
-```
-PaymentIntent
-  id, order_type/order_id (opaque, unvalidated until Phase 4 exists)
-  status (enum: created|awaiting_signature|submitting|escrowed|released|refunded|failed)
-  patient_profile_id (FK), facility_id (FK)
-  amount (bigint — smallest unit of asset_code; never scaled in this repo)
-  asset_code, token_contract_id (SAC address; token_contract_id is nullable
-    only for pre-#79 rows, which resolve ESCROW_TOKEN_ID as native XLM)
-  escrow_id, stellar_tx_hash, soroban_contract_id (nullable — set on fund)
-  prepared_tx_hash, prepared_xdr, prepared_expiry_ledger, prepared_expires_at,
-    refund_after (nullable — live only in awaiting_signature; cleared on expiry)
-  created_at, updated_at
-  # Every status write is a conditional UPDATE on the observed state, in the
-    same transaction as its AuditEvent (§4.10). Prepare is
-    created -> awaiting_signature; expiry is awaiting_signature -> created.
-    `submitting` is reserved for ADR 0005's submit half (not built).
+### 4.12 Escrow chain event observations (issue #86)
 
-PatientWalletLink
-  patient_profile_id (unique FK -> PatientProfile, cascade)
-  stellar_public_key, verified_at
-  # The PAYER wallet (ADR 0005). Only prepared rows are written by the
-    SEP-10 flow, which is not built yet; prepare requires one and returns
-    409 WALLET_NOT_LINKED otherwise.
-
-WalletLink
-  facility_id (unique FK -> FacilityProfile, cascade)
-  stellar_public_key
-  # The PAYEE/payout wallet, facility-managed (ADR 0004). Unchanged by #79.
+EscrowEventCursor has one row per deployed escrow contract and persists the Soroban RPC pagination cursor and retention error. EscrowChainEvent is uniquely keyed by (contractId, eventId) and records the contract event, ledger, transaction hash, escrow id, match state, and alert timestamp. These are observations, not a source of payment state: matching checks the locally owned PaymentIntent; the poller never mutates a payment transition.
+### 4.11 PHI read-access log (Phase 8, issue #45)
 ```
-Assets are an environment allowlist (`PAYMENT_ASSETS`; testnet defaults XLM +
-USDC SACs) rather than a fixed enum: an intent in any other asset is
-rejected at creation. Before funding (and preparing) an issued asset, the
-payee's Horizon account is checked for an authorised trustline
-(`PAYEE_TRUSTLINE_MISSING`); native XLM needs none. Only assets without
-clawback/transfer fees/rebasing belong on the list — escrow threat model
-T5, enforced as a curated config policy.
+AccessLog
+  id, accessed_by (nullable FK → User, SET NULL on delete — the row keeps
+    its timestamp and entity while the PII pointer is removed)
+  patient_profile_id (nullable FK → PatientProfile, CASCADE — the record
+    owner, whose data was viewed; used by the patient-facing query)
+  entity_type ('IntakeForm' | 'Consultation' | 'Prescription' |
+    'PrescriptionItem' | 'LabOrder' | 'LabResult' | 'Referral' |
+    'PaymentIntent' | 'PatientProfile' | 'Appointment'), entity_id
+  route (nullable — the HTTP route that returned the payload),
+    detail (nullable — context string, never PHI)
+  accessed_at (default now)
+  # indexes: (accessed_at), (accessed_by), (patient_profile_id,
+    accessed_at), (entity_type, entity_id).
+```
+Answers "who looked at this" — distinct from `AuditEvent`'s "who changed
+this" (§4.10). Reads are far higher volume than state changes, so:
+- writes go through `auditService.recordAccess()`, which is
+  **fire-and-forget** (never awaited on the read path — a unit test pins
+  sub-50ms return with a hanging insert) and **fail-open** (a logging
+  failure never fails the read, but is counted and surfaced via
+  `GET /admin/access-logs/stats` for alerting);
+- rows are **retention-managed**, not append-only: `pruneOldAccessLogs()`
+  (wired into the prune interval in `src/server.ts`) deletes rows older
+  than `ACCESS_LOG_RETENTION_DAYS` (default 365). That delete is the only
+  one in the audit repositories and is bounded to the retention cutoff.
+Patient-facing query (`GET /patients/me/access-log`) is scoped server-side
+to the caller's own profile (resolved from the authenticated user, never
+from the request) and strips all viewer PII to a role — a deleted viewer
+surfaces as `deleted_user`.
+
 
 ## 5. Key flows (sequence-level, not code)
 

@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { parsePaymentsConfig } from './payments';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -157,6 +158,13 @@ export const config = {
     pruneIntervalSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_INTERVAL_SECONDS ?? 60 * 60),
     pruneAfterSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_AFTER_SECONDS ?? 24 * 60 * 60),
   },
+  // PHI read-access log (Phase 8, issue #45). How long AccessLog rows are
+  // kept before the prune job (src/server.ts) deletes them. Reads are far
+  // higher volume than AuditEvent writes, so this gets its own, shorter
+  // retention instead of AuditEvent's append-forever lifetime.
+  accessLog: {
+    retentionDays: Number(process.env.ACCESS_LOG_RETENTION_DAYS ?? 365),
+  },
   // Patient data export (Phase 8, issue #40). Env-configurable so a
   // deployment can tune retention and memory bounds without a code change.
   patientExport: {
@@ -200,34 +208,11 @@ export const config = {
     sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
     path: '/',
   },
-  // Deliberately NOT required at startup via requireEnv() — unrelated
-  // parts of the app (auth, availability, etc.) shouldn't fail to boot
-  // just because payments isn't configured. The payments module itself
-  // (services/index.ts) validates these are present before doing
-  // anything that needs them, with a clear error naming which is
-  // missing. See docs/adr/0004-custodial-payments-v1.md.
-  payments: {
-    platformPayerSecret: process.env.PLATFORM_PAYER_SECRET,
-    platformReleaserSecret: process.env.PLATFORM_RELEASER_SECRET,
-    escrowContractId: process.env.ESCROW_CONTRACT_ID,
-    // Legacy native-XLM token id (ADR 0004). Still used as the fallback for
-    // PaymentIntent rows created before issue #79, whose tokenContractId is
-    // null, and as the default XLM entry in the allowlist.
-    escrowTokenId: process.env.ESCROW_TOKEN_ID,
-    // Per-environment asset allowlist (issue #79). See parsePaymentAssets.
-    assets: parsePaymentAssets(process.env.PAYMENT_ASSETS),
-    // Horizon is only read for payee trustlines — never for contract calls,
-    // which go through the SDK.
-    horizonUrl: process.env.HORIZON_URL ?? 'https://horizon-testnet.stellar.org',
-    // Issue #80: how long a prepared, unsigned create_escrow transaction is
-    // considered live before the expiry job returns the intent to `created`.
-    prepareTtlSeconds: Number(process.env.PAYMENT_PREPARE_TTL_SECONDS ?? 5 * 60),
-    // ADR 0005: refund_after = order expiry + grace. Orders are still
-    // placeholders without an expiry field (Phase 4), so the intent's own
-    // createdAt is the order-expiry anchor today.
-    orderExpiryHours: Number(process.env.PAYMENT_ORDER_EXPIRY_HOURS ?? 72),
-    refundGraceHours: Number(process.env.PAYMENT_REFUND_GRACE_HOURS ?? 24),
-    // Expiry sweep cadence (src/jobs/payment-intents.ts).
-    prepareExpirySweepIntervalSeconds: Number(process.env.PAYMENT_PREPARE_EXPIRY_SWEEP_INTERVAL_SECONDS ?? 60),
+  // Admin invites (Phase 8, issue #39). `acceptUrl` is where the invite link
+  // points — docforum-web owns the page that consumes `?token=`.
+  adminInvites: {
+    ttlHours: Number(process.env.ADMIN_INVITE_TTL_HOURS ?? 72),
+    acceptUrl: process.env.ADMIN_INVITE_ACCEPT_URL ?? 'http://localhost:5173/accept-admin-invite',
   },
+  payments: parsePaymentsConfig(process.env),
 } as const;

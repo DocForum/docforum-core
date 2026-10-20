@@ -7,10 +7,13 @@ import { authRouter } from './modules/auth/routes';
 import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
+import { ordersRouter } from './modules/orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
+import { adminRouter } from './modules/users/routes';
 import { registerPatientExportSections } from './export-sections';
-import { auditRouter } from './modules/audit/routes';
+import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
+import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 
 export function createApp() {
@@ -40,9 +43,19 @@ export function createApp() {
   app.use('/doctors', doctorsRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
+  app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
+  // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
+  // reactivate) alongside the audit read path. Different paths, no overlap.
+  app.use('/admin', adminRouter);
   app.use('/admin', auditRouter);
+  app.use('/admin/payments', escrowEventsRouter);
+
+  // PHI read-access logging (Phase 8, issue #45). Mounted at root so the
+  // paths match the issue's spec exactly: /admin/access-logs, /patients/me/access-log.
+  app.use('/admin', adminAuditRouter);
+  app.use('/patients', patientAuditRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.

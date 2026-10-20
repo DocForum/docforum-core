@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import * as paymentsService from '../services';
-import { linkWalletSchema, createPaymentIntentSchema } from '../validation';
+import { linkWalletSchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
@@ -11,8 +11,8 @@ import { auditActor } from '../../../middleware/request-id';
 // the prepare call itself and can be large.
 function serializeIntent(intent: {
   id: string;
-  orderType: string;
-  orderId: string;
+  prescriptionId: string | null;
+  labOrderId: string | null;
   status: string;
   patientProfileId: string;
   facilityId: string;
@@ -50,12 +50,6 @@ export async function getOwnWallet(req: Request, res: Response) {
   const link = await paymentsService.getWalletLink(facilityId);
   if (!link) throw new HttpError(404, 'No wallet linked yet.');
   res.status(200).json(link);
-}
-
-export async function createIntent(req: Request, res: Response) {
-  const input = createPaymentIntentSchema.parse(req.body);
-  const intent = await paymentsService.createPaymentIntent(input);
-  res.status(201).json(serializeIntent(intent));
 }
 
 export async function getIntent(req: Request, res: Response) {

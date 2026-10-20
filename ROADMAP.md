@@ -61,7 +61,7 @@ for status and issue links.
 - [ ] Doc reconciliation: update ARCHITECTURE_ESSENTIALS.md "Known unresolved design gaps" once routing rule + expiry exist — part of issue #6's DoD.
 
 ## Phase 4 — Orders: prescriptions & lab orders
-**Status: Not started (blocked by Phase 2, informed by Phase 3). Scoped into issues #9–#12.**
+**Status: Partially implemented by issues #9 and #85; remaining issue work is tracked in #10–#12.**
 - [ ] `Prescription` + `PrescriptionItem` models, **append-only** (issuance creates a row; corrections use `supersedes_prescription_id` — ARCHITECTURE.md §4.5, hard rule in ARCHITECTURE_ESSENTIALS.md). Tracked as [issue #9](https://github.com/DocForum/docforum-core/issues/9) (High, 200 pts), which also covers `LabOrder`/`LabResult` (same append-only rule).
 - [ ] `LabOrder` + `LabResult` models, same append-only rule — folded into issue #9 above.
 - [ ] Specialist UI: issue prescription/lab order from a consultation. Tracked as [issue #10](https://github.com/DocForum/docforum-core/issues/10) (Medium, 150 pts) — depends on #9.
@@ -77,11 +77,12 @@ for status and issue links.
 - [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1 — addressed by issue #14's admin-only gating; document any remaining gap in that issue's PR.
 
 ## Phase 5.5 — Payments (consumer side)
-**Status: Built, decoupled from Phase 4/5 rather than blocked by them — see docs/adr/0004-custodial-payments-v1.md.** `docforum-escrow` issues #4/#5 (SDK + distribution decision) closed, so the original blocker cleared; rather than wait further on Phase 4/5 (Orders/Facilities, still not built), `PaymentIntent`/`WalletLink` were designed with opaque, unvalidated `orderType`/`orderId` fields instead of hard FKs to `Prescription`/`LabOrder`, so this phase didn't have to wait on two more unbuilt phases. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
-- [x] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — no PHI). `WalletLink` scoped to the **facility** (payee), not the patient — see ADR 0004. Amount is a token-agnostic `BigInt` in the asset's smallest unit (renamed from `amountStroops` by #79).
-- [x] Payment asset support — USDC + native XLM per `PaymentIntent`, with a per-environment allowlist, payee trustline check, and a lossless `amountStroops → amount` migration. Tracked as [issue #79](https://github.com/DocForum/docforum-core/issues/79). Adds `assetCode`/`tokenContractId` to `PaymentIntent`; `PAYMENT_ASSETS` is the allowlist (testnet defaults: XLM + USDC SACs). Funding a non-native asset now fails with `409 PAYEE_TRUSTLINE_MISSING` before any on-chain call if the facility's linked wallet can't hold it.
+**Status: Payment order linkage, automatic intent issuance, configuration hardening, and platform signer abstraction are implemented; fulfillment-triggered release remains pending.** See docs/adr/0004-custodial-payments-v1.md. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
+- [x] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — no PHI). `WalletLink` scoped to the **facility** (payee), not the patient — see ADR 0004. Amount is raw stroops (`BigInt`), not the originally-scaffolded `Decimal`+`"USDC"` — matches what's actually proven end-to-end on testnet; multi-asset support is future work, not assumed.
 - [x] Added `@docforum/escrow-sdk` as a real dependency (via the GitHub Release tarball URL — see `docforum-escrow`'s ADR 0003); wired `payments/services` to call it through a dynamic `import()` (`escrow-sdk-loader.ts` — the SDK is ESM-only, this backend is CommonJS).
-- [ ] On order issuance, create a `PaymentIntent` (`created` status) — still manual/admin-triggered (`POST /payments/intents`) since Phase 4 order issuance doesn't exist yet to trigger it automatically.
+- [x] On order issuance, create a `PaymentIntent` (`created` status) automatically with a typed order FK. Manual intent creation was removed. Corrections move created intents; funded intents remain attached to the immutable original.
+- [x] [Issue #88] Harden payments configuration: typed network/RPC/contract/asset settings, mainnet opt-in guard, startup reachability check, and intent-recorded contract ids for release/refund.
+- [x] Soroban contract-event poller, per-deployment persisted cursors, unmatched release/refund alerts, and admin event view (issue #86). Contract deployments must include their deployment ledger; RPC retention gaps are surfaced for operator reconciliation.
 - [x] On patient funding action, call SDK to move funds into escrow (`escrowed` status), store `stellarTxHash` — except it's not a *patient* action in this design (custodial v1, ADR 0004): `POST /payments/intents/:id/fund`, admin-triggered, funds from `docforum-core`'s own platform payer identity.
 - [x] On `FulfillmentRecord` reaching `fulfilled`, trigger SDK release call (`released` status) — except there's no `FulfillmentRecord` yet (Phase 5), so v1 exposes `POST /payments/intents/:id/release` as an admin-triggered action instead. ADR 0002's "don't let it drift into a manual/admin-triggered release" goal is **not yet met** — this is the honest interim, not the destination; revisit once Phase 5 exists.
 - [x] Refund path for rejected/expired orders — `POST /payments/intents/:id/refund`, same admin-triggered caveat as release.
@@ -125,11 +126,13 @@ for status and issue links.
 
 ## Phase 9 — Deploy & CI
 **Status: Not started for real production. A Render free-tier preview exists — see note. Remaining items scoped into issues #21–#22.**
+- [x] **PR malware scan** — `.github/workflows/pr-malware-scan.yml` + `.github/scripts/pr-malware-scan.cjs`, on every PR push. Flags editor/devcontainer autorun tasks, npm install hooks, typosquatted packages and Actions, non-registry dependency sources, payloads disguised as fonts/images, base64/whitespace obfuscation, exfiltration endpoints, reverse shells and miners. HIGH findings fail the `Malware scan` check, label the PR `security-review` and @mention the author; one comment per PR, updated in place. Reads the PR as data only (never checks out or runs it). Added 2026-10-20 after a VS Code autorun payload (escrow #163) and a typosquatted action (escrow #176). Manual backfill (Actions → PR malware scan → Run workflow, `prs: all`) scans PRs opened before the scanner and records a `Malware scan` commit status, which satisfies the required check.
 - [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Still not resolved.** A Render free-tier web service + Postgres now runs `backend/`, so `docforum-web`'s GitHub Pages preview has a live API to call — see `docs/adr/0003-render-preview-deployment.md`. This is explicitly a preview, not the production decision: no secrets manager, no backups, no staging/prod split, free-tier Postgres expires 2026-11-06 (renewed 2026-10-07; 30 days, 14-day grace period) unless recreated/upgraded before then — renewal steps in ADR 0003's "Renewing the free database" section. Tracked as [issue #22](https://github.com/DocForum/docforum-core/issues/22) (Medium, 150 pts).
 - [x] Real CI pipeline (replaced `.github/workflows/ci.yml` placeholder — was `pull_request`-only, `echo "TODO"`, never once run). Now runs on push to `main` and on PRs: `npm audit --omit=dev` at high severity (`audit:prod`, Phase 8 issue #47) → `prisma:generate` → `typecheck` → unit tests → **integration tests (the self-contained embedded-Postgres double-booking proof)** → `build`. Verified locally end-to-end before pushing (14 unit + 1 integration test passing) and confirmed green in Actions. No lint script exists yet in `backend/package.json` — not added; `tsc --noEmit` is the closest static check currently available. Lint now tracked as [issue #28](https://github.com/DocForum/docforum-core/issues/28) (Trivial, 100 pts). Closes [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
 - [ ] Staging environment. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [ ] Production environment + secrets management. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [x] Docs site deployed — `docs/site/` (VitePress) via `.github/workflows/deploy-docs.yml`, live at https://docforum.github.io/docforum-core/. Unrelated to the production-deploy decision above; this is a static site with no backend of its own.
+- [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
 
 ## Explicitly deferred (not on this roadmap, tracked so they aren't forgotten)
 - In-app video/voice consultation (PRD OQ-1 — v1 assumes in-person + async messaging).
@@ -407,20 +410,4 @@ for status and issue links.
   observed state, so a racing second action gets 409 instead of silently
   overwriting). Rollback coupling proven with a real injected DB failure,
   not a mock. Phase 3/4 wiring explicitly left pending.
-- 2026-10-19 — Issues #79 and #80 opened as one PR:
-  PaymentIntent now carries `assetCode` + `tokenContractId` and stores its
-  amount as a token-agnostic `amount` (migration is a plain column rename,
-  so no row loses its value; pre-#79 rows resolve native XLM from
-  `ESCROW_TOKEN_ID`). `PAYMENT_ASSETS` is the per-environment allowlist
-  (testnet defaults XLM + USDC SACs); unknown assets are `400
-  UNSUPPORTED_PAYMENT_ASSET`, and fund/prepare check the payee's Horizon
-  trustline first (`409 PAYEE_TRUSTLINE_MISSING`). The prepare half of ADR
-  0005 adds `POST /payments/intents/:id/prepare` (patient-only, service
-  ownership check, `404` for someone else's intent), `awaiting_signature`/
-  `submitting` statuses, a stored prepared hash/XDR/expiry, `refundAfter`
-  from the order-expiry proxy + grace, and an expiry sweep back to
-  `created`. `PatientWalletLink` is the new patient payer address model
-  (SEP-10 flow still not built). Real prepare still waits on
-  `@docforum/escrow-sdk` 0.3.0 (docforum-escrow #58) — the endpoint returns
-  `503 ESCROW_SDK_PREPARE_UNSUPPORTED` against 0.2.0, and the new
-  integration tests mock the SDK/RPC.
+- 2026-10-20 — Added the PR conflict notifier workflow (see the CI item above): maintainers no longer need to manually ask authors to rebase after each merge.

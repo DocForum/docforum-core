@@ -28,8 +28,8 @@ can log in, refresh, and browse; they get
 depend on a trustworthy contact address:
 
 - `POST /appointments` (booking)
-- `POST /payments/wallet-link`, `POST /payments/intents`,
-  `POST /payments/intents/:id/{prepare,fund,release,refund}`
+- `POST /payments/wallet-link`,
+  `POST /payments/intents/:id/{fund,release,refund}`
 
 That guard reads the database rather than trusting a claim in the access
 token, so verifying in one tab unblocks the caller immediately instead of
@@ -151,6 +151,9 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 | `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
 
+## Orders (`/orders`) — `backend/src/modules/orders`
+
+Verified doctors can create a consultation with `POST /orders/consultations` (`appointmentId`, optional `outcome` and `notes`). Issue a prescription with `POST /orders/consultations/:consultationId/prescriptions` (`facilityProfileId`, positive integer `amountStroops`, and `items`), or a lab order with `POST /orders/consultations/:consultationId/lab-orders` (`facilityProfileId`, `amountStroops`, `testType`, optional `urgency` and `notes`). Issuance creates its payment intent in the same transaction. Corrections create superseding immutable orders: a created intent moves to the correction; an escrowed intent remains linked to the original and is handled by the existing admin refund action.
 ## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
 
 Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
@@ -220,7 +223,7 @@ Bundle (`schemaVersion` 1):
   "sections": {
     "account":      { "version": 1, "items": [{ "id", "email", "phone", "role", "emailVerifiedAt", "createdAt", "updatedAt" }] },
     "appointments": { "version": 1, "items": [{ "id", "status", "origin", "slot": { "startTime", "endTime" }, "doctor": { "id", "fullName" }, "createdAt", "updatedAt" }] },
-    "payments":     { "version": 2, "items": [{ "id", "orderType", "orderId", "status", "amount", "assetCode", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
+    "payments":     { "version": 1, "items": [{ "id", "prescriptionId", "labOrderId", "status", "amountStroops", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
     "profile":      { "version": 1, "items": [{ "id", "fullName", "dateOfBirth", "createdAt", "updatedAt" }] }
   }
 }
@@ -293,5 +296,10 @@ and `PAYMENT_PREPARE_EXPIRY_SWEEP_INTERVAL_SECONDS` (default 60).
 
 Everything else in `ARCHITECTURE.md` §3's module list (`facilities`,
 `consultations`, `referrals`, `prescriptions`, `lab-orders`,
-`pharmacy-orders`, `notifications`) has no routes yet — Phase 2 onward, see
-`ROADMAP.md`.
+`pharmacy-orders`, `payments`, `notifications`) has no routes yet — Phase
+2 onward, see `ROADMAP.md`.
+
+
+## Escrow chain events (/admin/payments/escrow-events)
+
+Admin-only read endpoint. Optional state filter accepts pending, matched, or unmatched; limit is 1�w^~)�w200 (default 50). It returns persisted Soroban events and per-contract cursors. Unmatched release/refund events produce a high-severity structured log, an optional JSON POST to ESCROW_EVENT_ALERT_WEBHOOK_URL, and an unmatched row visible here. A retention-window failure sets catchupError on the corresponding cursor; operators must reconcile the gap before changing the configured start ledger.

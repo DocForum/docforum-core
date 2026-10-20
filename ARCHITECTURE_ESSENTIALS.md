@@ -20,23 +20,22 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
-`User` → `PatientProfile | DoctorProfile | FacilityProfile`
+`User` → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
 `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
-`Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
+`Appointment` → `Consultation` → immutable `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
 `User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
+`User` → `AccessLog` (Phase 8, issue #45 — PHI read-access log: who viewed which clinical record, when; fire-and-forget writes, fail-open).
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
-`FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile` → `PatientWalletLink` (patient payer address, ADR 0005) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId`, allowlisted `assetCode` + `tokenContractId`, prepare fields — see docs/adr/0004/0005)
+`FacilityProfile` → `WalletLink` (payout address) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85)
 
-## Payments (Phase 5.5 — see docs/adr/0004 and docs/adr/0005)
-- **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). The patient-wallet path (ADR 0005) is being added alongside it; custodial stays as the fallback.
-- `WalletLink` is the **facility payee**; `PatientWalletLink` (ADR 0005) is the **patient payer**. Don't conflate them — a facility payout address must never be usable as a patient payer.
-- Asset is per intent, not per deployment (issue #79): `PaymentIntent.amount` is the smallest unit of `assetCode` (XLM or USDC by default), `tokenContractId` is the SAC address, and only `PAYMENT_ASSETS` allowlist entries may be used. Amounts are never scaled/converted in this repo, so don't assume 7 decimals. Issued assets need an authorised payee trustline before fund/prepare (`PAYEE_TRUSTLINE_MISSING`); XLM needs none.
-- `PaymentIntent.orderType`/`orderId` are opaque, unvalidated — `Prescription`/`LabOrder` aren't real records yet (Phase 4). Don't build on top of these assuming they're FK-validated.
-- `POST /payments/intents/:id/prepare` (issue #80) is patient-only and ownership-checked in the service (someone else's id is a 404). It builds+simulates via the SDK, stores the transaction hash/XDR, and moves `created → awaiting_signature`; re-prepare while live is idempotent, and expiry (`awaiting_signature → created`) is a normal case handled by a sweep, not an error. Only one prepared transaction may be live per intent — enforce with the conditional UPDATE, never a read-then-write.
+## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
+- **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule.
+- `WalletLink` is scoped to the **facility** (the on-chain payee), not the patient.
+- Each issued order stores its selected facility and clinician-entered total in XLM stroops; a database check requires exactly one PaymentIntent order FK.
 - `release`/`refund` are admin-triggered HTTP actions in v1 (`POST /payments/intents/:id/{release,refund}`) — there's no `FulfillmentRecord.status == fulfilled` to trigger off of yet. Don't treat this as the final design.
 - The actual Stellar contract calls go through `@docforum/escrow-sdk` (`backend/src/modules/payments/services/escrow-sdk-loader.ts` — dynamic `import()`, the SDK is ESM-only and this backend is CommonJS). Never reimplement contract-calling logic in this repo. The SDK used today (0.2.0) has no prepare call, so prepare returns `503 ESCROW_SDK_PREPARE_UNSUPPORTED` until the 0.3.0 prepare/submit call (docforum-escrow #58) lands.
 
@@ -63,3 +62,9 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - Data model source of truth: `backend/prisma/schema.prisma`
 - Frontend: `frontend/src/{pages,components,features,hooks,services,store,types}`
 - Roadmap / status: `ROADMAP.md` — **must be updated on every contribution that changes scope or completes work**.
+
+
+## Escrow event monitoring (issue #86)
+- EscrowEventCursor stores one pagination cursor per contract deployment; configure each historical deployment as ESCROW_CONTRACTS=CONTRACT_ID@START_LEDGER,...
+- EscrowChainEvent stores deduplicated Soroban events. The admin endpoint is GET /admin/payments/escrow-events.
+- Unmatched release/refund events are high-severity alerts; RPC retention loss is surfaced as catchupError and must be reconciled explicitly.

@@ -29,24 +29,6 @@ export function findWalletLinkByFacilityId(facilityId: string) {
   return prisma.walletLink.findUnique({ where: { facilityId } });
 }
 
-/** The patient's payer wallet (ADR 0005). Rows are created by the SEP-10
- * linking flow once it exists — not by this module's HTTP surface yet. */
-export function findPatientWalletLinkByPatientProfileId(patientProfileId: string) {
-  return prisma.patientWalletLink.findUnique({ where: { patientProfileId } });
-}
-
-export function createPaymentIntent(input: {
-  orderType: 'prescription' | 'lab_order';
-  orderId: string;
-  patientProfileId: string;
-  facilityId: string;
-  assetCode: string;
-  tokenContractId: string;
-  amount: bigint;
-}) {
-  return prisma.paymentIntent.create({ data: input });
-}
-
 export function findPaymentIntentById(id: string) {
   return prisma.paymentIntent.findUnique({ where: { id } });
 }

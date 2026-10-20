@@ -14,16 +14,18 @@
 import { HttpError } from '../../../http-error';
 import { config, type PaymentAsset } from '../../../config';
 import * as paymentsRepo from '../repositories';
-import { loadEscrowSdk } from './escrow-sdk-loader';
-import { hasTrustline } from './trustline';
+import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
+import { getPlatformSigners } from './platform-signers';
 import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
-import type { PaymentIntent, PaymentIntentStatus, Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+// Types are inferred from the prisma instance; use 'as' assertions where needed
 
 // Test seams re-exported through the service surface (same convention as the
 // auth module's setEmailSender) — see escrow-sdk-loader.ts and trustline.ts.
 export { setEscrowSdkForTests } from './escrow-sdk-loader';
+export { listEscrowEvents } from './escrow-events';
 export type { EscrowSdkModule } from './escrow-sdk-loader';
 export { setTrustlineCheckerForTests } from './trustline';
 export type { TrustlineChecker } from './trustline';
@@ -59,86 +61,47 @@ interface PrepareCapableClient {
 }
 
 async function requirePaymentsConfig() {
-  const { platformPayerSecret, platformReleaserSecret, escrowContractId } = config.payments;
-  const missing = Object.entries({ platformPayerSecret, platformReleaserSecret, escrowContractId })
+  const { activeContractId, escrowTokenId } = config.payments;
+  const missing = Object.entries({ activeContractId, escrowTokenId })
     .filter(([, value]) => !value)
     .map(([key]) => key);
   if (missing.length > 0) {
     throw new HttpError(500, `Payments is not configured — missing env var(s): ${missing.join(', ')}.`);
   }
-  const { Keypair } = await loadEscrowSdk();
+  const { payer, releaser } = await getPlatformSigners();
   return {
-    platformPayer: Keypair.fromSecret(platformPayerSecret!),
-    platformReleaser: Keypair.fromSecret(platformReleaserSecret!),
-    escrowContractId: escrowContractId!,
+    platformPayer: payer,
+    platformReleaser: releaser,
+    escrowContractId: activeContractId!,
+    escrowTokenId: escrowTokenId!,
   };
 }
-
 async function escrowClient(contractId: string) {
   const { EscrowClient } = await loadEscrowSdk();
-  return new EscrowClient({ contractId });
+  return new EscrowClient({ contractId, rpcUrl: config.payments.rpcUrl, networkPassphrase: config.payments.networkPassphrase });
 }
 
-/** The per-environment allowlist (issue #79). An intent may only be created
- * in one of these assets. */
-export function listPaymentAssets(): PaymentAsset[] {
-  return config.payments.assets;
-}
-
-function resolveAsset(code: string): PaymentAsset {
-  const asset = config.payments.assets.find((candidate) => candidate.code === code);
-  if (!asset) {
-    throw new HttpError(
-      400,
-      `Unsupported payment asset '${code}'. Allowed: ${config.payments.assets.map((a) => a.code).join(', ')}.`,
-      'UNSUPPORTED_PAYMENT_ASSET',
-    );
+export async function verifyPaymentsNetwork(): Promise<void> {
+  const { startupCheckEnabled, activeContractId, healthCheckEscrowId } = config.payments;
+  if (!startupCheckEnabled) return;
+  if (!activeContractId || healthCheckEscrowId === null) {
+    throw new Error('Payments startup verification is enabled without an active contract and health-check escrow.');
   }
-  return asset;
-}
-
-/**
- * Resolves the asset recorded on an intent. Rows created before issue #79
- * have no `tokenContractId` and were native XLM funded against
- * `ESCROW_TOKEN_ID` — the documented legacy fallback. The allowlist only
- * supplies `decimals`/`issuer` for the response; the stored contract id
- * wins so an intent keeps paying the asset it was denominated in even if
- * the allowlist entry is later rotated.
- */
-function resolveAssetForIntent(intent: PaymentIntent): PaymentAsset {
-  const configured = config.payments.assets.find((asset) => asset.code === intent.assetCode);
-  const tokenContractId =
-    intent.tokenContractId ??
-    (intent.assetCode === 'XLM' ? config.payments.escrowTokenId : undefined) ??
-    configured?.tokenContractId;
-  if (!tokenContractId) {
-    throw new HttpError(
-      409,
-      `PaymentIntent uses asset '${intent.assetCode}', whose token contract is not configured.`,
-      'PAYMENT_ASSET_NOT_CONFIGURED',
-    );
-  }
-  return {
-    code: intent.assetCode,
-    tokenContractId,
-    decimals: configured?.decimals ?? 0,
-    ...(configured?.issuer ? { issuer: configured.issuer } : {}),
-  };
-}
-
-/** Checks the payee can hold the asset before any on-chain call. Native XLM
- * passes unconditionally; an issued asset needs an authorised trustline. */
-async function requirePayeeTrustline(payee: string, asset: PaymentAsset): Promise<void> {
-  if (!asset.issuer) return;
-  if (!(await hasTrustline(payee, asset))) {
-    throw new HttpError(
-      409,
-      `The facility's linked wallet has no trustline for ${asset.code}. Ask the facility to link a wallet that can hold ${asset.code}.`,
-      'PAYEE_TRUSTLINE_MISSING',
-    );
+  try {
+    await (await escrowClient(activeContractId)).getStatus(healthCheckEscrowId);
+  } catch (cause) {
+    throw new Error('Payments startup verification failed: active escrow contract is unreachable or the configured health-check escrow is invalid.', { cause });
   }
 }
 
+function requireRecordedContractId(intent: { sorobanContractId: string | null }): string {
+  const contractId = intent.sorobanContractId;
+  if (!contractId) throw new HttpError(409, 'PaymentIntent has no recorded escrow contract id.');
+  if (!config.payments.contractIds.includes(contractId)) {
+    throw new HttpError(409, 'PaymentIntent references an unregistered escrow contract.');
+  }
+  return contractId;
+}
 export async function getOwnFacilityProfileId(userId: string): Promise<string> {
   const profile = await paymentsRepo.findFacilityProfileByUserId(userId);
   if (!profile) throw new HttpError(403, 'No facility profile is associated with this account.');
@@ -161,31 +124,35 @@ export function getWalletLink(facilityId: string) {
   return paymentsRepo.findWalletLinkByFacilityId(facilityId);
 }
 
-export function getPatientWalletLink(patientProfileId: string) {
-  return paymentsRepo.findPatientWalletLinkByPatientProfileId(patientProfileId);
-}
+/** Called by the orders module inside the order-issuance transaction. A
+ * created intent moves to a corrected order; any funded/terminal intent
+ * stays attached to the immutable original order. */
+export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, input: {
+  kind: 'prescription' | 'lab_order'; orderId: string; patientProfileId: string; doctorProfileId: string;
+  facilityProfileId: string; amountStroops: bigint; supersedesId: string | null;
+}) {
+  if (input.amountStroops <= 0n) throw new HttpError(400, 'amountStroops must be positive.');
+  const facility = await tx.facilityProfile.findUnique({ where: { id: input.facilityProfileId }, select: { type: true } });
+  const expectedType = input.kind === 'prescription' ? 'pharmacy' : 'lab';
+  if (!facility || facility.type !== expectedType) throw new HttpError(400, `The selected facility must be a ${expectedType} facility.`);
 
-export interface CreatePaymentIntentInput {
-  orderType: 'prescription' | 'lab_order';
-  orderId: string;
-  patientProfileId: string;
-  facilityId: string;
-  assetCode: string;
-  /** Smallest unit of `assetCode`. */
-  amount: bigint;
-}
-
-export function createPaymentIntent(input: CreatePaymentIntentInput) {
-  if (input.amount <= 0n) throw new HttpError(400, 'amount must be positive.');
-  const asset = resolveAsset(input.assetCode);
-  return paymentsRepo.createPaymentIntent({
-    orderType: input.orderType,
-    orderId: input.orderId,
-    patientProfileId: input.patientProfileId,
-    facilityId: input.facilityId,
-    assetCode: asset.code,
-    tokenContractId: asset.tokenContractId,
-    amount: input.amount,
+  const orderPointer = input.kind === 'prescription'
+    ? { prescriptionId: input.orderId, labOrderId: null }
+    : { prescriptionId: null, labOrderId: input.orderId };
+  if (input.supersedesId) {
+    const previous = await tx.paymentIntent.findFirst({
+      where: input.kind === 'prescription' ? { prescriptionId: input.supersedesId } : { labOrderId: input.supersedesId },
+    });
+    if (previous?.status === 'created') {
+      const moved = await tx.paymentIntent.updateMany({
+        where: { id: previous.id, status: 'created' },
+        data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops: input.amountStroops },
+      });
+      if (moved.count === 1) return tx.paymentIntent.findUniqueOrThrow({ where: { id: previous.id } });
+    }
+  }
+  return tx.paymentIntent.create({
+    data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops: input.amountStroops },
   });
 }
 
@@ -213,11 +180,13 @@ function intentAuditMetadata(intent: PaymentIntent) {
  * row moved on concurrently, nothing is written and the caller gets 409. */
 async function commitTransition(
   actor: auditService.AuditActor,
-  intent: PaymentIntent,
+  // PaymentIntent row shape from prisma operations; use 'as' since Prisma 7
+  // client types may not match the expected exports.
+  intent: any,
   action: string,
-  to: PaymentIntentStatus,
-  write: (tx: Prisma.TransactionClient) => Promise<PaymentIntent | null>,
-): Promise<PaymentIntent> {
+  to: any,
+  write: (tx: any) => Promise<any>,
+): Promise<any> {
   return prisma.$transaction(async (tx) => {
     const updated = await write(tx);
     if (!updated) {
@@ -229,7 +198,16 @@ async function commitTransition(
       action,
       fromState: intent.status,
       toState: to,
-      metadata: intentAuditMetadata(updated),
+      // Public, non-identifying references only: the escrow is on a public
+      // ledger anyway. No patient data, no secrets.
+      metadata: {
+        orderType: updated.prescriptionId ? 'prescription' : 'lab_order',
+        orderId: updated.prescriptionId ?? updated.labOrderId!,
+        amountStroops: updated.amountStroops.toString(),
+        escrowId: updated.escrowId?.toString() ?? null,
+        stellarTxHash: updated.stellarTxHash,
+        sorobanContractId: updated.sorobanContractId,
+      },
     });
     return updated;
   });
@@ -245,14 +223,14 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   const walletLink = await paymentsRepo.findWalletLinkByFacilityId(intent.facilityId);
   if (!walletLink) throw new HttpError(409, 'The facility for this payment has no linked wallet.');
 
-  const asset = resolveAssetForIntent(intent);
-  await requirePayeeTrustline(walletLink.stellarPublicKey, asset);
-
-  const { platformPayer, platformReleaser, escrowContractId } = await requirePaymentsConfig();
+  const { platformPayer, platformReleaser, escrowContractId, escrowTokenId } = await requirePaymentsConfig();
+  if (config.payments.assetAllowlist.length > 0 && !config.payments.assetAllowlist.includes(escrowTokenId)) {
+    throw new HttpError(500, 'Configured escrow token is not in the payments asset allowlist.');
+  }
   const client = await escrowClient(escrowContractId);
 
   const { escrowId, txHash } = await client.createEscrow({
-    payer: platformPayer,
+    payer: platformPayer as unknown as EscrowSdkKeypair,
     payee: walletLink.stellarPublicKey,
     token: asset.tokenContractId,
     amount: intent.amount,
@@ -455,10 +433,10 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
   }
 
-  const { platformReleaser, escrowContractId } = await requirePaymentsConfig();
-  const client = await escrowClient(intent.sorobanContractId ?? escrowContractId);
+  const { platformReleaser } = await requirePaymentsConfig();
+  const client = await escrowClient(requireRecordedContractId(intent));
 
-  await client.release({ escrowId: intent.escrowId, caller: platformReleaser });
+  await client.release({ escrowId: intent.escrowId, caller: platformReleaser as unknown as EscrowSdkKeypair });
 
   return commitTransition(actor, intent, 'payment_intent.released', 'released', (tx) =>
     paymentsRepo.markStatus(tx, id, 'escrowed', 'released'),
@@ -472,10 +450,10 @@ export async function refundPaymentIntent(actor: auditService.AuditActor, id: st
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot refund.`);
   }
 
-  const { platformReleaser, escrowContractId } = await requirePaymentsConfig();
-  const client = await escrowClient(intent.sorobanContractId ?? escrowContractId);
+  const { platformReleaser } = await requirePaymentsConfig();
+  const client = await escrowClient(requireRecordedContractId(intent));
 
-  await client.refund({ escrowId: intent.escrowId, caller: platformReleaser });
+  await client.refund({ escrowId: intent.escrowId, caller: platformReleaser as unknown as EscrowSdkKeypair });
 
   return commitTransition(actor, intent, 'payment_intent.refunded', 'refunded', (tx) =>
     paymentsRepo.markStatus(tx, id, 'escrowed', 'refunded'),
@@ -502,8 +480,8 @@ export const paymentsExportSection: PatientExportSection = {
         const facilityNames = new Map(facilities.map((facility) => [facility.id, facility.name]));
         return rows.map((row) => ({
           id: row.id,
-          orderType: row.orderType,
-          orderId: row.orderId,
+          prescriptionId: row.prescriptionId,
+          labOrderId: row.labOrderId,
           status: row.status,
           amount: row.amount.toString(),
           assetCode: row.assetCode,
