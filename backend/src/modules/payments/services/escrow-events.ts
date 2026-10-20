@@ -94,13 +94,11 @@ async function pollContract(contract: ContractConfig): Promise<void> {
   const { rpc } = await import('@stellar/stellar-sdk');
   const server = new rpc.Server(config.payments.sorobanRpcUrl);
   let cursor = cursorRow.cursor;
-  let startLedger = cursor ? undefined : cursorRow.startLedger;
   for (let page = 0; page < 20; page += 1) {
-    const response = await server.getEvents({
-      filters: [{ type: 'contract', contractIds: [contract.contractId] }],
-      limit: 100,
-      ...(cursor ? { cursor } : { startLedger }),
-    });
+    const filters = [{ type: 'contract' as const, contractIds: [contract.contractId] }];
+    const response = cursor
+      ? await server.getEvents({ filters, limit: 100, cursor })
+      : await server.getEvents({ filters, limit: 100, startLedger: cursorRow.startLedger });
     const rows = response.events.map((event: any) => decodeEscrowRpcEvent(event, contract.contractId));
     await prisma.$transaction(async (tx) => {
       for (const row of rows) {
@@ -120,7 +118,6 @@ async function pollContract(contract: ContractConfig): Promise<void> {
       });
     });
     cursor = response.cursor;
-    startLedger = undefined;
     if (rows.length < 100) break;
   }
   await reconcilePending(contract.contractId);

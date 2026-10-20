@@ -3,7 +3,7 @@
 // modules must go through this module's services, never import this file
 // directly (AGENTS.md hard rule 4).
 import { prisma } from '../../../db/prisma-client';
-import type { Prisma, Role } from '@prisma/client';
+import type { Role } from '@prisma/client';
 
 export function findUserByEmail(email: string) {
   return prisma.user.findUnique({ where: { email } });
@@ -165,7 +165,7 @@ export async function recordFailedLoginAttempt(input: {
 }
 
 export function findThrottleBuckets(emailKey: string, ipKey: string | null): Promise<ThrottleRow[]> {
-  const clauses: Prisma.LoginAttemptWhereInput[] = [{ scope: 'email', key: emailKey }];
+  const clauses: { scope: string; key: string }[] = [{ scope: 'email', key: emailKey }];
   if (ipKey) clauses.push({ scope: 'ip', key: ipKey });
   return prisma.loginAttempt.findMany({
     where: { OR: clauses },
