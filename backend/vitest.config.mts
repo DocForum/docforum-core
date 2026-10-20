@@ -12,6 +12,8 @@ export default defineConfig({
     // seed actors. Several such files run in parallel, so on a loaded CI
     // runner the 10s default cut the hook off mid-seed (issue #39 CI run:
     // access-control timed out at 101 tests skipped).
+    // The end-to-end care-thread test walks every phase in one file,
+    // so its hook also seeds the full actor set and needs headroom.
     hookTimeout: 30_000,
     env: {
       JWT_ACCESS_SECRET: 'test-access-secret',

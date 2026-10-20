@@ -1,6 +1,6 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-10-17
+Last updated: 2026-10-21
 Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
 `docs/adr/0004-custodial-payments-v1.md`) built and tested. Phase 3
 (Referrals) is **in progress**: #5, #7 and #65–#68 implemented and
@@ -8,7 +8,9 @@ tested on branch `feat/referral-phase3-cascade-multi-loop-admin`, #6 and
 #8 open. Phase 2 is partially unblocked by that work (#3/#4 minimal
 slices). Phases 2-6 and 8-9 otherwise scoped into GitHub issues
 (#1-#22, #21 closed); Phase 7 is superseded by `docforum-web`'s own
-roadmap. See each phase section below for status and issue links.
+roadmap. Phase 9's end-to-end care-thread integration test is in progress
+(scaffold + phase-gated steps). See each phase section below for status
+and issue links.
 
 > **Org note:** this repo (`docforum-core`) is the hub of a 3-repo `DocForum` org. Frontend work is tracked in `docforum-web`'s own roadmap. Stellar contract/SDK work is tracked in `docforum-escrow`'s own roadmap. This file tracks only what runs inside `docforum-core` — including the `payments` module, which *consumes* `docforum-escrow`'s published package but doesn't implement contract logic itself.
 
@@ -133,6 +135,7 @@ roadmap. See each phase section below for status and issue links.
 ## Phase 9 — Deploy & CI
 **Status: Not started for real production. A Render free-tier preview exists — see note. Remaining items scoped into issues #21–#22.**
 - [x] **PR malware scan** — `.github/workflows/pr-malware-scan.yml` + `.github/scripts/pr-malware-scan.cjs`, on every PR push. Flags editor/devcontainer autorun tasks, npm install hooks, typosquatted packages and Actions, non-registry dependency sources, payloads disguised as fonts/images, base64/whitespace obfuscation, exfiltration endpoints, reverse shells and miners. HIGH findings fail the `Malware scan` check, label the PR `security-review` and @mention the author; one comment per PR, updated in place. Reads the PR as data only (never checks out or runs it). Added 2026-10-20 after a VS Code autorun payload (escrow #163) and a typosquatted action (escrow #176). Manual backfill (Actions → PR malware scan → Run workflow, `prs: all`) scans PRs opened before the scanner and records a `Malware scan` commit status, which satisfies the required check.
+- [ ] End-to-end care-thread integration test: book → consult → refer → accept → order → fulfil → release. A single self-contained test (`backend/tests/integration/care-thread.test.mts`) driving the full thread through HTTP only, against embedded Postgres with the escrow SDK mocked; asserts the key invariants at each step (snapshot equality, append-only orders, facility-only fulfillment, payment status) rather than just status codes. Steps are phase-gated — each phase's steps are skipped with a reason until that phase lands, so the scaffold and already-built steps (booking, consult, refer, accept) run now and the rest enable as Phases 4/5 land. Runs as part of `test:integration` in CI, runtime kept under a minute. Tracked as [issue #69](https://github.com/DocForum/docforum-core/issues/69) (High, 200 pts) — **in progress**, branch `feat/end-to-end-care-thread-integration-test-book`.
 - [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Still not resolved.** A Render free-tier web service + Postgres now runs `backend/`, so `docforum-web`'s GitHub Pages preview has a live API to call — see `docs/adr/0003-render-preview-deployment.md`. This is explicitly a preview, not the production decision: no secrets manager, no backups, no staging/prod split, free-tier Postgres expires 2026-11-06 (renewed 2026-10-07; 30 days, 14-day grace period) unless recreated/upgraded before then — renewal steps in ADR 0003's "Renewing the free database" section. Tracked as [issue #22](https://github.com/DocForum/docforum-core/issues/22) (Medium, 150 pts).
 - [x] Real CI pipeline (replaced `.github/workflows/ci.yml` placeholder — was `pull_request`-only, `echo "TODO"`, never once run). Now runs on push to `main` and on PRs: `npm audit --omit=dev` at high severity (`audit:prod`, Phase 8 issue #47) → `prisma:generate` → `typecheck` → unit tests → **integration tests (the self-contained embedded-Postgres double-booking proof)** → `build`. Verified locally end-to-end before pushing (14 unit + 1 integration test passing) and confirmed green in Actions. No lint script exists yet in `backend/package.json` — not added; `tsc --noEmit` is the closest static check currently available. Lint now tracked as [issue #28](https://github.com/DocForum/docforum-core/issues/28) (Trivial, 100 pts). Closes [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
 - [ ] Staging environment. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
@@ -495,3 +498,4 @@ roadmap. See each phase section below for status and issue links.
   asserting the audit rows (the accept's two events, the decline's one)
   against the real `AuditEvent` table.
 - 2026-10-20 — Docs site: `docs/site/scripts/sync-docs.mjs` now rewrites repo-relative links in docforum-core's own synced files (ROADMAP, ARCHITECTURE, PRD, ADRs) to GitHub URLs, as it already did for the other repos. #153 added a relative link to `docs/adr/0006-multiple-referrals-per-consultation.md` in ROADMAP.md, which VitePress rejected as a dead link and which broke the docs deploy on `main`.
+- 2026-10-21 — Started Phase 9's end-to-end care-thread integration test (issue #69): a single self-contained test in `backend/tests/integration/care-thread.test.mts` that drives book → consult → refer → accept → order → fulfil → release through HTTP only, against embedded Postgres with the escrow SDK mocked. Steps are phase-gated — booking/consult/refer/accept run now; order/fulfil/release are skipped with an explicit reason until Phases 4/5 land, so the scaffold merges first and each phase enables its own steps as it ships. Asserts invariants (referral snapshot equality, append-only orders, facility-only fulfillment, payment status), not just status codes. Runs as part of `test:integration` in CI, runtime under a minute.
