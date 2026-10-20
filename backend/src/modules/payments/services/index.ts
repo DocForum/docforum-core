@@ -12,34 +12,36 @@
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
-import { loadEscrowSdk } from './escrow-sdk-loader';
+import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
+import { getPlatformSigners } from './platform-signers';
 import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
+import type { Prisma } from '@prisma/client';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
 
 // Test seam re-exported through the service surface (same convention as the
 // auth module's setEmailSender) — see escrow-sdk-loader.ts.
 export { setEscrowSdkForTests } from './escrow-sdk-loader';
+export { listEscrowEvents } from './escrow-events';
 export type { EscrowSdkModule } from './escrow-sdk-loader';
 
 async function requirePaymentsConfig() {
-  const { platformPayerSecret, platformReleaserSecret, activeContractId, escrowTokenId } = config.payments;
-  const missing = Object.entries({ platformPayerSecret, platformReleaserSecret, activeContractId, escrowTokenId })
+  const { activeContractId, escrowTokenId } = config.payments;
+  const missing = Object.entries({ activeContractId, escrowTokenId })
     .filter(([, value]) => !value)
     .map(([key]) => key);
   if (missing.length > 0) {
     throw new HttpError(500, `Payments is not configured — missing env var(s): ${missing.join(', ')}.`);
   }
-  const { Keypair } = await loadEscrowSdk();
+  const { payer, releaser } = await getPlatformSigners();
   return {
-    platformPayer: Keypair.fromSecret(platformPayerSecret!),
-    platformReleaser: Keypair.fromSecret(platformReleaserSecret!),
+    platformPayer: payer,
+    platformReleaser: releaser,
     escrowContractId: activeContractId!,
     escrowTokenId: escrowTokenId!,
   };
 }
-
 async function escrowClient(contractId: string) {
   const { EscrowClient } = await loadEscrowSdk();
   return new EscrowClient({ contractId, rpcUrl: config.payments.rpcUrl, networkPassphrase: config.payments.networkPassphrase });
@@ -80,17 +82,36 @@ export function getWalletLink(facilityId: string) {
   return paymentsRepo.findWalletLinkByFacilityId(facilityId);
 }
 
-export interface CreatePaymentIntentInput {
-  orderType: 'prescription' | 'lab_order';
-  orderId: string;
-  patientProfileId: string;
-  facilityId: string;
-  amountStroops: bigint;
-}
-
-export function createPaymentIntent(input: CreatePaymentIntentInput) {
+/** Called by the orders module inside the order-issuance transaction. A
+ * created intent moves to a corrected order; any funded/terminal intent
+ * stays attached to the immutable original order. */
+export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, input: {
+  kind: 'prescription' | 'lab_order'; orderId: string; patientProfileId: string; doctorProfileId: string;
+  facilityProfileId: string; amountStroops: bigint; supersedesId: string | null;
+}) {
   if (input.amountStroops <= 0n) throw new HttpError(400, 'amountStroops must be positive.');
-  return paymentsRepo.createPaymentIntent(input);
+  const facility = await tx.facilityProfile.findUnique({ where: { id: input.facilityProfileId }, select: { type: true } });
+  const expectedType = input.kind === 'prescription' ? 'pharmacy' : 'lab';
+  if (!facility || facility.type !== expectedType) throw new HttpError(400, `The selected facility must be a ${expectedType} facility.`);
+
+  const orderPointer = input.kind === 'prescription'
+    ? { prescriptionId: input.orderId, labOrderId: null }
+    : { prescriptionId: null, labOrderId: input.orderId };
+  if (input.supersedesId) {
+    const previous = await tx.paymentIntent.findFirst({
+      where: input.kind === 'prescription' ? { prescriptionId: input.supersedesId } : { labOrderId: input.supersedesId },
+    });
+    if (previous?.status === 'created') {
+      const moved = await tx.paymentIntent.updateMany({
+        where: { id: previous.id, status: 'created' },
+        data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops: input.amountStroops },
+      });
+      if (moved.count === 1) return tx.paymentIntent.findUniqueOrThrow({ where: { id: previous.id } });
+    }
+  }
+  return tx.paymentIntent.create({
+    data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops: input.amountStroops },
+  });
 }
 
 export async function getPaymentIntent(id: string) {
@@ -124,7 +145,8 @@ async function commitTransition(
       // Public, non-identifying references only: the escrow is on a public
       // ledger anyway. No patient data, no secrets.
       metadata: {
-        orderType: updated.orderType,
+        orderType: updated.prescriptionId ? 'prescription' : 'lab_order',
+        orderId: updated.prescriptionId ?? updated.labOrderId!,
         amountStroops: updated.amountStroops.toString(),
         escrowId: updated.escrowId?.toString() ?? null,
         stellarTxHash: updated.stellarTxHash,
@@ -152,7 +174,7 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   const client = await escrowClient(escrowContractId);
 
   const { escrowId, txHash } = await client.createEscrow({
-    payer: platformPayer,
+    payer: platformPayer as unknown as EscrowSdkKeypair,
     payee: walletLink.stellarPublicKey,
     token: escrowTokenId,
     amount: intent.amountStroops,
@@ -178,7 +200,7 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
   const { platformReleaser } = await requirePaymentsConfig();
   const client = await escrowClient(requireRecordedContractId(intent));
 
-  await client.release({ escrowId: intent.escrowId, caller: platformReleaser });
+  await client.release({ escrowId: intent.escrowId, caller: platformReleaser as unknown as EscrowSdkKeypair });
 
   return commitTransition(actor, intent, 'payment_intent.released', 'released', (tx) =>
     paymentsRepo.markStatus(tx, id, 'escrowed', 'released'),
@@ -195,7 +217,7 @@ export async function refundPaymentIntent(actor: auditService.AuditActor, id: st
   const { platformReleaser } = await requirePaymentsConfig();
   const client = await escrowClient(requireRecordedContractId(intent));
 
-  await client.refund({ escrowId: intent.escrowId, caller: platformReleaser });
+  await client.refund({ escrowId: intent.escrowId, caller: platformReleaser as unknown as EscrowSdkKeypair });
 
   return commitTransition(actor, intent, 'payment_intent.refunded', 'refunded', (tx) =>
     paymentsRepo.markStatus(tx, id, 'escrowed', 'refunded'),
@@ -221,8 +243,8 @@ export const paymentsExportSection: PatientExportSection = {
         const facilityNames = new Map(facilities.map((facility) => [facility.id, facility.name]));
         return rows.map((row) => ({
           id: row.id,
-          orderType: row.orderType,
-          orderId: row.orderId,
+          prescriptionId: row.prescriptionId,
+          labOrderId: row.labOrderId,
           status: row.status,
           amountStroops: row.amountStroops.toString(),
           facility: { id: row.facilityId, name: facilityNames.get(row.facilityId) ?? null },

@@ -2,10 +2,13 @@
 // (ROADMAP.md Phase 2 — "`Consultation` record + outcome".)
 //
 // The correctness-critical assertions here are:
-//   1. the owning doctor can close their appointment's consultation once;
+//   1. the owning doctor can close their appointment's consultation once,
+//      and only after the appointment is `completed`;
 //   2. a second close is refused AND the database still holds exactly one
 //      row — the unique constraint on Consultation.appointmentId is the
-//      guarantee, not the service's pre-check;
+//      guarantee, not the service's pre-check. The two addresses for that
+//      write (`POST /appointments/:id/consultation` and `POST /consultations`)
+//      are the same operation, so neither can slip a second row past it;
 //   3. another doctor cannot close it (404, not 403 — no existence leak).
 //
 // Self-contained like the other integration suites: spins up its own
@@ -15,7 +18,9 @@
 // each other's beforeAll until the hook timeout kills the file. Taken today:
 // 5433 booking, 5435 email-verification, 5436 login-throttle, 5437 csrf,
 // 5438 access-control, 5439 admin-lifecycle, 5440 payments-bigint,
-// 5441 audit, 5442 patient-export, 5443 this file.
+// 5441 audit, 5442 patient-export, 5443 referral-loops, 5444 admin-referrals,
+// 5445 referral-foundation, 5446 referral-cascade, 5447 referral-multi,
+// 5451 sessions, 5452 this file.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,7 +31,7 @@ import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5443;
+const PORT = 5452;
 const runId = Date.now();
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-consult-pg-'));
@@ -128,6 +133,27 @@ describe('consultation close-once guarantee', () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it('refuses to close a consultation before the appointment is completed', async () => {
+    const res = await request(app)
+      .post(`/appointments/${appointmentId}/consultation`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ outcome: 'resolved', notes: 'Too early — the visit has not happened.' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.message.toLowerCase()).toContain('completed');
+    expect(await prisma.consultation.count({ where: { appointmentId } })).toBe(0);
+  });
+
+  it('lets the treating doctor complete the appointment', async () => {
+    const res = await request(app)
+      .patch(`/appointments/${appointmentId}/status`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ status: 'completed' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.status).toBe('completed');
+  });
+
   it('lets the owning doctor close the appointment consultation once', async () => {
     const res = await request(app)
       .post(`/appointments/${appointmentId}/consultation`)
@@ -173,6 +199,37 @@ describe('consultation close-once guarantee', () => {
     expect(rows).toHaveLength(1);
     // The rejected second attempt did not overwrite the first outcome.
     expect(rows[0].outcome).toBe('resolved');
+  });
+
+  it('refuses a second close through the /consultations address (same row)', async () => {
+    const res = await request(app)
+      .post('/consultations')
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ appointmentId, outcome: 'resolved', notes: 'Same appointment, other address.' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(await prisma.consultation.count({ where: { appointmentId } })).toBe(1);
+  });
+
+  it('returns the decrypted notes to the treating doctor and the patient, and 403 to anyone else', async () => {
+    const consultationId = (await prisma.consultation.findUniqueOrThrow({ where: { appointmentId } })).id;
+
+    const asDoctor = await request(app)
+      .get(`/consultations/${consultationId}`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`);
+    expect(asDoctor.status).toBe(200);
+    expect(asDoctor.body.notes).toBe('Reviewed results; no follow-up needed.');
+
+    const asPatient = await request(app)
+      .get(`/consultations/${consultationId}`)
+      .set('Authorization', `Bearer ${patientToken}`);
+    expect(asPatient.status).toBe(200);
+    expect(asPatient.body.notes).toBe('Reviewed results; no follow-up needed.');
+
+    const asOtherDoctor = await request(app)
+      .get(`/consultations/${consultationId}`)
+      .set('Authorization', `Bearer ${otherDoctorToken}`);
+    expect(asOtherDoctor.status).toBe(403);
   });
 
   it('refuses a doctor who does not own the appointment (no existence leak)', async () => {

@@ -38,6 +38,7 @@ const ENCRYPTED_COLUMNS = [
   // today (nullable/TODO FKs), but the columns exist in the schema — the
   // script handles them as soon as rows exist.
   { table: 'Consultation', column: 'notes' },
+  { table: 'LabOrder', column: 'notes' },
   { table: 'Referral', column: 'snapshotNotes' },
 ];
 

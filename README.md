@@ -1,7 +1,7 @@
 # docforum-core
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
-![Status](https://img.shields.io/badge/status-Phase%201-yellow.svg)
+![Status](https://img.shields.io/badge/status-Phase%203%20in%20progress-yellow.svg)
 ![Stack](https://img.shields.io/badge/stack-Node.js%20%2B%20TypeScript-339933.svg)
 
 **The backend of DocForum** — a platform that collapses a multi-visit,
@@ -91,6 +91,7 @@ User ─┬─ PatientProfile
 
 AvailabilitySlot (doctor's calendar) → Appointment → IntakeForm, Consultation
 Consultation ──(outcome = referred)──▶ Referral (immutable snapshot!) → new Appointment
+Referral ──▶ AuditEvent (append-only admin actions)
 Consultation → Prescription (+ PrescriptionItem) / LabOrder (+ LabResult)
 FulfillmentRecord (facility-owned) references an order but never mutates it
 PaymentIntent / WalletLink — relational metadata only; contract logic lives in docforum-escrow
@@ -185,9 +186,17 @@ the safe-booking foundation): built and tested** — auth, doctor
 verification, availability/slot generation, and the booking-concurrency
 guarantee are real, not aspirational (see Getting started above). One
 item is unverified: the Docker Compose file for local dev exists but
-wasn't exercisable in this environment. Phase 2 is in progress: the
-`Consultation` record and its close-once guarantee (issue #4) are implemented;
-intake, the appointment lifecycle beyond booking, and doctor discovery are
+wasn't exercisable in this environment. **Phase 3 (referrals): the core
+is built and tested** — referral model with an immutable notes snapshot,
+patient accept/decline producing a real pre-populated appointment through
+the same slot-claim path, no-show/cancellation cascade, loop detection
+with a hop limit, multi-referral bundles from one consultation, and an
+admin queue with audited reassign/cancel. Still open within Phase 3: the
+routing ADR for specialty-only referrals (issue #6) and a time-based
+expiry job (issue #8). Phase 2 is in progress alongside it: the
+`Consultation` record and its close-once guarantee (issue #4) are done, and
+the appointment lifecycle (completed/cancelled/no_show) exists as Phase 3's
+prerequisite; intake, the doctor's today view and specialty discovery are
 still ahead.
 
 Full phase breakdown: [`ROADMAP.md`](ROADMAP.md).
