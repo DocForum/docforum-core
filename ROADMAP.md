@@ -494,3 +494,4 @@ roadmap. See each phase section below for status and issue links.
   wire the remaining state changes. Tests: two new integration cases
   asserting the audit rows (the accept's two events, the decline's one)
   against the real `AuditEvent` table.
+- 2026-10-20 — Docs site: `docs/site/scripts/sync-docs.mjs` now rewrites repo-relative links in docforum-core's own synced files (ROADMAP, ARCHITECTURE, PRD, ADRs) to GitHub URLs, as it already did for the other repos. #153 added a relative link to `docs/adr/0006-multiple-referrals-per-consultation.md` in ROADMAP.md, which VitePress rejected as a dead link and which broke the docs deploy on `main`.
