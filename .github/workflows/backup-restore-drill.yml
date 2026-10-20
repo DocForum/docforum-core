@@ -5,6 +5,9 @@ on:
     - cron: '0 3 * * *'  # daily at 03:00 UTC
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   PGCLIENT_VERSION: '16'
 
@@ -17,38 +20,42 @@ jobs:
       postgres:
         image: postgres:16
         env:
+          POSTGRES_USER: drill
           POSTGRES_PASSWORD: drill
           POSTGRES_DB: app
         ports:
           - 5432:5432
-        options: >
-          --health-cmd = pg_isready -U drill -d app
-          --health-interval = 1s
-          --health-timeout = 5s
-          --health-retries = 10
+        options: >-
+          --health-cmd "pg_isready -U drill -d app"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgres://drill:drill@127.0.0.1:5432/app
       RESTORE_TARGET_URL: postgres://drill:drill@127.0.0.1:5432/app_drill
-      BACKUP_ENCRYPTION_KEY: $>
-        {{ secrets.BACKUP_ENCRYPTION_KEY || 'drill-passphrase-not-for-prod' }}
-      BACKUP_DIR: ${{ runner.temp }}/backups
+      BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY || 'drill-passphrase-not-for-prod' }}
       BACKUP_RETENTION_DAYS: '14'
       RESTORE_CONFIRM: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # `runner` isn't available in job-level env, so set the backup
+      # directory from the step environment instead.
+      - name: Set backup directory
+        run: echo "BACKUP_DIR=$RUNNER_TEMP/backups" >> "$GITHUB_ENV"
+
       - name: Install Postgres clients
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client
           pg_dump --version
-          ps_sql --version
+          psql --version
 
       - name: Wait for Postgres
         run: |
           for i in $(seq 1 30); do
-            pg_isready -U drill -d app && break
+            pg_isready -h 127.0.0.1 -U drill -d app && break
             sleep 1
           done
 

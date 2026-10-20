@@ -138,6 +138,14 @@ cookie, 30-day TTL, `SameSite=None; Secure` in production and
 (`backend/src/config/index.ts`) so the refresh and CSRF cookies can never
 drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 
+Every token carries a `tv` claim (the user's `tokenVersion` at issue time).
+Bumping `User.tokenVersion` — which password reset does — invalidates every
+outstanding refresh token for that user at the next refresh. This is the
+interim kill switch for issue #33; the fuller revocation list (per-session
+revocation, #18) is still open, so a bumped-away **access** token keeps
+working until its 15-minute TTL elapses. Refresh tokens are checked
+against `tokenVersion` on every `POST /auth/refresh`.
+
 ## Doctors (`/doctors`) — `backend/src/modules/doctors`
 
 | Method & path | Auth | Notes |

@@ -4,7 +4,7 @@
 // revocation is enforced at refresh time, and ownership checks hold.
 //
 // Self-contained like the other integration suites: throwaway Postgres on
-// port 5438 (one port per file — vitest runs files in parallel).
+// port 5451 (one port per file — vitest runs files in parallel).
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,7 +15,7 @@ import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5438;
+const PORT = 5451;
 const runId = Date.now();
 
 process.env.DATABASE_URL = `postgresql://docforum:docforum@localhost:${PORT}/docforum_test`;
