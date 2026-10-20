@@ -23,11 +23,11 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
-`AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
-`Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
+`AvailabilitySlot` (doctor's calendar) → `Appointment` (`availability_slot_id` nullable — a cancelled appointment releases its slot; booking safety is `claimOpenSlot`, not that column) → `IntakeForm`, `Consultation`
+`Consultation` → (outcome=referred) → `Referral` (snapshot! required `target_doctor_id`, self-FK lineage `parent_referral_id`, no-show/loop/admin flags) → new `Appointment`
 `Appointment` → `Consultation` → immutable `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
-`User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
+`User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking, consultation/referral mutations and payment mutations, never login/browsing).
 `User` → `AccessLog` (Phase 8, issue #45 — PHI read-access log: who viewed which clinical record, when; fire-and-forget writes, fail-open).
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
@@ -41,10 +41,12 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - The actual Stellar contract calls go through `@docforum/escrow-sdk` (`backend/src/modules/payments/services/escrow-sdk-loader.ts` — dynamic `import()`, the SDK is ESM-only and this backend is CommonJS). Never reimplement contract-calling logic in this repo.
 
 ## Known unresolved design gaps (do not silently "fix" without flagging in PR description)
-- No routing rule yet for a referral with no specific target doctor (which specialist gets it?).
-- No expiry/TTL job for held slots or pending referrals — currently just an enum value with no worker.
+- No routing rule yet for a referral with no specific target doctor (which specialist gets it?). **v1 re-scope (2026-10-17): `target_doctor_id` is required, so unassigned referrals can't exist — but that makes PRD §8.2.2's "waiting for a specialist" state unreachable rather than implemented. ADR still owed (issue #6).**
+- No time-based expiry/TTL job for held slots or pending referrals — the referral *no-show* cascade (#67) now reaches `expired`, but nothing expires a referral (or a held slot) purely by age. Issue #8 / #19.
+- `AuditEvent` exists (§4.10 of ARCHITECTURE.md) and records booking (both booking paths), doctor verification, payment fund/release/refund, the patient's referral accept/decline and the referral admin actions — auth (the admin login-throttle clear), the referral's creation + cascade transitions, and the remaining Phase 4 order transitions are still unaudited. PRD §7 is not satisfied yet.
+- `Referral.snapshotIntakeId` has no column — `IntakeForm` doesn't exist yet (issue #1); the notes half of the snapshot rule is real and enforced.
 - Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables.
-- `AuditEvent` foundation exists (Phase 8, issue #43 — ARCHITECTURE.md §4.10): append-only (DB triggers), written by `auditService.record(tx, …)` **inside the same transaction** as the change. Wired for booking, doctor verification and payment fund/release/refund only — **Phase 3/4 transitions must call it when they're built.** Never put PHI in `metadata`.
+- `AuditEvent` foundation exists (Phase 8, issue #43 — ARCHITECTURE.md §4.10): append-only (DB triggers), written by `auditService.record(tx, …)` **inside the same transaction** as the change. Wired for booking (direct and referral-origin), doctor verification, payment fund/release/refund, referral accept/decline and referral admin actions (`entity_type: 'Referral'`) — **Phase 4 transitions must call it when they're built.** There is one audit table: referral actions go into it, not into a second one. Never put PHI in `metadata`.
 - No email/SMS provider integrated yet (Phase 6, issue #17) — email verification (issue #34) therefore can't deliver its link on a hosted deployment; `backend/scripts/mark-email-verified.mjs` is the interim operator path.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 

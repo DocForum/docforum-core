@@ -16,6 +16,8 @@ import { registerPatientExportSections } from './export-sections';
 import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
 import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
+import { referralsRouter } from './modules/referrals/routes';
+import { consultationsRouter } from './modules/consultations/routes';
 
 export function createApp() {
   const app = express();
@@ -58,6 +60,8 @@ export function createApp() {
   // paths match the issue's spec exactly: /admin/access-logs, /patients/me/access-log.
   app.use('/admin', adminAuditRouter);
   app.use('/patients', patientAuditRouter);
+  app.use('/referrals', referralsRouter);
+  app.use('/consultations', consultationsRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.
