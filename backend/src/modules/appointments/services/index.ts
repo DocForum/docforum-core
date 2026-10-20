@@ -7,10 +7,11 @@ import * as doctorsService from '../../doctors/services';
 import * as patientsService from '../../patients/services';
 import * as auditService from '../../audit/services';
 import * as referralsService from '../../referrals/services';
+import * as notificationsService from '../../notifications/services';
 
 /**
  * Books a slot for the calling patient. This is the correctness-critical
- * path in the whole backend (ARCHITECTURE.md §5.1 / ROADMAP.md Phase 1 —
+ * path in the whole backend (ARCHITECTURE%20md%20%C2%A75.1 / ROADMAP.md Phase 1 —
  * "the single highest-priority correctness item in the whole roadmap").
  *
  * Two steps, one transaction:
@@ -28,6 +29,11 @@ import * as referralsService from '../../referrals/services';
  * of the same transaction, after the Appointment row exists — so an event
  * exists if and only if the booking committed. A caller that loses the
  * race fails at step 1 and never reaches it.
+ *
+ * Phase 6: booking-confirmed (patient) and new-booking (doctor)
+ * notifications are enqueued through the transactional outbox in the same
+ * transaction, after the Appointment row exists — so a notification is emitted
+ * if and only if the booking commits.
  */
 export async function bookSlot(actor: auditService.AuditActor, availabilitySlotId: string) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
@@ -60,6 +66,11 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
       toState: appointment.status,
       metadata: { availabilitySlotId, doctorProfileId: slot.doctorProfileId, origin: appointment.origin },
     });
+
+    // Phase 6 (FR-15/16): booking-confirmed to the patient and new-booking
+    // alert to the doctor, enqueued in the same transaction as the booking.
+    await notificationsService.emitBookingConfirmed(tx, appointment);
+    await notificationsService.emitNewBookingAlert(tx, appointment);
 
     return appointment;
   });
@@ -116,7 +127,7 @@ export async function getDoctorAppointmentContext(userId: string, appointmentId:
 
 /**
  * Creates the pre-populated appointment behind an accepted referral
- * (PRD FR-8 / issue #7). Called by the referrals service from inside its
+ * (PRP FR-8 / issue #7). Called by the referrals service from inside its
  * accept transaction — same shape as bookSlot: conditional slot claim,
  * then the Appointment row, with `origin: 'referral'` and the referralId
  * link the cascade rules (issue #67) later react to. Appointment creation
@@ -172,6 +183,11 @@ export async function bookForReferral(
     },
   });
 
+  // Phase 6 (FR-15/16): the same booking-confirmed / new-booking notifications
+  // as a direct booking, enqueued in the same transaction.
+  await notificationsService.emitBookingConfirmed(db, appointment);
+  await notificationsService.emitNewBookingAlert(db, appointment);
+
   return appointment;
 }
 
@@ -180,7 +196,7 @@ export async function bookForReferral(
  * the conditional status UPDATE, an optional slot release on cancellation,
  * and — if the appointment came from a referral — the cascade reaction in
  * the referrals module (issue #67, PRD §8.2.3). Running the transition
- * twice is impossible by construction: the conditional UPDATE only ever
+ * twice is impossible by construction: the conditional UPDATE only ever not
  * matches a still-`scheduled` row, so the cascade hook below can only fire
  * once per real transition (and the cascade itself is additionally
  * conditional — see referralsService.applyAppointmentOutcome).
@@ -230,6 +246,10 @@ export async function updateStatusByDoctor(userId: string, appointmentId: string
 
   return prisma.$transaction(async (tx) => {
     await applyScheduledTransition(tx, appointment, newStatus);
+    // Phase 6: tell the patient when the doctor cancels their visit.
+    if (newStatus === 'cancelled') {
+      await notificationsService.emitAppointmentCancelled(tx, appointment, { by: 'doctor' });
+    }
     return appointmentsRepo.findAppointmentById(tx, appointmentId);
   });
 }
@@ -254,28 +274,65 @@ export async function cancelByPatient(userId: string, appointmentId: string) {
 
   return prisma.$transaction(async (tx) => {
     await applyScheduledTransition(tx, appointment, 'cancelled');
+    // Phase 6: tell the doctor when the patient cancels their visit.
+    await notificationsService.emitAppointmentCancelled(tx, appointment, { by: 'patient' });
     return appointmentsRepo.findAppointmentById(tx, appointmentId);
   });
 }
 
 /**
- * Called by the referrals module's admin cancel (#68) inside its
- * transaction: close a live appointment without firing the referral
- * cascade back (the caller already knows it's cancelling the referral).
- * Appointment rows are still only ever written by this module — the
- * boundary holds.
+ * Patient-side reschedule of the patient's own scheduled appointment.
+ * Moves to a different open slot in one transaction: claim the new slot,
+ * update the appointment's slot link, release the old slot. The old slot
+ * is released after the new one is claimed so a failure never leaves the
+ * appointment with no slot at all.
  */
-export async function forceCancelAppointment(db: Prisma.TransactionClient, appointmentId: string) {
-  const appointment = await appointmentsRepo.findAppointmentById(db, appointmentId);
-  if (!appointment || appointment.status !== 'scheduled') {
-    return null; // already terminal — idempotent for the caller
+export async function rescheduleByPatient(userId: string, appointmentId: string, newAvailabilitySlotId: string) {
+  const patientProfile = await patientsService.getMyPatientProfile(userId);
+  const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
+  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  if (appointment.patientProfileId !== patientProfile.id) {
+    throw new HttpError(403, 'You can only reschedule your own appointments.');
   }
-  const updated = await appointmentsRepo.updateStatusIfScheduled(db, appointmentId, 'cancelled');
-  if (updated.count === 1 && appointment.availabilitySlotId) {
-    const released = await availabilityService.releaseBookedSlotIfFuture(db, appointment.availabilitySlotId);
-    if (released) {
-      await appointmentsRepo.clearAvailabilitySlotLink(db, appointmentId);
+  if (appointment.status !== 'scheduled') {
+    throw new HttpError(409, 'Only a scheduled appointment can be rescheduled.');
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const claimed = await availabilityService.claimOpenSlot(tx, newAvailabilitySlotId);
+    if (!claimed) {
+      throw new HttpError(409, 'This slot is no longer available.');
     }
-  }
-  return appointmentsRepo.findAppointmentById(db, appointmentId);
+
+    const newSlot = await availabilityService.getSlot(tx, newAvailabilitySlotId);
+    if (!newSlot) {
+      throw new HttpError(404, 'Slot not found.');
+    }
+    if (newSlot.doctorProfileId !== appointment.doctorProfileId) {
+      throw new HttpError(409, 'You can only reschedule to a slot with the same doctor.');
+    }
+
+    const oldAvailabilitySlotId = appointment.availabilitySlotId;
+    await appointmentsRepo.updateAvailabilitySlotLink(tx, appointmentId, newAvailabilitySlotId);
+    if (oldAvailabilitySlotId) {
+      await availabilityService.releaseBookedSlotIfFuture(tx, oldAvailabilitySlotId);
+    }
+
+    await auditService.record(tx, { userId }, {
+      entityType: 'Appointment',
+      entityId: appointmentId,
+      action: 'appointment.rescheduled',
+      fromState: appointment.status,
+      toState: appointment.status,
+      metadata: { oldAvailabilitySlotId, newAvailabilitySlotId },
+    });
+
+    // Phase 6: tell the doctor the visit moved.
+    await notificationsService.emitAppointmentRescheduled(tx, appointment, {
+      oldAvailabilitySlotId,
+      newAvailabilitySlotId,
+    });
+
+    return appointmentsRepo.findAppointmentById(tx, appointmentId);
+  });
 }
