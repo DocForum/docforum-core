@@ -287,7 +287,7 @@ describe('patient data export', () => {
     ]);
 
     const appointments = bundle.sections.appointments.items;
-    expect(appointments).toHaveLength(21);
+    expect(appointments).toHaveLength(23);
     expect(new Set(appointments.map((a: { id: string }) => a.id)).size).toBe(21);
     for (const appointment of appointments) {
       expect(appointment.doctor).toEqual({ id: doctorProfileId, fullName: 'export-doctor Fullname' });
