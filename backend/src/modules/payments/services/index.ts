@@ -16,6 +16,7 @@ import { loadEscrowSdk } from './escrow-sdk-loader';
 import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
+import type { Prisma } from '@prisma/client';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
 
 // Test seam re-exported through the service surface (same convention as the
@@ -143,7 +144,8 @@ async function commitTransition(
       // Public, non-identifying references only: the escrow is on a public
       // ledger anyway. No patient data, no secrets.
       metadata: {
-        order: updated.prescriptionId ? { type: 'prescription', id: updated.prescriptionId } : { type: 'lab_order', id: updated.labOrderId },
+        orderType: updated.prescriptionId ? 'prescription' : 'lab_order',
+        orderId: updated.prescriptionId ?? updated.labOrderId!,
         amountStroops: updated.amountStroops.toString(),
         escrowId: updated.escrowId?.toString() ?? null,
         stellarTxHash: updated.stellarTxHash,

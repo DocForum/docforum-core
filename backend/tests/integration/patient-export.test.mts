@@ -55,6 +55,8 @@ describe('patient data export', () => {
   let alice: { token: string; userId: string; profileId: string; email: string };
   let bob: { token: string; userId: string; profileId: string; email: string };
   let facilityId: string;
+  let aliceLabOrder: Awaited<ReturnType<typeof createOrderFixture>>;
+  let alicePrescription: Awaited<ReturnType<typeof createOrderFixture>>;
 
   async function signupVerified(role: 'patient' | 'doctor', label: string) {
     const email = `${label}-${runId}@example.com`;
@@ -171,10 +173,10 @@ describe('patient data export', () => {
     facilityId = (
       await prisma.facilityProfile.create({ data: { userId: facilityUser.id, name: 'Lagos Lab', type: 'lab' } })
     ).id;
-    const aliceLabOrder = await createOrderFixture(prisma, { patientProfileId: alice.profileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: 12_345_678_901n, tag: `alice-lab-${runId}` });
+    aliceLabOrder = await createOrderFixture(prisma, { patientProfileId: alice.profileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: 12_345_678_901n, tag: `alice-lab-${runId}` });
     const aliceLabPayment = await createPaymentIntentForFixture(prisma, aliceLabOrder, 'escrowed');
     await prisma.paymentIntent.update({ where: { id: aliceLabPayment.id }, data: { escrowId: 42n, stellarTxHash: 'a'.repeat(64), sorobanContractId: 'CCONTRACT' } });
-    const alicePrescription = await createOrderFixture(prisma, { patientProfileId: alice.profileId, facilityProfileId: facilityId, kind: 'prescription', amountStroops: 5n, tag: `alice-rx-${runId}` });
+    alicePrescription = await createOrderFixture(prisma, { patientProfileId: alice.profileId, facilityProfileId: facilityId, kind: 'prescription', amountStroops: 5n, tag: `alice-rx-${runId}` });
     await createPaymentIntentForFixture(prisma, alicePrescription);
     const bobPrescription = await createOrderFixture(prisma, { patientProfileId: bob.profileId, facilityProfileId: facilityId, kind: 'prescription', amountStroops: 9n, tag: `bob-rx-${runId}` });
     await prisma.paymentIntent.create({ data: {
