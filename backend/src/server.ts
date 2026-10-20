@@ -3,12 +3,22 @@ import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
 import { pruneOldAccessLogs } from './modules/audit/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
+import { verifyPaymentsNetwork } from './modules/payments/services';
 
 const app = createApp();
 
-app.listen(config.port, () => {
+async function startServer() {
+  await verifyPaymentsNetwork();
+  app.listen(config.port, () => {
+    // eslint-disable-next-line no-console
+    console.log(`docforum-core backend listening on :${config.port}`);
+  });
+}
+
+void startServer().catch((error: unknown) => {
   // eslint-disable-next-line no-console
-  console.log(`docforum-core backend listening on :${config.port}`);
+  console.error('[startup] backend startup failed:', error);
+  process.exitCode = 1;
 });
 
 // Login-throttle cleanup (Phase 8, issue #35). A plain interval, per
