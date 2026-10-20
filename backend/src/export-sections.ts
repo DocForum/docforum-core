@@ -18,7 +18,9 @@ export const PATIENT_EXPORT_SECTIONS = [
   accountExportSection,
   profileExportSection,
   appointmentsExportSection,
-  paymentsExportSection,`r`n  prescriptionsExportSection,`r`n  labOrdersExportSection,
+  paymentsExportSection,
+  prescriptionsExportSection,
+  labOrdersExportSection,
 ];
 
 export function registerPatientExportSections(): void {

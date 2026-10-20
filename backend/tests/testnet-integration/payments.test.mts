@@ -60,7 +60,8 @@ describe('payments module against live testnet', () => {
   let prisma: typeof import('../../src/db/prisma-client.js').prisma;
   let paymentsService: typeof import('../../src/modules/payments/services/index.js');
   let facilityId: string;
-  let patientProfileId: string;`r`n  let pharmacyFacilityId: string;
+  let patientProfileId: string;
+  let pharmacyFacilityId: string;
 
   beforeAll(async () => {
     await pg.initialise();
