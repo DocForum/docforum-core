@@ -1,6 +1,6 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-10-19
+Last updated: 2026-10-17
 Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
 `docs/adr/0004-custodial-payments-v1.md`) built and tested. Phases 2-6
 and 8-9 scoped into GitHub issues (#1-#22, #21 closed); Phase 7 is
@@ -61,7 +61,7 @@ for status and issue links.
 - [ ] Doc reconciliation: update ARCHITECTURE_ESSENTIALS.md "Known unresolved design gaps" once routing rule + expiry exist — part of issue #6's DoD.
 
 ## Phase 4 — Orders: prescriptions & lab orders
-**Status: Not started (blocked by Phase 2, informed by Phase 3). Scoped into issues #9–#12.**
+**Status: Partially implemented by issues #9 and #85; remaining issue work is tracked in #10–#12.**
 - [ ] `Prescription` + `PrescriptionItem` models, **append-only** (issuance creates a row; corrections use `supersedes_prescription_id` — ARCHITECTURE.md §4.5, hard rule in ARCHITECTURE_ESSENTIALS.md). Tracked as [issue #9](https://github.com/DocForum/docforum-core/issues/9) (High, 200 pts), which also covers `LabOrder`/`LabResult` (same append-only rule).
 - [ ] `LabOrder` + `LabResult` models, same append-only rule — folded into issue #9 above.
 - [ ] Specialist UI: issue prescription/lab order from a consultation. Tracked as [issue #10](https://github.com/DocForum/docforum-core/issues/10) (Medium, 150 pts) — depends on #9.
@@ -77,18 +77,16 @@ for status and issue links.
 - [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1 — addressed by issue #14's admin-only gating; document any remaining gap in that issue's PR.
 
 ## Phase 5.5 — Payments (consumer side)
-**Status: Built; signer abstraction (#87) and payment config hardening (#88) complete, decoupled from Phase 4/5 rather than blocked by them — see docs/adr/0004-custodial-payments-v1.md.** `docforum-escrow` issues #4/#5 (SDK + distribution decision) closed, so the original blocker cleared; rather than wait further on Phase 4/5 (Orders/Facilities, still not built), `PaymentIntent`/`WalletLink` were designed with opaque, unvalidated `orderType`/`orderId` fields instead of hard FKs to `Prescription`/`LabOrder`, so this phase didn't have to wait on two more unbuilt phases. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
+**Status: Payment order linkage, automatic intent issuance, configuration hardening, and platform signer abstraction are implemented; fulfillment-triggered release remains pending.** See docs/adr/0004-custodial-payments-v1.md. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
 - [x] `PaymentIntent` + `WalletLink` models finalized (relational metadata only — no PHI). `WalletLink` scoped to the **facility** (payee), not the patient — see ADR 0004. Amount is raw stroops (`BigInt`), not the originally-scaffolded `Decimal`+`"USDC"` — matches what's actually proven end-to-end on testnet; multi-asset support is future work, not assumed.
 - [x] Added `@docforum/escrow-sdk` as a real dependency (via the GitHub Release tarball URL — see `docforum-escrow`'s ADR 0003); wired `payments/services` to call it through a dynamic `import()` (`escrow-sdk-loader.ts` — the SDK is ESM-only, this backend is CommonJS).
+- [x] On order issuance, create a `PaymentIntent` (`created` status) automatically with a typed order FK. Manual intent creation was removed. Corrections move created intents; funded intents remain attached to the immutable original.
 - [x] [Issue #88] Harden payments configuration: typed network/RPC/contract/asset settings, mainnet opt-in guard, startup reachability check, and intent-recorded contract ids for release/refund.
-- [ ] On order issuance, create a `PaymentIntent` (`created` status) automatically when Phase 4 order issuance is implemented.
+- [x] Soroban contract-event poller, per-deployment persisted cursors, unmatched release/refund alerts, and admin event view (issue #86). Contract deployments must include their deployment ledger; RPC retention gaps are surfaced for operator reconciliation.
 - [x] On patient funding action, call SDK to move funds into escrow (`escrowed` status), store `stellarTxHash` — except it's not a *patient* action in this design (custodial v1, ADR 0004): `POST /payments/intents/:id/fund`, admin-triggered, funds from `docforum-core`'s own platform payer identity.
 - [x] On `FulfillmentRecord` reaching `fulfilled`, trigger SDK release call (`released` status) — except there's no `FulfillmentRecord` yet (Phase 5), so v1 exposes `POST /payments/intents/:id/release` as an admin-triggered action instead. ADR 0002's "don't let it drift into a manual/admin-triggered release" goal is **not yet met** — this is the honest interim, not the destination; revisit once Phase 5 exists.
 - [x] Refund path for rejected/expired orders — `POST /payments/intents/:id/refund`, same admin-triggered caveat as release.
-
-- [x] Soroban contract-event poller, per-deployment persisted cursors, unmatched release/refund alerts, and admin event view (issue #86). Contract deployments must include their deployment ledger; RPC retention gaps are surfaced for operator reconciliation.
 - [ ] Idempotent escrow funding + on-chain reconcile job (`fundPaymentIntent` is check-then-act — docforum-escrow threat model §5). Tracked as [issue #24](https://github.com/DocForum/docforum-core/issues/24) (High, 200 pts).
-- [x] [Issue #87](https://github.com/DocForum/docforum-core/issues/87): platform signer interface with env and remote adapters, expected-address validation, and payment service integration.
 - [ ] ADR: releaser key custody — multisig, KMS, or per-period rotation (threat model T1/T2). Tracked as [issue #25](https://github.com/DocForum/docforum-core/issues/25) (Medium, 150 pts).
 - [ ] Checksum-validate facility wallet keys, not just regex. Tracked as [issue #26](https://github.com/DocForum/docforum-core/issues/26) (Trivial, 100 pts).
 - [ ] Non-custodial patient payments (v2): patients fund escrows from their own Stellar wallet, custodial kept as fallback. **Proposed** in `docs/adr/0005-non-custodial-patient-payments.md`; implementation issues to be opened once it's Accepted.
@@ -123,7 +121,6 @@ for status and issue links.
 - [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
 - [x] Access-control test suite: who may read intake, consultation and payment data. Integration tests (`tests/integration/access-control.test.mts`) establishing the test harness and access-control patterns for the three PHI data categories; intake/consultation test cases are scaffolded as placeholders until Phase 2/3 routes exist, payment-intent access cases exercise the live admin-gated routes. Tracked as [issue #44](https://github.com/DocForum/docforum-core/issues/44) — **Done**.
 - [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. Not yet scoped into an issue.
-- [ ] PHI read-access log: record who viewed which clinical record. `AccessLog` table (viewer, record owner, entity, route, retention-managed), fire-and-forget fail-open writes off the read path, admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log` with all viewer PII stripped to a role. Tracked as [issue #45](https://github.com/DocForum/docforum-core/issues/45) (High) — **in review**, PR #149. Read-path wiring into the Phase 2/3/4/5 controllers (intake, consultation, prescriptions, lab orders) happens as those routes are built.
 - [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence). Tracked as [issue #20](https://github.com/DocForum/docforum-core/issues/20) (Trivial, 100 pts) — a decision task, unblocked now.
 
 ## Phase 9 — Deploy & CI
@@ -410,6 +407,3 @@ for status and issue links.
   observed state, so a racing second action gets 409 instead of silently
   overwriting). Rollback coupling proven with a real injected DB failure,
   not a mock. Phase 3/4 wiring explicitly left pending.
-
-- 2026-10-19 - Started issue #86: Soroban escrow contract-event ingestion, persistent per-deployment cursors, unmatched release/refund alerts, and an admin event view.
-- 2026-10-19 - Started issue #87 signer abstraction work: payment service signing now goes through an env/remote-capable PlatformSigner seam; production custody choice remains tracked by issue #25.

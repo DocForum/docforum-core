@@ -17,6 +17,7 @@ import { getPlatformSigners } from './platform-signers';
 import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
+import type { Prisma } from '@prisma/client';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
 
 // Test seam re-exported through the service surface (same convention as the
@@ -81,17 +82,36 @@ export function getWalletLink(facilityId: string) {
   return paymentsRepo.findWalletLinkByFacilityId(facilityId);
 }
 
-export interface CreatePaymentIntentInput {
-  orderType: 'prescription' | 'lab_order';
-  orderId: string;
-  patientProfileId: string;
-  facilityId: string;
-  amountStroops: bigint;
-}
-
-export function createPaymentIntent(input: CreatePaymentIntentInput) {
+/** Called by the orders module inside the order-issuance transaction. A
+ * created intent moves to a corrected order; any funded/terminal intent
+ * stays attached to the immutable original order. */
+export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, input: {
+  kind: 'prescription' | 'lab_order'; orderId: string; patientProfileId: string; doctorProfileId: string;
+  facilityProfileId: string; amountStroops: bigint; supersedesId: string | null;
+}) {
   if (input.amountStroops <= 0n) throw new HttpError(400, 'amountStroops must be positive.');
-  return paymentsRepo.createPaymentIntent(input);
+  const facility = await tx.facilityProfile.findUnique({ where: { id: input.facilityProfileId }, select: { type: true } });
+  const expectedType = input.kind === 'prescription' ? 'pharmacy' : 'lab';
+  if (!facility || facility.type !== expectedType) throw new HttpError(400, `The selected facility must be a ${expectedType} facility.`);
+
+  const orderPointer = input.kind === 'prescription'
+    ? { prescriptionId: input.orderId, labOrderId: null }
+    : { prescriptionId: null, labOrderId: input.orderId };
+  if (input.supersedesId) {
+    const previous = await tx.paymentIntent.findFirst({
+      where: input.kind === 'prescription' ? { prescriptionId: input.supersedesId } : { labOrderId: input.supersedesId },
+    });
+    if (previous?.status === 'created') {
+      const moved = await tx.paymentIntent.updateMany({
+        where: { id: previous.id, status: 'created' },
+        data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops: input.amountStroops },
+      });
+      if (moved.count === 1) return tx.paymentIntent.findUniqueOrThrow({ where: { id: previous.id } });
+    }
+  }
+  return tx.paymentIntent.create({
+    data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops: input.amountStroops },
+  });
 }
 
 export async function getPaymentIntent(id: string) {
@@ -125,7 +145,8 @@ async function commitTransition(
       // Public, non-identifying references only: the escrow is on a public
       // ledger anyway. No patient data, no secrets.
       metadata: {
-        orderType: updated.orderType,
+        orderType: updated.prescriptionId ? 'prescription' : 'lab_order',
+        orderId: updated.prescriptionId ?? updated.labOrderId!,
         amountStroops: updated.amountStroops.toString(),
         escrowId: updated.escrowId?.toString() ?? null,
         stellarTxHash: updated.stellarTxHash,
@@ -222,8 +243,8 @@ export const paymentsExportSection: PatientExportSection = {
         const facilityNames = new Map(facilities.map((facility) => [facility.id, facility.name]));
         return rows.map((row) => ({
           id: row.id,
-          orderType: row.orderType,
-          orderId: row.orderId,
+          prescriptionId: row.prescriptionId,
+          labOrderId: row.labOrderId,
           status: row.status,
           amountStroops: row.amountStroops.toString(),
           facility: { id: row.facilityId, name: facilityNames.get(row.facilityId) ?? null },

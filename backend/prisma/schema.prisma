@@ -153,13 +153,6 @@ model EmailVerificationToken {
   @@index([userId])
 }
 
-// Phase 8 (issue #39): admin invites. Admin accounts are "seeded or
-// invited" (ROADMAP Phase 8) and there was no supported path for either.
-// Only the SHA-256 hash of the token is stored — a database leak must not
-// hand out working invite links — and every invite is single-use and
-// expiring. Admin-only scope for now: PRD OQ-2's facility invites will need
-// their own profile fields (name/type) at redemption, so they are
-// deliberately not folded in here.
 model AdminInvite {
   id              String    @id @default(uuid())
   email           String
@@ -204,21 +197,23 @@ model LoginAttempt {
 }
 
 model PatientProfile {
-  id             String    @id @default(uuid())
-  userId         String    @unique
-  fullName       String
-  dateOfBirth    DateTime?
+  id          String    @id @default(uuid())
+  userId      String    @unique
+  fullName    String
+  dateOfBirth DateTime?
   // Nullable, no FK relation on purpose — the minor/dependent consent and
   // account-ownership model is an explicit open PRD question (§8.2.5), not
   // resolved here. Don't build on top of this field assuming it means
   // anything enforced yet.
   guardianUserId String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
+  prescriptions  Prescription[]
+  labOrders      LabOrder[]
   dataExports    PatientExport[]
 
   // Phase 8 (issue #45): who viewed this patient's records.
@@ -304,6 +299,8 @@ model DoctorProfile {
   specialties       DoctorSpecialty[]
   availabilitySlots AvailabilitySlot[]
   appointments      Appointment[]
+  prescriptions     Prescription[]
+  labOrders         LabOrder[]
 
   @@index([verificationStatus])
 }
@@ -337,6 +334,9 @@ model FacilityProfile {
 
   user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   capabilities   FacilityCapability[]
+  prescriptions  Prescription[]
+  labOrders      LabOrder[]
+  labResults     LabResult[]
   paymentIntents PaymentIntent[]
   walletLink     WalletLink?
 }
@@ -347,7 +347,7 @@ model FacilityCapability {
   capabilityType    CapabilityType
   // e.g. a lab test category, or a medication class — free text on purpose,
   // no controlled vocabulary decided yet (out of Phase 1 scope).
-  detail            String?
+  detail String?
 
   facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id], onDelete: Cascade)
 
@@ -389,6 +389,7 @@ model Appointment {
   patientProfile   PatientProfile   @relation(fields: [patientProfileId], references: [id])
   doctorProfile    DoctorProfile    @relation(fields: [doctorProfileId], references: [id])
   availabilitySlot AvailabilitySlot @relation(fields: [availabilitySlotId], references: [id])
+  consultation     Consultation?
 
   // TODO Phase 2: intakeId (FK -> IntakeForm). PRD FR-5 requires intake
   // before confirmation, not enforced yet — booking works without it in
@@ -398,17 +399,6 @@ model Appointment {
 }
 
 // =========================================================================
-// Phase 8 (issue #45): PHI read-access logging — AccessLog
-//
-// Answers "who looked at this" (distinct from AuditEvent's "who changed
-// this"). Written asynchronously off the read path so it never adds to
-// p95 latency. Fail-open: a logging failure never fails the read, but is
-// counted and surfaced for alerting.
-//
-// patientProfileId is the record owner (whose data was viewed) — used by
-// GET /patients/me/access-log. accessedBy is the viewer.
-// =========================================================================
-
 model AccessLog {
   id               String   @id @default(uuid())
   // Who viewed. SetNull on user delete keeps the log row (timestamp +
@@ -435,7 +425,6 @@ model AccessLog {
   @@index([entityType, entityId])
 }
 
-// =========================================================================
 // Below this line: Phase 0 structural placeholders, not yet implemented.
 // See ROADMAP.md for phase order.
 // =========================================================================
@@ -447,19 +436,23 @@ model IntakeForm {
 }
 
 model Consultation {
-  id        String               @id @default(uuid())
-  outcome   ConsultationOutcome?
-  notes     String?
-  createdAt DateTime             @default(now())
-  // TODO: appointmentId (unique)
+  id            String              @id @default(uuid())
+  appointmentId String              @unique
+  outcome       ConsultationOutcome?
+  notes         String?
+  createdAt     DateTime            @default(now())
+
+  appointment  Appointment   @relation(fields: [appointmentId], references: [id])
+  prescriptions Prescription[]
+  labOrders     LabOrder[]
 }
 
 model Referral {
-  id            String         @id @default(uuid())
-  status        ReferralStatus @default(pending)
-  snapshotNotes String
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  id             String         @id @default(uuid())
+  status         ReferralStatus @default(pending)
+  snapshotNotes  String
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
   // TODO: sourceConsultationId, referringDoctorId, targetSpecialtyId,
   // targetDoctorId (nullable), snapshotIntakeId, resultingAppointmentId (nullable)
   // IMPORTANT: snapshotNotes / snapshotIntakeId must be copies, not live
@@ -467,36 +460,81 @@ model Referral {
 }
 
 model Prescription {
-  id        String      @id @default(uuid())
-  status    OrderStatus @default(issued)
-  createdAt DateTime    @default(now())
-  // TODO: consultationId, patientProfileId, prescribingDoctorId, supersedesPrescriptionId (nullable, self-relation)
+  id                       String      @id @default(uuid())
+  consultationId           String
+  patientProfileId         String
+  prescribingDoctorId      String
+  facilityProfileId        String
+  amountStroops            BigInt
+  status                   OrderStatus @default(issued)
+  supersedesPrescriptionId String?
+  createdAt                DateTime    @default(now())
+
+  consultation    Consultation   @relation(fields: [consultationId], references: [id])
+  patientProfile  PatientProfile @relation(fields: [patientProfileId], references: [id])
+  prescribingDoctor DoctorProfile @relation(fields: [prescribingDoctorId], references: [id])
+  facilityProfile  FacilityProfile @relation(fields: [facilityProfileId], references: [id])
+  supersedes      Prescription?  @relation("PrescriptionCorrections", fields: [supersedesPrescriptionId], references: [id])
+  correctedBy     Prescription?  @relation("PrescriptionCorrections")
+  items           PrescriptionItem[]
+  paymentIntent   PaymentIntent?
+
+  @@unique([supersedesPrescriptionId])
+  @@index([patientProfileId, createdAt])
+  @@index([consultationId])
 }
 
 model PrescriptionItem {
-  id        String @id @default(uuid())
-  drugName  String
-  dosage    String
-  frequency String
-  duration  String
-  // TODO: prescriptionId
+  id             String @id @default(uuid())
+  prescriptionId String
+  drugName       String
+  dosage         String
+  frequency      String
+  duration       String
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id])
+
+  @@index([prescriptionId])
 }
 
 model LabOrder {
-  id        String      @id @default(uuid())
-  testType  String
-  urgency   Urgency     @default(routine)
-  status    OrderStatus @default(issued)
-  createdAt DateTime    @default(now())
-  // TODO: consultationId, patientProfileId, orderingDoctorId, supersedesLabOrderId (nullable, self-relation)
+  id                  String      @id @default(uuid())
+  consultationId      String
+  patientProfileId    String
+  orderingDoctorId    String
+  facilityProfileId   String
+  amountStroops       BigInt
+  testType            String
+  urgency             Urgency     @default(routine)
+  notes               String?
+  status              OrderStatus @default(issued)
+  supersedesLabOrderId String?
+  createdAt           DateTime    @default(now())
+
+  consultation   Consultation   @relation(fields: [consultationId], references: [id])
+  patientProfile PatientProfile @relation(fields: [patientProfileId], references: [id])
+  orderingDoctor DoctorProfile  @relation(fields: [orderingDoctorId], references: [id])
+  facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id])
+  supersedes     LabOrder?      @relation("LabOrderCorrections", fields: [supersedesLabOrderId], references: [id])
+  correctedBy    LabOrder?      @relation("LabOrderCorrections")
+  result         LabResult?
+  paymentIntent  PaymentIntent?
+
+  @@unique([supersedesLabOrderId])
+  @@index([patientProfileId, createdAt])
+  @@index([consultationId])
 }
 
 model LabResult {
-  id            String   @id @default(uuid())
-  resultFileUrl String?
-  summary       String?
-  createdAt     DateTime @default(now())
-  // TODO: labOrderId (unique), fulfillingFacilityId
+  id                   String   @id @default(uuid())
+  labOrderId           String   @unique
+  fulfillingFacilityId String
+  resultFileUrl        String?
+  summary              String?
+  createdAt            DateTime @default(now())
+
+  labOrder           LabOrder        @relation(fields: [labOrderId], references: [id])
+  fulfillingFacility FacilityProfile @relation(fields: [fulfillingFacilityId], references: [id])
 }
 
 model FulfillmentRecord {
@@ -513,11 +551,11 @@ model FulfillmentRecord {
 }
 
 model Notification {
-  id        String    @id @default(uuid())
+  id        String   @id @default(uuid())
   type      String
   payload   Json
   readAt    DateTime?
-  createdAt DateTime  @default(now())
+  createdAt DateTime @default(now())
   // TODO: userId
 }
 
@@ -530,12 +568,8 @@ model Notification {
 // in this schema. See docs/adr/0002-stellar-escrow-for-fulfillment-payout.md
 // and docs/adr/0004-custodial-payments-v1.md.
 //
-// Deliberately decoupled from Prescription/LabOrder/FulfillmentRecord
-// below — those are still Phase 0 placeholders (Phase 4/5, not built).
-// `orderType`/`orderId` stay opaque, unvalidated references rather than
-// real foreign keys, so this phase is buildable independently rather than
-// blocked behind two unbuilt phases. Revisit once Phase 4/5 are real —
-// see ADR 0004's "Known gap."
+// One of prescriptionId/labOrderId is required by a PostgreSQL check
+// constraint. Amount and recipient are snapshotted from the issued order.
 
 enum PaymentIntentStatus {
   created
@@ -545,21 +579,18 @@ enum PaymentIntentStatus {
   failed
 }
 
-enum OrderTypeForPayment {
-  prescription
-  lab_order
-}
 
 model PaymentIntent {
-  id        String              @id @default(uuid())
-  orderType OrderTypeForPayment
-  // Opaque — Prescription/LabOrder don't exist as real records yet
-  // (Phase 4). Not validated against anything until then.
-  orderId   String
-  status    PaymentIntentStatus @default(created)
+  id             String              @id @default(uuid())
+  prescriptionId String?             @unique
+  labOrderId     String?             @unique
+  status         PaymentIntentStatus @default(created)
+
+  prescription Prescription? @relation(fields: [prescriptionId], references: [id])
+  labOrder     LabOrder?     @relation(fields: [labOrderId], references: [id])
 
   patientProfileId String
-  patientProfile   PatientProfile  @relation(fields: [patientProfileId], references: [id])
+  patientProfile   PatientProfile @relation(fields: [patientProfileId], references: [id])
   facilityId       String
   facility         FacilityProfile @relation(fields: [facilityId], references: [id])
 
