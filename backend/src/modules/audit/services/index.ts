@@ -32,7 +32,8 @@ export type AuditEntityType =
   | 'Consultation'
   | 'Prescription'
   | 'LabOrder'
-  | 'Referral';
+  | 'Referral'
+  | 'FacilityPrice';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;

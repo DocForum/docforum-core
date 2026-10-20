@@ -1,16 +1,21 @@
 import { Router } from 'express';
-import { requireAuth, requireRole } from '../../auth/middleware';
-import { FacilityPriceController } from '../controllers/FacilityPriceController';
+import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
+import * as facilitiesController from '../controllers';
 
-const router = Router();
-const controller = new FacilityPriceController();
+export const facilitiesRouter = Router();
 
-// Facility owners manage their price list
-router.get('/:facilityId/prices', requireAuth, controller.list);
-router.post('/:facilityId/prices', requireAuth, requireRole('facility_owner', 'admin'), controller.create);
-router.patch('/:facilityId/prices/:priceId', requireAuth, requireRole('facility_owner', 'admin'), controller.update);
+// Price management is scoped to "my facility": the owner's profile is looked
+// up from the authenticated user, so there is no client-supplied id to forge.
+facilitiesRouter.get('/me/prices', authenticate, requireRole('facility'), facilitiesController.listOwnPrices);
+facilitiesRouter.post(
+  '/me/prices',
+  authenticate,
+  requireRole('facility'),
+  requireVerifiedEmail,
+  facilitiesController.createOwnPrice,
+);
 
-// Patient-facing: current price per eligible facility
-router.get('/eligible', requireAuth, controller.eligible);
-
-export default router;
+// Public reads. `/eligible` is declared before `/:facilityId/prices` so the
+// literal segment is never captured as an id (Express 5 matches in order).
+facilitiesRouter.get('/eligible', facilitiesController.eligibleFacilities);
+facilitiesRouter.get('/:facilityId/prices', facilitiesController.listFacilityPrices);

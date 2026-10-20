@@ -1,6 +1,7 @@
 // payments services — this module owns PaymentIntent/WalletLink
 // (relational metadata only — no PHI ever passes through here) and
-// delegates actual escrow contract calls to @docforum/escrow-sdk. This module does NOT reimplement contract logic — it calls the SDK,
+// delegates actual escrow contract calls to @docforum/escrow-sdk. This
+// module does NOT reimplement contract logic — it calls the SDK,
 // persists the resulting tx hash/status, and exposes that status to
 // other core modules through this services/ interface, per AGENTS.md
 // module-boundary rule.
@@ -15,6 +16,7 @@ import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
 import { getPlatformSigners } from './platform-signers';
 import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
+import { parseStroopsAmount } from '../../../utils/stroops';
 import * as auditService from '../../audit/services';
 import type { Prisma } from '@prisma/client';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
@@ -81,47 +83,22 @@ export function getWalletLink(facilityId: string) {
   return paymentsRepo.findWalletLinkByFacilityId(facilityId);
 }
 
-// Number of decimal places for a payment asset. Stellar assets are always 7
-// decimals (107 stroops = 1 unit), but we keep this explicit so the validation
-// rule is not buried in a magic number and can be extended if another asset is
-	// ever added.
-export const PAYMENT_ASSET_DECIMALS = 7;
-
-/** Validates a stroops amount against the payment asset's decimals and
- * returns it as a BigInt. Throws 400 on non-positive, non-integer, or
- * over-precision values. */
-export function validateAmountStroops(amountStroops: bigint | string | number): bigint {
-  let value: bigint;
-  if (typeof amountStroops === 'bigint') {
-    value = amountStroops;
-  } else if (typeof amountStroops === 'string') {
-    if (!/^[0-9]+$/.test(amountStroops)) throw new HttpError(400, 'amountStroops must be a non-negative integer string.');
-    value = BigInt(amountStroops);
-  } else if (typeof amountStroops === 'number') {
-    if (!Number.isInteger(amountStroops)) throw new HttpError(400, 'amountStroops must be an integer.');
-    value = BigInt(amountStroops);
-  } else {
-    throw new HttpError(400, 'amountStroops is required.');
-  }
-  if (value <= 0n) throw new HttpError(400, 'amountStroops must be positive.');
-  // Amounts are already in the asset's smallest unit (stroops), so the decimal
-  // constraint is that the value fits within the asset's precision budget.
-  // We guard against accidentally passing a decimal number (e.g. 1.5) by
-  // requiring integers above, and against overflowing the asset's representable
-  // range by capping at 10^(decimals + 18) - 1 (BigInt safe in JS and in Soroban).
-  const max = 10n ** BigInt(PAYMENT_ASSET_DECIMALS + 18) - 1n;
-  if (value > max) throw new HttpError(400, 'amountStroops exceeds the payment asset representable range.');
-  return value;
-}
-
 /** Called by the orders module inside the order-issuance transaction. A
  * created intent moves to a corrected order; any funded/terminal intent
- * stays attached to the immutable original order. */
+ * stays attached to the immutable original order.
+ *
+ * `catalogItemCode` is snapshotted alongside the amount: the amount is the
+ * facility price in force when the doctor selected the facility, so a later
+ * price-list change cannot re-price an existing intent (issue #127). */
 export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, input: {
   kind: 'prescription' | 'lab_order'; orderId: string; patientProfileId: string; doctorProfileId: string;
   facilityProfileId: string; amountStroops: bigint; supersedesId: string | null;
+  catalogItemCode?: string | null;
 }) {
-  const amountStroops = validateAmountStroops(input.amountStroops);
+  // Same guard the facility price list uses: positive integer stroops that
+  // fit the asset's precision and the contract's i128 amount.
+  const amountStroops = parseStroopsAmount(input.amountStroops, 'amountStroops');
+  const catalogItemCode = input.catalogItemCode ?? null;
   const facility = await tx.facilityProfile.findUnique({ where: { id: input.facilityProfileId }, select: { type: true } });
   const expectedType = input.kind === 'prescription' ? 'pharmacy' : 'lab';
   if (!facility || facility.type !== expectedType) throw new HttpError(400, `The selected facility must be a ${expectedType} facility.`);
@@ -136,13 +113,13 @@ export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, i
     if (previous?.status === 'created') {
       const moved = await tx.paymentIntent.updateMany({
         where: { id: previous.id, status: 'created' },
-        data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops },
+        data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops, catalogItemCode },
       });
       if (moved.count === 1) return tx.paymentIntent.findUniqueOrThrow({ where: { id: previous.id } });
     }
   }
   return tx.paymentIntent.create({
-    data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops },
+    data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops, catalogItemCode },
   });
 }
 
@@ -155,7 +132,7 @@ export async function getPaymentIntent(id: string) {
 /** Commits a status change and its AuditEvent together (issue #43). If the
  * row moved on concurrently, nothing is written and the caller gets 409. */
 async function commitTransition(
-  actor: auditService.AuditAuditor,
+  actor: auditService.AuditActor,
   // PaymentIntent row shape from prisma operations; use 'as' since Prisma 7
   // client types may not match the expected exports.
   intent: any,
@@ -190,7 +167,7 @@ async function commitTransition(
 }
 
 /** Funds the escrow from the platform's own payer identity. The intent must be `created` and its facility must have a linked wallet (the on-chain payee). */
-export async function fundPaymentIntent(actor: auditService.AuditAuditor, id: string) {
+export async function fundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (intent.status !== 'created') {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
@@ -211,7 +188,7 @@ export async function fundPaymentIntent(actor: auditService.AuditAuditor, id: st
     token: escrowTokenId,
     amount: intent.amountStroops,
     // The PaymentIntent's own id is the opaque condition_ref — the
-    // contract never interprets it (docforum-escrow ADI 0001); it's
+    // contract never interprets it (docforum-escrow ADR 0001); it's
     // just how we can trace an on-chain escrow back to this record.
     conditionRef: intent.id,
     releaser: platformReleaser.publicKey(),
@@ -222,8 +199,8 @@ export async function fundPaymentIntent(actor: auditService.AuditAuditor, id: st
   );
 }
 
-/** Releases the escrow to the facility's linked wallet. v1: admin-triggered (see AD 0004 "Consequences") — no automatic FulfillmentRecord trigger yet, since that model doesn't exist. */
-export async function releasePaymentIntent(actor: auditService.AuditAuditor, id: string) {
+/** Releases the escrow to the facility's linked wallet. v1: admin-triggered (see ADR 0004 "Consequences") — no automatic FulfillmentRecord trigger yet, since that model doesn't exist. */
+export async function releasePaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (intent.status !== 'escrowed' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
@@ -240,7 +217,7 @@ export async function releasePaymentIntent(actor: auditService.AuditAuditor, id:
 }
 
 /** Refunds the escrow back toward the platform payer. v1: admin-triggered, same reasoning as release. */
-export async function refundPaymentIntent(actor: auditService.AuditAuditor, id: string) {
+export async function refundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (intent.status !== 'escrowed' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot refund.`);
@@ -260,8 +237,8 @@ export async function refundPaymentIntent(actor: auditService.AuditAuditor, id: 
  * This module's contribution to the patient data export (issue #40). An
  * explicit field allowlist: on-chain references (tx hash, escrow id,
  * contract id) are the patient's payment record and are included; the
- * platform's signing secrets never touch a PaymentIntent row and can't appear
- * here. BigInts are strings, matching the HTTP API.
+ * platform's signing secrets never touch a PaymentIntent row and can't
+ * appear here. BigInts are strings, matching the HTTP API.
  */
 export const paymentsExportSection: PatientExportSection = {
   name: 'payments',
@@ -280,6 +257,11 @@ export const paymentsExportSection: PatientExportSection = {
           status: row.status,
           amountStroops: row.amountStroops.toString(),
           facility: { id: row.facilityId, name: facilityNames.get(row.facilityId) ?? null },
+          escrowId: row.escrowId?.toString() ?? null,
+          stellarTxHash: row.stellarTxHash,
+          sorobanContractId: row.sorobanContractId,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
         }));
       },
     );

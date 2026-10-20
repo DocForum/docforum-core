@@ -351,6 +351,7 @@ model FacilityProfile {
   labResults     LabResult[]
   paymentIntents PaymentIntent[]
   walletLink     WalletLink?
+  prices         FacilityPrice[]
 }
 
 model FacilityCapability {
@@ -364,6 +365,33 @@ model FacilityCapability {
   facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id], onDelete: Cascade)
 
   @@unique([facilityProfileId, capabilityType, detail])
+}
+
+/// Versioned facility price list (issue #127). Rows are append-only: changing
+/// a price inserts a new row with a later `effectiveFrom`, so history is kept
+/// and an intent priced earlier keeps resolving against what was in force at
+/// its selection time. Amounts are stroops (BigInt) like PaymentIntent.
+///
+/// `catalogItemCode` is deliberately an open vocabulary (a lab test or
+/// medication code the facility publishes), matching FacilityCapability.detail
+/// — no controlled vocabulary has been decided yet.
+model FacilityPrice {
+  id              String   @id @default(uuid())
+  facilityId      String
+  facility        FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  catalogItemCode String
+  // Stellar asset the price is denominated in. v1 quotes native XLM
+  // ('native'); the column exists so a price list can add assets without a
+  // schema change when multi-asset payments land.
+  asset           String
+  amount          BigInt
+  effectiveFrom   DateTime
+  createdAt       DateTime @default(now())
+
+  // Two versions of the same item/asset cannot share an effective instant.
+  @@unique([facilityId, catalogItemCode, asset, effectiveFrom])
+  @@index([facilityId, catalogItemCode, asset, effectiveFrom])
+  @@index([catalogItemCode, asset, effectiveFrom])
 }
 
 model AvailabilitySlot {
@@ -701,6 +729,12 @@ model PaymentIntent {
   // testnet (see ADR 0004). Multi-asset support is a future addition,
   // not assumed by this field.
   amountStroops BigInt
+
+  // Which facility price list entry priced this intent (issue #127). The
+  // amount above is the snapshot; this code records *which* item it was for,
+  // so a later price change can be explained without re-deriving it. Null for
+  // intents priced from an admin-supplied amount.
+  catalogItemCode String?
 
   // Set once funded (create_escrow succeeds) — needed to later call
   // release/refund against the right on-chain escrow.
