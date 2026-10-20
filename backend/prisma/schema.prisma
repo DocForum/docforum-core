@@ -72,6 +72,10 @@ enum ReferralStatus {
   declined
   completed
   expired
+  // Admin-initiated termination (issue #68) — distinct from `expired`
+  // (the cascade gave up after repeated no-shows) and `declined` (the
+  // patient said no) so audit/metrics can tell the three exits apart.
+  cancelled
 }
 
 enum OrderStatus {
@@ -255,6 +259,9 @@ model PatientProfile {
   prescriptions  Prescription[]
   labOrders      LabOrder[]
   dataExports    PatientExport[]
+  // Phase 3: the referrals this patient is the subject of (the opposite
+  // side of Referral.patientProfileId).
+  referrals      Referral[]
 
   // Phase 8 (issue #45): who viewed this patient's records.
   accessLogs AccessLog[]
@@ -341,6 +348,11 @@ model DoctorProfile {
   appointments      Appointment[]
   prescriptions     Prescription[]
   labOrders         LabOrder[]
+  // Referral sides a doctor can sit on: `referringReferrals` are ones
+  // they created; `targetedReferrals` are ones aimed at them (whether
+  // they ultimately see the patient or not).
+  referringReferrals Referral[]       @relation("ReferralReferringDoctor")
+  targetedReferrals  Referral[]       @relation("ReferralTargetDoctor")
 
   @@index([verificationStatus])
 }
@@ -420,22 +432,38 @@ model Appointment {
   id                 String            @id @default(uuid())
   patientProfileId   String
   doctorProfileId    String
-  availabilitySlotId String            @unique
+  // Nullable because a CANCELLED appointment releases its slot back to
+  // `open` (referral cascade / patient cancel) — the appointment keeps its
+  // history row but must stop holding the unique claim on the slot, or
+  // re-booking the freed slot would violate the unique constraint.
+  // The booking guarantee itself is unchanged: claimOpenSlot's
+  // conditional UPDATE on SlotStatus is what prevents double-booking.
+  availabilitySlotId String?           @unique
   status             AppointmentStatus @default(scheduled)
   origin             AppointmentOrigin @default(direct_booking)
+  // Set when this appointment was produced by accepting a Referral (issue
+  // #7). The cascade rules (#67 / PRD §8.2.3) react to status transitions
+  // on exactly these appointments. NOT unique: one referral can produce
+  // several appointments over its life (re-booking after a cancellation).
+  // Referral.resultingAppointmentId is the unique "current" pointer.
+  referralId         String?
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
   patientProfile   PatientProfile   @relation(fields: [patientProfileId], references: [id])
   doctorProfile    DoctorProfile    @relation(fields: [doctorProfileId], references: [id])
-  availabilitySlot AvailabilitySlot @relation(fields: [availabilitySlotId], references: [id])
+  availabilitySlot AvailabilitySlot? @relation(fields: [availabilitySlotId], references: [id])
+  referral         Referral?        @relation("ReferralOriginatedAppointments", fields: [referralId], references: [id])
+  // Non-owning side of Referral.resultingAppointmentId (the FK lives on
+  // Referral) — which referral currently points at this appointment as
+  // the one it produced.
+  referralResultOf Referral?        @relation("ReferralResultingAppointment")
   consultation     Consultation?
 
   // TODO Phase 2: intakeId (FK -> IntakeForm). PRD FR-5 requires intake
   // before confirmation, not enforced yet — booking works without it in
   // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
   // existing. Flagged, not silently dropped.
-  // TODO Phase 3: referralId (nullable FK -> Referral).
 }
 
 // =========================================================================
@@ -475,29 +503,100 @@ model IntakeForm {
   // TODO: patientProfileId, symptoms (Json), freeTextNotes
 }
 
+// Phase 3 (issue #5 minimal + lineage for #65): a Consultation is the
+// record of a doctor having seen the patient at a specific appointment.
+// `appointmentId` is the lineage seam — Referral.parentReferralId is
+// derived through it (consultation → appointment → referral), which is
+// what loop detection walks. Full consultation-note workflow (append-only
+// addenda, sign-off) stays issue #4/#64's scope.
 model Consultation {
   id            String              @id @default(uuid())
   appointmentId String              @unique
   outcome       ConsultationOutcome?
   notes         String?
   createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   appointment  Appointment   @relation(fields: [appointmentId], references: [id])
   prescriptions Prescription[]
   labOrders     LabOrder[]
+  // Phase 3: the referrals that grew out of this consultation (the
+  // opposite side of Referral.sourceConsultationId).
+  referrals     Referral[]
 }
 
+// Phase 3 (issues #5/#65/#66/#67/#68). Snapshot rule (FR-7/FR-8, hard
+// rule 3): `snapshotNotes` is a copy taken at creation, never a live
+// reference — reassign/cancel/cascade never touch it.
 model Referral {
-  id             String         @id @default(uuid())
-  status         ReferralStatus @default(pending)
-  snapshotNotes  String
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-  // TODO: sourceConsultationId, referringDoctorId, targetSpecialtyId,
-  // targetDoctorId (nullable), snapshotIntakeId, resultingAppointmentId (nullable)
-  // IMPORTANT: snapshotNotes / snapshotIntakeId must be copies, not live
-  // references — see ARCHITECTURE.md §4.4 design note.
+  id                String         @id @default(uuid())
+  status            ReferralStatus @default(pending)
+  patientProfileId  String
+  // The consultation this referral grew out of. Required: every referral
+  // is created from a consultation (PRD FR-7), which is also what gives
+  // loop detection its lineage.
+  sourceConsultationId String
+  referringDoctorId String
+  // v1 requires a concrete target doctor — the routing rule for "a
+  // specialty, no specific doctor" is an unresolved design gap
+  // (ARCHITECTURE.md §6.1.2, issue #6), not silently defaulted here.
+  targetDoctorId    String
+  // Optional denormalised label of the target specialty, used by the
+  // loop guard and admin views. Not a substitute for issue #23's real
+  // per-doctor specialty management.
+  targetSpecialtyId String?
+  snapshotNotes     String
+  // Issue #65: the referral whose appointment produced the consultation
+  // this referral came from — the chain loop detection walks (bounded).
+  parentReferralId  String?
+  // Issue #67 bookkeeping: how many times a referral-origin appointment
+  // has no-showed, and the "the referring doctor must know" flag set
+  // when repeated no-shows expire the referral. Both live on the
+  // referral (not a Notification row) because Phase 6's dispatch layer
+  // doesn't exist yet — the flag is the seam it will read.
+  noShowCount                Int       @default(0)
+  referringDoctorNotifiedAt  DateTime?
+  // Issue #65: set (with a reason naming the matching hop) when the
+  // target doctor/specialty was already in the ancestor chain — the
+  // referral is still created (a human decides), but surfaces in the
+  // admin queue.
+  loopFlaggedAt    DateTime?
+  loopFlagReason   String?
+  // Issue #68: admin-initiated cancellation carries its reason; the
+  // audit trail proper is the AuditEvent row written alongside.
+  cancelledReason  String?
+  // The appointment this referral currently produced (null while
+  // pending/declined, or after a cancelled/no-showed appointment returns
+  // it to pending). Kept pointing at the last no-show when expired —
+  // that appointment is why it expired.
+  resultingAppointmentId String? @unique
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  sourceConsultation Consultation  @relation(fields: [sourceConsultationId], references: [id])
+  patientProfile     PatientProfile @relation(fields: [patientProfileId], references: [id])
+  referringDoctor    DoctorProfile  @relation("ReferralReferringDoctor", fields: [referringDoctorId], references: [id])
+  targetDoctor       DoctorProfile  @relation("ReferralTargetDoctor", fields: [targetDoctorId], references: [id])
+  parentReferral     Referral?      @relation("ReferralLineage", fields: [parentReferralId], references: [id])
+  childReferrals     Referral[]     @relation("ReferralLineage")
+  resultingAppointment Appointment? @relation("ReferralResultingAppointment", fields: [resultingAppointmentId], references: [id])
+  // Every appointment this referral ever produced (including cancelled/
+  // no-showed ones) — history survives the resultingAppointmentId link
+  // being cleared when the referral returns to pending.
+  appointments        Appointment[] @relation("ReferralOriginatedAppointments")
+
+  @@index([patientProfileId])
+  @@index([referringDoctorId])
+  @@index([targetDoctorId])
+  @@index([status])
+  @@index([loopFlaggedAt])
 }
+
+// Issue #68: who did what to a referral, when, and why. Deliberately NOT a
+// second audit table: the append-only `AuditEvent` in this schema (Phase 8,
+// issue #43) is the one audit trail, so referral admin actions are recorded
+// as `entityType: 'Referral'` rows through the audit module
+// (`auditService.record`) — same table, same triggers, same writer.
 
 model Prescription {
   id                       String      @id @default(uuid())
