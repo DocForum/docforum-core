@@ -188,24 +188,3 @@ export function listAdminQueue(filters: {
     orderBy: { createdAt: 'asc' },
   });
 }
-
-export function createAuditEvent(
-  db: DbClient,
-  event: {
-    actorUserId: string;
-    actorRole: string;
-    action: string;
-    referralId?: string;
-    reason?: string;
-    metadata?: Prisma.InputJsonValue;
-  },
-) {
-  return db.auditEvent.create({ data: event });
-}
-
-export function listAuditEventsForReferral(referralId: string) {
-  return prisma.auditEvent.findMany({
-    where: { referralId },
-    orderBy: { createdAt: 'desc' },
-  });
-}

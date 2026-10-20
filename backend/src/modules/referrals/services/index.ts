@@ -15,6 +15,7 @@ import { HttpError } from '../../../http-error';
 import type { Prisma, ReferralStatus } from '@prisma/client';
 import * as referralsRepo from '../repositories';
 import * as appointmentsService from '../../appointments/services';
+import * as auditService from '../../audit/services';
 import * as doctorsService from '../../doctors/services';
 import * as patientsService from '../../patients/services';
 import { evaluateReferralLoop, LoopGuardError, REFERRAL_MAX_HOPS } from '../loop';
@@ -419,9 +420,14 @@ function deriveQueueReason(row: {
  * the snapshot (notes, patient, consultation, lineage) is untouched, per
  * the constraint that reassignment must never alter the snapshot. The
  * target is validated through the doctors service, never around it.
+ *
+ * The audit event goes through the audit module's `record()` (Phase 8,
+ * issue #43) — there is one AuditEvent table in this system, and this
+ * module writes its rows as `entityType: 'Referral'` through that
+ * module's service, never by touching the table itself.
  */
 export async function adminReassign(
-  userId: string,
+  actor: auditService.AuditActor,
   referralId: string,
   input: { targetDoctorId: string; reason: string },
 ) {
@@ -453,13 +459,20 @@ export async function adminReassign(
       throw new HttpError(409, 'Referral is no longer pending; it changed while you were working.');
     }
 
-    await referralsRepo.createAuditEvent(tx, {
-      actorUserId: userId,
-      actorRole: 'admin',
+    await auditService.record(tx, actor, {
+      entityType: 'Referral',
+      entityId: referralId,
       action: 'referral.reassign',
-      referralId,
-      reason: input.reason,
-      metadata: { fromDoctorId: referral.targetDoctorId, toDoctorId: input.targetDoctorId },
+      // The referral's *state* doesn't change here — it stays pending and
+      // is retargeted — so there is no from/to state. What changed is the
+      // target doctor, which is recorded as ids in the metadata.
+      fromState: null,
+      toState: null,
+      metadata: {
+        fromDoctorId: referral.targetDoctorId,
+        toDoctorId: input.targetDoctorId,
+        reason: input.reason,
+      },
     });
 
     return referralsRepo.findReferralById(tx, referralId);
@@ -475,7 +488,11 @@ export async function adminReassign(
  * The patient-notification hook point is the audit event + the referral
  * status itself; Phase 6's dispatch layer will read both.
  */
-export async function adminCancel(userId: string, referralId: string, input: { reason: string }) {
+export async function adminCancel(
+  actor: auditService.AuditActor,
+  referralId: string,
+  input: { reason: string },
+) {
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
     if (!referral) throw new HttpError(404, 'Referral not found.');
@@ -498,23 +515,32 @@ export async function adminCancel(userId: string, referralId: string, input: { r
       throw new HttpError(409, 'Referral changed while you were working; reload and retry.');
     }
 
-    await referralsRepo.createAuditEvent(tx, {
-      actorUserId: userId,
-      actorRole: 'admin',
+    await auditService.record(tx, actor, {
+      entityType: 'Referral',
+      entityId: referralId,
       action: 'referral.cancel',
-      referralId,
-      reason: input.reason,
+      fromState: referral.status,
+      toState: 'cancelled',
+      metadata: { reason: input.reason },
     });
 
     return referralsRepo.findReferralById(tx, referralId);
   });
 }
 
-export async function listAuditEvents(userId: string, referralId: string) {
-  // Any authenticated role may read a referral's audit trail — it's the
-  // accountability surface PRD §7 demands, and contains no clinical text.
-  void userId;
+/**
+ * A referral's audit trail (issue #68). Read through the audit module's
+ * service — this module never queries the AuditEvent table itself. The
+ * rows are the same ones the admin-wide `GET /admin/audit-events`
+ * endpoint serves, narrowed to this referral.
+ */
+export async function listAuditEvents(referralId: string) {
   const referral = await referralsRepo.findReferralById(prisma, referralId);
   if (!referral) throw new HttpError(404, 'Referral not found.');
-  return referralsRepo.listAuditEventsForReferral(referralId);
+  const page = await auditService.listAuditEvents({
+    entityType: 'Referral',
+    entityId: referralId,
+    limit: 200,
+  });
+  return page.items;
 }

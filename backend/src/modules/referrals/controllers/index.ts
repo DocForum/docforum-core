@@ -10,6 +10,7 @@ import {
 } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
+import { auditActor } from '../../../middleware/request-id';
 
 export async function create(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
@@ -68,19 +69,23 @@ export async function adminQueue(req: Request, res: Response) {
 export async function adminReassign(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const input = adminReassignSchema.parse(req.body);
-  const referral = await referralsService.adminReassign(req.user.id, getParam(req, 'referralId'), input);
+  const referral = await referralsService.adminReassign(
+    auditActor(req),
+    getParam(req, 'referralId'),
+    input,
+  );
   res.status(200).json(referral);
 }
 
 export async function adminCancel(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const input = adminCancelSchema.parse(req.body);
-  const referral = await referralsService.adminCancel(req.user.id, getParam(req, 'referralId'), input);
+  const referral = await referralsService.adminCancel(auditActor(req), getParam(req, 'referralId'), input);
   res.status(200).json(referral);
 }
 
 export async function auditTrail(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const events = await referralsService.listAuditEvents(req.user.id, getParam(req, 'referralId'));
+  const events = await referralsService.listAuditEvents(getParam(req, 'referralId'));
   res.status(200).json(events);
 }

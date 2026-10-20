@@ -144,14 +144,19 @@ describe('admin referral operations', () => {
     expect(res.body.snapshotNotes).toBe('admin fixture notes');
     expect(res.body.status).toBe('pending');
 
-    const events = await prisma.auditEvent.findMany({ where: { referralId } });
+    // Referral admin actions are rows in the one append-only AuditEvent
+    // table (issue #43), written through the audit module's service as
+    // `entityType: 'Referral'` — there is no second referral audit table.
+    const events = await prisma.auditEvent.findMany({
+      where: { entityType: 'Referral', entityId: referralId },
+    });
     expect(events).toHaveLength(1);
     expect(events[0].action).toBe('referral.reassign');
     expect(events[0].actorUserId).toBe(admin.userId);
-    expect(events[0].reason).toBe('cardioA on leave');
     expect(events[0].metadata).toMatchObject({
       fromDoctorId: cardioA.profileId,
       toDoctorId: cardioB.profileId,
+      reason: 'cardioA on leave',
     });
   });
 
@@ -226,7 +231,10 @@ describe('admin referral operations', () => {
     expect(res.body.status).toBe('cancelled');
     expect(res.body.cancelledReason).toBe('patient moved abroad');
 
-    const events = await prisma.auditEvent.findMany({ where: { referralId }, orderBy: { createdAt: 'asc' } });
+    const events = await prisma.auditEvent.findMany({
+      where: { entityType: 'Referral', entityId: referralId },
+      orderBy: { createdAt: 'asc' },
+    });
     expect(events.map((event) => event.action)).toContain('referral.cancel');
   });
 
@@ -268,7 +276,8 @@ describe('admin referral operations', () => {
     expect(trail.status).toBe(200);
     expect(trail.body).toHaveLength(1);
     expect(trail.body[0].action).toBe('referral.cancel');
-    expect(trail.body[0].reason).toBe('first');
+    expect(trail.body[0].entityType).toBe('Referral');
+    expect(trail.body[0].metadata).toMatchObject({ reason: 'first' });
   });
 
   it('rejects admin operations without the admin role', async () => {

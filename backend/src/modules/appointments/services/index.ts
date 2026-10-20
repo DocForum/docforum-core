@@ -81,15 +81,20 @@ export const appointmentsExportSection: patientsService.PatientExportSection = {
       pageSize,
       (cursor, take) => appointmentsRepo.findAppointmentsPageForPatient(subject.patientProfileId, cursor, take),
       async (rows) => {
+        // `availabilitySlotId` is nullable (Phase 3): a CANCELLED
+        // appointment releases its slot back to the calendar, so its row
+        // keeps its history but no longer points at one. Those rows export
+        // with a null slot rather than a stale one.
+        const slotIds = rows.map((row) => row.availabilitySlotId).filter((id): id is string => id !== null);
         const [slots, doctors] = await Promise.all([
-          availabilityService.getSlotTimesByIds(rows.map((row) => row.availabilitySlotId)),
+          availabilityService.getSlotTimesByIds(slotIds),
           doctorsService.getDoctorSummariesByIds(rows.map((row) => row.doctorProfileId)),
         ]);
         return rows.map((row) => ({
           id: row.id,
           status: row.status,
           origin: row.origin,
-          slot: slots.get(row.availabilitySlotId) ?? null,
+          slot: row.availabilitySlotId ? (slots.get(row.availabilitySlotId) ?? null) : null,
           doctor: doctors.get(row.doctorProfileId) ?? null,
           createdAt: row.createdAt,
           updatedAt: row.updatedAt,
