@@ -10,6 +10,7 @@ import {
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import { readCsrfHeader } from '../../../middleware/csrf';
+import { getParam } from '../../../request-params';
 
 const REFRESH_COOKIE = 'docforum_refresh';
 const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30d — matches config.jwt.refreshTtl
@@ -43,7 +44,12 @@ function sessionResponse(res: Response, session: authService.AuthSession) {
   // `csrfToken` is returned in the body, not as a readable cookie — see
   // middleware/csrf.ts for why a cross-site frontend can't use a cookie for
   // this. docforum-web keeps it in memory alongside the access token.
-  res.status(200).json({ user: session.user, accessToken: session.accessToken, csrfToken: session.csrfToken });
+  res.status(200).json({
+    user: session.user,
+    accessToken: session.accessToken,
+    csrfToken: session.csrfToken,
+    sessionId: session.sessionId,
+  });
 }
 
 export async function signup(req: Request, res: Response) {
@@ -58,7 +64,7 @@ export async function login(req: Request, res: Response) {
     // Express's `req.ip` honours the `trust proxy` setting (app.ts) — it is
     // the whole reason the throttle keys on the IP the client believes it
     // is, rather than Render's proxy address (see config.trustProxy).
-    const session = await authService.login({ ...input, ip: req.ip });
+    const session = await authService.login({ ...input, ip: req.ip }, sessionContext(req));
     sessionResponse(res, session);
   } catch (err) {
     // Phase 8, issue #35: a throttled attempt must tell the client how long
@@ -90,7 +96,7 @@ export async function clearLoginAttempts(req: Request, res: Response) {
  */
 export async function signupWithInvite(req: Request, res: Response) {
   const input = signupWithInviteSchema.parse(req.body);
-  const session = await authService.signupWithInvite(input);
+  const session = await authService.signupWithInvite(input, sessionContext(req));
   sessionResponse(res, session);
 }
 
@@ -172,7 +178,7 @@ export async function revokeSession(req: Request, res: Response) {
   if (!result.revoked) throw new HttpError(404, 'Session not found.');
   // Revoking the session you're using has to clear the cookie in the same
   // response, or the browser keeps sending a dead refresh token.
-  if (result.wasCurrent) res.clearCookie(REFRESH_COOKIE, REFRESH_COOKIE_OPTIONS);
+  if (result.wasCurrent) res.clearCookie(REFRESH_COOKIE, config.cookie);
   res.status(204).send();
 }
 

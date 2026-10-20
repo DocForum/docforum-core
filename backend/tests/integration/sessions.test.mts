@@ -50,9 +50,11 @@ describe('session management', () => {
   let tokenA: string;
   let sessionIdA1: string;
   let cookieA1: string;
+  let csrfA1: string;
   let patientBUserId: string;
   let tokenB: string;
   let cookieB: string;
+  let csrfB: string;
 
   function login(email: string, password: string) {
     return request(app).post('/auth/login').send({ email, password });
@@ -62,8 +64,8 @@ describe('session management', () => {
     return request(app).get('/auth/sessions').set('Authorization', `Bearer ${token}`);
   }
 
-  function refresh(cookie: string) {
-    return request(app).post('/auth/refresh').set('Cookie', cookie);
+  function refresh(cookie: string, csrfToken: string) {
+    return request(app).post('/auth/refresh').set('Cookie', cookie).set('X-CSRF-Token', csrfToken);
   }
 
   beforeAll(async () => {
@@ -93,6 +95,7 @@ describe('session management', () => {
     tokenA = signupA.body.accessToken as string;
     sessionIdA1 = signupA.body.sessionId as string;
     cookieA1 = cookieFrom(signupA);
+    csrfA1 = signupA.body.csrfToken as string;
 
     const signupB = await request(app)
       .post('/auth/signup')
@@ -100,6 +103,7 @@ describe('session management', () => {
     expect(signupB.status).toBe(200);
     tokenB = signupB.body.accessToken as string;
     cookieB = cookieFrom(signupB);
+    csrfB = signupB.body.csrfToken as string;
     patientBUserId = (await prisma.user.findUniqueOrThrow({ where: { email: patientB.email } })).id;
   });
 
@@ -152,7 +156,7 @@ describe('session management', () => {
     const before = await prisma.refreshSession.findUniqueOrThrow({ where: { id: sessionIdA1 } });
     expect(await prisma.refreshSession.count({ where: { userId: before.userId } })).toBe(2);
 
-    const refreshed = await refresh(cookieA1);
+    const refreshed = await refresh(cookieA1, csrfA1);
     expect(refreshed.status).toBe(200);
     // Same session (same family) — rotation does not fork the session.
     expect(refreshed.body.sessionId).toBe(sessionIdA1);
@@ -161,8 +165,9 @@ describe('session management', () => {
     const after = await prisma.refreshSession.findUniqueOrThrow({ where: { id: sessionIdA1 } });
     expect(after.lastUsedAt.getTime()).toBeGreaterThanOrEqual(before.lastUsedAt.getTime());
 
-    // Subsequent requests use the rotated cookie.
+    // Subsequent requests use the rotated cookie and CSRF token.
     cookieA1 = cookieFrom(refreshed);
+    csrfA1 = refreshed.body.csrfToken as string;
   });
 
   it('does not let a user see or revoke another user sessions', async () => {
@@ -173,7 +178,7 @@ describe('session management', () => {
     expect(foreign.status).toBe(404);
 
     // A's session is untouched.
-    expect((await refresh(cookieA1)).status).toBe(200);
+    expect((await refresh(cookieA1, csrfA1)).status).toBe(200);
     const listA = await sessions(tokenA);
     expect(listA.body.map((s: { id: string }) => s.id)).toContain(sessionIdA1);
 
@@ -199,15 +204,16 @@ describe('session management', () => {
     expect(revokedRow.revokedAt).not.toBeNull();
 
     // ...and the caller's own session still does.
-    expect((await refresh(cookieA1)).status).toBe(200);
+    expect((await refresh(cookieA1, csrfA1)).status).toBe(200);
 
     const after = (await sessions(tokenA)).body as { id: string }[];
     expect(after.map((s) => s.id)).not.toContain(other?.id);
   });
 
   it('clears the refresh cookie when the current session is revoked', async () => {
-    const refreshed = await refresh(cookieA1);
+    const refreshed = await refresh(cookieA1, csrfA1);
     cookieA1 = cookieFrom(refreshed);
+    csrfA1 = refreshed.body.csrfToken as string;
 
     const revoked = await request(app)
       .delete(`/auth/sessions/${sessionIdA1}`)
@@ -219,14 +225,16 @@ describe('session management', () => {
     expect(cleared).toContain('docforum_refresh=');
     expect(cleared).toMatch(/Expires=|Max-Age=0/);
 
-    expect((await refresh(cookieA1)).status).toBe(401);
+    expect((await refresh(cookieA1, csrfA1)).status).toBe(401);
   });
 
   it('revokes every other session but keeps the current one', async () => {
     const first = await login(patientA.email, patientA.password);
     const second = await login(patientA.email, patientA.password);
     const currentCookie = cookieFrom(second);
+    const currentCsrf = second.body.csrfToken as string;
     const staleCookie = cookieFrom(first);
+    const staleCsrf = first.body.csrfToken as string;
 
     const result = await request(app)
       .delete('/auth/sessions')
@@ -235,11 +243,13 @@ describe('session management', () => {
     expect(result.status).toBe(200);
     expect(result.body.revoked).toBeGreaterThanOrEqual(1);
 
-    expect((await refresh(staleCookie)).status).toBe(401);
-    expect((await refresh(currentCookie)).status).toBe(200);
+    expect((await refresh(staleCookie, staleCsrf)).status).toBe(401);
+    expect((await refresh(currentCookie, currentCsrf)).status).toBe(200);
 
     // Make the surviving session the one the rest of the file uses.
-    cookieA1 = cookieFrom(await refresh(currentCookie));
+    const rotated = await refresh(currentCookie, currentCsrf);
+    cookieA1 = cookieFrom(rotated);
+    csrfA1 = rotated.body.csrfToken as string;
   });
 
   it('lets an admin revoke all sessions for a user, and only admins', async () => {
@@ -263,7 +273,7 @@ describe('session management', () => {
     expect(asAdmin.body.revoked).toBeGreaterThanOrEqual(1);
 
     // B's refresh is dead — the session row is the kill switch.
-    expect((await refresh(cookieB)).status).toBe(401);
+    expect((await refresh(cookieB, csrfB)).status).toBe(401);
     expect((await sessions(tokenB)).body).toHaveLength(0);
   });
 });
