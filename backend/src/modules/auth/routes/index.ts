@@ -28,7 +28,16 @@ authRouter.post('/login-attempts/clear', authenticate, requireRole('admin'), aut
 authRouter.post('/refresh', requireAllowedOrigin, authController.refresh);
 authRouter.post('/logout', requireAllowedOrigin, authController.logout);
 
-// Password reset (Phase 8 #33) — both unauthenticated; possession of the
-// emailed single-use token is the credential for the confirm step.
-authRouter.post('/password-reset/request', authController.requestPasswordReset);
-authRouter.post('/password-reset/confirm', authController.confirmPasswordReset);
+// Session management (Phase 8 #38). Note the ordering: `DELETE /sessions`
+// (revoke all others) is registered before `DELETE /sessions/:id` — Express
+// matches in registration order, and `/sessions` must not be read as an id.
+authRouter.get('/sessions', authenticate, authController.listSessions);
+authRouter.delete('/sessions', authenticate, authController.revokeOtherSessions);
+authRouter.delete('/sessions/:id', authenticate, authController.revokeSession);
+
+/** Admin routes for the auth module, mounted at `/admin` in app.ts. Session
+ * administration acts on *another* user, so it doesn't belong under
+ * `/auth`. */
+export const adminAuthRouter = Router();
+
+adminAuthRouter.delete('/users/:id/sessions', authenticate, requireRole('admin'), authController.revokeUserSessions);
