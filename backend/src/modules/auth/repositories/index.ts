@@ -13,6 +13,62 @@ export function findUserById(id: string) {
   return prisma.user.findUnique({ where: { id } });
 }
 
+// --- TOTP two-factor auth (Phase 8 #36) ---------------------------------
+
+export function findTwoFactorByUserId(userId: string) {
+  return prisma.twoFactorAuth.findUnique({
+    where: { userId },
+    include: { recoveryCodes: { where: { usedAt: null }, orderBy: { createdAt: 'asc' } } },
+  });
+}
+
+/** Starts (or restarts) enrollment. Re-enrolling replaces the pending
+ * secret; the service refuses this once `enabledAt` is set, so a live
+ * second factor can't be silently swapped out by an unauthenticated
+ * enrollment call. */
+export function upsertTwoFactorEnrollment(input: { userId: string; secretEncrypted: string }) {
+  return prisma.twoFactorAuth.upsert({
+    where: { userId: input.userId },
+    create: { userId: input.userId, secretEncrypted: input.secretEncrypted },
+    update: { secretEncrypted: input.secretEncrypted, lastUsedTimeStep: null },
+  });
+}
+
+/** Confirms enrollment and installs a fresh set of recovery codes in one
+ * transaction — there is never a moment where 2FA is enabled with no
+ * recovery path. */
+export function confirmTwoFactorEnablement(input: {
+  twoFactorId: string;
+  recoveryCodeHashes: string[];
+  enabledAt: Date;
+}) {
+  return prisma.$transaction(async (tx) => {
+    await tx.twoFactorRecoveryCode.deleteMany({ where: { twoFactorAuthId: input.twoFactorId } });
+    await tx.twoFactorAuth.update({
+      where: { id: input.twoFactorId },
+      data: {
+        enabledAt: input.enabledAt,
+        recoveryCodes: { create: input.recoveryCodeHashes.map((codeHash) => ({ codeHash })) },
+      },
+    });
+  });
+}
+
+export function recordTotpTimeStep(twoFactorId: string, timeStep: number) {
+  return prisma.twoFactorAuth.update({
+    where: { id: twoFactorId },
+    data: { lastUsedTimeStep: BigInt(timeStep) },
+  });
+}
+
+export function markRecoveryCodeUsed(id: string) {
+  return prisma.twoFactorRecoveryCode.update({ where: { id }, data: { usedAt: new Date() } });
+}
+
+export function deleteTwoFactor(userId: string) {
+  return prisma.twoFactorAuth.deleteMany({ where: { userId } });
+}
+
 // --- Refresh sessions (Phase 8 #38) -------------------------------------
 
 export function createRefreshSession(input: { userId: string; userAgent?: string; ip?: string }) {

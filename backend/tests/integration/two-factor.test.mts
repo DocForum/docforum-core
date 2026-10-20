@@ -4,7 +4,7 @@
 // disable rule, and the admin-mandatory config flag.
 //
 // Self-contained like the other integration suites: throwaway Postgres on
-// port 5437 (one port per file — vitest runs files in parallel).
+// port 5450 (one port per file — vitest runs files in parallel).
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,7 +15,7 @@ import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5437;
+const PORT = 5450;
 const runId = Date.now();
 
 // Set before importing anything from src/ — config/index.ts reads

@@ -131,6 +131,7 @@ model User {
   doctorProfile   DoctorProfile?
   facilityProfile FacilityProfile?
   refreshSessions RefreshSession[]
+  twoFactorAuth   TwoFactorAuth?
 
   emailVerificationTokens EmailVerificationToken[]
   adminInvitesSent AdminInvite[]
@@ -199,6 +200,45 @@ model LoginAttempt {
 
   @@unique([scope, key])
   @@index([lastFailedAt])
+}
+
+// TOTP two-factor authentication (Phase 8 #36). One row per user who has
+// started (or completed) enrollment.
+model TwoFactorAuth {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The TOTP shared secret (RFC 6238), AES-256-GCM encrypted at rest with
+  // TOTP_ENCRYPTION_KEY. Never returned by the API after the initial
+  // enrollment URI — see auth/services/secret-crypto.ts.
+  secretEncrypted String
+
+  // Null until POST /auth/2fa/enable confirms a first code. An enrollment
+  // in this state does NOT count as enabled (login stays single-step).
+  enabledAt DateTime?
+
+  // Highest TOTP time step ever accepted for this user. A code whose step
+  // is <= this is a replay and is rejected, even inside the ±1 window.
+  lastUsedTimeStep BigInt?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  recoveryCodes TwoFactorRecoveryCode[]
+}
+
+// Single-use recovery codes: 10 generated at enable time, stored hashed
+// (bcrypt, same as passwords — the plaintext is shown once, never again).
+model TwoFactorRecoveryCode {
+  id              String        @id @default(uuid())
+  twoFactorAuthId String
+  twoFactorAuth   TwoFactorAuth @relation(fields: [twoFactorAuthId], references: [id], onDelete: Cascade)
+  codeHash        String
+  usedAt          DateTime?
+  createdAt       DateTime      @default(now())
+
+  @@index([twoFactorAuthId])
 }
 
 // One row per refresh-token *family*, i.e. per login. This is the

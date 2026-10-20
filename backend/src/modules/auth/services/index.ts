@@ -14,7 +14,8 @@ import {
   replaceVerificationToken,
 } from '../repositories';
 import { hashPassword, verifyPassword } from './password';
-import { signAccessToken, signRefreshToken, verifyRefreshToken } from './tokens';
+import { signAccessToken, signMfaPendingToken, signRefreshToken, verifyMfaPendingToken, verifyRefreshToken } from './tokens';
+import { isTwoFactorEnabled, verifyTwoFactorLogin } from './two-factor';
 import { assertSessionUsable, recordSessionUse, startSession, type SessionContext } from './sessions';
 import { generateVerificationToken, hashVerificationToken } from './verification-tokens';
 import { sendEmail } from './email-dispatcher';
@@ -36,6 +37,17 @@ import type { PatientExportSection } from '../../patients/services';
 // reaching into services/tokens.ts directly.
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
+
+// TOTP two-factor auth (Phase 8 #36) — its own file, exposed through this
+// module's single service surface.
+export {
+  disableTwoFactor,
+  enableTwoFactor,
+  getTwoFactorStatus,
+  normalizeRecoveryCode,
+  setupTwoFactor,
+  type TwoFactorStatus,
+} from './two-factor';
 
 export {
   assertSessionUsable,
@@ -220,7 +232,17 @@ export interface LoginInput {
  * response body is identical. */
 const ABSENT_ACCOUNT_HASH = '$2b$12$z8J5gwFm9TiwC.YpeD6yguMkgakFPA8egT1KEKYiaeVkmb3CHRGXu';
 
-export async function login(input: LoginInput, context: SessionContext = {}): Promise<AuthSession> {
+/** Returned instead of a session when the password step passed but the
+ * second factor is still outstanding. Contains a short-lived token that
+ * is accepted by exactly one route — POST /auth/2fa/verify. */
+export interface MfaRequiredResult {
+  mfaRequired: true;
+  mfaPendingToken: string;
+}
+
+export type LoginResult = AuthSession | MfaRequiredResult;
+
+export async function login(input: LoginInput, context: SessionContext = {}): Promise<LoginResult> {
   const throttleKeys = {
     emailKey: emailThrottleKey(input.email),
     ipKey: normalizeClientIp(input.ip),
@@ -256,11 +278,53 @@ export async function login(input: LoginInput, context: SessionContext = {}): Pr
     throw new HttpError(403, 'This account has been deactivated. Contact an administrator.');
   }
 
+  // Two-step login for enrolled users. The password step deliberately
+  // yields no access token and starts no session at all — an mfa_pending
+  // token can't be used anywhere except the verify endpoint (see
+  // services/tokens.ts).
+  if (await isTwoFactorEnabled(user.id)) {
+    return {
+      mfaRequired: true,
+      mfaPendingToken: signMfaPendingToken({ sub: user.id, role: user.role }),
+    };
+  }
+
+  // Config flag: admin accounts must have 2FA on to sign in. Checked after
+  // the password is verified, so it can't be used to enumerate admin
+  // accounts without credentials. NOTE (flagged, not hidden): an admin who
+  // has not enrolled yet cannot sign in to enroll while this flag is on —
+  // see ARCHITECTURE_ESSENTIALS.md known gaps.
+  if (config.twoFactor.requireForAdmin && user.role === 'admin') {
+    throw new HttpError(403, 'Two-factor authentication is required for admin accounts. Enable it before signing in.');
+  }
+
   const tokens = await issueNewSession(user, context);
   return { user: toPublicUser(user), ...tokens };
 }
 
-// --- Email verification (Phase 8, issue #34) -----------------------------
+/**
+ * Second step of a two-factor login: exchanges an `mfa_pending` token plus
+ * a TOTP (or recovery) code for a real session.
+ */
+export async function completeTwoFactorLogin(input: {
+  mfaPendingToken: string;
+  code: string;
+}, context: SessionContext = {}): Promise<AuthSession> {
+  let payload;
+  try {
+    payload = verifyMfaPendingToken(input.mfaPendingToken);
+  } catch {
+    throw new HttpError(401, 'Invalid or expired two-factor session. Sign in again.');
+  }
+
+  const user = await findUserById(payload.sub);
+  if (!user) throw new HttpError(401, 'Invalid or expired two-factor session. Sign in again.');
+
+  await verifyTwoFactorLogin({ userId: user.id, code: input.code });
+
+  const tokens = await issueNewSession(user, context);
+  return { user: toPublicUser(user), ...tokens };
+}
 
 /** Mints a fresh token, retires any outstanding one, and hands the link to
  * the email dispatcher. The raw token is never persisted and never logged. */

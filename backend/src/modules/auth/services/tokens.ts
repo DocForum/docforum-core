@@ -21,6 +21,9 @@ export interface AccessTokenPayload {
    * the access token stays stateless so protected requests don't need a
    * session lookup. */
   sid?: string;
+  /** Present only on single-purpose tokens (currently `mfa_pending`). All
+   * other token types must leave it undefined. */
+  scope?: 'mfa_pending';
 }
 
 /**
