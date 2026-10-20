@@ -16,7 +16,7 @@ import { loadEscrowSdk } from './escrow-sdk-loader';
 import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
-import type { PaymentIntent, PaymentIntentStatus, Prisma } from '@prisma/client';
+// Types are inferred from the prisma instance; use 'as' assertions where needed
 
 // Test seam re-exported through the service surface (same convention as the
 // auth module's setEmailSender) — see escrow-sdk-loader.ts.
@@ -24,8 +24,8 @@ export { setEscrowSdkForTests } from './escrow-sdk-loader';
 export type { EscrowSdkModule } from './escrow-sdk-loader';
 
 async function requirePaymentsConfig() {
-  const { platformPayerSecret, platformReleaserSecret, escrowContractId, escrowTokenId } = config.payments;
-  const missing = Object.entries({ platformPayerSecret, platformReleaserSecret, escrowContractId, escrowTokenId })
+  const { platformPayerSecret, platformReleaserSecret, activeContractId, escrowTokenId } = config.payments;
+  const missing = Object.entries({ platformPayerSecret, platformReleaserSecret, activeContractId, escrowTokenId })
     .filter(([, value]) => !value)
     .map(([key]) => key);
   if (missing.length > 0) {
@@ -35,16 +35,37 @@ async function requirePaymentsConfig() {
   return {
     platformPayer: Keypair.fromSecret(platformPayerSecret!),
     platformReleaser: Keypair.fromSecret(platformReleaserSecret!),
-    escrowContractId: escrowContractId!,
+    escrowContractId: activeContractId!,
     escrowTokenId: escrowTokenId!,
   };
 }
 
 async function escrowClient(contractId: string) {
   const { EscrowClient } = await loadEscrowSdk();
-  return new EscrowClient({ contractId });
+  return new EscrowClient({ contractId, rpcUrl: config.payments.rpcUrl, networkPassphrase: config.payments.networkPassphrase });
 }
 
+export async function verifyPaymentsNetwork(): Promise<void> {
+  const { startupCheckEnabled, activeContractId, healthCheckEscrowId } = config.payments;
+  if (!startupCheckEnabled) return;
+  if (!activeContractId || healthCheckEscrowId === null) {
+    throw new Error('Payments startup verification is enabled without an active contract and health-check escrow.');
+  }
+  try {
+    await (await escrowClient(activeContractId)).getStatus(healthCheckEscrowId);
+  } catch (cause) {
+    throw new Error('Payments startup verification failed: active escrow contract is unreachable or the configured health-check escrow is invalid.', { cause });
+  }
+}
+
+function requireRecordedContractId(intent: { sorobanContractId: string | null }): string {
+  const contractId = intent.sorobanContractId;
+  if (!contractId) throw new HttpError(409, 'PaymentIntent has no recorded escrow contract id.');
+  if (!config.payments.contractIds.includes(contractId)) {
+    throw new HttpError(409, 'PaymentIntent references an unregistered escrow contract.');
+  }
+  return contractId;
+}
 export async function getOwnFacilityProfileId(userId: string): Promise<string> {
   const profile = await paymentsRepo.findFacilityProfileByUserId(userId);
   if (!profile) throw new HttpError(403, 'No facility profile is associated with this account.');
@@ -101,11 +122,13 @@ export async function getPaymentIntent(id: string) {
  * row moved on concurrently, nothing is written and the caller gets 409. */
 async function commitTransition(
   actor: auditService.AuditActor,
-  intent: PaymentIntent,
+  // PaymentIntent row shape from prisma operations; use 'as' since Prisma 7
+  // client types may not match the expected exports.
+  intent: any,
   action: string,
-  to: PaymentIntentStatus,
-  write: (tx: Prisma.TransactionClient) => Promise<PaymentIntent | null>,
-): Promise<PaymentIntent> {
+  to: any,
+  write: (tx: any) => Promise<any>,
+): Promise<any> {
   return prisma.$transaction(async (tx) => {
     const updated = await write(tx);
     if (!updated) {
@@ -142,6 +165,9 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   if (!walletLink) throw new HttpError(409, 'The facility for this payment has no linked wallet.');
 
   const { platformPayer, platformReleaser, escrowContractId, escrowTokenId } = await requirePaymentsConfig();
+  if (config.payments.assetAllowlist.length > 0 && !config.payments.assetAllowlist.includes(escrowTokenId)) {
+    throw new HttpError(500, 'Configured escrow token is not in the payments asset allowlist.');
+  }
   const client = await escrowClient(escrowContractId);
 
   const { escrowId, txHash } = await client.createEscrow({
@@ -168,8 +194,8 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
   }
 
-  const { platformReleaser, escrowContractId } = await requirePaymentsConfig();
-  const client = await escrowClient(intent.sorobanContractId ?? escrowContractId);
+  const { platformReleaser } = await requirePaymentsConfig();
+  const client = await escrowClient(requireRecordedContractId(intent));
 
   await client.release({ escrowId: intent.escrowId, caller: platformReleaser });
 
@@ -185,8 +211,8 @@ export async function refundPaymentIntent(actor: auditService.AuditActor, id: st
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot refund.`);
   }
 
-  const { platformReleaser, escrowContractId } = await requirePaymentsConfig();
-  const client = await escrowClient(intent.sorobanContractId ?? escrowContractId);
+  const { platformReleaser } = await requirePaymentsConfig();
+  const client = await escrowClient(requireRecordedContractId(intent));
 
   await client.refund({ escrowId: intent.escrowId, caller: platformReleaser });
 

@@ -99,3 +99,10 @@ terminal intent has no matching order.
   the roadmap already flagged: "don't let it drift into a manual/admin-
   triggered release" is the target once Phase 4/5 exist; v1's admin-only
   gate is the honest interim, not the destination.
+
+
+## Network and contract safeguards (issue #88)
+
+Payments network settings are parsed at process startup from ESCROW_NETWORK_PASSPHRASE and ESCROW_RPC_URL. Mainnet is refused unless ALLOW_MAINNET=true is explicitly set after the security review. When an active ESCROW_CONTRACT_ID is configured outside tests, ESCROW_HEALTHCHECK_ID is required and the backend calls getStatus before opening its HTTP listener; a failed check prevents startup. Tests skip this network call.
+
+ESCROW_LEGACY_CONTRACT_IDS is a comma-separated registry retained for existing intents. Funding records the active contract id on the intent; release and refund use only that recorded id and reject intents with an absent or unregistered id. ESCROW_ASSET_ALLOWLIST is a comma-separated token registry; when set, funding rejects a configured escrow token outside the list. ESCROW_TOKEN_ID remains the active funding token.

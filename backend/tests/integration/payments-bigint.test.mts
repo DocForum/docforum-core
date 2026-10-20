@@ -29,7 +29,7 @@ import EmbeddedPostgres from 'embedded-postgres';
 import { createOrderFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5438;
+const PORT = 5440; // unique per integration file — 5438 collides with access-control
 const runId = Date.now();
 
 // 2^53 + 1 — exactly one more than Number.MAX_SAFE_INTEGER, so it only
