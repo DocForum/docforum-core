@@ -11,6 +11,7 @@
 // Patients never hold or sign with a wallet in this design.
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
+import type { PaymentIntent, PaymentIntentStatus } from '@prisma/client';
 import * as paymentsRepo from '../repositories';
 import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
 import { getPlatformSigners } from './platform-signers';
