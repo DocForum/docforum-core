@@ -130,6 +130,7 @@ export async function bookForReferral(
     availabilitySlotId: string;
     referralId: string;
   },
+  actor: auditService.AuditActor,
 ) {
   const claimed = await availabilityService.claimOpenSlot(db, input.availabilitySlotId);
   if (!claimed) {
@@ -144,13 +145,34 @@ export async function bookForReferral(
     throw new HttpError(409, 'That slot does not belong to the referral’s target doctor.');
   }
 
-  return appointmentsRepo.createAppointment(db, {
+  const appointment = await appointmentsRepo.createAppointment(db, {
     patientProfileId: input.patientProfileId,
     doctorProfileId: input.doctorProfileId,
     availabilitySlotId: input.availabilitySlotId,
     origin: 'referral',
     referralId: input.referralId,
   });
+
+  // Same audit event a direct booking writes, in the same transaction —
+  // a referral-origin appointment is still an appointment, and the event's
+  // `origin` metadata is what tells the two apart. Without this, the
+  // referral accept path would be the one way to create an appointment
+  // with no trail at all.
+  await auditService.record(db, actor, {
+    entityType: 'Appointment',
+    entityId: appointment.id,
+    action: 'appointment.booked',
+    fromState: null,
+    toState: appointment.status,
+    metadata: {
+      availabilitySlotId: input.availabilitySlotId,
+      doctorProfileId: input.doctorProfileId,
+      origin: appointment.origin,
+      referralId: input.referralId,
+    },
+  });
+
+  return appointment;
 }
 
 /**

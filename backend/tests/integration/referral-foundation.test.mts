@@ -275,6 +275,72 @@ describe('referral foundation', () => {
     expect(again.status).toBe(409);
   });
 
+  // The patient's accept/decline and the appointment the accept produces
+  // are state changes on accountable records, so both belong in the audit
+  // trail (Phase 8, issue #43) — the referral accept path used to be the
+  // one way to create an appointment with no trail at all. Asserted
+  // against the one AuditEvent table, written by the audit module's
+  // service, not by the referrals module touching the table.
+  it('audits the accept: the referral transition and the appointment it booked', async () => {
+    const { consultationId } = await consultationRitual(app, patient, doctorA);
+    const created = await createReferral(app, doctorA, {
+      sourceConsultationId: consultationId,
+      targetDoctorId: doctorB.profileId,
+      snapshotNotes: 'audited snapshot',
+    });
+    expect(created.status).toBe(201);
+    const referralId = created.body.id as string;
+
+    const slots = await generateSlots(app, doctorB, 2);
+    const accepted = await acceptReferral(app, patient, referralId, slots[0]);
+    expect(accepted.status).toBe(200);
+    const appointmentId = accepted.body.resultingAppointmentId as string;
+
+    const referralEvents = await prisma.auditEvent.findMany({
+      where: { entityType: 'Referral', entityId: referralId },
+    });
+    const acceptedEvent = referralEvents.find((event) => event.action === 'referral.accepted');
+    expect(acceptedEvent).toBeDefined();
+    expect(acceptedEvent?.fromState).toBe('pending');
+    expect(acceptedEvent?.toState).toBe('accepted');
+    expect(acceptedEvent?.actorUserId).toBe(patient.userId);
+    expect(acceptedEvent?.actorRole).toBe('patient');
+
+    // The appointment the accept booked is audited too, as an
+    // appointment — with `origin: 'referral'`, which is what tells the
+    // two booking paths apart in the trail.
+    const appointmentEvents = await prisma.auditEvent.findMany({
+      where: { entityType: 'Appointment', entityId: appointmentId },
+    });
+    const bookedEvent = appointmentEvents.find((event) => event.action === 'appointment.booked');
+    expect(bookedEvent).toBeDefined();
+    expect(bookedEvent?.toState).toBe('scheduled');
+    expect(bookedEvent?.actorUserId).toBe(patient.userId);
+    expect((bookedEvent?.metadata as { origin?: string } | null)?.origin).toBe('referral');
+  });
+
+  it('audits the decline', async () => {
+    const { consultationId } = await consultationRitual(app, patient, doctorA);
+    const created = await createReferral(app, doctorA, {
+      sourceConsultationId: consultationId,
+      targetDoctorId: doctorB.profileId,
+      snapshotNotes: 'notes',
+    });
+    const declined = await request(app)
+      .post(`/referrals/${created.body.id}/decline`)
+      .set('Authorization', `Bearer ${patient.accessToken}`);
+    expect(declined.status).toBe(200);
+
+    const events = await prisma.auditEvent.findMany({
+      where: { entityType: 'Referral', entityId: created.body.id as string },
+    });
+    const declinedEvent = events.find((event) => event.action === 'referral.declined');
+    expect(declinedEvent).toBeDefined();
+    expect(declinedEvent?.fromState).toBe('pending');
+    expect(declinedEvent?.toState).toBe('declined');
+    expect(declinedEvent?.actorUserId).toBe(patient.userId);
+  });
+
   it('lists the patient’s referrals grouped by source consultation', async () => {
     const list = await request(app)
       .get('/referrals/mine')

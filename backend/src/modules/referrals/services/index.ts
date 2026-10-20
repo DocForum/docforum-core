@@ -209,8 +209,13 @@ export async function createReferralBatch(
  * "pre-populated" in the FR-8 sense — no re-intake, the snapshot travels
  * on the referral — not in the sense of an auto-chosen time.
  */
-export async function acceptReferral(userId: string, referralId: string, availabilitySlotId: string) {
-  const patientProfile = await patientsService.getMyPatientProfile(userId);
+export async function acceptReferral(
+  actor: auditService.AuditActor,
+  referralId: string,
+  availabilitySlotId: string,
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
 
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
@@ -234,18 +239,35 @@ export async function acceptReferral(userId: string, referralId: string, availab
       throw new HttpError(409, 'This referral is no longer pending.');
     }
 
-    const appointment = await appointmentsService.bookForReferral(tx, {
-      patientProfileId: patientProfile.id,
-      doctorProfileId: referral.targetDoctorId,
-      availabilitySlotId,
-      referralId,
-    });
+    const appointment = await appointmentsService.bookForReferral(
+      tx,
+      {
+        patientProfileId: patientProfile.id,
+        doctorProfileId: referral.targetDoctorId,
+        availabilitySlotId,
+        referralId,
+      },
+      actor,
+    );
 
     await referralsRepo.updateReferralConditional(
       tx,
       { id: referralId, status: 'accepted', resultingAppointmentId: null },
       { resultingAppointmentId: appointment.id },
     );
+
+    // The patient's own state change on the referral, recorded in the same
+    // transaction as the appointment it produced — so the trail shows who
+    // accepted, and the `appointment.booked` row the appointments module
+    // wrote, together or not at all.
+    await auditService.record(tx, actor, {
+      entityType: 'Referral',
+      entityId: referralId,
+      action: 'referral.accepted',
+      fromState: 'pending',
+      toState: 'accepted',
+      metadata: { appointmentId: appointment.id },
+    });
 
     return referralsRepo.findReferralById(tx, referralId);
   });
@@ -258,26 +280,38 @@ export async function acceptReferral(userId: string, referralId: string, availab
  * pending (re-bookable), from which declining is then possible. Keeps one
  * narrow transition instead of two overlapping exit paths.
  */
-export async function declineReferral(userId: string, referralId: string) {
-  const patientProfile = await patientsService.getMyPatientProfile(userId);
-  const referral = await referralsRepo.findReferralById(prisma, referralId);
-  if (!referral) throw new HttpError(404, 'Referral not found.');
-  if (referral.patientProfileId !== patientProfile.id) {
-    throw new HttpError(403, 'This referral is not for you.');
-  }
-  if (referral.status !== 'pending') {
-    throw new HttpError(409, 'Only a pending referral can be declined.');
-  }
+export async function declineReferral(actor: auditService.AuditActor, referralId: string) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  return prisma.$transaction(async (tx) => {
+    const referral = await referralsRepo.findReferralById(tx, referralId);
+    if (!referral) throw new HttpError(404, 'Referral not found.');
+    if (referral.patientProfileId !== patientProfile.id) {
+      throw new HttpError(403, 'This referral is not for you.');
+    }
+    if (referral.status !== 'pending') {
+      throw new HttpError(409, 'Only a pending referral can be declined.');
+    }
 
-  const updated = await referralsRepo.updateReferralConditional(
-    prisma,
-    { id: referralId, status: 'pending', resultingAppointmentId: null },
-    { status: 'declined' },
-  );
-  if (updated.count !== 1) {
-    throw new HttpError(409, 'This referral is no longer pending.');
-  }
-  return referralsRepo.findReferralById(prisma, referralId);
+    const updated = await referralsRepo.updateReferralConditional(
+      tx,
+      { id: referralId, status: 'pending', resultingAppointmentId: null },
+      { status: 'declined' },
+    );
+    if (updated.count !== 1) {
+      throw new HttpError(409, 'This referral is no longer pending.');
+    }
+
+    await auditService.record(tx, actor, {
+      entityType: 'Referral',
+      entityId: referralId,
+      action: 'referral.declined',
+      fromState: 'pending',
+      toState: 'declined',
+    });
+
+    return referralsRepo.findReferralById(tx, referralId);
+  });
 }
 
 export async function listMine(userId: string) {

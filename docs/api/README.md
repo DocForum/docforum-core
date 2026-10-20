@@ -175,8 +175,8 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 |---|---|---|---|
 | `POST /referrals` | doctor | `{ sourceConsultationId, targetDoctorId, targetSpecialtyId?, snapshotNotes }` | Issue #5. Requires: the caller's own **completed** appointment's consultation, a target doctor who is verified (and verified in `targetSpecialtyId` when given), no self-referral, no duplicate target for that consultation. `targetDoctorId` is **required** — the specialty-only routing ADR (issue #6) isn't done, so an unassignable referral can't be created. Writes `snapshotNotes` as a copy. A repeat doctor/specialty anywhere in the lineage **flags** the referral (`loopFlaggedAt`) for the admin queue instead of failing; chains over `REFERRAL_MAX_HOPS` (default 4) and self-referrals are `422`. |
 | `POST /referrals/from-consultation/:consultationId` | doctor | `{ targets: [...] }` | Issue #66 — same atomic batch as the consultations route; the decision to allow multi-referral with independent lifecycles (and no bundle table) is `docs/adr/0006-multiple-referrals-per-consultation.md`. Duplicate doctor *or* specialty inside the batch, or against an existing referral from that consultation, fails the whole batch. |
-| `POST /referrals/:referralId/accept` | patient (the referred patient) | `{ availabilitySlotId }` | Issue #7. Conditional `pending → accepted` (exactly one concurrent accept wins → `409`), then books a real appointment against the **target doctor** through the same slot-claim path as `POST /appointments` — the patient picks the slot; no re-intake, the snapshot travels on the referral. `409` if the slot isn't the target doctor's. |
-| `POST /referrals/:referralId/decline` | patient (the referred patient) | — | Pending-only, terminal (`409` otherwise). |
+| `POST /referrals/:referralId/accept` | patient (the referred patient) | `{ availabilitySlotId }` | Issue #7. Conditional `pending → accepted` (exactly one concurrent accept wins → `409`), then books a real appointment against the **target doctor** through the same slot-claim path as `POST /appointments` — the patient picks the slot; no re-intake, the snapshot travels on the referral. `409` if the slot isn't the target doctor's. Writes two audit rows in the one append-only trail: `referral.accepted` (a `Referral`-typed row) and `appointment.booked` for the appointment it booked (`origin: 'referral'`), both inside the accept's own transaction. |
+| `POST /referrals/:referralId/decline` | patient (the referred patient) | — | Pending-only, terminal (`409` otherwise). Writes a `referral.declined` audit row. |
 | `GET /referrals/mine` | patient | — | `{ referrals, groupedByConsultation }` — grouped for the "one visit, several referrals" view (#66). |
 | `GET /referrals/created` | doctor | — | Referrals the caller created, including ones the cascade expired (see `referringDoctorNotifiedAt`) and ones the loop guard flagged. |
 | `GET /referrals/admin/queue` | admin | query: `status`, `olderThan` (`48h` / `7d`), `loopFlagged` (`true`\|`false`) | Issue #68 — stuck/aged/loop-flagged referrals with a derived human-readable `reason` and `ageMinutes`. |
@@ -216,9 +216,12 @@ pair, so paging never skips or repeats an event; events written after a scan
 started appear at the front of a new scan, not mid-way through the old one.
 `400 INVALID_CURSOR` for a malformed cursor; `400` if `from` is after `to`.
 
-Recorded today: `appointment.booked`, `doctor.verification_status_changed`,
-`payment_intent.{funded,released,refunded}`, `referral.reassign`,
-`referral.cancel` — see ARCHITECTURE.md §4.10. There is no write or delete
+Recorded today: `appointment.booked` (both the direct booking and the
+referral-origin booking the accept produces — the `origin` metadata tells
+them apart), `doctor.verification_status_changed`,
+`payment_intent.{funded,released,refunded}`, `referral.accepted`,
+`referral.declined`, `referral.reassign`, `referral.cancel` — see
+ARCHITECTURE.md §4.10. There is no write or delete
 endpoint, and the table rejects UPDATE/DELETE in the database.
 
 Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now

@@ -30,13 +30,17 @@ export async function createBatch(req: Request, res: Response) {
 export async function accept(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const { availabilitySlotId } = acceptReferralSchema.parse(req.body);
-  const referral = await referralsService.acceptReferral(req.user.id, getParam(req, 'referralId'), availabilitySlotId);
+  const referral = await referralsService.acceptReferral(
+    auditActor(req),
+    getParam(req, 'referralId'),
+    availabilitySlotId,
+  );
   res.status(200).json(referral);
 }
 
 export async function decline(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const referral = await referralsService.declineReferral(req.user.id, getParam(req, 'referralId'));
+  const referral = await referralsService.declineReferral(auditActor(req), getParam(req, 'referralId'));
   res.status(200).json(referral);
 }
 
