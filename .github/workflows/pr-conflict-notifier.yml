@@ -41,6 +41,8 @@ jobs:
       - name: Label and notify conflicting PRs
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
+          # Retry transient GitHub API errors (5xx) instead of failing the run.
+          retries: 3
           script: |
             const notify = require('./.github/scripts/pr-conflict-notifier.cjs');
             await notify({ github, context, core, dryRun: context.eventName === 'workflow_dispatch' && `${{ inputs.dry_run }}` === 'true' });
