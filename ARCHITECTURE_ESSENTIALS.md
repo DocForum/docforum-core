@@ -27,6 +27,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
 `User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
+`User` → `AccessLog` (Phase 8, issue #45 — PHI read-access log: who viewed which clinical record, when; fire-and-forget writes, fail-open).
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)

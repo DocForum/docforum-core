@@ -1,6 +1,13 @@
-// audit repositories — AuditEvent data access. INSERT and SELECT only: this
-// table is append-only (issue #43), enforced again by a database trigger.
-// There is intentionally no update or delete function here; don't add one.
+// audit repositories — AuditEvent and AccessLog data access.
+//
+// AuditEvent (issue #43): INSERT and SELECT only — the table is
+// append-only, enforced again by a database trigger. There is
+// intentionally no update or delete function for it here; don't add one.
+//
+// AccessLog (issue #45) is a different table with a different lifecycle:
+// reads are far higher volume and retention-managed, so `pruneAccessLogs`
+// is the one deliberate delete — it removes rows older than the retention
+// window, never arbitrary ones.
 import { prisma } from '../../../db/prisma-client';
 import type { Prisma, Role } from '@prisma/client';
 
@@ -54,4 +61,84 @@ export function findAuditEvents(query: AuditEventQuery) {
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: query.take,
   });
+}
+
+// --- AccessLog (Phase 8, issue #45) ----------------------------------------
+// Written off the read path (fire-and-forget from the service), so this
+// uses the root client, unlike insertAuditEvent above.
+
+export interface AccessLogRow {
+  accessedBy: string | null;
+  patientProfileId: string | null;
+  entityType: string;
+  entityId: string;
+  route: string | null;
+  detail: string | null;
+}
+
+export function recordAccess(row: AccessLogRow) {
+  return prisma.accessLog.create({ data: row });
+}
+
+/** Viewer id/role only — callers that surface results to patients must
+ * strip even this (see services getAccessForPatient). */
+const ACCESS_LOG_VIEWER = { select: { id: true, role: true } } as const;
+
+export interface AccessLogByEntityQuery {
+  entityType: string;
+  entityId?: string;
+  take: number;
+}
+
+/** Admin: who accessed a specific kind of record (optionally a specific
+ * one). Newest first; bounded by `take` — no unpaged dump. */
+export function findAccessByEntity(query: AccessLogByEntityQuery) {
+  return prisma.accessLog.findMany({
+    where: {
+      entityType: query.entityType,
+      ...(query.entityId ? { entityId: query.entityId } : {}),
+    },
+    include: { accessedByUser: ACCESS_LOG_VIEWER },
+    orderBy: { accessedAt: 'desc' },
+    take: query.take,
+  });
+}
+
+export interface AccessLogForPatientQuery {
+  patientProfileId: string;
+  take: number;
+}
+
+/** Patient-facing source rows: whose records were viewed, by whom. The
+ * service strips the viewer's identity before this shape leaves the API. */
+export function findAccessForPatient(query: AccessLogForPatientQuery) {
+  return prisma.accessLog.findMany({
+    where: { patientProfileId: query.patientProfileId },
+    include: { accessedByUser: ACCESS_LOG_VIEWER },
+    orderBy: { accessedAt: 'desc' },
+    take: query.take,
+  });
+}
+
+export interface AccessLogByUserQuery {
+  accessedBy: string;
+  take: number;
+}
+
+/** Admin: what a specific user accessed. */
+export function findAccessByUser(query: AccessLogByUserQuery) {
+  return prisma.accessLog.findMany({
+    where: { accessedBy: query.accessedBy },
+    include: { accessedByUser: ACCESS_LOG_VIEWER },
+    orderBy: { accessedAt: 'desc' },
+    take: query.take,
+  });
+}
+
+/** Retention pruning: removes rows strictly older than `before`. Returns
+ * the number of rows deleted. This is the only delete on AccessLog. */
+export function pruneAccessLogs(before: Date) {
+  return prisma.accessLog
+    .deleteMany({ where: { accessedAt: { lt: before } } })
+    .then((result) => result.count);
 }

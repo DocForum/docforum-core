@@ -11,7 +11,7 @@ import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
 import { adminRouter } from './modules/users/routes';
 import { registerPatientExportSections } from './export-sections';
-import { auditRouter } from './modules/audit/routes';
+import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
 import { requestId } from './middleware/request-id';
 
 export function createApp() {
@@ -47,6 +47,11 @@ export function createApp() {
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);
   app.use('/admin', auditRouter);
+
+  // PHI read-access logging (Phase 8, issue #45). Mounted at root so the
+  // paths match the issue's spec exactly: /admin/access-logs, /patients/me/access-log.
+  app.use('/admin', adminAuditRouter);
+  app.use('/patients', patientAuditRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.

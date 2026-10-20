@@ -10,6 +10,7 @@
 //     entity, action, from/to state, request id — plus a small, flat,
 //     validated metadata map of ids/codes. Never PHI, never request bodies.
 import type { Prisma, Role } from '@prisma/client';
+import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import * as auditRepo from '../repositories';
 
@@ -158,4 +159,135 @@ export async function listAuditEvents(filters: AuditEventFilters) {
   const items = rows.slice(0, filters.limit);
   const last = items[items.length - 1];
   return { items, nextCursor: rows.length > filters.limit && last ? encodeAuditCursor(last) : null };
+}
+
+// --- PHI read-access logging (Phase 8, issue #45) ---------------------------
+// Answers "who looked at this" — distinct from record()'s "who changed this".
+// Writes are fire-and-forget (never awaited on the read path) and fail
+// open: a logging failure must never fail the read, but it IS counted and
+// surfaced for alerting via GET /admin/access-logs/stats.
+
+/** Entity kinds a read can be logged against. Mirrors the schema comment
+ * on AccessLog.entityType — extend both together. */
+export type AccessEntityType =
+  | 'IntakeForm'
+  | 'Consultation'
+  | 'Prescription'
+  | 'PrescriptionItem'
+  | 'LabOrder'
+  | 'LabResult'
+  | 'Referral'
+  | 'PaymentIntent'
+  | 'PatientProfile'
+  | 'Appointment';
+
+export interface AccessLogInput {
+  /** The viewer. Null only for anonymous/system reads (there are none today). */
+  accessedBy?: string | null;
+  /** The record owner (whose data was viewed) — used by the patient-facing
+   * /patients/me/access-log. Null when the read isn't attributable to one. */
+  patientProfileId?: string | null;
+  entityType: AccessEntityType;
+  entityId: string;
+  route?: string | null;
+  /** Context string — no PHI, just enough to correlate with request logs. */
+  detail?: string | null;
+}
+
+/** Retention window for AccessLog rows (env ACCESS_LOG_RETENTION_DAYS).
+ * pruneOldAccessLogs() deletes anything older; wired into the prune
+ * interval in src/server.ts. */
+export const ACCESS_LOG_RETENTION_DAYS = config.accessLog.retentionDays;
+
+let logFailureCount = 0;
+
+/** Cumulative count of failed access-log writes since process start —
+ * readable by admins via GET /admin/access-logs/stats for alerting. */
+export function getLogFailureCount(): number {
+  return logFailureCount;
+}
+
+/** Records one read, off the call path: returns immediately, never throws.
+ * Callers must NOT await this on a request path — the unit test asserting
+ * sub-50ms return with a hanging insert is the guard. */
+export function recordAccess(input: AccessLogInput): void {
+  void auditRepo
+    .recordAccess({
+      accessedBy: input.accessedBy ?? null,
+      patientProfileId: input.patientProfileId ?? null,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      route: input.route ?? null,
+      detail: input.detail ?? null,
+    })
+    .catch((err: unknown) => {
+      logFailureCount += 1;
+      // Fail-open by design, but loudly: this is a privacy trail, so a
+      // silent gap is worse than a noisy one.
+      console.error(`[audit] FAILED to record access (${input.entityType} ${input.entityId})`, err);
+    });
+}
+
+// --- Patient-facing query (PII stripped) ------------------------------------
+
+export interface PatientAccessLogEntry {
+  id: string;
+  accessedAt: Date;
+  entityType: string;
+  entityId: string;
+  /** The viewer's role only — never their email or internal id. A deleted
+   * viewer (FK SetNull) surfaces as the 'deleted_user' placeholder. */
+  viewerRole: string;
+}
+
+/** Who viewed MY records. The caller supplies only their own
+ * patientProfileId (resolved server-side from the authenticated user, never
+ * from the request), and the response carries no viewer PII. */
+export async function getAccessForPatient(
+  patientProfileId: string,
+  limit = 100,
+): Promise<PatientAccessLogEntry[]> {
+  const rows = await auditRepo.findAccessForPatient({ patientProfileId, take: limit });
+  return rows.map((row) => ({
+    id: row.id,
+    accessedAt: row.accessedAt,
+    entityType: row.entityType,
+    entityId: row.entityId,
+    viewerRole: row.accessedByUser?.role ?? 'deleted_user',
+  }));
+}
+
+// --- Admin queries ----------------------------------------------------------
+
+/** Admin: who accessed a specific kind of record (optionally a specific
+ * one). Unlike the patient-facing query this keeps viewer ids — admins
+ * need attribution, and role-only would be useless for incident response. */
+export function listAccessForEntity(filters: { entityType: string; entityId?: string; limit?: number }) {
+  return auditRepo.findAccessByEntity({
+    entityType: filters.entityType,
+    entityId: filters.entityId,
+    take: filters.limit ?? 50,
+  });
+}
+
+/** Admin: what a specific user accessed. */
+export function listAccessForUser(filters: { userId: string; limit?: number }) {
+  return auditRepo.findAccessByUser({
+    accessedBy: filters.userId,
+    take: filters.limit ?? 50,
+  });
+}
+
+/** Admin: cumulative write-failure count + retention config (alerting). */
+export function getAccessLogStats() {
+  return { logFailureCount, retentionDays: ACCESS_LOG_RETENTION_DAYS };
+}
+
+// --- Retention --------------------------------------------------------------
+
+/** Deletes AccessLog rows older than the retention window. Returns the
+ * number of rows removed. Runs from the prune interval in src/server.ts. */
+export async function pruneOldAccessLogs(): Promise<number> {
+  const cutoff = new Date(Date.now() - ACCESS_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  return auditRepo.pruneAccessLogs(cutoff);
 }
