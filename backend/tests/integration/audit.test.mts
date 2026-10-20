@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import EmbeddedPostgres from 'embedded-postgres';
+import { createOrderFixture, createPaymentIntentForFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5441;
@@ -41,6 +42,7 @@ type Prisma = typeof import('../../src/db/prisma-client.js').prisma;
 
 const emailedTokens = new Map<string, string>();
 const sdkBehaviour = { failRelease: false, nextEscrowId: 77n };
+let escrowClientContractIds: string[] = [];
 
 describe('AuditEvent foundation', () => {
   let app: App;
@@ -82,9 +84,9 @@ describe('AuditEvent foundation', () => {
     request(app).get('/admin/audit-events').query(query).set(adminAuth());
 
   async function createIntent() {
-    return prisma.paymentIntent.create({
-      data: { orderType: 'lab_order', orderId: `order-${Math.random()}`, patientProfileId: (await prisma.patientProfile.findFirstOrThrow()).id, facilityId, amountStroops: 5000n },
-    });
+    const patientProfileId = (await prisma.patientProfile.findFirstOrThrow()).id;
+    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: 5000n, tag: `audit-${Math.random()}` });
+    return createPaymentIntentForFixture(prisma, order);
   }
 
   beforeAll(async () => {
@@ -101,6 +103,7 @@ describe('AuditEvent foundation', () => {
     process.env.PLATFORM_PAYER_SECRET = PAYER_SECRET;
     process.env.PLATFORM_RELEASER_SECRET = RELEASER_SECRET;
     process.env.ESCROW_CONTRACT_ID = 'CTESTCONTRACT';
+    process.env.ESCROW_LEGACY_CONTRACT_IDS = 'CLEGACYCONTRACT';
     process.env.ESCROW_TOKEN_ID = 'CTESTTOKEN';
 
     const appModule = await import('../../src/app.js');
@@ -115,7 +118,9 @@ describe('AuditEvent foundation', () => {
       if (match) emailedTokens.set(message.to, decodeURIComponent(match[1]));
     });
 
+    escrowClientContractIds = [];
     class FakeEscrowClient {
+      constructor(options: { contractId: string }) { escrowClientContractIds.push(options.contractId); }
       async createEscrow() {
         const escrowId = sdkBehaviour.nextEscrowId;
         sdkBehaviour.nextEscrowId += 1n;
@@ -296,11 +301,19 @@ describe('AuditEvent foundation', () => {
         actorUserId: admin.id,
         actorRole: 'admin',
         requestId: `pay-fund-${runId}`,
-        metadata: { orderType: 'lab_order', amountStroops: '5000', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
+        metadata: { orderType: 'lab_order', orderId: intent.labOrderId, amountStroops: '5000', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
       });
       expect((events[0]!.metadata as Record<string, unknown>).escrowId).toMatch(/^\d+$/);
       const serialized = JSON.stringify(events);
       for (const secret of [PAYER_SECRET, RELEASER_SECRET, 'GPLATFORMRELEASERPUBLICKEY']) expect(serialized).not.toContain(secret);
+    });
+
+    it('uses the payment intent recorded legacy contract for release', async () => {
+      const intent = await createIntent();
+      await post(intent.id, 'fund');
+      await prisma.paymentIntent.update({ where: { id: intent.id }, data: { sorobanContractId: 'CLEGACYCONTRACT' } });
+      expect((await post(intent.id, 'release')).status).toBe(200);
+      expect(escrowClientContractIds.slice(-2)).toEqual(['CTESTCONTRACT', 'CLEGACYCONTRACT']);
     });
 
     it('records escrowed -> refunded', async () => {
@@ -352,9 +365,21 @@ describe('AuditEvent foundation', () => {
   });
 
   describe('append-only', () => {
-    it('has no update or delete path in the audit module', async () => {
+    it('has no update path, and no delete beyond access-log retention', async () => {
       const repo = await import('../../src/modules/audit/repositories/index.js');
-      expect(Object.keys(repo).sort()).toEqual(['findAuditEvents', 'insertAuditEvent']);
+      // AuditEvent: INSERT + SELECT only (the DB triggers below enforce the
+      // rest). AccessLog (issue #45) is a different table with its own
+      // retention: `pruneAccessLogs` is the one deliberate delete, bounded
+      // to rows older than the retention window — never an arbitrary one.
+      expect(Object.keys(repo).sort()).toEqual([
+        'findAccessByEntity',
+        'findAccessByUser',
+        'findAccessForPatient',
+        'findAuditEvents',
+        'insertAuditEvent',
+        'pruneAccessLogs',
+        'recordAccess',
+      ]);
     });
 
     it('rejects UPDATE, DELETE and TRUNCATE at the database level', async () => {
