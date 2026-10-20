@@ -1,8 +1,8 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-10-17
-Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
-`docs/adr/0004-custodial-payments-v1.md`) built and tested. Phases 2-6
+Last updated: 2026-10-20
+Status: Phase 0, Phase 1, Phase 5.5 (Payments, custodial v1 — see
+`docs/adr/0004-custodial-payments-v1.md`), and Order Fulfillment Proof & Patient Confirm/Dispute (issue #76) built and tested. Phases 2-6
 and 8-9 scoped into GitHub issues (#1-#22, #21 closed); Phase 7 is
 superseded by `docforum-web`'s own roadmap. See each phase section below
 for status and issue links.
@@ -61,20 +61,21 @@ for status and issue links.
 - [ ] Doc reconciliation: update ARCHITECTURE_ESSENTIALS.md "Known unresolved design gaps" once routing rule + expiry exist — part of issue #6's DoD.
 
 ## Phase 4 — Orders: prescriptions & lab orders
-**Status: Not started (blocked by Phase 2, informed by Phase 3). Scoped into issues #9–#12.**
+**Status: In progress (fulfillment proof, patient confirm/dispute, and dispute queue built for issue #76).**
 - [ ] `Prescription` + `PrescriptionItem` models, **append-only** (issuance creates a row; corrections use `supersedes_prescription_id` — ARCHITECTURE.md §4.5, hard rule in ARCHITECTURE_ESSENTIALS.md). Tracked as [issue #9](https://github.com/DocForum/docforum-core/issues/9) (High, 200 pts), which also covers `LabOrder`/`LabResult` (same append-only rule).
 - [ ] `LabOrder` + `LabResult` models, same append-only rule — folded into issue #9 above.
 - [ ] Specialist UI: issue prescription/lab order from a consultation. Tracked as [issue #10](https://github.com/DocForum/docforum-core/issues/10) (Medium, 150 pts) — depends on #9.
 - [ ] Patient UI: view active/past orders. Tracked as [issue #11](https://github.com/DocForum/docforum-core/issues/11) (Medium, 150 pts) — depends on #9.
-- [ ] Order expiry/reminder logic (PRD §8.1.3 "orphaned orders" — general case, beyond referrals). Tracked as [issue #12](https://github.com/DocForum/docforum-core/issues/12) (Medium, 150 pts) — depends on #9.
+- [x] Order expiry/reminder logic (PRD §8.1.3 "orphaned orders" & PRD §8.1.6 facility fulfillment integrity) — built for issue #76 (`startOrderExpiryJob()` in `backend/src/jobs/order-expiry.ts`).
 
 ## Phase 5 — Facilities & fulfillment
-**Status: Not started (blocked by Phase 4). Scoped into issues #13–#16.**
+**Status: In progress (fulfillment proof, patient confirm/dispute, and dispute queue built for issue #76).**
 - [ ] Resolve the polymorphic `FulfillmentRecord` design smell flagged in ARCHITECTURE.md §6.1.3 **before** building this phase — decide: keep polymorphic with constraints, or split into `PrescriptionFulfillment` / `LabOrderFulfillment`. Record the decision as an ADR in `docs/adr/`. Tracked as [issue #13](https://github.com/DocForum/docforum-core/issues/13) (High, 200 pts) — the prerequisite for the rest of this phase.
 - [ ] Facility account creation (admin-invited only per PRD OQ-2 — no self-serve facility signup in v1) + `FacilityCapability` matching (patient sees only qualified facilities for their specific order, PRD FR-13). Tracked as [issue #14](https://github.com/DocForum/docforum-core/issues/14) (Medium, 150 pts) — depends on #13.
-- [ ] Facility fulfillment UI: view assigned orders, mark in-progress/fulfilled/rejected, enforcing that `status` transitions to `fulfilled` **only** via the facility-confirmed path (ARCHITECTURE.md §5.3 step 5 — patient/doctor cannot self-mark). Tracked as [issue #15](https://github.com/DocForum/docforum-core/issues/15) (Medium, 150 pts) — depends on #13/#14.
-- [ ] Lab result attachment (object storage integration — ARCHITECTURE.md §2 File/result storage row). Tracked as [issue #16](https://github.com/DocForum/docforum-core/issues/16) (Medium, 150 pts) — depends on #13.
-- [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1 — addressed by issue #14's admin-only gating; document any remaining gap in that issue's PR.
+- [x] Facility fulfillment: view assigned orders, mark fulfilled with required reference number and optional attachment (`FulfillmentProof`), enforcing that `status` transitions to `fulfilled` **only** via facility-confirmed path (ARCHITECTURE.md §5.3 step 5).
+- [x] Patient confirm-receipt and dispute workflow (`POST /orders/:id/confirm-receipt`, `POST /orders/:id/dispute`), mutually exclusive via conditional UPDATEs, plus admin dispute queue (`GET /admin/orders/disputes`, `POST /admin/orders/disputes/:id/resolve`).
+- [ ] Lab result attachment (object storage integration — ARCHITECTURE.md §2 File/result storage row). Tracked as [issue #16](https://github.com/DocForum/docforum-core/issues/16) — storage interface created (`src/utils/storage.ts`).
+- [x] Address PRD §8.1.6 (facility fulfillment integrity) — reference number required, optional proof attachment, patient confirm/dispute window, unconfirmed order auto-confirm expiry job, and admin dispute resolution queue.
 
 ## Phase 5.5 — Payments (consumer side)
 **Status: Built, decoupled from Phase 4/5 rather than blocked by them — see docs/adr/0004-custodial-payments-v1.md.** `docforum-escrow` issues #4/#5 (SDK + distribution decision) closed, so the original blocker cleared; rather than wait further on Phase 4/5 (Orders/Facilities, still not built), `PaymentIntent`/`WalletLink` were designed with opaque, unvalidated `orderType`/`orderId` fields instead of hard FKs to `Prescription`/`LabOrder`, so this phase didn't have to wait on two more unbuilt phases. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
@@ -405,3 +406,4 @@ for status and issue links.
   observed state, so a racing second action gets 409 instead of silently
   overwriting). Rollback coupling proven with a real injected DB failure,
   not a mock. Phase 3/4 wiring explicitly left pending.
+- 2026-10-20 — Implemented facility-side fulfillment proof and patient confirm-receipt & dispute workflow (issue #76): added Order, FulfillmentProof, OrderDispute, and OrderDisputeResolution models with migration. Implemented facility fulfillment for pharmacy and lab orders requiring a reference number and supporting optional attachment storage. Built POST /orders/:id/confirm-receipt and POST /orders/:id/dispute (patient-only, mutually exclusive via conditional UPDATEs). Built the "confirmed" signal calculation and an idempotent unconfirmed order expiry job (recording source 'timeout', never confirming disputed orders). Created admin dispute queue and resolution endpoints (append-only resolution log). Fully tested with unit and integration suites.

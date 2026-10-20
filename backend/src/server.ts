@@ -2,6 +2,7 @@ import { createApp } from './app';
 import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
+import { startOrderExpiryJob } from './jobs/order-expiry';
 
 const app = createApp();
 
@@ -32,3 +33,6 @@ pruneTimer.unref();
 
 // Patient data export worker + expiry cleanup (Phase 8, issue #40).
 startPatientExportJobs();
+
+// Unconfirmed order expiry job (auto-confirm when window elapses with no dispute).
+startOrderExpiryJob();

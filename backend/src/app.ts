@@ -11,6 +11,10 @@ import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
 import { registerPatientExportSections } from './export-sections';
 import { auditRouter } from './modules/audit/routes';
+import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
+import { labOrdersRouter } from './modules/lab-orders/routes';
+import { ordersRouter } from './modules/orders/routes';
+import { adminOrdersRouter } from './modules/orders/routes/admin';
 import { requestId } from './middleware/request-id';
 
 export function createApp() {
@@ -42,7 +46,11 @@ export function createApp() {
   app.use('/appointments', appointmentsRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
+  app.use('/pharmacy-orders', pharmacyOrdersRouter);
+  app.use('/lab-orders', labOrdersRouter);
+  app.use('/orders', ordersRouter);
   app.use('/admin', auditRouter);
+  app.use('/admin', adminOrdersRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.

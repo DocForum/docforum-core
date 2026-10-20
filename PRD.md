@@ -2,7 +2,7 @@
 
 Status: Draft v0.1
 Owner: (unassigned)
-Last updated: 2026-09-09
+Last updated: 2026-10-20
 
 > **Contribution rule:** Any PR that changes scope, models, or phases must update this file (or ROADMAP.md if it's execution-only) in the same PR. See AGENTS.md / CLAUDE.md.
 
@@ -104,7 +104,7 @@ The core value proposition: **collapse a multi-visit, multi-queue hospital journ
 3. **Orphaned orders** — a prescription/lab order issued, but the patient never selects a fulfilling facility, and there is no reminder/expiry logic → orders silently rot.
 4. **Referral context loss** — if referral doesn't strictly carry forward intake + notes (FR-7/FR-8 not enforced at the data layer), the whole value proposition (no re-explaining) quietly breaks and nobody notices until a patient complains.
 5. **Specialty mismatch at signup** — doctors self-select specialty with no verification → patients get referred into a specialty the doctor doesn't actually practice.
-6. **Facility fulfillment integrity** — nothing currently stops a facility from marking an order "fulfilled" without actually doing the work, or a patient walking into an unqualified/non-partnered facility with a screenshot of an order.
+6. **Facility fulfillment integrity** — nothing currently stops a facility from marking an order "fulfilled" without actually doing the work, or a patient walking into an unqualified/non-partnered facility with a screenshot of an order. **Updated 2026-10-20:** Facility fulfillment requires a reference number and optional proof attachment via the storage interface (`FulfillmentProof`). Patients confirm receipt or raise a dispute within a configurable window (`ORDER_CONFIRMATION_WINDOW_HOURS`). Unconfirmed orders auto-confirm via an idempotent scheduler job (`confirmationSource: 'timeout'`), while disputes route to an append-only admin resolution queue.
 
 ### 8.2 What edge cases are we missing?
 1. Patient has **no matching specialist available** (none online / none accepting new patients) after a referral — what happens?

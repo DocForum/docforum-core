@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — DocForum
 
 Status: Draft v0.1
-Last updated: 2026-09-09
+Last updated: 2026-10-20
 
 > **Contribution rule:** Any PR that changes a data model, a service boundary, or the tech stack must update this file in the same PR, and reflect the essentials in `ARCHITECTURE_ESSENTIALS.md`. Also update `ROADMAP.md` status if the change closes/opens roadmap work.
 
@@ -32,7 +32,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | Frontend state/data | React Query (server state) + lightweight store (Zustand) for client-only UI state | Avoids over-centralizing server data into a global store. |
 | Realtime (messaging/notifications) | WebSocket gateway (or managed pub/sub, e.g. Pusher/Ably) behind an internal `notifications` interface | Swappable; not custom infra from day one. |
 | Video/voice (if/when needed) | Third-party embed (Twilio/Daily/Agora) behind an interface, not built in-house | PRD §8.3.1 — explicitly flagged as overengineering risk if built custom. |
-| File/result storage | Object storage (S3-compatible) for lab result attachments | Never store clinical files directly in Postgres rows. |
+| File/result storage | Object storage (S3-compatible) for lab result attachments / fulfillment proofs (`src/utils/storage.ts`) | Never store clinical files directly in Postgres rows. |
 | Field-level encryption | AES-256-GCM envelope encryption (`backend/src/utils/field-encryption.ts`, Phase 8 issue #46) for clinical free text (`Consultation.notes`, `Referral.snapshotNotes`) | Limits blast radius of a leaked DB dump / over-broad read replica — encryption at rest doesn't protect against those. Versioned key-id prefix enables rotation without rewriting every row. **Constraint: encrypted fields cannot be searched or indexed** — they're write-once/read-decrypt blobs. |
 | Background jobs | Simple queue (BullMQ on Redis) for reminders, order-expiry checks, notification delivery | Needed for FR-15/16 and the "orphaned order" hard question (PRD §8.1.3). |
 | Infra | Docker Compose for local dev; containerized deploy target TBD (not decided — see Open Questions in ROADMAP) | Keep infra decisions deferred until a real deploy target is chosen; don't overbuild CI/CD for a repo with no code yet. |
@@ -51,10 +51,11 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `consultations` — the record of what happened in a booked appointment (notes, outcome).
 - `referrals` — referral creation, lifecycle, snapshot of context.
 - `prescriptions` — prescription issuance and versioning.
-- `lab-orders` — lab order issuance and versioning.
-- `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
+- `lab-orders` — lab order issuance, fulfillment proof submission, and versioning.
+- `pharmacy-orders` — prescription fulfillment proof submission and versioning at a specific pharmacy.
+- `orders` — common order operations (receipt confirmation, disputes, dispute queue).
 - `notifications` — outbound notification dispatch, provider-agnostic.
-- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking, doctor verification, payment fund/release/refund. **Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here.
+- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking, doctor verification, payment fund/release/refund, order fulfillment, receipt confirmation, disputes, and dispute resolution.
 
 ### 3.1 Patient data export registry (Phase 8, issue #40)
 
@@ -95,7 +96,7 @@ bounded by one page of rows plus one chunk regardless of history length.
 
 Canonical source of truth: `backend/prisma/schema.prisma`. This section is the human-readable mirror — if they drift, the schema file wins and this doc should be corrected in the same PR.
 
-**Phase 1 models are now real** (User, PatientProfile, DoctorProfile, Specialty, DoctorSpecialty, FacilityProfile, FacilityCapability, AvailabilitySlot, Appointment) — migrated via `backend/prisma/migrations/20260914110638_init/`. Everything else below (§4.3 onward) is still the Phase 0 structural placeholder. Two intentional deviations from the sketches below, both flagged in the schema file itself: `Appointment.intakeId` is deferred (nullable-by-omission, not yet a column) since `IntakeForm` doesn't exist until Phase 2; `PatientProfile.guardianUserId` is a plain string with no FK relation, since the minor/dependent consent model (§8.2.5 in PRD.md) is still an open question, not resolved here.
+**Phase 1 models are now real** (User, PatientProfile, DoctorProfile, Specialty, DoctorSpecialty, FacilityProfile, FacilityCapability, AvailabilitySlot, Appointment) — migrated via `backend/prisma/migrations/20260914110638_init/`. Everything else below (§4.3 onward) is still the Phase 0 structural placeholder, except Order, FulfillmentProof, OrderDispute, and OrderDisputeResolution. Two intentional deviations from the sketches below, both flagged in the schema file itself: `Appointment.intakeId` is deferred (nullable-by-omission, not yet a column) since `IntakeForm` doesn't exist until Phase 2; `PatientProfile.guardianUserId` is a plain string with no FK relation, since the minor/dependent consent model (§8.2.5 in PRD.md) is still an open question, not resolved here.
 
 ### 4.1 User / Role model
 ```
@@ -177,16 +178,31 @@ Referral
 ```
 Design note: `snapshot_notes` and `snapshot_intake_id` deliberately duplicate data rather than pointing live at `Consultation.notes`, so a later edit to the original consultation can never silently change what the specialist already acted on (PRD hard question 8.1.4).
 
-### 4.5 Prescriptions (versioned, append-only)
+### 4.5 Prescriptions & Orders (versioned, append-only)
 ```
-Prescription
-  id, consultation_id (FK), patient_profile_id, prescribing_doctor_id
+Order
+  id, order_type (enum: pharmacy|lab), patient_profile_id (FK -> PatientProfile), facility_profile_id (nullable FK -> FacilityProfile)
+  prescribing_doctor_id (nullable), details (nullable string)
   status (enum: issued|fulfilled|expired|superseded)
-  supersedes_prescription_id (nullable, self-FK — corrections create a new row)
+  fulfilled_at (nullable DateTime)
+  confirmed (boolean, default false), confirmation_source ('patient' | 'timeout'), confirmed_at (nullable)
+  disputed (boolean, default false), disputed_at (nullable)
+  created_at, updated_at
+
+FulfillmentProof
+  id, order_id (FK -> Order), facility_profile_id (FK -> FacilityProfile)
+  reference_number (string, required), attachment_url (nullable string), notes (nullable string)
   created_at
 
-PrescriptionItem
-  id, prescription_id (FK), drug_name, dosage, frequency, duration
+OrderDispute
+  id, order_id (FK -> Order), patient_profile_id (FK -> PatientProfile)
+  reason (string, required), status (enum: pending|resolved)
+  created_at, updated_at
+
+OrderDisputeResolution
+  id, dispute_id (FK -> OrderDispute), admin_user_id (FK -> User)
+  resolution_notes (string), outcome (string)
+  created_at
 ```
 
 ### 4.6 Lab orders (versioned, append-only)
@@ -203,14 +219,14 @@ LabResult
   created_at
 ```
 
-### 4.7 Fulfillment (facility-side)
+### 4.7 Fulfillment & Proofs (facility & patient side)
 ```
-FulfillmentRecord
-  id, order_type (enum: prescription|lab_order), order_id (polymorphic ref)
-  facility_id, status (enum: pending|in_progress|fulfilled|rejected)
-  created_at, updated_at
+FulfillmentProof
+  id, order_id (FK -> Order), facility_profile_id (FK -> FacilityProfile)
+  reference_number (string, required), attachment_url (nullable string via storage interface), notes (nullable string)
+  created_at
 ```
-Design note: kept separate from `Prescription`/`LabOrder` so a facility's operational status doesn't need write access to the clinical order record itself — it only writes to its own fulfillment row. Reduces blast radius of a compromised/misbehaving facility account.
+Design note: facility fulfillment requires a reference number and optional file attachment. Patient receipt confirmation and disputes are mutually exclusive, enforced with a conditional DB UPDATE. Unconfirmed orders auto-confirm via an idempotent background job after `ORDER_CONFIRMATION_WINDOW_HOURS`, setting `confirmationSource: 'timeout'`.
 
 ### 4.8 Notifications
 ```
@@ -240,8 +256,8 @@ LoginAttempt (issue #35)
 ```
 AuditEvent
   id, actor_user_id (nullable — null = system), actor_role (nullable Role)
-  entity_type ('Appointment' | 'DoctorProfile' | 'PaymentIntent' so far), entity_id
-  action (dotted, e.g. 'appointment.booked'), from_state, to_state (nullable)
+  entity_type ('Appointment' | 'DoctorProfile' | 'PaymentIntent' | 'Order' | 'OrderDispute'), entity_id
+  action (dotted, e.g. 'appointment.booked', 'order.fulfilled', 'order.receipt_confirmed', 'order.disputed', 'dispute.resolved'), from_state, to_state (nullable)
   request_id (X-Request-Id of the causing request), metadata (jsonb, nullable)
   created_at
   # APPEND-ONLY: no update/delete path in code, and BEFORE UPDATE/DELETE
@@ -264,7 +280,11 @@ AuditEvent
 Transitions recorded (action: from → to):
 - `appointment.booked`: `null → scheduled` (metadata: slot id, doctor profile id, origin)
 - `doctor.verification_status_changed`: previous → new verification status (read under `FOR UPDATE`; a no-op set records nothing)
-- `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
+- `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only).
+- `order.fulfilled`: `issued → fulfilled` (metadata: orderType, referenceNumber, facilityProfileId)
+- `order.receipt_confirmed`: `fulfilled → confirmed` (metadata: confirmationSource)
+- `order.disputed`: `fulfilled → disputed` (metadata: reason)
+- `dispute.resolved`: `pending → resolved` (metadata: outcome, adminUserId)
 ### 4.11 Patient data export (Phase 8, issue #40)
 ```
 PatientExport
@@ -309,8 +329,9 @@ schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }
 1. Specialist issues `Prescription` and/or `LabOrder` from a `Consultation`.
 2. Patient views eligible facilities filtered by `FacilityCapability` matching the order.
 3. Patient selects a facility → `FulfillmentRecord` created (`pending`).
-4. Facility updates its own `FulfillmentRecord` status; for labs, attaches `LabResult`.
+4. Facility updates its own `FulfillmentRecord` status with reference number and optional attachment; for labs, attaches `LabResult`.
 5. Order's own `status` field is updated to `fulfilled` only via this facility-confirmed path — patient/doctor cannot self-mark it.
+6. Patient confirms receipt or disputes within configurable window (`ORDER_CONFIRMATION_WINDOW_HOURS`). Unconfirmed orders auto-confirm via an idempotent background job.
 
 ## 6. Hard questions (architecture-level — see PRD §8 for product-level)
 

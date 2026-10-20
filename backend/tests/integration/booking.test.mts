@@ -123,7 +123,7 @@ describe('booking concurrency', () => {
     slotId = slots.body[0].id;
 
     patientTokens = await Promise.all(Array.from({ length: CONCURRENT_PATIENTS }, (_, i) => signupPatient(app, i)));
-  });
+  }, 30_000);
 
   afterAll(async () => {
     const authServices = await import('../../src/modules/auth/services/index.js');

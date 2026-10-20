@@ -17,7 +17,7 @@
 // so any silent number coercion would change it (to 2^53) and fail the
 // assertion, rather than quietly rounding and passing.
 //
-// Self-contained embedded Postgres on its own port (5438), same pattern as the
+// Self-contained embedded Postgres on its own port (5440), same pattern as the
 // other files in this directory, so it runs alongside them.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -28,7 +28,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5438;
+const PORT = 5440;
 const runId = Date.now();
 
 // 2^53 + 1 — exactly one more than Number.MAX_SAFE_INTEGER, so it only

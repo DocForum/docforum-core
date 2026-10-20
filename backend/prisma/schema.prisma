@@ -81,6 +81,16 @@ enum OrderStatus {
   superseded
 }
 
+enum OrderType {
+  pharmacy
+  lab
+}
+
+enum DisputeStatus {
+  pending
+  resolved
+}
+
 enum FulfillmentStatus {
   pending
   in_progress
@@ -117,6 +127,7 @@ model User {
   facilityProfile FacilityProfile?
 
   emailVerificationTokens EmailVerificationToken[]
+  disputeResolutions      OrderDisputeResolution[]
 
   @@index([role])
 }
@@ -184,6 +195,8 @@ model PatientProfile {
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
   dataExports    PatientExport[]
+  orders         Order[]
+  disputes       OrderDispute[]
 }
 
 // Phase 8 (issue #40): right-of-access export jobs. One row per request;
@@ -296,10 +309,12 @@ model FacilityProfile {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  capabilities   FacilityCapability[]
-  paymentIntents PaymentIntent[]
-  walletLink     WalletLink?
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  capabilities      FacilityCapability[]
+  paymentIntents    PaymentIntent[]
+  walletLink        WalletLink?
+  orders            Order[]
+  fulfillmentProofs FulfillmentProof[]
 }
 
 model FacilityCapability {
@@ -356,6 +371,91 @@ model Appointment {
   // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
   // existing. Flagged, not silently dropped.
   // TODO Phase 3: referralId (nullable FK -> Referral).
+}
+
+// =========================================================================
+// Orders, Fulfillment Proofs, Disputes & Resolutions
+// =========================================================================
+
+model Order {
+  id                  String      @id @default(uuid())
+  orderType           OrderType
+  patientProfileId    String
+  facilityProfileId   String?
+  prescribingDoctorId String?
+  details             String?
+  status              OrderStatus @default(issued)
+
+  fulfilledAt         DateTime?
+
+  confirmed           Boolean     @default(false)
+  confirmationSource  String?     // 'patient' | 'timeout'
+  confirmedAt         DateTime?
+
+  disputed            Boolean     @default(false)
+  disputedAt          DateTime?
+
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  patientProfile      PatientProfile   @relation(fields: [patientProfileId], references: [id])
+  facilityProfile     FacilityProfile? @relation(fields: [facilityProfileId], references: [id])
+
+  fulfillmentProofs   FulfillmentProof[]
+  disputes            OrderDispute[]
+
+  @@index([patientProfileId, status])
+  @@index([facilityProfileId, status])
+  @@index([status, confirmed, disputed])
+}
+
+model FulfillmentProof {
+  id                String   @id @default(uuid())
+  orderId           String
+  facilityProfileId String
+  referenceNumber   String
+  attachmentUrl     String?
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  order             Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  facilityProfile   FacilityProfile @relation(fields: [facilityProfileId], references: [id])
+
+  @@index([orderId])
+  @@index([facilityProfileId])
+}
+
+model OrderDispute {
+  id               String        @id @default(uuid())
+  orderId          String
+  patientProfileId String
+  reason           String
+  status           DisputeStatus @default(pending)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  order            Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  patientProfile   PatientProfile         @relation(fields: [patientProfileId], references: [id])
+  resolutions      OrderDisputeResolution[]
+
+  @@index([orderId])
+  @@index([patientProfileId])
+  @@index([status])
+}
+
+model OrderDisputeResolution {
+  id              String   @id @default(uuid())
+  disputeId       String
+  adminUserId     String
+  resolutionNotes String
+  outcome         String   // e.g. 'upheld' | 'rejected' | 'refunded'
+  createdAt       DateTime @default(now())
+
+  dispute         OrderDispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  adminUser       User         @relation(fields: [adminUserId], references: [id])
+
+  @@index([disputeId])
+  @@index([adminUserId])
 }
 
 // =========================================================================

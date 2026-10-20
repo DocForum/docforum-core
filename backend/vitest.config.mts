@@ -7,6 +7,7 @@ export default defineConfig({
     // Booking-concurrency tests fire real concurrent transactions against
     // a real Postgres — a bit more headroom than vitest's 5s default.
     testTimeout: 15_000,
+    hookTimeout: 30_000,
     env: {
       JWT_ACCESS_SECRET: 'test-access-secret',
       JWT_REFRESH_SECRET: 'test-refresh-secret',

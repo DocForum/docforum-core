@@ -1,8 +1,7 @@
 # API docs
 
-Phase 1 endpoints are real and tested (see `backend/tests/`). Everything
-else is still unimplemented — see `ROADMAP.md` for phase order. Keep this
-file in sync with `backend/src/modules/*/routes` (AGENTS.md doc-update
+Phase 1 endpoints are real and tested (see `backend/tests/`).
+Keep this file in sync with `backend/src/modules/*/routes` (AGENTS.md doc-update
 rule).
 
 Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI
@@ -151,33 +150,38 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 | `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
 
-## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
+## Pharmacy Orders (`/pharmacy-orders`) — `backend/src/modules/pharmacy-orders`
 
-Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
-well-formed inbound `X-Request-Id` (8–128 chars of `[A-Za-z0-9._:-]`) is
-kept, anything else is replaced with a UUID. Audit events store it, so an
-event can be traced to the request (and logs) that caused it.
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /pharmacy-orders` | authenticated | `{ patientProfileId, prescribingDoctorId?, details? }` | Creates a pharmacy prescription order. |
+| `GET /pharmacy-orders/:id` | authenticated | — | Returns pharmacy order details and fulfillment proofs. |
+| `POST /pharmacy-orders/:id/fulfill` | facility | `{ referenceNumber, attachment?, notes? }` | Fulfills order with required reference number and optional storage attachment. Returns 409 if already fulfilled. |
+
+## Lab Orders (`/lab-orders`) — `backend/src/modules/lab-orders`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /lab-orders` | authenticated | `{ patientProfileId, orderingDoctorId?, details? }` | Creates a lab test order. |
+| `GET /lab-orders/:id` | authenticated | — | Returns lab order details and fulfillment proofs. |
+| `POST /lab-orders/:id/fulfill` | facility | `{ referenceNumber, attachment?, notes? }` | Fulfills order with required reference number and optional storage attachment. Returns 409 if already fulfilled. |
+
+## Common Orders (`/orders`) — `backend/src/modules/orders`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `GET /orders/:id` | authenticated | — | Returns order details including `confirmedSignal`. |
+| `POST /orders/:id/confirm-receipt` | patient (owner) | — | Confirms order receipt. Conditional update enforces mutual exclusion with disputes. Idempotent. |
+| `POST /orders/:id/dispute` | patient (owner) | `{ reason }` | Raises a dispute (reason required). Allowed within `ORDER_CONFIRMATION_WINDOW_HOURS`. Returns 409 if confirmed or window elapsed. |
+
+## Audit trail & Admin Queue (`/admin`) — `backend/src/modules/audit` & `backend/src/modules/orders`
 
 | Method & path | Auth | Notes |
 |---|---|---|
-| `GET /admin/audit-events` | admin | Newest first. Query: `entityType`, `entityId` (requires `entityType`), `actorUserId`, `from` / `to` (ISO-8601 date or date-time, inclusive), `limit` (1–200, default 50), `cursor`. Unknown parameters are `400`. Returns `{ items, nextCursor }`; pass `nextCursor` back as `cursor` for the next page (`null` = last page). |
+| `GET /admin/audit-events` | admin | Newest first. Keyset-paginated audit trail. |
+| `GET /admin/orders/disputes` | admin | Lists order disputes (optional `?status=pending\|resolved`). |
+| `POST /admin/orders/disputes/:id/resolve` | admin | Resolves a dispute (body `{ resolutionNotes, outcome }`, append-only resolution log). Does not set order receipt confirmed. |
 
-Item shape: `{ id, actorUserId, actorRole, entityType, entityId, action,
-fromState, toState, requestId, metadata, createdAt }`. `metadata` is a small
-flat map of ids/codes (never personal data). Ordering is
-`(createdAt DESC, id DESC)` and the cursor is a keyset position on that
-pair, so paging never skips or repeats an event; events written after a scan
-started appear at the front of a new scan, not mid-way through the old one.
-`400 INVALID_CURSOR` for a malformed cursor; `400` if `from` is after `to`.
-
-Recorded today: `appointment.booked`, `doctor.verification_status_changed`,
-`payment_intent.{funded,released,refunded}` — see ARCHITECTURE.md §4.10.
-There is no write or delete endpoint, and the table rejects UPDATE/DELETE
-in the database.
-
-Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
-return `409` when the intent changed state concurrently between the check
-and the write (previously the second write silently overwrote the first).
 ## Patients (`/patients`) — `backend/src/modules/patients`
 
 ### Data export — right of access (Phase 8, issue #40)
@@ -187,60 +191,3 @@ and the write (previously the second write silently overwrote the first).
 | `POST /patients/me/export` | patient | Starts an export of the **caller's own** data. `202` with the export status object and a `Location: /patients/me/export/:id` header. If one is already `pending`/`processing`, returns that one instead of queuing a second. No body is read — there is no way to name another patient. |
 | `GET /patients/me/export/:id` | patient (owner) | Status object (below). `404` for an id that isn't the caller's — the same response as one that doesn't exist. |
 | `GET /patients/me/export/:id/download` | patient (owner) | Streams the bundle as `application/json` (`Content-Disposition: attachment`, `Cache-Control: no-store`). `409 EXPORT_NOT_READY` while pending/processing/failed; `410 EXPORT_EXPIRED` at or after `expiresAt`, even before the cleanup job has run. |
-
-Doctors and admins get `403` on all three — there is no on-behalf-of export.
-
-Status object:
-
-```json
-{
-  "id": "uuid",
-  "status": "pending | processing | ready | failed | expired",
-  "schemaVersion": 1,
-  "createdAt": "…", "startedAt": "…", "generatedAt": "…", "expiresAt": "…",
-  "sizeBytes": 12345,
-  "failure": null,
-  "downloadUrl": "/patients/me/export/<id>/download"
-}
-```
-
-`downloadUrl` and `sizeBytes` are non-null only while `ready`. A failed
-export reports `failure: { code: 'SECTION_FAILED', section: '<name>' }` (or
-`GENERATION_FAILED` / `GENERATION_TIMEOUT`, with `section: null`) — request a
-new export to retry. Generation is asynchronous; poll the status object.
-
-Bundle (`schemaVersion` 1):
-
-```json
-{
-  "format": "docforum.patient-export",
-  "schemaVersion": 1,
-  "exportId": "uuid",
-  "generatedAt": "ISO-8601",
-  "sections": {
-    "account":      { "version": 1, "items": [{ "id", "email", "phone", "role", "emailVerifiedAt", "createdAt", "updatedAt" }] },
-    "appointments": { "version": 1, "items": [{ "id", "status", "origin", "slot": { "startTime", "endTime" }, "doctor": { "id", "fullName" }, "createdAt", "updatedAt" }] },
-    "payments":     { "version": 1, "items": [{ "id", "orderType", "orderId", "status", "amountStroops", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
-    "profile":      { "version": 1, "items": [{ "id", "fullName", "dateOfBirth", "createdAt", "updatedAt" }] }
-  }
-}
-```
-
-Sections are sorted by name; new modules add sections (ARCHITECTURE.md §3.1)
-without changing the envelope. `amountStroops`/`escrowId` are strings
-(bigint). No password hash, tokens, throttle state or platform secrets are
-ever included.
-
-Exports stay downloadable for `PATIENT_EXPORT_TTL_HOURS` (default 24), then
-the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZE`,
-`PATIENT_EXPORT_CHUNK_BYTES`, `PATIENT_EXPORT_WORKER_INTERVAL_SECONDS`,
-`PATIENT_EXPORT_CLEANUP_INTERVAL_SECONDS`, `PATIENT_EXPORT_STALE_AFTER_SECONDS`,
-`PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
-`backend/src/jobs/README.md`.
-
-## Not yet implemented
-
-Everything else in `ARCHITECTURE.md` §3's module list (`facilities`,
-`consultations`, `referrals`, `prescriptions`, `lab-orders`,
-`pharmacy-orders`, `payments`, `notifications`) has no routes yet — Phase
-2 onward, see `ROADMAP.md`.

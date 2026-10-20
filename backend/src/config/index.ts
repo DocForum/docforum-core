@@ -109,6 +109,11 @@ export const config = {
     staleAfterSeconds: Number(process.env.PATIENT_EXPORT_STALE_AFTER_SECONDS ?? 15 * 60),
     maxAttempts: Number(process.env.PATIENT_EXPORT_MAX_ATTEMPTS ?? 3),
   },
+  // Order receipt confirmation and dispute window configuration
+  orders: {
+    confirmationWindowHours: Number(process.env.ORDER_CONFIRMATION_WINDOW_HOURS ?? 72),
+    expiryIntervalSeconds: Number(process.env.ORDER_EXPIRY_INTERVAL_SECONDS ?? 300),
+  },
   // Explicit, per-environment CORS allowlist (Phase 8, issue #37). A single
   // configured origin string was one typo away from "reflect whatever origin
   // asked"; an allowlist makes every permitted frontend a deliberate entry.
