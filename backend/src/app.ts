@@ -3,20 +3,19 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
-import { adminAuthRouter, authRouter } from './modules/auth/routes';
+import { authRouter } from './modules/auth/routes';
 import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
-import { ordersRouter } from './modules/orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
-import { adminRouter } from './modules/users/routes';
 import { registerPatientExportSections } from './export-sections';
-import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
-import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
+import { auditRouter } from './modules/audit/routes';
+import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
+import { labOrdersRouter } from './modules/lab-orders/routes';
+import { ordersRouter } from './modules/orders/routes';
+import { adminOrdersRouter } from './modules/orders/routes/admin';
 import { requestId } from './middleware/request-id';
-import { referralsRouter } from './modules/referrals/routes';
-import { consultationsRouter } from './modules/consultations/routes';
 
 export function createApp() {
   const app = express();
@@ -42,27 +41,16 @@ export function createApp() {
   app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 
   app.use('/auth', authRouter);
-  // Admin surface. Currently only the auth module's session administration
-  // (Phase 8 #38) — other modules' admin routes can hang off the same mount.
-  app.use('/admin', adminAuthRouter);
   app.use('/doctors', doctorsRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
-  app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
-  // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
-  // reactivate) alongside the audit read path. Different paths, no overlap.
-  app.use('/admin', adminRouter);
+  app.use('/pharmacy-orders', pharmacyOrdersRouter);
+  app.use('/lab-orders', labOrdersRouter);
+  app.use('/orders', ordersRouter);
   app.use('/admin', auditRouter);
-  app.use('/admin/payments', escrowEventsRouter);
-
-  // PHI read-access logging (Phase 8, issue #45). Mounted at root so the
-  // paths match the issue's spec exactly: /admin/access-logs, /patients/me/access-log.
-  app.use('/admin', adminAuditRouter);
-  app.use('/patients', patientAuditRouter);
-  app.use('/referrals', referralsRouter);
-  app.use('/consultations', consultationsRouter);
+  app.use('/admin', adminOrdersRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.

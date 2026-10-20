@@ -5,14 +5,6 @@ import type { Role } from '@prisma/client';
 export interface AccessTokenPayload {
   sub: string; // user id
   role: Role;
-  /** Issued-at, set by `jsonwebtoken` itself. Read by the auth middleware to
-   * compare against `User.sessionsInvalidatedAt` (Phase 8, issue #39) —
-   * tokens minted before a deactivation must stop working immediately. */
-  iat?: number;
-  /** Refresh-session id (Phase 8 #38). Present only on refresh tokens —
-   * the access token stays stateless so protected requests don't need a
-   * session lookup. */
-  sid?: string;
 }
 
 /**

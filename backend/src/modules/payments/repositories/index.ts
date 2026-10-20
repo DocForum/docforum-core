@@ -22,6 +22,16 @@ export function findWalletLinkByFacilityId(facilityId: string) {
   return prisma.walletLink.findUnique({ where: { facilityId } });
 }
 
+export function createPaymentIntent(input: {
+  orderType: 'prescription' | 'lab_order';
+  orderId: string;
+  patientProfileId: string;
+  facilityId: string;
+  amountStroops: bigint;
+}) {
+  return prisma.paymentIntent.create({ data: input });
+}
+
 export function findPaymentIntentById(id: string) {
   return prisma.paymentIntent.findUnique({ where: { id } });
 }

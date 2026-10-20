@@ -27,7 +27,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import EmbeddedPostgres from 'embedded-postgres';
-import { createOrderFixture, createPaymentIntentForFixture } from '../integration/order-fixtures.mjs';
 import { Keypair } from '@stellar/stellar-sdk';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -61,7 +60,6 @@ describe('payments module against live testnet', () => {
   let paymentsService: typeof import('../../src/modules/payments/services/index.js');
   let facilityId: string;
   let patientProfileId: string;
-  let pharmacyFacilityId: string;
 
   beforeAll(async () => {
     await pg.initialise();
@@ -93,11 +91,6 @@ describe('payments module against live testnet', () => {
     });
     facilityId = facility.id;
 
-    const pharmacyUser = await prisma.user.create({ data: { email: `pharmacy-${runId}@example.com`, passwordHash: 'unused', role: 'facility' } });
-    const pharmacy = await prisma.facilityProfile.create({ data: { userId: pharmacyUser.id, name: 'Test Pharmacy', type: 'pharmacy' } });
-    pharmacyFacilityId = pharmacy.id;
-    await paymentsService.linkWallet(pharmacyFacilityId, (await fundedKeypair()).publicKey());
-
     const patientUser = await prisma.user.create({
       data: { email: `patient-${runId}@example.com`, passwordHash: 'unused', role: 'patient' },
     });
@@ -116,8 +109,13 @@ describe('payments module against live testnet', () => {
   });
 
   it('funds and releases a payment intent end-to-end on testnet', async () => {
-    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: 500_000n, tag: `release-${runId}` });
-    const intent = await createPaymentIntentForFixture(prisma, order);
+    const intent = await paymentsService.createPaymentIntent({
+      orderType: 'lab_order',
+      orderId: 'test-order-release',
+      patientProfileId,
+      facilityId,
+      amountStroops: 500_000n, // 0.05 XLM
+    });
     expect(intent.status).toBe('created');
 
     const funded = await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
@@ -130,8 +128,13 @@ describe('payments module against live testnet', () => {
   }, 60_000);
 
   it('funds and refunds a payment intent end-to-end on testnet', async () => {
-    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: pharmacyFacilityId, kind: 'prescription', amountStroops: 500_000n, tag: `refund-${runId}` });
-    const intent = await createPaymentIntentForFixture(prisma, order);
+    const intent = await paymentsService.createPaymentIntent({
+      orderType: 'prescription',
+      orderId: 'test-order-refund',
+      patientProfileId,
+      facilityId,
+      amountStroops: 500_000n,
+    });
 
     await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
     const refunded = await paymentsService.refundPaymentIntent(TEST_ACTOR, intent.id);
@@ -146,8 +149,13 @@ describe('payments module against live testnet', () => {
       data: { userId: unlinkedFacilityUser.id, name: 'Unlinked Facility', type: 'pharmacy' },
     });
 
-    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: unlinkedFacility.id, kind: 'prescription', amountStroops: 500_000n, tag: `unlinked-${runId}` });
-    const intent = await createPaymentIntentForFixture(prisma, order);
+    const intent = await paymentsService.createPaymentIntent({
+      orderType: 'prescription',
+      orderId: 'test-order-unlinked',
+      patientProfileId,
+      facilityId: unlinkedFacility.id,
+      amountStroops: 500_000n,
+    });
 
     await expect(paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id)).rejects.toThrow(/no linked wallet/);
   }, 30_000);

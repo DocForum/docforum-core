@@ -17,14 +17,12 @@ async function copyLocal(from, to) {
   const src = path.join(CORE_ROOT, from);
   const dest = path.join(SITE_ROOT, to);
   await mkdir(path.dirname(dest), { recursive: true });
-  // Local files get the same rewrite as remote ones: a repo-relative link
-  // (e.g. ROADMAP.md -> docs/adr/0006-...md) has no page in the site.
-  const content = rewriteRelativeLinks(await readFile(src, 'utf8'), 'docforum-core');
+  const content = await readFile(src, 'utf8');
   await writeFile(dest, content);
   console.log(`  synced (local)  ${from} -> docs/site/${to}`);
 }
 
-// Synced files link relative to their own repo root (./ROADMAP.md,
+// Synced READMEs link relative to their own repo root (./ROADMAP.md,
 // docs/adr/foo.md, LICENSE, ...) — meaningless in the docs site's own
 // structure. Rewrite anything that isn't already absolute (http/https)
 // or a same-page anchor (#foo) to point at the real file on GitHub,

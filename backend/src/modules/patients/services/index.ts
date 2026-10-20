@@ -279,9 +279,3 @@ export async function expireExports(now = new Date()): Promise<{ expired: number
   const orphanChunksDeleted = await patientsRepo.deleteUnservableExportChunks();
   return { expired, orphanChunksDeleted };
 }
-
-export async function getPatientProfileById(id: string) {
-  const profile = await patientsRepo.findPatientProfileById(id);
-  if (!profile) throw new HttpError(404, 'Patient profile not found.');
-  return profile;
-}

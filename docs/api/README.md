@@ -1,9 +1,8 @@
 # API docs
 
-Phases 1, 3 (referrals/consultations) and 5.5 (payments) endpoints are
-real and tested (see `backend/tests/`). Everything else is still
-unimplemented — see `ROADMAP.md` for phase order. Keep this file in sync
-with `backend/src/modules/*/routes` (AGENTS.md doc-update rule).
+Phase 1 endpoints are real and tested (see `backend/tests/`).
+Keep this file in sync with `backend/src/modules/*/routes` (AGENTS.md doc-update
+rule).
 
 Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI
 spec yet — TBD, tracked informally, not blocking Phase 1.
@@ -28,15 +27,8 @@ can log in, refresh, and browse; they get
 depend on a trustworthy contact address:
 
 - `POST /appointments` (booking)
-- `POST /consultations`, `POST /consultations/:id/referrals`
-- `POST /referrals`, `POST /referrals/from-consultation/:id`,
-  `POST /referrals/:id/{accept,decline}`
 - `POST /payments/wallet-link`, `POST /payments/intents`,
   `POST /payments/intents/:id/{fund,release,refund}`
-
-(`GET`-style routes — lists, availability, the admin referral queue —
-are deliberately *not* gated on verification: browsing needs no contact
-address.)
 
 That guard reads the database rather than trusting a claim in the access
 token, so verifying in one tab unblocks the caller immediately instead of
@@ -119,9 +111,8 @@ account also pays bcrypt's comparison cost, so timing doesn't leak either).
 user is stuck behind: body `{ email?, ip? }` (at least one), returns
 `{ cleared }`. Clear **both** when a lock was taken out via the account's IP,
 or the IP bucket will keep refusing them. It's logged to the server console
-— the `AuditEvent` table (ARCHITECTURE.md §4.10) records booking, doctor
-verification, payments and the referral admin actions, but not the
-login-throttle clear, so that's still the interim record.
+— it isn't wired into `AuditEvent` yet (issue #43 covered booking, doctor
+verification and payments), so that's the interim record.
 
 Under the hood this uses Express's `trust proxy` setting via the
 `TRUST_PROXY` env var: `1` behind Render's single proxy hop, `false` (the
@@ -158,46 +149,8 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 |---|---|---|---|
 | `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
-| `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'\|'cancelled'\|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
-| `PATCH /appointments/:appointmentId/cancel` | patient (own appointment) | — | Patient-side cancellation, `scheduled` only. Same slot-release + cascade behaviour as above. |
 
-## Consultations (`/consultations`) — `backend/src/modules/consultations`
-
-| Method & path | Auth | Body | Notes |
-|---|---|---|---|
-| `POST /consultations` | doctor (own appointment) | `{ appointmentId, outcome?, notes? }` | Issue #4's minimal slice. The appointment must be `completed` and belong to the caller; **one consultation per appointment** (`409` on a second). `outcome` is `resolved\|referred\|follow_up_needed`. |
-| `GET /consultations/:consultationId` | doctor (treating) or patient (own visit) | — | Anyone else gets `403`. |
-| `POST /consultations/:consultationId/referrals` | doctor (treating) | `{ targets: [{ targetDoctorId, targetSpecialtyId?, snapshotNotes }] }` | Issue #66 — atomic all-or-none multi-referral. Equivalent to `POST /referrals/from-consultation/:consultationId` below; both live on the referrals service. |
-
-## Referrals (`/referrals`) — `backend/src/modules/referrals`
-
-| Method & path | Auth | Body | Notes |
-|---|---|---|---|
-| `POST /referrals` | doctor | `{ sourceConsultationId, targetDoctorId, targetSpecialtyId?, snapshotNotes }` | Issue #5. Requires: the caller's own **completed** appointment's consultation, a target doctor who is verified (and verified in `targetSpecialtyId` when given), no self-referral, no duplicate target for that consultation. `targetDoctorId` is **required** — the specialty-only routing ADR (issue #6) isn't done, so an unassignable referral can't be created. Writes `snapshotNotes` as a copy. A repeat doctor/specialty anywhere in the lineage **flags** the referral (`loopFlaggedAt`) for the admin queue instead of failing; chains over `REFERRAL_MAX_HOPS` (default 4) and self-referrals are `422`. |
-| `POST /referrals/from-consultation/:consultationId` | doctor | `{ targets: [...] }` | Issue #66 — same atomic batch as the consultations route; the decision to allow multi-referral with independent lifecycles (and no bundle table) is `docs/adr/0006-multiple-referrals-per-consultation.md`. Duplicate doctor *or* specialty inside the batch, or against an existing referral from that consultation, fails the whole batch. |
-| `POST /referrals/:referralId/accept` | patient (the referred patient) | `{ availabilitySlotId }` | Issue #7. Conditional `pending → accepted` (exactly one concurrent accept wins → `409`), then books a real appointment against the **target doctor** through the same slot-claim path as `POST /appointments` — the patient picks the slot; no re-intake, the snapshot travels on the referral. `409` if the slot isn't the target doctor's. Writes two audit rows in the one append-only trail: `referral.accepted` (a `Referral`-typed row) and `appointment.booked` for the appointment it booked (`origin: 'referral'`), both inside the accept's own transaction. |
-| `POST /referrals/:referralId/decline` | patient (the referred patient) | — | Pending-only, terminal (`409` otherwise). Writes a `referral.declined` audit row. |
-| `GET /referrals/mine` | patient | — | `{ referrals, groupedByConsultation }` — grouped for the "one visit, several referrals" view (#66). |
-| `GET /referrals/created` | doctor | — | Referrals the caller created, including ones the cascade expired (see `referringDoctorNotifiedAt`) and ones the loop guard flagged. |
-| `GET /referrals/admin/queue` | admin | query: `status`, `olderThan` (`48h` / `7d`), `loopFlagged` (`true`\|`false`) | Issue #68 — stuck/aged/loop-flagged referrals with a derived human-readable `reason` and `ageMinutes`. |
-| `POST /referrals/admin/:referralId/reassign` | admin | `{ targetDoctorId, reason }` | **Pending referrals only.** Moves `targetDoctorId` (validated through the doctors service) — the snapshot, lineage and patient are untouched. Writes an `AuditEvent` (`referral.reassign`) in the one append-only audit trail, as a `Referral`-typed row. |
-| `POST /referrals/admin/:referralId/cancel` | admin | `{ reason }` | Pending or accepted (`409` on terminal). Cancelling an accepted referral also cancels its live appointment through the appointments service. Writes an `AuditEvent` (`referral.cancel`) in the one append-only audit trail, as a `Referral`-typed row. `cancelled` is distinct from `expired`/`declined` so the three exits stay tellable apart. |
-| `GET /referrals/admin/:referralId/audit-events` | admin | — | The referral's audit rows, read from the same `AuditEvent` table `GET /admin/audit-events` serves (`entityType: 'Referral'`, `entityId: <referralId>`): actor, role, action, from/to state, metadata (the admin's `reason` lives in `metadata.reason`), timestamp. |
-
-## Payments (`/payments`) — `backend/src/modules/payments`
-
-Phase 5.5 (custodial v1 — `docs/adr/0004-custodial-payments-v1.md`):
-`POST /payments/wallet-link` (facility, sets its Stellar payout address),
-and admin-gated `/payments/intents` (`POST`, `GET /:id`, plus
-`POST /intents/:id/{fund,release,refund}`). `PaymentIntent.orderType` /
-`orderId` are opaque and **not** FK-validated — `Prescription`/`LabOrder`
-don't exist yet (Phase 4). Admin-triggered release/refund is the interim
-design, not the final one.
-
-## Orders (`/orders`) — `backend/src/modules/orders`
-
-Verified doctors can create a consultation with `POST /orders/consultations` (`appointmentId`, optional `outcome` and `notes`). Issue a prescription with `POST /orders/consultations/:consultationId/prescriptions` (`facilityProfileId`, positive integer `amountStroops`, and `items`), or a lab order with `POST /orders/consultations/:consultationId/lab-orders` (`facilityProfileId`, `amountStroops`, `testType`, optional `urgency` and `notes`). Issuance creates its payment intent in the same transaction. Corrections create superseding immutable orders: a created intent moves to the correction; an escrowed intent remains linked to the original and is handled by the existing admin refund action.
-## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
+## Pharmacy Orders (`/pharmacy-orders`) — `backend/src/modules/pharmacy-orders`
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
@@ -225,27 +178,10 @@ Verified doctors can create a consultation with `POST /orders/consultations` (`a
 
 | Method & path | Auth | Notes |
 |---|---|---|
-| `GET /admin/audit-events` | admin | Newest first. Query: `entityType`, `entityId` (requires `entityType`), `actorUserId`, `from` / `to` (ISO-8601 date or date-time, inclusive), `limit` (1–200, default 50), `cursor`. Unknown parameters are `400`. Returns `{ items, nextCursor }`; pass `nextCursor` back as `cursor` for the next page (`null` = last page). |
+| `GET /admin/audit-events` | admin | Newest first. Keyset-paginated audit trail. |
+| `GET /admin/orders/disputes` | admin | Lists order disputes (optional `?status=pending\|resolved`). |
+| `POST /admin/orders/disputes/:id/resolve` | admin | Resolves a dispute (body `{ resolutionNotes, outcome }`, append-only resolution log). Does not set order receipt confirmed. |
 
-Item shape: `{ id, actorUserId, actorRole, entityType, entityId, action,
-fromState, toState, requestId, metadata, createdAt }`. `metadata` is a small
-flat map of ids/codes (never personal data). Ordering is
-`(createdAt DESC, id DESC)` and the cursor is a keyset position on that
-pair, so paging never skips or repeats an event; events written after a scan
-started appear at the front of a new scan, not mid-way through the old one.
-`400 INVALID_CURSOR` for a malformed cursor; `400` if `from` is after `to`.
-
-Recorded today: `appointment.booked` (both the direct booking and the
-referral-origin booking the accept produces — the `origin` metadata tells
-them apart), `doctor.verification_status_changed`,
-`payment_intent.{funded,released,refunded}`, `referral.accepted`,
-`referral.declined`, `referral.reassign`, `referral.cancel` — see
-ARCHITECTURE.md §4.10. There is no write or delete
-endpoint, and the table rejects UPDATE/DELETE in the database.
-
-Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
-return `409` when the intent changed state concurrently between the check
-and the write (previously the second write silently overwrote the first).
 ## Patients (`/patients`) — `backend/src/modules/patients`
 
 ### Data export — right of access (Phase 8, issue #40)
@@ -255,64 +191,3 @@ and the write (previously the second write silently overwrote the first).
 | `POST /patients/me/export` | patient | Starts an export of the **caller's own** data. `202` with the export status object and a `Location: /patients/me/export/:id` header. If one is already `pending`/`processing`, returns that one instead of queuing a second. No body is read — there is no way to name another patient. |
 | `GET /patients/me/export/:id` | patient (owner) | Status object (below). `404` for an id that isn't the caller's — the same response as one that doesn't exist. |
 | `GET /patients/me/export/:id/download` | patient (owner) | Streams the bundle as `application/json` (`Content-Disposition: attachment`, `Cache-Control: no-store`). `409 EXPORT_NOT_READY` while pending/processing/failed; `410 EXPORT_EXPIRED` at or after `expiresAt`, even before the cleanup job has run. |
-
-Doctors and admins get `403` on all three — there is no on-behalf-of export.
-
-Status object:
-
-```json
-{
-  "id": "uuid",
-  "status": "pending | processing | ready | failed | expired",
-  "schemaVersion": 1,
-  "createdAt": "…", "startedAt": "…", "generatedAt": "…", "expiresAt": "…",
-  "sizeBytes": 12345,
-  "failure": null,
-  "downloadUrl": "/patients/me/export/<id>/download"
-}
-```
-
-`downloadUrl` and `sizeBytes` are non-null only while `ready`. A failed
-export reports `failure: { code: 'SECTION_FAILED', section: '<name>' }` (or
-`GENERATION_FAILED` / `GENERATION_TIMEOUT`, with `section: null`) — request a
-new export to retry. Generation is asynchronous; poll the status object.
-
-Bundle (`schemaVersion` 1):
-
-```json
-{
-  "format": "docforum.patient-export",
-  "schemaVersion": 1,
-  "exportId": "uuid",
-  "generatedAt": "ISO-8601",
-  "sections": {
-    "account":      { "version": 1, "items": [{ "id", "email", "phone", "role", "emailVerifiedAt", "createdAt", "updatedAt" }] },
-    "appointments": { "version": 1, "items": [{ "id", "status", "origin", "slot": { "startTime", "endTime" }, "doctor": { "id", "fullName" }, "createdAt", "updatedAt" }] },
-    "payments":     { "version": 1, "items": [{ "id", "prescriptionId", "labOrderId", "status", "amountStroops", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
-    "profile":      { "version": 1, "items": [{ "id", "fullName", "dateOfBirth", "createdAt", "updatedAt" }] }
-  }
-}
-```
-
-Sections are sorted by name; new modules add sections (ARCHITECTURE.md §3.1)
-without changing the envelope. `amountStroops`/`escrowId` are strings
-(bigint). No password hash, tokens, throttle state or platform secrets are
-ever included.
-
-Exports stay downloadable for `PATIENT_EXPORT_TTL_HOURS` (default 24), then
-the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZE`,
-`PATIENT_EXPORT_CHUNK_BYTES`, `PATIENT_EXPORT_WORKER_INTERVAL_SECONDS`,
-`PATIENT_EXPORT_CLEANUP_INTERVAL_SECONDS`, `PATIENT_EXPORT_STALE_AFTER_SECONDS`,
-`PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
-`backend/src/jobs/README.md`.
-
-## Not yet implemented
-
-`patients`, `facilities`, `prescriptions`, `lab-orders`,
-`pharmacy-orders` and `notifications` have no routes yet — Phase 2
-(intake), 4 (orders), 5 (facilities) and 6 (notifications), see
-`ROADMAP.md`.
-
-## Escrow chain events (/admin/payments/escrow-events)
-
-Admin-only read endpoint. Optional state filter accepts pending, matched, or unmatched; limit is 1–200 (default 50). It returns persisted Soroban events and per-contract cursors. Unmatched release/refund events produce a high-severity structured log, an optional JSON POST to ESCROW_EVENT_ALERT_WEBHOOK_URL, and an unmatched row visible here. A retention-window failure sets catchupError on the corresponding cursor; operators must reconcile the gap before changing the configured start ledger.

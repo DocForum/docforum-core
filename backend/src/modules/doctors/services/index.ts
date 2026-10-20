@@ -66,37 +66,3 @@ export async function setVerificationStatus(
     return profile;
   });
 }
-
-/** A referral target (or admin-reassignment target) must be a verified
- * doctor — an unverified profile has no business receiving patients
- * (issue #68: reassignment goes through this gate, never around it). */
-export async function assertDoctorVerified(doctorProfileId: string) {
-  const profile = await getDoctorProfileById(doctorProfileId);
-  if (profile.verificationStatus !== 'verified') {
-    throw new HttpError(422, 'Target doctor is not verified.');
-  }
-  return profile;
-}
-
-/**
- * Issue #68: the reassignment target must be verified AND actually hold
- * the referral's target specialty. Checked through this module's own
- * repository — callers (referrals/admin ops) never touch DoctorSpecialty
- * directly (module-boundary hard rule).
- */
-export async function assertDoctorVerifiedInSpecialty(doctorProfileId: string, specialtyId: string) {
-  const profile = await assertDoctorVerified(doctorProfileId);
-  const specialties = await doctorsRepo.findDoctorSpecialties(doctorProfileId);
-  const holds = specialties.some((link) => link.specialtyId === specialtyId);
-  if (!holds) {
-    throw new HttpError(422, 'Target doctor does not hold the referral’s specialty.');
-  }
-  return profile;
-}
-
-/** Doctor's specialty ids — used by referral creation to denormalise the
- * target specialty onto the referral for the loop guard. */
-export async function listDoctorSpecialtyIds(doctorProfileId: string) {
-  const specialties = await doctorsRepo.findDoctorSpecialties(doctorProfileId);
-  return specialties.map((link) => link.specialtyId);
-}

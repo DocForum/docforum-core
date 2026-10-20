@@ -31,10 +31,3 @@ export async function lockVerificationStatus(
 export function updateVerificationStatus(db: DbClient, id: string, status: VerificationStatus) {
   return db.doctorProfile.update({ where: { id }, data: { verificationStatus: status } });
 }
-
-export function findDoctorSpecialties(doctorProfileId: string) {
-  return prisma.doctorSpecialty.findMany({
-    where: { doctorProfileId },
-    include: { specialty: true },
-  });
-}
