@@ -15,10 +15,10 @@ Instructions for any coding agent (human-directed or autonomous) working in this
 4. `ROADMAP.md` — current phase, what's done, what's next, what's explicitly not started.
 
 ## Non-negotiable rules
-- Follow the **Hard rules** section in `ARCHITECTURE_ESSENTIALS.md` exactly. These are not style preferences — violating them (e.g., mutating a `Prescription` after issuance, app-level slot booking checks instead of DB-level) reintroduces the exact bug classes the architecture was designed to prevent.
+- Follow the **Hard rules** section in `ARCHITECTURE_ESSENTIALS.md` exactly. These are not style preferences — violating them (e.g., mutating a `Prescription` after issuance, app-level slot booking checks instead of DB -level) reintroduces the exact bug classes the architecture was designed to prevent.
 - **Never invent a data model field or table that isn't in `backend/prisma/schema.prisma`.** If a task needs a new field/table, propose the schema change explicitly in the PR description and update `ARCHITECTURE.md` §4 in the same PR.
 - **Never cross a module boundary directly.** If module A needs data from module B, call B's exported service — do not import B's repository or query B's tables directly from A.
-- Keep the module folder shape consistent: `routes/ controllers/ services/ repositories/`. If a module doesn't need one of these yet, leave the folder with a placeholder file rather than deleting it — folder structure is intentional scope-marking (see scaffold rationale in ROADMAP.md intro).
+- Keep the module folder shape consistent: `routes/ controllers/ services/ repositories/`. If a module doesn't need one of these yet, leave the folder with a placeholder file rather than deleting it — folder structure is intentional scope-marking (see scaffold rationale in ROADMaP.md intro).
 
 ## Documentation is part of the contribution — not optional
 Every PR/commit that does any of the following **must** update the relevant doc in the same change:
@@ -27,7 +27,7 @@ Every PR/commit that does any of the following **must** update the relevant doc 
 | Adds/changes a data model or table | `ARCHITECTURE.md` §4 + `ARCHITECTURE_ESSENTIALS.md` data model map if it affects the summary |
 | Adds/removes a module or changes a module boundary | `ARCHITECTURE.md` §3 + `ARCHITECTURE_ESSENTIALS.md` |
 | Changes tech stack / adds a dependency that's architecturally significant (new infra, new provider) | `ARCHITECTURE.md` §2, and add an ADR in `docs/adr/` if it reverses or overrides a prior stack decision |
-| Completes, starts, or blocks a roadmap item | **`ROADMAP.md` — always.** Move the item, update its status, add a one-line note if you discovered new scope. This is required for every PR that touches roadmap-tracked work, no exceptions. |
+| Completes, starts, or blocks a roadmap item | **(ROADMAP.md — always.** Move the item, update its status, add a one-line note if you discovered new scope. This is required for every PR that touches roadmap-tracked work, no exceptions. |
 | Resolves or discovers a "hard question" / edge case / overengineering flag in PRD.md §8 or ARCHITECTURE.md §6 | Update that section — mark resolved with a short note, or add the newly discovered item. Do not silently drop these. |
 
 **If you're not sure whether a change is "significant enough" to need a doc update: update the doc.** A stale doc is worse than a slightly over-documented one in this repo, because other agents/contributors treat these files as ground truth before reading code.
@@ -37,6 +37,15 @@ Every PR/commit that does any of the following **must** update the relevant doc 
 - Prefer the "boring" solution described in `ARCHITECTURE.md` over a cleverer one, especially around concurrency (booking) and data mutability (orders). Cleverness there is a liability, not a feature.
 - When you hit an unresolved design gap listed in `ARCHITECTURE_ESSENTIALS.md` ("Known unresolved design gaps"), don't silently invent a resolution — implement the smallest reasonable default, note the assumption in the PR description, and leave the gap noted (or mark it resolved if your PR actually closes it).
 - Tests: booking, referral, and order-issuance flows are correctness-critical (see ARCHITECTURE.md §7) — these need integration tests, not just unit tests, before being considered done.
+
+## Query budget convention (N + 1 guards)
+List endpoints must not run a number of Prisma queries that grows with the result size. To make this a tested property rather than a review nickety:
+
+- Use the query-counting helper in `backend/tests/integration/helpers/query-budget.ts` (`countQueriesDuring`). It subscribes to Prisma query events for the duration of a single supertest request and returns the per-request count. Never count globally — parallel tests would interfere.
+- Every list endpoint gets a budget assertion in `backend/tests/integration/` (e.g. `GET /appointments/mine <= 3 queries`).
+- Assert the budget at **1 row and at least 50 rows**. The budget must be constant in result size — that is the whole point of the test.
+- If an endpoint exceeds its budget, fix the endpoint (`relationLoad`, includes, batched queries) rather than raising the budget. Raising a budget requires justification in the PR description.
+- New list endpoints add a budget test in the same PR as the endpoint. This is not optional.
 
 ## For CLAUDE.md
 `CLAUDE.md` in this repo defers to this file for substantive project rules and only adds Claude-specific operating notes (tool usage, file skills, etc.). Keep the two in sync — don't duplicate rules, reference them.

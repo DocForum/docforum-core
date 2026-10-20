@@ -28,6 +28,14 @@ export function findAppointmentsPageForPatient(patientProfileId: string, cursor:
   });
 }
 
+/**
+ * A patient's appointments with their availability slot, for the list
+ * endpoint (GET /appointments/mine). This is a single query with a
+ * relation include — the relation is fetched by Prisma in a batched
+ * query, not an N + 1 loop. Keep the query count constant in result
+ * size so the query-budget tests in tests/integration/query-budget
+ * continue to pass.
+ */
 export function findAppointmentsForPatient(patientProfileId: string) {
   return prisma.appointment.findMany({
     where: { patientProfileId },
@@ -38,7 +46,10 @@ export function findAppointmentsForPatient(patientProfileId: string) {
 
 /** Minimal appointment context for a doctor-owned consultation. */
 export function findAppointmentDoctorContext(id: string) {
-  return prisma.appointment.findUnique({ where: { id }, include: { doctorProfile: { select: { id: true, userId: true, verificationStatus: true } } } });
+  return prisma.appointment.findUnique({
+    where: { id },
+    include: { doctorProfile: { select: { id: true, userId: true, verificationStatus: true } } },
+  });
 }
 
 export function findAppointmentById(db: DbClient, id: string) {
