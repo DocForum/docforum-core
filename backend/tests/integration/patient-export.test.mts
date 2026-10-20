@@ -288,7 +288,7 @@ describe('patient data export', () => {
 
     const appointments = bundle.sections.appointments.items;
     expect(appointments).toHaveLength(23);
-    expect(new Set(appointments.map((a: { id: string }) => a.id)).size).toBe(21);
+    expect(new Set(appointments.map((a: { id: string }) => a.id)).size).toBe(23);
     for (const appointment of appointments) {
       expect(appointment.doctor).toEqual({ id: doctorProfileId, fullName: 'export-doctor Fullname' });
       expect(appointment.slot.startTime).toBeTruthy();
