@@ -130,6 +130,7 @@ for status and issue links.
 - [ ] Staging environment. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [ ] Production environment + secrets management. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [x] Docs site deployed — `docs/site/` (VitePress) via `.github/workflows/deploy-docs.yml`, live at https://docforum.github.io/docforum-core/. Unrelated to the production-deploy decision above; this is a static site with no backend of its own.
+- [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.js`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
 
 ## Explicitly deferred (not on this roadmap, tracked so they aren't forgotten)
 - In-app video/voice consultation (PRD OQ-1 — v1 assumes in-person + async messaging).
@@ -407,3 +408,4 @@ for status and issue links.
   observed state, so a racing second action gets 409 instead of silently
   overwriting). Rollback coupling proven with a real injected DB failure,
   not a mock. Phase 3/4 wiring explicitly left pending.
+- 2026-10-20 — Added the PR conflict notifier workflow (see the CI item above): maintainers no longer need to manually ask authors to rebase after each merge.
