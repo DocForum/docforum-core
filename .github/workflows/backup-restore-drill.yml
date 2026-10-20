@@ -1,0 +1,94 @@
+name: Backup restore drill
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # daily at 03:00 UTC
+  workflow_dispatch:
+
+env:
+  PGCLIENT_VERSION: '16'
+
+jobs:
+  backup-and-restore:
+    name: Backup and restore drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: drill
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >
+          --health-cmd = pg_isready -U drill -d app
+          --health-interval = 1s
+          --health-timeout = 5s
+          --health-retries = 10
+    env:
+      DATABASE_URL: postgres://drill:drill@127.0.0.1:5432/app
+      RESTORE_TARGET_URL: postgres://drill:drill@127.0.0.1:5432/app_drill
+      BACKUP_ENCRYPTION_KEY: $>
+        {{ secrets.BACKUP_ENCRYPTION_KEY || 'drill-passphrase-not-for-prod' }}
+      BACKUP_DIR: ${{ runner.temp }}/backups
+      BACKUP_RETENTION_DAYS: '14'
+      RESTORE_CONFIRM: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Postgres clients
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          pg_dump --version
+          ps_sql --version
+
+      - name: Wait for Postgres
+        run: |
+          for i in $(seq 1 30); do
+            pg_isready -U drill -d app && break
+            sleep 1
+          done
+
+      - name: Seed source database
+        run: |
+          psql "$DATABASE_URL" << 'SQL'
+          CREATE TABLE IF NOT EXISTS _prisma_migrations (
+            id TEXT PRIMARY KEY,
+            checksum TEXT NOT NULL,
+            finished_at TIMESTAMP NOT NULL,
+            migration_name TEXT NOT NULL,
+            logs TEXT
+          );
+          INSERT INTO _prisma_migrations (id, checksum, finished_at, migration_name)
+            VALUES ('20250101000000_init', 'drill', now(), 'init');
+          CREATE TABLE IF NOT EXISTS "users" (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL
+          );
+          INSERT INTO "users" (id, email) VALUES ('u-1', 'drill@example.test');
+          CREATE TABLE IF NOT EXISTS "bookings" (
+            id TEXT PRIMARY KEY,
+            "userId" TEXT NOT NULL REFERENCES "users"(id),
+            status TEXT NOT NULL
+          );
+          INSERT INTO "bookings" (id, "userId", status) VALUES ('b-1', 'u-1', 'confirmed');
+          SQL
+
+      - name: Take encrypted backup
+        run: |
+          chmod +x scripts/backup-postgres.sh
+          ./scripts/backup-postgres.sh
+
+      - name: Run restore drill
+        run: |
+          chmod +x scripts/restore-drill.sh
+          ./scripts/restore-drill.sh
+
+      - name: Alert on failure
+        if: failure()
+        run: |
+          echo "::warning::backup restore drill failed -- backups may not be restorable"
+          exit 1

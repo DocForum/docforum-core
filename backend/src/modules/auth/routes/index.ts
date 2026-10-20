@@ -6,6 +6,9 @@ import * as authController from '../controllers';
 export const authRouter = Router();
 
 authRouter.post('/signup', authController.signup);
+// Phase 8, issue #39: admin invite redemption (the admin invite itself is
+// issued by `POST /admin/invites` in the users module).
+authRouter.post('/signup-with-invite', authController.signupWithInvite);
 authRouter.post('/login', authController.login);
 
 // Phase 8, issue #34 — email verification.
@@ -24,3 +27,17 @@ authRouter.post('/login-attempts/clear', authenticate, requireRole('admin'), aut
 // /logout. See middleware/csrf.ts for the choice and its justification.
 authRouter.post('/refresh', requireAllowedOrigin, authController.refresh);
 authRouter.post('/logout', requireAllowedOrigin, authController.logout);
+
+// Session management (Phase 8 #38). Note the ordering: `DELETE /sessions`
+// (revoke all others) is registered before `DELETE /sessions/:id` — Express
+// matches in registration order, and `/sessions` must not be read as an id.
+authRouter.get('/sessions', authenticate, authController.listSessions);
+authRouter.delete('/sessions', authenticate, authController.revokeOtherSessions);
+authRouter.delete('/sessions/:id', authenticate, authController.revokeSession);
+
+/** Admin routes for the auth module, mounted at `/admin` in app.ts. Session
+ * administration acts on *another* user, so it doesn't belong under
+ * `/auth`. */
+export const adminAuthRouter = Router();
+
+adminAuthRouter.delete('/users/:id/sessions', authenticate, requireRole('admin'), authController.revokeUserSessions);

@@ -1,0 +1,46 @@
+name: PR conflict notifier
+
+# Labels open PRs that conflict with main as `needs-rebase` and @mentions the
+# author once per push with rebase steps. Runs from main only (push, schedule,
+# manual), reads PRs through the API and never checks out PR code, so it is
+# safe to run against untrusted fork PRs.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Catches PRs opened or pushed between merges to main.
+    - cron: '23 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Log what would happen without labelling or commenting
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: pr-conflict-notifier
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Checks out main (the trusted default branch), never a PR head.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Label and notify conflicting PRs
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const notify = require('./.github/scripts/pr-conflict-notifier.cjs');
+            await notify({ github, context, core, dryRun: context.eventName === 'workflow_dispatch' && `${{ inputs.dry_run }}` === 'true' });
