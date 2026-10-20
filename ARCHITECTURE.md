@@ -42,7 +42,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 Each module under `backend/src/modules/<name>/` owns its own `routes/`, `controllers/`, `services/`, `repositories/`. Cross-module access happens through a module's exported service interface only — **never reach into another module's repository directly.** This is the internal seam that would let us extract a module into its own service later without a rewrite.
 
 - `auth` — signup/login, tokens, role checks.
-- `users` — shared user profile fields common to all roles.
+- `users` — shared user profile fields common to all roles, plus the admin account lifecycle (invites, soft deactivation — issue #39). `auth` calls this module's services to create an invited admin; `users` never calls back into `auth`.
 - `patients` — patient-specific profile data.
 - `doctors` — doctor profile, specialties, verification status.
 - `facilities` — lab/pharmacy accounts, capability tags (what order types they can fulfill).
@@ -54,7 +54,7 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `lab-orders` — lab order issuance and versioning.
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
-- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking, doctor verification, payment fund/release/refund. **Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here.
+- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking, doctor verification, payment fund/release/refund. **Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
 
 ### 3.1 Patient data export registry (Phase 8, issue #40)
 
@@ -291,6 +291,38 @@ PatientExportChunk
 Bundle format (schemaVersion 1): `{ format: "docforum.patient-export",
 schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }`
 — see §3.1 for where sections come from.
+
+### 4.11 PHI read-access log (Phase 8, issue #45)
+```
+AccessLog
+  id, accessed_by (nullable FK → User, SET NULL on delete — the row keeps
+    its timestamp and entity while the PII pointer is removed)
+  patient_profile_id (nullable FK → PatientProfile, CASCADE — the record
+    owner, whose data was viewed; used by the patient-facing query)
+  entity_type ('IntakeForm' | 'Consultation' | 'Prescription' |
+    'PrescriptionItem' | 'LabOrder' | 'LabResult' | 'Referral' |
+    'PaymentIntent' | 'PatientProfile' | 'Appointment'), entity_id
+  route (nullable — the HTTP route that returned the payload),
+    detail (nullable — context string, never PHI)
+  accessed_at (default now)
+  # indexes: (accessed_at), (accessed_by), (patient_profile_id,
+    accessed_at), (entity_type, entity_id).
+```
+Answers "who looked at this" — distinct from `AuditEvent`'s "who changed
+this" (§4.10). Reads are far higher volume than state changes, so:
+- writes go through `auditService.recordAccess()`, which is
+  **fire-and-forget** (never awaited on the read path — a unit test pins
+  sub-50ms return with a hanging insert) and **fail-open** (a logging
+  failure never fails the read, but is counted and surfaced via
+  `GET /admin/access-logs/stats` for alerting);
+- rows are **retention-managed**, not append-only: `pruneOldAccessLogs()`
+  (wired into the prune interval in `src/server.ts`) deletes rows older
+  than `ACCESS_LOG_RETENTION_DAYS` (default 365). That delete is the only
+  one in the audit repositories and is bounded to the retention cutoff.
+Patient-facing query (`GET /patients/me/access-log`) is scoped server-side
+to the caller's own profile (resolved from the authenticated user, never
+from the request) and strips all viewer PII to a role — a deleted viewer
+surfaces as `deleted_user`.
 
 ## 5. Key flows (sequence-level, not code)
 
