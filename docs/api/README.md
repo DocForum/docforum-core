@@ -180,9 +180,9 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 | `GET /referrals/mine` | patient | — | `{ referrals, groupedByConsultation }` — grouped for the "one visit, several referrals" view (#66). |
 | `GET /referrals/created` | doctor | — | Referrals the caller created, including ones the cascade expired (see `referringDoctorNotifiedAt`) and ones the loop guard flagged. |
 | `GET /referrals/admin/queue` | admin | query: `status`, `olderThan` (`48h` / `7d`), `loopFlagged` (`true`\|`false`) | Issue #68 — stuck/aged/loop-flagged referrals with a derived human-readable `reason` and `ageMinutes`. |
-| `POST /referrals/admin/:referralId/reassign` | admin | `{ targetDoctorId, reason }` | **Pending referrals only.** Moves `targetDoctorId` (validated through the doctors service) — the snapshot, lineage and patient are untouched. Writes an `AuditEvent` (`referral.reassign`). |
-| `POST /referrals/admin/:referralId/cancel` | admin | `{ reason }` | Pending or accepted (`409` on terminal). Cancelling an accepted referral also cancels its live appointment through the appointments service. Writes an `AuditEvent` (`referral.cancel`). `cancelled` is distinct from `expired`/`declined` so the three exits stay tellable apart. |
-| `GET /referrals/admin/:referralId/audit-events` | admin | — | The referral's `AuditEvent` rows (actor, role, action, reason, metadata, timestamp). |
+| `POST /referrals/admin/:referralId/reassign` | admin | `{ targetDoctorId, reason }` | **Pending referrals only.** Moves `targetDoctorId` (validated through the doctors service) — the snapshot, lineage and patient are untouched. Writes an `AuditEvent` (`referral.reassign`) in the one append-only audit trail, as a `Referral`-typed row. |
+| `POST /referrals/admin/:referralId/cancel` | admin | `{ reason }` | Pending or accepted (`409` on terminal). Cancelling an accepted referral also cancels its live appointment through the appointments service. Writes an `AuditEvent` (`referral.cancel`) in the one append-only audit trail, as a `Referral`-typed row. `cancelled` is distinct from `expired`/`declined` so the three exits stay tellable apart. |
+| `GET /referrals/admin/:referralId/audit-events` | admin | — | The referral's audit rows, read from the same `AuditEvent` table `GET /admin/audit-events` serves (`entityType: 'Referral'`, `entityId: <referralId>`): actor, role, action, from/to state, metadata (the admin's `reason` lives in `metadata.reason`), timestamp. |
 
 ## Payments (`/payments`) — `backend/src/modules/payments`
 
@@ -217,9 +217,9 @@ started appear at the front of a new scan, not mid-way through the old one.
 `400 INVALID_CURSOR` for a malformed cursor; `400` if `from` is after `to`.
 
 Recorded today: `appointment.booked`, `doctor.verification_status_changed`,
-`payment_intent.{funded,released,refunded}` — see ARCHITECTURE.md §4.10.
-There is no write or delete endpoint, and the table rejects UPDATE/DELETE
-in the database.
+`payment_intent.{funded,released,refunded}`, `referral.reassign`,
+`referral.cancel` — see ARCHITECTURE.md §4.10. There is no write or delete
+endpoint, and the table rejects UPDATE/DELETE in the database.
 
 Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
 return `409` when the intent changed state concurrently between the check
@@ -283,34 +283,6 @@ the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZ
 `PATIENT_EXPORT_CLEANUP_INTERVAL_SECONDS`, `PATIENT_EXPORT_STALE_AFTER_SECONDS`,
 `PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
 `backend/src/jobs/README.md`.
-
-## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
-
-Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
-well-formed inbound `X-Request-Id` (8–128 chars of `[A-Za-z0-9._:-]`) is
-kept, anything else is replaced with a UUID. Audit events store it, so an
-event can be traced to the request (and logs) that caused it.
-
-| Method & path | Auth | Notes |
-|---|---|---|
-| `GET /admin/audit-events` | admin | Newest first. Query: `entityType`, `entityId` (requires `entityType`), `actorUserId`, `from` / `to` (ISO-8601 date or date-time, inclusive), `limit` (1–200, default 50), `cursor`. Unknown parameters are `400`. Returns `{ items, nextCursor }`; pass `nextCursor` back as `cursor` for the next page (`null` = last page). |
-
-Item shape: `{ id, actorUserId, actorRole, entityType, entityId, action,
-fromState, toState, requestId, metadata, createdAt }`. `metadata` is a small
-flat map of ids/codes (never personal data). Ordering is
-`(createdAt DESC, id DESC)` and the cursor is a keyset position on that
-pair, so paging never skips or repeats an event; events written after a scan
-started appear at the front of a new scan, not mid-way through the old one.
-`400 INVALID_CURSOR` for a malformed cursor; `400` if `from` is after `to`.
-
-Recorded today: `appointment.booked`, `doctor.verification_status_changed`,
-`payment_intent.{funded,released,refunded}` — see ARCHITECTURE.md §4.10.
-There is no write or delete endpoint, and the table rejects UPDATE/DELETE
-in the database.
-
-Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
-return `409` when the intent changed state concurrently between the check
-and the write (previously the second write silently overwrote the first).
 
 ## Not yet implemented
 

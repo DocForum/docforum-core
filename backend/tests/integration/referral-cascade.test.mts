@@ -23,7 +23,7 @@ import {
 } from './helpers/fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5441;
+const PORT = 5446;
 const runId = Date.now();
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-test-pg-'));

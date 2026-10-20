@@ -1,8 +1,10 @@
 // Referral foundation (issues #5/#7 minimal): creation from a
 // consultation, snapshot copy, patient accept (books the referral
 // appointment) and decline — plus the creation-time validation gates.
-// Self-contained embedded Postgres on port 5440 (see booking.test.mts
-// for the why of that pattern).
+// Self-contained embedded Postgres on port 5445 (see booking.test.mts
+// for the why of that pattern). Every integration file needs its OWN port —
+// vitest runs them in parallel, and two files on one port means one of them
+// fails to start.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,7 +26,7 @@ import {
 } from './helpers/fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5440;
+const PORT = 5445;
 const runId = Date.now();
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-test-pg-'));
