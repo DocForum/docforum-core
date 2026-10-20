@@ -65,13 +65,13 @@ ALTER TABLE "LabResult" ADD CONSTRAINT "LabResult_fulfillingFacilityId_fkey" FOR
 
 -- Remove preview/manual intents without a resolvable order. Never discard a
 -- funded or terminal payment record; abort and require an operator review.
-DELETE FROM "PaymentIntent" pi
+DELETE FROM "PaymentIntent" AS pi
 WHERE pi."status" = 'created'
   AND ((pi."orderType" = 'prescription' AND NOT EXISTS (SELECT 1 FROM "Prescription" p WHERE p."id" = pi."orderId'))
     OR (pi."orderType" = 'lab_order' AND NOT EXISTS (SELECT 1 FROM "LabOrder" l WHERE l."id" = pi."orderId')));
 DO $$ BEGIN
   IF EXISTS (
-    SELECT 1 FROM "PaymentIntent" pi
+    SELECT 1 FROM "PaymentIntent" AS pi
     WHERE (pi."orderType" = 'prescription' AND NOT EXISTS (SELECT 1 FROM "Prescription" p WHERE p."id" = pi."orderId'))
        OR (pi."orderType" = 'lab_order' AND NOT EXISTS (SELECT 1 FROM "LabOrder" l WHERE l."id" = pi."orderId'))
   ) THEN RAISE EXCEPTION 'Orphaned non-created PaymentIntent rows need manual reconciliation'; END IF;
