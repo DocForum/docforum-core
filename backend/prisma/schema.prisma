@@ -98,17 +98,28 @@ enum Urgency {
 // =========================================================================
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  phone        String?
-  passwordHash String
-  role         Role
+  id              String    @id @default(uuid())
+  email           String    @unique
+  phone           String?
+  passwordHash    String
+  role            Role
   // Phase 8 (issue #34): null = never verified. Self-serve signup leaves
   // this null; existing rows were backfilled to `createdAt` in the
   // add_email_verification migration. Distinct from
   // DoctorProfile.verificationStatus, which is the separate, manual
   // admin verification of a doctor's credentials — do not conflate.
   emailVerifiedAt DateTime?
+  // Phase 8 (issue #39): null = active. Deactivating never deletes anything
+  // — no clinical or payment record is keyed to this flag, and none of the
+  // deactivation paths remove rows. Login, refresh and access tokens are all
+  // refused while this is set.
+  deactivatedAt DateTime?
+  // Phase 8 (issue #39): bumped when an account is deactivated/reactivated,
+  // so access tokens minted before that moment stop working immediately
+  // instead of living out their 15-minute TTL. There is still no general
+  // refresh-token revocation list (issue #18) — this is the narrow "revoke
+  // everything for one account" case that deactivation needs.
+  sessionsInvalidatedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -117,6 +128,10 @@ model User {
   facilityProfile FacilityProfile?
 
   emailVerificationTokens EmailVerificationToken[]
+  adminInvitesSent AdminInvite[]
+  // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
+  // Opposite of AccessLog.accessedByUser.
+  accessLogs AccessLog[]
 
   @@index([role])
 }
@@ -136,6 +151,20 @@ model EmailVerificationToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model AdminInvite {
+  id              String    @id @default(uuid())
+  email           String
+  tokenHash       String    @unique
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  invitedByUserId String
+  createdAt       DateTime  @default(now())
+
+  invitedBy User @relation(fields: [invitedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([email])
 }
 
 // Phase 8 (issue #35): login-throttle state. Deliberately in Postgres and
@@ -186,6 +215,9 @@ model PatientProfile {
   prescriptions  Prescription[]
   labOrders      LabOrder[]
   dataExports    PatientExport[]
+
+  // Phase 8 (issue #45): who viewed this patient's records.
+  accessLogs AccessLog[]
 }
 
 // Phase 8 (issue #40): right-of-access export jobs. One row per request;
@@ -367,6 +399,32 @@ model Appointment {
 }
 
 // =========================================================================
+model AccessLog {
+  id               String   @id @default(uuid())
+  // Who viewed. SetNull on user delete keeps the log row (timestamp +
+  // entity remain) while removing the PII pointer.
+  accessedBy       String?
+  // Which patient's records were viewed (the record owner, not the viewer).
+  patientProfileId String?
+  // Entity that was read: 'IntakeForm' | 'Consultation' | 'Prescription' |
+  // 'LabOrder' | 'LabResult' | 'Referral' | 'PaymentIntent' | 'PatientProfile'
+  entityType       String
+  entityId         String
+  // The HTTP route that returned the payload (for correlating with access logs).
+  route            String?
+  // Free-text detail — no PHI here, just context like "GET /appointments/mine".
+  detail           String?
+  accessedAt       DateTime @default(now())
+
+  accessedByUser User?           @relation(fields: [accessedBy], references: [id], onDelete: SetNull)
+  patientProfile PatientProfile? @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+
+  @@index([accessedAt])
+  @@index([accessedBy])
+  @@index([patientProfileId, accessedAt])
+  @@index([entityType, entityId])
+}
+
 // Below this line: Phase 0 structural placeholders, not yet implemented.
 // See ROADMAP.md for phase order.
 // =========================================================================
