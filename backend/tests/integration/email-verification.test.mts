@@ -256,16 +256,16 @@ describe('email verification', () => {
     const login = await request(app).post('/auth/login').send({ email, password: 'longenough123' });
     const adminToken = login.body.accessToken as string;
 
-    const blocked = await request(app).post('/payments/intents').set('Authorization', `Bearer ${adminToken}`).send({});
+    const blocked = await request(app).post('/payments/intents/00000000-0000-4000-8000-000000000000/fund').set('Authorization', `Bearer ${adminToken}`).send({});
     expect(blocked.status).toBe(403);
     expect(blocked.body.code).toBe('EMAIL_NOT_VERIFIED');
 
     await request(app).post('/auth/verify-email').send({ token: tokenFor(email) });
 
-    // Past the guard it reaches body validation, which is the proof the
+    // Past the guard it reaches the intent lookup, which is the proof the
     // guard was what stopped it a moment ago.
-    const unblocked = await request(app).post('/payments/intents').set('Authorization', `Bearer ${adminToken}`).send({});
-    expect(unblocked.status).toBe(400);
+    const unblocked = await request(app).post('/payments/intents/00000000-0000-4000-8000-000000000000/fund').set('Authorization', `Bearer ${adminToken}`).send({});
+    expect(unblocked.status).toBe(404);
     expect(unblocked.body.code).toBeUndefined();
   });
 });

@@ -20,4 +20,5 @@ export function setEscrowSdkForTests(sdk: EscrowSdkModule | undefined): void {
   modulePromise = sdk ? Promise.resolve(sdk) : undefined;
 }
 
+export type EscrowSdkKeypair = InstanceType<EscrowSdkModule['Keypair']>;
 export type { EscrowSdkModule };
