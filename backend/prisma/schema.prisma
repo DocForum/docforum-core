@@ -162,6 +162,27 @@ model EmailVerificationToken {
   @@index([userId])
 }
 
+// Password reset tokens (Phase 8 #33). Only the SHA-256 hash of the
+// token is ever stored — the raw token exists exactly once, in the
+// notification that carries the reset link, and is never logged or
+// persisted. Single-use (`usedAt`) and expiring (`expiresAt`).
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // SHA-256 hex of the raw token. Unique so lookup-by-hash is a single
+  // indexed read, and a duplicate hash (astronomically unlikely) is a
+  // constraint violation rather than a silent overwrite.
+  tokenHash String    @unique
+  expiresAt DateTime
+  // Non-null once used or superseded by a newer request — either way the
+  // token is dead. Requesting a second reset marks the first one used.
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
 model AdminInvite {
   id              String    @id @default(uuid())
   email           String

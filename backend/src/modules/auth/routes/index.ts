@@ -27,3 +27,8 @@ authRouter.post('/login-attempts/clear', authenticate, requireRole('admin'), aut
 // /logout. See middleware/csrf.ts for the choice and its justification.
 authRouter.post('/refresh', requireAllowedOrigin, authController.refresh);
 authRouter.post('/logout', requireAllowedOrigin, authController.logout);
+
+// Password reset (Phase 8 #33) — both unauthenticated; possession of the
+// emailed single-use token is the credential for the confirm step.
+authRouter.post('/password-reset/request', authController.requestPasswordReset);
+authRouter.post('/password-reset/confirm', authController.confirmPasswordReset);

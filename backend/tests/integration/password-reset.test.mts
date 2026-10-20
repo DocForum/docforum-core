@@ -204,15 +204,22 @@ describe('password reset', () => {
     const login = await request(app).post('/auth/login').send({ email, password: newPassword });
     expect(login.status).toBe(200);
     const cookie = login.headers['set-cookie']?.[0] as unknown as string;
+    const csrfToken = login.body.csrfToken as string;
     expect(cookie).toBeTruthy();
+    expect(csrfToken).toBeTruthy();
 
-    expect((await request(app).post('/auth/refresh').set('Cookie', cookie)).status).toBe(200);
+    expect(
+      (await request(app).post('/auth/refresh').set('Cookie', cookie).set('X-CSRF-Token', csrfToken)).status,
+    ).toBe(200);
 
     expect((await requestReset(email)).status).toBe(202);
     expect((await confirmReset(lastToken(), newPassword)).status).toBe(200);
 
     // Same cookie, same token — now revoked by the tokenVersion bump.
-    const afterReset = await request(app).post('/auth/refresh').set('Cookie', cookie);
+    const afterReset = await request(app)
+      .post('/auth/refresh')
+      .set('Cookie', cookie)
+      .set('X-CSRF-Token', csrfToken);
     expect(afterReset.status).toBe(401);
   });
 

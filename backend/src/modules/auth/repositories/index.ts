@@ -184,3 +184,58 @@ export function clearLoginAttempts(buckets: { scope: string; key: string }[]) {
 export function pruneStaleLoginAttempts(before: Date) {
   return prisma.loginAttempt.deleteMany({ where: { lastFailedAt: { lt: before } } }).then((result) => result.count);
 }
+
+/**
+ * Stores a new single-use reset token for a user, superseding any of that
+ * user's outstanding ones in the same transaction — "requesting a second
+ * reset invalidates the first token" is a DB-level guarantee here, not an
+ * application-level hope.
+ */
+export function createPasswordResetToken(input: {
+  userId: string;
+  tokenHash: string;
+  expiresAt: Date;
+}) {
+  return prisma.$transaction(async (tx) => {
+    await tx.passwordResetToken.updateMany({
+      where: { userId: input.userId, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    return tx.passwordResetToken.create({
+      data: { userId: input.userId, tokenHash: input.tokenHash, expiresAt: input.expiresAt },
+    });
+  });
+}
+
+/** Lookup by token hash (unique index) — never by the raw token, which is
+ * never stored. */
+export function findPasswordResetTokenByHash(tokenHash: string) {
+  return prisma.passwordResetToken.findUnique({ where: { tokenHash } });
+}
+
+/**
+ * Consumes a reset token and applies the new password in one transaction:
+ * marks the token used, sets the new password hash, and increments
+ * `User.tokenVersion` so every previously issued refresh token for this
+ * user stops working (issue #33; the full revocation list is #18).
+ */
+export function consumePasswordResetToken(input: {
+  tokenId: string;
+  userId: string;
+  passwordHash: string;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.passwordResetToken.updateMany({
+      where: { id: input.tokenId, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    // Two concurrent confirms of the same token: only one claims the row.
+    if (claimed.count !== 1) return false;
+
+    await tx.user.update({
+      where: { id: input.userId },
+      data: { passwordHash: input.passwordHash, tokenVersion: { increment: 1 } },
+    });
+    return true;
+  });
+}

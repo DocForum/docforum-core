@@ -13,6 +13,8 @@ export interface AccessTokenPayload {
    * compare against `User.sessionsInvalidatedAt` (Phase 8, issue #39) —
    * tokens minted before a deactivation must stop working immediately. */
   iat?: number;
+  /** User.tokenVersion at issue time. Compared at refresh time (Phase 8 #33). */
+  tv?: number;
 }
 
 /**

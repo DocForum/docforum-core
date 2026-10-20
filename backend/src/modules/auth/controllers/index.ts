@@ -3,6 +3,8 @@ import * as authService from '../services';
 import {
   clearLoginAttemptsSchema,
   loginSchema,
+  passwordResetConfirmSchema,
+  passwordResetRequestSchema,
   signupSchema,
   signupWithInviteSchema,
   verifyEmailSchema,
@@ -151,6 +153,6 @@ export async function confirmPasswordReset(req: Request, res: Response) {
   // The reset already killed every refresh token for this user
   // (tokenVersion bump) — clear the caller's cookie too so a browser that
   // still holds the old one isn't left sending a dead token.
-  res.clearCookie(REFRESH_COOKIE, REFRESH_COOKIE_OPTIONS);
+  res.clearCookie(REFRESH_COOKIE, config.cookie);
   res.status(200).json({ message: 'Password updated. Please sign in with your new password.' });
 }
