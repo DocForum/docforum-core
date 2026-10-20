@@ -1,6 +1,12 @@
 import type { Request, Response } from 'express';
 import * as authService from '../services';
-import { clearLoginAttemptsSchema, loginSchema, signupSchema, verifyEmailSchema } from '../validation';
+import {
+  clearLoginAttemptsSchema,
+  loginSchema,
+  signupSchema,
+  signupWithInviteSchema,
+  verifyEmailSchema,
+} from '../validation';
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import { readCsrfHeader } from '../../../middleware/csrf';
@@ -59,14 +65,27 @@ export async function login(req: Request, res: Response) {
 }
 
 /** Admin-only: clear a login lock/throttle bucket for an account or an IP.
- * Writes an audit line to the server log — there is no AuditEvent table yet
- * (ARCHITECTURE_ESSENTIALS.md known gaps), so this is the interim record. */
+ * Writes an audit line to the server log. Not wired into AuditEvent yet
+ * (issue #43 covered booking, doctor verification and payments only — see
+ * ARCHITECTURE.md §6.2.4), so this is the interim record. */
 export async function clearLoginAttempts(req: Request, res: Response) {
   const { email, ip } = clearLoginAttemptsSchema.parse(req.body);
   const cleared = await authService.clearLoginAttempts({ email, ip });
   // eslint-disable-next-line no-console
   console.info(`[auth] admin ${req.user?.id ?? 'unknown'} cleared ${cleared} login-throttle bucket(s) (email=${email ?? '-'} ip=${ip ?? '-'})`);
   res.status(200).json({ cleared });
+}
+
+/**
+ * Admin invite redemption (Phase 8, issue #39). Lives in the auth module
+ * because it ends in a session, but the invite itself is the users module's
+ * business — see `authService.signupWithInvite`, which calls that module's
+ * service rather than touching its tables.
+ */
+export async function signupWithInvite(req: Request, res: Response) {
+  const input = signupWithInviteSchema.parse(req.body);
+  const session = await authService.signupWithInvite(input);
+  sessionResponse(res, session);
 }
 
 export async function refresh(req: Request, res: Response) {

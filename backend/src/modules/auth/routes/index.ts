@@ -7,6 +7,9 @@ import { authenticate } from '../../../middleware/auth';
 export const authRouter = Router();
 
 authRouter.post('/signup', authController.signup);
+// Phase 8, issue #39: admin invite redemption (the admin invite itself is
+// issued by `POST /admin/invites` in the users module).
+authRouter.post('/signup-with-invite', authController.signupWithInvite);
 authRouter.post('/login', authController.login);
 
 // Phase 8, issue #34 — email verification.

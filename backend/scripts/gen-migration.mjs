@@ -6,6 +6,11 @@
 // non-interactively (this environment has no TTY). Same embedded-postgres
 // pattern as tests/integration/booking.test.mts.
 //
+// Prisma 7 note (issue #47): `migrate diff` dropped `--shadow-database-url`
+// and renamed `--to-schema-datamodel` to `--to-schema`. The shadow database
+// is now configured through prisma.config.ts, so this script passes it as the
+// SHADOW_DATABASE_URL env var instead of a CLI flag.
+//
 // Usage: node scripts/gen-migration.mjs <migration_name>
 // After running, review prisma/migrations/<timestamp>_<name>/migration.sql
 // before committing — this generates the SQL, it doesn't apply it to your
@@ -44,13 +49,11 @@ try {
       'diff',
       '--from-migrations',
       'prisma/migrations',
-      '--to-schema-datamodel',
+      '--to-schema',
       'prisma/schema.prisma',
-      '--shadow-database-url',
-      shadowUrl,
       '--script',
     ],
-    { encoding: 'utf-8' },
+    { encoding: 'utf-8', env: { ...process.env, SHADOW_DATABASE_URL: shadowUrl } },
   );
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'migration.sql'), sql);

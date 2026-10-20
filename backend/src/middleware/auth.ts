@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { assertEmailVerified, verifyAccessToken } from '../modules/auth/services';
+import { assertActiveSession, assertEmailVerified, verifyAccessToken } from '../modules/auth/services';
 import { HttpError } from '../http-error';
 import type { Role } from '@prisma/client';
 
@@ -13,22 +13,30 @@ declare global {
 }
 
 /** Verifies the `Authorization: Bearer <accessToken>` header and attaches
- * `req.user`. Throws 401 if missing/invalid/expired — there is no
- * revocation list yet, so an expired token is the only way an access
- * token stops working before its 15-minute TTL (see config/index.ts). */
-export function authenticate(req: Request, _res: Response, next: NextFunction) {
+ * `req.user`.
+ *
+ * Throws 401 if missing/invalid/expired. Beyond expiry, `assertActiveSession`
+ * is a database read per request that rejects a deactivated account and any
+ * token minted before that account's sessions were invalidated (Phase 8,
+ * issue #39) — without it, a deactivated user's access token would keep
+ * working for the rest of its 15-minute TTL. This is not a general
+ * revocation list; that is still issue #18. */
+export async function authenticate(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     throw new HttpError(401, 'Missing or malformed Authorization header.');
   }
 
+  let payload;
   try {
-    const payload = verifyAccessToken(header.slice('Bearer '.length));
-    req.user = { id: payload.sub, role: payload.role };
-    next();
+    payload = verifyAccessToken(header.slice('Bearer '.length));
   } catch {
     throw new HttpError(401, 'Invalid or expired access token.');
   }
+
+  await assertActiveSession(payload.sub, payload.iat);
+  req.user = { id: payload.sub, role: payload.role };
+  next();
 }
 
 /** Must run after `authenticate`. Rejects with `403 EMAIL_NOT_VERIFIED`

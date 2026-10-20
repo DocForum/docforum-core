@@ -27,6 +27,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import EmbeddedPostgres from 'embedded-postgres';
+import { createOrderFixture, createPaymentIntentForFixture } from '../integration/order-fixtures.mjs';
 import { Keypair } from '@stellar/stellar-sdk';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -43,6 +44,11 @@ const pg = new EmbeddedPostgres({
 });
 const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_payments_test`;
 
+// Phase 8, issue #43: fund/release/refund now take the audit actor. This
+// suite calls the services directly (no HTTP request), so it acts as a
+// system actor.
+const TEST_ACTOR = { userId: null, role: null, requestId: `testnet-${runId}` };
+
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
   const res = await fetch(`https://friendbot.stellar.org?addr=${encodeURIComponent(kp.publicKey())}`);
@@ -55,6 +61,7 @@ describe('payments module against live testnet', () => {
   let paymentsService: typeof import('../../src/modules/payments/services/index.js');
   let facilityId: string;
   let patientProfileId: string;
+  let pharmacyFacilityId: string;
 
   beforeAll(async () => {
     await pg.initialise();
@@ -86,6 +93,11 @@ describe('payments module against live testnet', () => {
     });
     facilityId = facility.id;
 
+    const pharmacyUser = await prisma.user.create({ data: { email: `pharmacy-${runId}@example.com`, passwordHash: 'unused', role: 'facility' } });
+    const pharmacy = await prisma.facilityProfile.create({ data: { userId: pharmacyUser.id, name: 'Test Pharmacy', type: 'pharmacy' } });
+    pharmacyFacilityId = pharmacy.id;
+    await paymentsService.linkWallet(pharmacyFacilityId, (await fundedKeypair()).publicKey());
+
     const patientUser = await prisma.user.create({
       data: { email: `patient-${runId}@example.com`, passwordHash: 'unused', role: 'patient' },
     });
@@ -104,35 +116,25 @@ describe('payments module against live testnet', () => {
   });
 
   it('funds and releases a payment intent end-to-end on testnet', async () => {
-    const intent = await paymentsService.createPaymentIntent({
-      orderType: 'lab_order',
-      orderId: 'test-order-release',
-      patientProfileId,
-      facilityId,
-      amountStroops: 500_000n, // 0.05 XLM
-    });
+    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: 500_000n, tag: `release-${runId}` });
+    const intent = await createPaymentIntentForFixture(prisma, order);
     expect(intent.status).toBe('created');
 
-    const funded = await paymentsService.fundPaymentIntent(intent.id);
+    const funded = await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
     expect(funded.status).toBe('escrowed');
     expect(funded.escrowId).not.toBeNull();
     expect(funded.stellarTxHash).toBeTruthy();
 
-    const released = await paymentsService.releasePaymentIntent(intent.id);
+    const released = await paymentsService.releasePaymentIntent(TEST_ACTOR, intent.id);
     expect(released.status).toBe('released');
   }, 60_000);
 
   it('funds and refunds a payment intent end-to-end on testnet', async () => {
-    const intent = await paymentsService.createPaymentIntent({
-      orderType: 'prescription',
-      orderId: 'test-order-refund',
-      patientProfileId,
-      facilityId,
-      amountStroops: 500_000n,
-    });
+    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: pharmacyFacilityId, kind: 'prescription', amountStroops: 500_000n, tag: `refund-${runId}` });
+    const intent = await createPaymentIntentForFixture(prisma, order);
 
-    await paymentsService.fundPaymentIntent(intent.id);
-    const refunded = await paymentsService.refundPaymentIntent(intent.id);
+    await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
+    const refunded = await paymentsService.refundPaymentIntent(TEST_ACTOR, intent.id);
     expect(refunded.status).toBe('refunded');
   }, 60_000);
 
@@ -144,14 +146,9 @@ describe('payments module against live testnet', () => {
       data: { userId: unlinkedFacilityUser.id, name: 'Unlinked Facility', type: 'pharmacy' },
     });
 
-    const intent = await paymentsService.createPaymentIntent({
-      orderType: 'prescription',
-      orderId: 'test-order-unlinked',
-      patientProfileId,
-      facilityId: unlinkedFacility.id,
-      amountStroops: 500_000n,
-    });
+    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: unlinkedFacility.id, kind: 'prescription', amountStroops: 500_000n, tag: `unlinked-${runId}` });
+    const intent = await createPaymentIntentForFixture(prisma, order);
 
-    await expect(paymentsService.fundPaymentIntent(intent.id)).rejects.toThrow(/no linked wallet/);
+    await expect(paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id)).rejects.toThrow(/no linked wallet/);
   }, 30_000);
 });

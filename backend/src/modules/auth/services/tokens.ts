@@ -13,9 +13,10 @@ import type { Role } from '@prisma/client';
 export interface AccessTokenPayload {
   sub: string; // user id
   role: Role;
-  /** Present only on single-purpose tokens (currently `mfa_pending`). All
-   * other token types must leave it undefined. */
-  scope?: 'mfa_pending';
+  /** Issued-at, set by `jsonwebtoken` itself. Read by the auth middleware to
+   * compare against `User.sessionsInvalidatedAt` (Phase 8, issue #39) —
+   * tokens minted before a deactivation must stop working immediately. */
+  iat?: number;
 }
 
 /**
