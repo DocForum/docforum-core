@@ -22,7 +22,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
-`AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
+`AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation` (`appointmentId` **UNIQUE** — closing a consultation is a create-once operation, `409` on a second attempt; see docs/adr/0007)
 `Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
 `Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.

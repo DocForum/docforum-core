@@ -55,6 +55,7 @@ const KNOWN_ROUTES = [
   'POST /availability/doctors/:doctorProfileId/slots/generate',
   'POST /appointments',
   'GET /appointments/mine',
+  'POST /appointments/:appointmentId/consultation',
   'POST /payments/wallet-link',
   'GET /payments/wallet-link',
   'POST /payments/intents',
@@ -104,6 +105,11 @@ const ACCESS_MATRIX: MatrixRow[] = [
   // Appointments — POST is patient-only (verified email); GET /mine is patient-only
   { method: 'POST', path: '/appointments', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } }, // patient unverified → 403 EMAIL_NOT_VERIFIED
   { method: 'GET', path: '/appointments/mine', expected: { anon: 401, patient: 200, doctor: 403, facility: 403, admin: 403 } },
+
+  // Consultations (issue #4) — closing is doctor-only, and only for the
+  // doctor's own appointment. Placeholder id → "not found", so 404 for the
+  // doctor actor; anyone else is stopped by the role gate first.
+  { method: 'POST', path: '/appointments/:appointmentId/consultation', expected: { anon: 401, patient: 403, doctor: 404, facility: 403, admin: 403 } },
 
   // Payments — admin-triggered in v1; wallet-link is facility-only
   { method: 'POST', path: '/payments/wallet-link', expected: { anon: 401, patient: 403, doctor: 403, facility: 400, admin: 403 } },
@@ -241,9 +247,15 @@ describe('Access-control test suite: who may read intake, consultation and payme
     expect(true).toBe(true);
   });
 
-  it('non-participating doctors cannot read a consultation (IDOR guard)', async () => {
-    // TODO(issue #3/#4): once consultation routes exist, seed two doctors
-    // and assert doctor B gets 403/404 on doctor A's consultation.
+  it('non-participating doctors cannot act on a consultation (IDOR guard)', async () => {
+    // The only consultation route in v1 is close/create, covered by the matrix
+    // row above (doctor → 404 for an appointment that isn't theirs, never a
+    // 403 that would confirm it exists). The write path itself — including a
+    // real second doctor being refused on doctor A's booked appointment — is
+    // asserted end-to-end in tests/integration/consultation.test.mts.
+    //
+    // TODO(issue #4 follow-ups): extend this once a consultation READ route
+    // exists, so doctor B is refused a read of doctor A's notes too.
     expect(true).toBe(true);
   });
 });

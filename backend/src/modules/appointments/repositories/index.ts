@@ -29,3 +29,7 @@ export function findAppointmentsForPatient(patientProfileId: string) {
     orderBy: { createdAt: 'desc' },
   });
 }
+
+export function findAppointmentById(appointmentId: string) {
+  return prisma.appointment.findUnique({ where: { id: appointmentId } });
+}

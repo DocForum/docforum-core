@@ -151,6 +151,32 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 | `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
 
+## Consultations (under `/appointments`) — `backend/src/modules/consultations`
+
+Phase 2, issue #4. Routed under `/appointments` (`app.use('/appointments',
+consultationsRouter)` in `src/app.ts`), so the module keeps its own folder while
+the URL stays appointment-scoped.
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /appointments/:appointmentId/consultation` | doctor (own appointment only) | `{ outcome: 'resolved' \| 'referred' \| 'follow_up_needed', notes }` | Closes the appointment's consultation. `201` returns `{ consultation, appointment }`; `404` if the appointment doesn't exist **or isn't the caller's** (no existence leak); `400` on an unknown outcome or empty/over-20k notes; `409` if this appointment's consultation was already closed. |
+
+Once-only is a database guarantee, not an app-level check:
+`Consultation.appointmentId` is `UNIQUE`, so two concurrent closes can't both
+commit — the loser gets `409`. There is no amendment/edit path in v1 (an
+explicit open question, not an assumption).
+
+`notes` is clinical free text and is stored **encrypted** (AES-256-GCM
+envelope, `v1:<iv>:<tag>:<data>` — ARCHITECTURE.md §4.3, issue #46); it is
+returned in plaintext to the caller who just wrote it. This requires
+`FIELD_ENCRYPTION_KEY_V1` (32 bytes, base64) and optionally
+`FIELD_ENCRYPTION_ACTIVE_VERSION` (default `v1`) to be set; a missing key is a
+`500` on this endpoint, not a silent plaintext write. Encrypted columns cannot
+be searched or indexed.
+
+Closing also records an `AuditEvent` (`consultation.closed`) in the same
+transaction, so the event exists iff the consultation was written.
+
 ## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
 
 Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
@@ -171,7 +197,8 @@ started appear at the front of a new scan, not mid-way through the old one.
 `400 INVALID_CURSOR` for a malformed cursor; `400` if `from` is after `to`.
 
 Recorded today: `appointment.booked`, `doctor.verification_status_changed`,
-`payment_intent.{funded,released,refunded}` — see ARCHITECTURE.md §4.10.
+`payment_intent.{funded,released,refunded}`, `consultation.closed` — see
+ARCHITECTURE.md §4.10.
 There is no write or delete endpoint, and the table rejects UPDATE/DELETE
 in the database.
 

@@ -383,6 +383,10 @@ model Appointment {
   patientProfile   PatientProfile   @relation(fields: [patientProfileId], references: [id])
   doctorProfile    DoctorProfile    @relation(fields: [doctorProfileId], references: [id])
   availabilitySlot AvailabilitySlot @relation(fields: [availabilitySlotId], references: [id])
+  // Phase 2 (issue #4): created by POST /appointments/:id/consultation. The
+  // 1:1-ness is enforced by Consultation.appointmentId UNIQUE — see
+  // docs/adr/0007. On the schema side this is a plain back-relation.
+  consultations    Consultation[]
 
   // TODO Phase 2: intakeId (FK -> IntakeForm). PRD FR-5 requires intake
   // before confirmation, not enforced yet — booking works without it in
@@ -403,11 +407,17 @@ model IntakeForm {
 }
 
 model Consultation {
-  id        String              @id @default(uuid())
-  outcome   ConsultationOutcome?
-  notes     String?
-  createdAt DateTime            @default(now())
-  // TODO: appointmentId (unique)
+  id            String              @id @default(uuid())
+  // unique = "a consultation is closed once per appointment", enforced by the
+  // database rather than by a read-then-write check (docs/adr/0007).
+  appointmentId String              @unique
+  appointment   Appointment         @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  // A closed consultation always has an outcome (PRD FR-6).
+  outcome       ConsultationOutcome
+  // Clinical free text: stored as an AES-256-GCM envelope by
+  // consultations/services (issue #46 — ARCHITECTURE.md §4.3), never plaintext.
+  notes         String?
+  createdAt     DateTime            @default(now())
 }
 
 model Referral {

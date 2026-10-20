@@ -162,6 +162,8 @@ Consultation
   outcome (enum: resolved|referred|follow_up_needed)
   created_at
 ```
+**Implemented 2026-10-20 (Phase 2, issue #4):** `POST /appointments/:id/consultation` creates this row. `appointment_id UNIQUE` is what makes a consultation closable **once** — a second concurrent close loses at the INSERT, not at an app-level check (see docs/adr/0007). There is no amendment/edit path in v1. `outcome` is NOT NULL, and `notes` is encrypted on write via `encryptField()` (requires `FIELD_ENCRYPTION_KEY_V1`), so the first writer to a clinical free-text column honours the rule below rather than starting a plaintext precedent.
+
 **Encryption note:** `notes` is stored as an AES-256-GCM envelope (`v1:<iv>:<tag>:<data>`) via `backend/src/utils/field-encryption.ts`. Because it's encrypted, it **cannot be searched or indexed** — any future full-text search over consultation notes must decrypt in the application layer or use a separate searchable index, not a Postgres index on this column. Key rotation: `backend/scripts/rotate-field-keys.mjs` re-encrypts in batches.
 
 ### 4.4 Referral
@@ -240,7 +242,8 @@ LoginAttempt (issue #35)
 ```
 AuditEvent
   id, actor_user_id (nullable — null = system), actor_role (nullable Role)
-  entity_type ('Appointment' | 'DoctorProfile' | 'PaymentIntent' so far), entity_id
+  entity_type ('Appointment' | 'DoctorProfile' | 'PaymentIntent' |
+               'Consultation' so far), entity_id
   action (dotted, e.g. 'appointment.booked'), from_state, to_state (nullable)
   request_id (X-Request-Id of the causing request), metadata (jsonb, nullable)
   created_at
@@ -263,6 +266,7 @@ AuditEvent
 ```
 Transitions recorded (action: from → to):
 - `appointment.booked`: `null → scheduled` (metadata: slot id, doctor profile id, origin)
+- `consultation.closed`: `null → outcome` (metadata: appointment id; never the notes — that's PHI)
 - `doctor.verification_status_changed`: previous → new verification status (read under `FOR UPDATE`; a no-op set records nothing)
 - `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
 ### 4.11 Patient data export (Phase 8, issue #40)

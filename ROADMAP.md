@@ -42,11 +42,11 @@ for status and issue links.
 - [x] Doc reconciliation: PRD §8.1.1 and ARCHITECTURE §6.1.1 marked resolved in place.
 
 ## Phase 2 — Intake, appointments, consultations
-**Status: Not started — unblocked (Phase 1 is done). Scoped into issues #1–#4 and #23.**
+**Status: In progress — #4 done; #1–#3 and #23 not started.** Scoped into issues #1–#4 and #23.
 - [ ] `IntakeForm` model + structured symptom entry (not free-text-only, per PRD FR-5). Tracked as [issue #1](https://github.com/DocForum/docforum-core/issues/1) (Medium, 150 pts).
 - [ ] Booking flow requires intake before confirmation. Tracked as [issue #2](https://github.com/DocForum/docforum-core/issues/2) (Medium, 150 pts) — depends on #1.
 - [ ] `Appointment` lifecycle (`scheduled → completed/cancelled/no_show`) + doctor's today view. Tracked as [issue #3](https://github.com/DocForum/docforum-core/issues/3) (Medium, 150 pts).
-- [ ] `Consultation` record + outcome (`resolved | referred | follow_up_needed`). Tracked as [issue #4](https://github.com/DocForum/docforum-core/issues/4) (High, 200 pts).
+- [x] `Consultation` record + outcome (`resolved | referred | follow_up_needed`). Tracked as [issue #4](https://github.com/DocForum/docforum-core/issues/4) (High, 200 pts) — **Done.** `POST /appointments/:id/consultation` (doctor-only, own appointment only), `Consultation.appointmentId` FK + `UNIQUE` so "closed once" is a DB constraint rather than app logic, `outcome` NOT NULL, notes stored encrypted (issue #46), `consultation.closed` audit event in the same transaction. Migration `20261020120000_add_consultation_appointment`. No amendment/edit path in v1 — that stays an open question for when referral/amendment work lands. Integration test: `backend/tests/integration/consultation.test.mts` (close-once, 409 on second close, one row, other-doctor 404, patient 403). **Verification note:** written and typechecked, but the embedded-Postgres harness can't start in the sandbox this was built in (`initdb` spawn refused) — same environment limitation already recorded for the other integration suites; it must be run against a real Postgres before merge.
 - [ ] Doctor discovery: specialty catalog, doctor ↔ specialty assignment, public `GET /doctors?specialty=` (verified doctors only). Nothing in `backend/src` touched `Specialty`/`DoctorSpecialty` before this; `docforum-web` issue #1 depends on it. Tracked as [issue #23](https://github.com/DocForum/docforum-core/issues/23) (Medium, 150 pts).
 - [ ] Patient-facing view: my intake history. Not yet split into its own issue — small enough to fold into whichever of the above lands last, or split out later if it grows.
 

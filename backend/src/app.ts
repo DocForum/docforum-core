@@ -7,6 +7,7 @@ import { authRouter } from './modules/auth/routes';
 import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
+import { consultationsRouter } from './modules/consultations/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
 import { adminRouter } from './modules/users/routes';
@@ -41,6 +42,7 @@ export function createApp() {
   app.use('/doctors', doctorsRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
+  app.use('/appointments', consultationsRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
