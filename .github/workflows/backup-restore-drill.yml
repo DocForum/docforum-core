@@ -34,12 +34,16 @@ jobs:
       DATABASE_URL: postgres://drill:drill@127.0.0.1:5432/app
       RESTORE_TARGET_URL: postgres://drill:drill@127.0.0.1:5432/app_drill
       BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY || 'drill-passphrase-not-for-prod' }}
-      BACKUP_DIR: ${{ runner.temp }}/backups
       BACKUP_RETENTION_DAYS: '14'
       RESTORE_CONFIRM: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # `runner` isn't available in job-level env, so set the backup
+      # directory from the step environment instead.
+      - name: Set backup directory
+        run: echo "BACKUP_DIR=$RUNNER_TEMP/backups" >> "$GITHUB_ENV"
 
       - name: Install Postgres clients
         run: |
