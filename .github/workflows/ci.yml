@@ -1,3 +1,4 @@
+ 
 name: CI
 
 on:
@@ -41,5 +42,22 @@ jobs:
 
       - name: Integration tests (self-contained embedded Postgres — the double-booking-guarantee proof)
         run: npm run test:integration
+
+      # Phase 9, issue #48: regenerate the OpenAPI 3.1 spec from the Zod
+      # Phase 9, issue #48: regenerate the OpenAPI 3.1 spec from the Zod
+      # schemas and fail if the committed docs/api/openapi.json is stale.
+      # Reviewer flow: change a schema locally without regenerating and
+      # confirm this step fails.
+      - name: OpenAPI drift check
+        run: |
+          if ! npm run openapi:generate; then
+            echo "::error::OpenAPI generator failed (see backend/scripts/generate-openapi.mjs output above)."
+            echo "::error::OpenAPI generator failed (see backend/scripts/generate-openapi.mjs output above)."
+            exit 1
+          fi
+          if ! git diff --exit-code -- ../docs/api/openapi.json; then
+            echo "::error::docs/api/openapi.json is out of date. Run 'npm run openapi:generate' in backend/ and commit the result."
+            exit 1
+          fi
 
       - run: npm run build
