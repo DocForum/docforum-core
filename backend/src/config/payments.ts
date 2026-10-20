@@ -38,6 +38,12 @@ export function parsePaymentsConfig(env: NodeJS.ProcessEnv = process.env) {
   return {
     platformPayerSecret: env.PLATFORM_PAYER_SECRET,
     platformReleaserSecret: env.PLATFORM_RELEASER_SECRET,
+    platformSignerMode: env.PLATFORM_SIGNER_MODE ?? 'env',
+    platformSignerUrl: env.PLATFORM_SIGNER_URL,
+    platformSignerToken: env.PLATFORM_SIGNER_TOKEN,
+    platformPayerPublicKey: env.PLATFORM_PAYER_PUBLIC_KEY,
+    platformReleaserPublicKey: env.PLATFORM_RELEASER_PUBLIC_KEY,
+    platformSignerTimeoutMs: Number(env.PLATFORM_SIGNER_TIMEOUT_MS ?? 10_000),
     activeContractId: parsed.ESCROW_CONTRACT_ID,
     legacyContractIds,
     contractIds: parsed.ESCROW_CONTRACT_ID

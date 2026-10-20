@@ -3,12 +3,13 @@ import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
 import { pruneOldAccessLogs } from './modules/audit/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
+import { validatePlatformSigners } from './modules/payments/services/platform-signers';
 import { verifyPaymentsNetwork } from './modules/payments/services';
 
 const app = createApp();
 
 async function startServer() {
-  await verifyPaymentsNetwork();
+  await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork()]);
   app.listen(config.port, () => {
     // eslint-disable-next-line no-console
     console.log(`docforum-core backend listening on :${config.port}`);

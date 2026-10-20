@@ -12,7 +12,8 @@
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
-import { loadEscrowSdk } from './escrow-sdk-loader';
+import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
+import { getPlatformSigners } from './platform-signers';
 import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
@@ -25,22 +26,21 @@ export { setEscrowSdkForTests } from './escrow-sdk-loader';
 export type { EscrowSdkModule } from './escrow-sdk-loader';
 
 async function requirePaymentsConfig() {
-  const { platformPayerSecret, platformReleaserSecret, activeContractId, escrowTokenId } = config.payments;
-  const missing = Object.entries({ platformPayerSecret, platformReleaserSecret, activeContractId, escrowTokenId })
+  const { activeContractId, escrowTokenId } = config.payments;
+  const missing = Object.entries({ activeContractId, escrowTokenId })
     .filter(([, value]) => !value)
     .map(([key]) => key);
   if (missing.length > 0) {
     throw new HttpError(500, `Payments is not configured — missing env var(s): ${missing.join(', ')}.`);
   }
-  const { Keypair } = await loadEscrowSdk();
+  const { payer, releaser } = await getPlatformSigners();
   return {
-    platformPayer: Keypair.fromSecret(platformPayerSecret!),
-    platformReleaser: Keypair.fromSecret(platformReleaserSecret!),
+    platformPayer: payer,
+    platformReleaser: releaser,
     escrowContractId: activeContractId!,
     escrowTokenId: escrowTokenId!,
   };
 }
-
 async function escrowClient(contractId: string) {
   const { EscrowClient } = await loadEscrowSdk();
   return new EscrowClient({ contractId, rpcUrl: config.payments.rpcUrl, networkPassphrase: config.payments.networkPassphrase });
@@ -173,7 +173,7 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   const client = await escrowClient(escrowContractId);
 
   const { escrowId, txHash } = await client.createEscrow({
-    payer: platformPayer,
+    payer: platformPayer as unknown as EscrowSdkKeypair,
     payee: walletLink.stellarPublicKey,
     token: escrowTokenId,
     amount: intent.amountStroops,
@@ -199,7 +199,7 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
   const { platformReleaser } = await requirePaymentsConfig();
   const client = await escrowClient(requireRecordedContractId(intent));
 
-  await client.release({ escrowId: intent.escrowId, caller: platformReleaser });
+  await client.release({ escrowId: intent.escrowId, caller: platformReleaser as unknown as EscrowSdkKeypair });
 
   return commitTransition(actor, intent, 'payment_intent.released', 'released', (tx) =>
     paymentsRepo.markStatus(tx, id, 'escrowed', 'released'),
@@ -216,7 +216,7 @@ export async function refundPaymentIntent(actor: auditService.AuditActor, id: st
   const { platformReleaser } = await requirePaymentsConfig();
   const client = await escrowClient(requireRecordedContractId(intent));
 
-  await client.refund({ escrowId: intent.escrowId, caller: platformReleaser });
+  await client.refund({ escrowId: intent.escrowId, caller: platformReleaser as unknown as EscrowSdkKeypair });
 
   return commitTransition(actor, intent, 'payment_intent.refunded', 'refunded', (tx) =>
     paymentsRepo.markStatus(tx, id, 'escrowed', 'refunded'),

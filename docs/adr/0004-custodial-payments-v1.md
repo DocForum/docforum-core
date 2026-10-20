@@ -100,6 +100,11 @@ terminal intent has no matching order.
   triggered release" is the target once Phase 4/5 exist; v1's admin-only
   gate is the honest interim, not the destination.
 
+## Signing provider seam (issue #87)
+
+Payment operations use the `PlatformSigner` interface (`publicKey`, async transaction signing, and optional Soroban auth-entry signing) rather than constructing keypairs in the payments service. The env adapter preserves the current `PLATFORM_PAYER_SECRET` / `PLATFORM_RELEASER_SECRET` behavior. A reference HTTP adapter supports a signer service with role-scoped `GET /signers/{role}/public-key`, `POST /signers/{role}/sign-transaction`, and `POST /signers/{role}/sign-auth-entry` endpoints. Requests carry the network passphrase; the remote public key must match the configured expected address. Errors are sanitized before leaving the adapter.
+
+The HTTP adapter is a seam, not a managed KMS deployment. It requires HTTPS, a bearer token, and operator-provided signer service; production deployment choice and custody policy remain with issue #25. The issue #25 custody ADR should choose an adapter configuration here without changing the payment services interface. The implementation follows the signer surface proposed by `docforum-escrow` issue #60. The current published SDK remains compatible through its signer-shaped Keypair boundary; when SDK #60 is released, the local bridge can be removed without changing payment services. Signing is completed before the database transition transaction begins.
 
 ## Network and contract safeguards (issue #88)
 
