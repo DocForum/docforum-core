@@ -9,10 +9,13 @@
 //   3. another doctor cannot close it (404, not 403 — no existence leak).
 //
 // Self-contained like the other integration suites: spins up its own
-// throwaway Postgres (embedded-postgres, prebuilt binary) on port 5436 and
-// applies the committed migrations, so no pre-existing DB/Docker is needed.
-// A distinct port keeps it clear of booking.test.mts (5433), the payments
-// testnet suite (5435) and access-control.test.mts (5438).
+// throwaway Postgres (embedded-postgres, prebuilt binary) and applies the
+// committed migrations, so no pre-existing DB/Docker is needed. The port has
+// to be unique per integration file — two embedded clusters on one port hang
+// each other's beforeAll until the hook timeout kills the file. Taken today:
+// 5433 booking, 5435 email-verification, 5436 login-throttle, 5437 csrf,
+// 5438 access-control, 5439 admin-lifecycle, 5440 payments-bigint,
+// 5441 audit, 5442 patient-export, 5443 this file.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -23,7 +26,7 @@ import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5436;
+const PORT = 5443;
 const runId = Date.now();
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-consult-pg-'));

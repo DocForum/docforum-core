@@ -98,11 +98,11 @@ enum Urgency {
 // =========================================================================
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  phone        String?
-  passwordHash String
-  role         Role
+  id              String    @id @default(uuid())
+  email           String    @unique
+  phone           String?
+  passwordHash    String
+  role            Role
   // Phase 8 (issue #34): null = never verified. Self-serve signup leaves
   // this null; existing rows were backfilled to `createdAt` in the
   // add_email_verification migration. Distinct from
@@ -129,6 +129,9 @@ model User {
 
   emailVerificationTokens EmailVerificationToken[]
   adminInvitesSent AdminInvite[]
+  // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
+  // Opposite of AccessLog.accessedByUser.
+  accessLogs AccessLog[]
 
   @@index([role])
 }
@@ -201,22 +204,25 @@ model LoginAttempt {
 }
 
 model PatientProfile {
-  id          String    @id @default(uuid())
-  userId      String    @unique
-  fullName    String
-  dateOfBirth DateTime?
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  fullName       String
+  dateOfBirth    DateTime?
   // Nullable, no FK relation on purpose — the minor/dependent consent and
   // account-ownership model is an explicit open PRD question (§8.2.5), not
   // resolved here. Don't build on top of this field assuming it means
   // anything enforced yet.
   guardianUserId String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
   dataExports    PatientExport[]
+
+  // Phase 8 (issue #45): who viewed this patient's records.
+  accessLogs AccessLog[]
 }
 
 // Phase 8 (issue #40): right-of-access export jobs. One row per request;
@@ -341,7 +347,7 @@ model FacilityCapability {
   capabilityType    CapabilityType
   // e.g. a lab test category, or a medication class — free text on purpose,
   // no controlled vocabulary decided yet (out of Phase 1 scope).
-  detail String?
+  detail            String?
 
   facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id], onDelete: Cascade)
 
@@ -396,6 +402,44 @@ model Appointment {
 }
 
 // =========================================================================
+// Phase 8 (issue #45): PHI read-access logging — AccessLog
+//
+// Answers "who looked at this" (distinct from AuditEvent's "who changed
+// this"). Written asynchronously off the read path so it never adds to
+// p95 latency. Fail-open: a logging failure never fails the read, but is
+// counted and surfaced for alerting.
+//
+// patientProfileId is the record owner (whose data was viewed) — used by
+// GET /patients/me/access-log. accessedBy is the viewer.
+// =========================================================================
+
+model AccessLog {
+  id               String   @id @default(uuid())
+  // Who viewed. SetNull on user delete keeps the log row (timestamp +
+  // entity remain) while removing the PII pointer.
+  accessedBy       String?
+  // Which patient's records were viewed (the record owner, not the viewer).
+  patientProfileId String?
+  // Entity that was read: 'IntakeForm' | 'Consultation' | 'Prescription' |
+  // 'LabOrder' | 'LabResult' | 'Referral' | 'PaymentIntent' | 'PatientProfile'
+  entityType       String
+  entityId         String
+  // The HTTP route that returned the payload (for correlating with access logs).
+  route            String?
+  // Free-text detail — no PHI here, just context like "GET /appointments/mine".
+  detail           String?
+  accessedAt       DateTime @default(now())
+
+  accessedByUser User?           @relation(fields: [accessedBy], references: [id], onDelete: SetNull)
+  patientProfile PatientProfile? @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+
+  @@index([accessedAt])
+  @@index([accessedBy])
+  @@index([patientProfileId, accessedAt])
+  @@index([entityType, entityId])
+}
+
+// =========================================================================
 // Below this line: Phase 0 structural placeholders, not yet implemented.
 // See ROADMAP.md for phase order.
 // =========================================================================
@@ -421,11 +465,11 @@ model Consultation {
 }
 
 model Referral {
-  id             String         @id @default(uuid())
-  status         ReferralStatus @default(pending)
-  snapshotNotes  String
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  id            String         @id @default(uuid())
+  status        ReferralStatus @default(pending)
+  snapshotNotes String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
   // TODO: sourceConsultationId, referringDoctorId, targetSpecialtyId,
   // targetDoctorId (nullable), snapshotIntakeId, resultingAppointmentId (nullable)
   // IMPORTANT: snapshotNotes / snapshotIntakeId must be copies, not live
@@ -433,18 +477,18 @@ model Referral {
 }
 
 model Prescription {
-  id                     String      @id @default(uuid())
-  status                 OrderStatus @default(issued)
-  createdAt              DateTime    @default(now())
+  id        String      @id @default(uuid())
+  status    OrderStatus @default(issued)
+  createdAt DateTime    @default(now())
   // TODO: consultationId, patientProfileId, prescribingDoctorId, supersedesPrescriptionId (nullable, self-relation)
 }
 
 model PrescriptionItem {
-  id       String @id @default(uuid())
-  drugName String
-  dosage   String
+  id        String @id @default(uuid())
+  drugName  String
+  dosage    String
   frequency String
-  duration String
+  duration  String
   // TODO: prescriptionId
 }
 
@@ -479,11 +523,11 @@ model FulfillmentRecord {
 }
 
 model Notification {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   type      String
   payload   Json
   readAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
   // TODO: userId
 }
 
@@ -517,15 +561,15 @@ enum OrderTypeForPayment {
 }
 
 model PaymentIntent {
-  id         String              @id @default(uuid())
-  orderType  OrderTypeForPayment
+  id        String              @id @default(uuid())
+  orderType OrderTypeForPayment
   // Opaque — Prescription/LabOrder don't exist as real records yet
   // (Phase 4). Not validated against anything until then.
-  orderId    String
-  status     PaymentIntentStatus @default(created)
+  orderId   String
+  status    PaymentIntentStatus @default(created)
 
   patientProfileId String
-  patientProfile   PatientProfile @relation(fields: [patientProfileId], references: [id])
+  patientProfile   PatientProfile  @relation(fields: [patientProfileId], references: [id])
   facilityId       String
   facility         FacilityProfile @relation(fields: [facilityId], references: [id])
 
