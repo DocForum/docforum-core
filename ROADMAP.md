@@ -1,6 +1,6 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-10-17
+Last updated: 2026-10-21
 Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
 `docs/adr/0004-custodial-payments-v1.md`) built and tested. Phase 3
 (Referrals) is **in progress**: #5, #7 and #65–#68 implemented and
@@ -45,13 +45,14 @@ roadmap. See each phase section below for status and issue links.
 - [x] Doc reconciliation: PRD §8.1.1 and ARCHITECTURE §6.1.1 marked resolved in place.
 
 ## Phase 2 — Intake, appointments, consultations
-**Status: In progress — issues #3 and #4 carry a minimal slice landed as Phase 3's prerequisite; intake (#1/#2) and discovery (#23) still Not started. Scoped into issues #1–#4 and #23.**
+**Status: In progress — issues #3 and #4 carry a minimal slice landed as Phase 3's prerequisite; check-in + live queue position landed (issue #3 extension); intake (#1/#2) and discovery (#23) still Not started. Scoped into issues #1–#4 and #23.**
 - [ ] `IntakeForm` model + structured symptom entry (not free-text-only, per PRD FR-5). Tracked as [issue #1](https://github.com/DocForum/docforum-core/issues/1) (Medium, 150 pts).
 - [ ] Booking flow requires intake before confirmation. Tracked as [issue #2](https://github.com/DocForum/docforum-core/issues/2) (Medium, 150 pts) — depends on #1.
 - [ ] `Appointment` lifecycle (`scheduled → completed/cancelled/no_show`) + doctor's today view. Tracked as [issue #3](https://github.com/DocForum/docforum-core/issues/3) (Medium, 150 pts) — **partially done** as part of Phase 3's referral work: `PATCH /appointments/:id/status` (treating doctor only) and `PATCH /appointments/:id/cancel` (patient, own appointment), with slot release on cancellation and the referral cascade hook. Remaining: the doctor's today view and any admin-on-behalf transition.
 - [ ] `Consultation` record + outcome (`resolved | referred | follow_up_needed`). Tracked as [issue #4](https://github.com/DocForum/docforum-core/issues/4) (High, 200 pts) — **minimal slice done** for Phase 3: `POST /consultations` against one's own completed appointment (one per appointment), `GET /consultations/:id` scoped to that doctor + the patient. Remaining: sign-off, addenda / post-hoc note editing.
 - [ ] Doctor discovery: specialty catalog, doctor ↔ specialty assignment, public `GET /doctors?specialty=` (verified doctors only). Nothing in `backend/src` touched `Specialty`/`DoctorSpecialty` before this; `docforum-web` issue #1 depends on it. Tracked as [issue #23](https://github.com/DocForum/docforum-core/issues/23) (Medium, 150 pts).
 - [ ] Patient-facing view: my intake history. Not yet split into its own issue — small enough to fold into whichever of the above lands last, or split out later if it grows.
+- [x] In-person check-in + live queue position for the day's appointments. `POST /appointments/:id/check-in` (patient, own appointment, only within a window around the start — records `checkedInAt`), doctor start/complete transitions extended with `startedAt`/`completedAt` timestamps, and `GET /appointments/:id/queue` returning the patient's own position and an explainable estimated wait from the doctor's running-average delay (simple running average, not ML). Queue changes are exposed for polling; the notification stream (Phase 6) is not built yet, so no push path exists. Patients see only their own position — never other patients' details. Schema additions (`Appointment.checkedInAt`, `startedAt`, `completedAt`) recorded in ARCHITECTURE.md §4.2; endpoint docs in `docs/api/README.md`. Tracked as [issue #3](https://github.com/DocForum/docforum-core/issues/3) extension (High, 200 pts).
 
 ## Phase 3 — Referrals
 **Status: In progress — issues #5, #7 and #65–#68 are implemented and tested (unit + 5 self-contained integration suites); #6 (routing ADR) and #8 (time-based expiry job) remain open. Original scope was #5–#8; #65–#68 were opened later against the same phase for loop detection, multi-referral, cascade and admin overrides.**
@@ -495,3 +496,5 @@ roadmap. See each phase section below for status and issue links.
   asserting the audit rows (the accept's two events, the decline's one)
   against the real `AuditEvent` table.
 - 2026-10-20 — Docs site: `docs/site/scripts/sync-docs.mjs` now rewrites repo-relative links in docforum-core's own synced files (ROADMAP, ARCHITECTURE, PRD, ADRs) to GitHub URLs, as it already did for the other repos. #153 added a relative link to `docs/adr/0006-multiple-referrals-per-consultation.md` in ROADMAP.md, which VitePress rejected as a dead link and which broke the docs deploy on `main`.
+- 2026-10-21 — Phase 2: in-person check-in and live queue position. `POST /appointments/:id/check-in` records `checkedInAt` within a window around the appointment start (patient, own appointment only); the doctor's start/complete transitions now stamp `startedAt`/`completedAt`; `GET /appointments/:id/queue` returns the patient's own position and an estimated wait derived from the doctor's running-average delay (explainable, not ML). Patients never see other patients' details through the queue endpoint. Queue changes are pollable — the notification stream is Phase 6 and doesn't exist yet, so no push path was added. Schema: `Appointment.checkedInAt`/`startedAt`/`completedAt` (ARCHITECTURE.md §4.2), endpoints in `docs/api/README.md`. Unit tests cover position and estimate calculations; integration tests cover check-in window enforcement and queue access control.
+- 2026-10-21 — Fixed a syntax error in `backend/src/modules/appointments/routes/index.ts` (TS1109/TS1161: an unterminated regular expression literal at line 29) that failed the local syntax check before push. No roadmap-tracked behavior changed; the check-in/queue work described above is unaffected.

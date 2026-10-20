@@ -16,6 +16,23 @@ appointmentsRouter.post(
 );
 appointmentsRouter.get('/mine', authenticate, requireRole('patient'), appointmentsController.listMine);
 
+// In-person check-in (Phase 2): the patient records arrival within a
+// window around the appointment start. Only the owning patient may check in.
+appointmentsRouter.post(
+  '/:appointmentId/check-in',
+  authenticate,
+  requireRole('patient'),
+  appointmentsController.checkIn,
+);
+
+// Live queue position for the appointment. Patients see only their own
+// position and an estimate derived from the doctor's running delay.
+appointmentsRouter.get(
+  '/:appointmentId/queue',
+  authenticate,
+  appointmentsController.getQueue,
+);
+
 // Lifecycle (issue #3 + the cascade trigger for issue #67): only the
 // treating doctor moves an appointment through completed/cancelled/
 // no_show; the patient may cancel their own — nothing else.
