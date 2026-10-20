@@ -1,6 +1,5 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-10-22
 Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
 `docs/adr/0004-custodial-payments-v1.md`) built and tested. Phase 3
 (Referrals) is **in progress**: #5, #7 and #65–#68 implemented and
@@ -153,6 +152,12 @@ roadmap. See each phase section below for status and issue links.
 ---
 
 ## Changelog (append, don't rewrite history)
+
+> New entries go in `changelog.d/`, one file per PR — see
+> `changelog.d/README.md`. Maintainers fold them in here with
+> `node scripts/fold-changelog.mjs`. Please don't append to this section
+> directly.
+
 - 2026-09-09 — Initial roadmap created alongside Phase 0 scaffolding.
 - 2026-09-14 — Resolved the open risk in `docs/adr/0002-stellar-escrow-for-fulfillment-payout.md`: confirmed against the real Drips Wave docs that this repo and `docforum-web` are not ecosystem-relevant to a Stellar-only Wave and will not be submitted. Only `docforum-escrow` will apply, once it has enough real GitHub activity — see its Phase E1–E4 work.
 - 2026-09-14 — Phase 1 built: Express 5 API, Prisma schema for the Phase 1

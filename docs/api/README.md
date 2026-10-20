@@ -1,9 +1,10 @@
 # API docs
 
-Phases 1, 3 (referrals/consultations) and 5.5 (payments) endpoints are
-real and tested (see `backend/tests/`). Everything else is still
-unimplemented — see `ROADMAP.md` for phase order. Keep this file in sync
-with `backend/src/modules/*/routes` (AGENTS.md doc-update rule).
+Endpoints are grouped by module below. Which phases are built is tracked
+in `ROADMAP.md`, not here. Keep this file in sync with
+`backend/src/modules/*/routes` (AGENTS.md doc-update rule): when you add or
+change an endpoint, add or edit its row in that module's table, and leave
+the rest of the file alone.
 
 Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
 
