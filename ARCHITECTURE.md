@@ -30,13 +30,14 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | Request validation | Zod | Not originally listed here — added alongside Phase 1's real request bodies. Schemas live per-module (`modules/*/validation.ts`), thrown `ZodError`s are caught centrally by `middleware/error-handler.ts`. |
 | Password hashing | bcryptjs | Pure-JS, not a native bcrypt binding — one less native build dependency for a repo with no other native deps yet. |
 | Database | PostgreSQL | Relational integrity is critical (bookings, orders, referrals all have strict FK/state constraints); JSONB available for the flexible parts (intake payload). |
-| ORM / schema | Prisma | Schema-as-code, migrations, keeps `backend/prisma/schema.prisma` as the single source of truth for data models (mirrors §4 below). |
+| ORM / schema | Prisma 7, with the `@prisma/adapter-pg` (node-postgres) driver adapter — **upgraded 2026-10-16 to clear a high-severity advisory; see `docs/adr/0006`** | Schema-as-code, migrations, keeps `backend/prisma/schema.prisma` as the single source of truth for data models (mirrors §4 below). Two v7 facts that constrain where code goes: (a) there is no Rust query engine any more, so the client must be constructed with a driver adapter (`src/db/prisma-client.ts`) — bare `new PrismaClient()` throws; (b) the CLI's datasource URL lives in `backend/prisma.config.ts`, not in the schema's `datasource` block. The `prisma-client-js` generator is retained deliberately, so the client still generates into `node_modules/@prisma/client` and this backend stays CommonJS (see §3 note on `@docforum/escrow-sdk` being ESM-only). Requires Node >= 20.19. |
 | Auth | JWT access + refresh tokens, role claims (`patient` \| `doctor` \| `facility` \| `admin`) | Simple, stateless for API scaling; refresh rotation for security. |
 | Frontend | React + TypeScript, Vite | Fast dev loop, standard choice, no framework lock-in beyond React. |
 | Frontend state/data | React Query (server state) + lightweight store (Zustand) for client-only UI state | Avoids over-centralizing server data into a global store. |
 | Realtime (messaging/notifications) | WebSocket gateway (or managed pub/sub, e.g. Pusher/Ably) behind an internal `notifications` interface | Swappable; not custom infra from day one. |
 | Video/voice (if/when needed) | Third-party embed (Twilio/Daily/Agora) behind an interface, not built in-house | PRD §8.3.1 — explicitly flagged as overengineering risk if built custom. |
 | File/result storage | Object storage (S3-compatible) for lab result attachments | Never store clinical files directly in Postgres rows. |
+| Field-level encryption | AES-256-GCM envelope encryption (`backend/src/utils/field-encryption.ts`, Phase 8 issue #46) for clinical free text (`Consultation.notes`, `Referral.snapshotNotes`) | Limits blast radius of a leaked DB dump / over-broad read replica — encryption at rest doesn't protect against those. Versioned key-id prefix enables rotation without rewriting every row. **Constraint: encrypted fields cannot be searched or indexed** — they're write-once/read-decrypt blobs. |
 | Background jobs | Simple queue (BullMQ on Redis) for reminders, order-expiry checks, notification delivery | Needed for FR-15/16 and the "orphaned order" hard question (PRD §8.1.3). |
 | Infra | Docker Compose for local dev; containerized deploy target TBD (not decided — see Open Questions in ROADMAP) | Keep infra decisions deferred until a real deploy target is chosen; don't overbuild CI/CD for a repo with no code yet. |
 
@@ -45,7 +46,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 Each module under `backend/src/modules/<name>/` owns its own `routes/`, `controllers/`, `services/`, `repositories/`. Cross-module access happens through a module's exported service interface only — **never reach into another module's repository directly.** This is the internal seam that would let us extract a module into its own service later without a rewrite.
 
 - `auth` — signup/login, tokens, role checks.
-- `users` — shared user profile fields common to all roles.
+- `users` — shared user profile fields common to all roles, plus the admin account lifecycle (invites, soft deactivation — issue #39). `auth` calls this module's services to create an invited admin; `users` never calls back into `auth`.
 - `patients` — patient-specific profile data.
 - `doctors` — doctor profile, specialties, verification status.
 - `facilities` — lab/pharmacy accounts, capability tags (what order types they can fulfill).
@@ -57,6 +58,42 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `lab-orders` — lab order issuance and versioning.
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
+- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking, doctor verification, payment fund/release/refund. **Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
+
+### 3.1 Patient data export registry (Phase 8, issue #40)
+
+Right of access (`POST /patients/me/export`) is coordinated by `patients`,
+but **each module contributes its own section through its own `services/`
+interface** — `patients` never reads another module's tables to build an
+export. The pieces:
+
+- `modules/patients/services/export-registry.ts` — the `PatientExportSection`
+  contract (`name`, `version`, `pages(subject, pageSize)` yielding pages of
+  plain JSON items), `registerExportSection`, and a `paginate` keyset helper.
+- `src/export-sections.ts` — the one explicit list of registered sections,
+  called from `createApp()`. It's wiring, outside `modules/`, so `patients`
+  doesn't have to import every module that already imports `patients`.
+- Current sections: `account` (auth: email/phone/role, never the password
+  hash), `profile` (patients), `appointments` (appointments, with slot times
+  from `availability` and the doctor's name from `doctors`, both via their
+  services), `payments` (payments: amounts, status, on-chain tx hash /
+  escrow id / contract id; the platform's signing secrets never live in a
+  row and can't reach an export).
+
+**Adding a module with patient data (referrals, prescriptions, lab orders,
+…):** export a `PatientExportSection` from that module's `services/` and add
+it to `src/export-sections.ts`. Rules for a section: an explicit field
+allowlist (never spread a Prisma row — a column added later must not leak by
+default); page through your own tables with `paginate` (at most `pageSize`
+rows in memory); batch any cross-module lookups per page through the other
+module's service; JSON-safe values only (BigInt → string). Bump `version`
+when the item shape changes. A section that throws fails the whole export —
+there is no "partial" bundle.
+
+Generation runs in `src/jobs/patient-exports.ts` (plain intervals, woken
+immediately by a new request). Sections run one at a time and the bundle is
+flushed in bounded chunks to `PatientExportChunk` (§4.11), so memory is
+bounded by one page of rows plus one chunk regardless of history length.
 
 ## 4. Data models
 
@@ -124,35 +161,16 @@ IntakeForm
 ### 4.3 Consultation
 ```
 Consultation
-  id, doctor_profile_id (FK -> DoctorProfile — the authoring doctor)
-  notes, outcome (enum: resolved|referred|follow_up_needed)
-  signed_at (nullable — null = draft/editable; set = immutable)
+  id, appointment_id (FK, unique)
+  notes [ENCRYPTED — Phase 8 issue #46, see §2 field-level encryption row]
+  outcome (enum: resolved|referred|follow_up_needed)
   created_at
 
 ConsultationAddendum (issue #64)
   id, consultation_id (FK -> Consultation, cascade)
   author_doctor_profile_id, body, created_at
 ```
-Design note (issue #64): clinical notes are legal records, so a consultation is
-**immutable once signed off** — the same rule as orders (§1.2), applied to
-notes. Corrections are `ConsultationAddendum` rows: append-only by
-construction, read back in order, and only the authoring doctor may add one.
-Immutability is enforced twice on purpose: repository writes are scoped to
-`signed_at IS NULL` (so a signed note simply doesn't match), and a `BEFORE
-UPDATE` trigger added in
-`prisma/migrations/*_consultation_note_sign_off/migration.sql` rejects any
-change to `notes`/`outcome`/`signed_at` on a signed row — including a direct
-Prisma `update()`, which is the test that proves it. `signed_at` is also part of
-the trigger's guard, so a signed note can't be un-signed back into mutability.
-`appointment_id` is still not modelled — issue #4 owns that link, and the
-auto-sign-off window is measured from `created_at` until it exists.
-
-**Referrals and sign-off:** a referral snapshots the consultation's notes at
-creation (§4.4), so a referral may only be created from a **signed-off**
-consultation — otherwise the snapshot could freeze a note that is still being
-drafted, or be taken twice with different contents. This is the rule Phase 3
-(#5) must implement; it is not enforced in code yet because referral creation
-doesn't exist yet.
+**Encryption note:** `notes` is stored as an AES-256-GCM envelope (`v1:<iv>:<tag>:<data>`) via `backend/src/utils/field-encryption.ts`. Because it's encrypted, it **cannot be searched or indexed** — any future full-text search over consultation notes must decrypt in the application layer or use a separate searchable index, not a Postgres index on this column. Key rotation: `backend/scripts/rotate-field-keys.mjs` re-encrypts in batches.
 
 ### 4.4 Referral
 ```
@@ -160,7 +178,7 @@ Referral
   id, source_consultation_id (FK)
   referring_doctor_id, target_specialty_id, target_doctor_id (nullable)
   snapshot_intake_id (FK -> IntakeForm, copy reference, immutable)
-  snapshot_notes (text copy of the referring consultation notes at time of referral — immutable)
+  snapshot_notes [ENCRYPTED — Phase 8 issue #46] (text copy of the referring consultation notes at time of referral — immutable)
   status (enum: pending|accepted|declined|completed|expired)
   resulting_appointment_id (nullable FK -> Appointment)
   created_at, updated_at
@@ -170,10 +188,10 @@ Design note: `snapshot_notes` and `snapshot_intake_id` deliberately duplicate da
 ### 4.5 Prescriptions (versioned, append-only)
 ```
 Prescription
-  id, consultation_id (FK), patient_profile_id, prescribing_doctor_id
-  status (enum: issued|fulfilled|expired|superseded)
-  supersedes_prescription_id (nullable, self-FK — corrections create a new row)
-  created_at
+  id, consultation_id (FK), patient_profile_id (FK), prescribing_doctor_id (FK)
+  facility_profile_id (FK to pharmacy), amount_stroops (clinician-entered XLM total)
+  supersedes_prescription_id (nullable, unique self-FK), created_at
+  # Corrections create a child row and never update the issued row.
 
 PrescriptionItem
   id, prescription_id (FK), drug_name, dosage, frequency, duration
@@ -182,16 +200,20 @@ PrescriptionItem
 ### 4.6 Lab orders (versioned, append-only)
 ```
 LabOrder
-  id, consultation_id (FK), patient_profile_id, ordering_doctor_id
-  test_type, urgency (enum: routine|urgent), notes
-  status (enum: issued|fulfilled|expired|superseded)
-  supersedes_lab_order_id (nullable, self-FK)
-  created_at
+  id, consultation_id (FK), patient_profile_id (FK), ordering_doctor_id (FK)
+  facility_profile_id (FK to lab), amount_stroops (clinician-entered XLM total)
+  test_type, urgency (enum: routine|urgent), notes [ENCRYPTED]
+  supersedes_lab_order_id (nullable, unique self-FK), created_at
 
 LabResult
-  id, lab_order_id (FK, unique), fulfilling_facility_id, result_file_url, summary
+  id, lab_order_id (FK, unique), fulfilling_facility_id (FK), result_file_url, summary
   created_at
 ```
+The facility and total are captured at issuance. The issuing clinician supplies
+`amount_stroops` in native XLM stroops because v1 has no facility catalog or
+pricing service. Corrections create a new immutable row. A `created` payment
+intent moves to the correction; an already escrowed intent remains linked to
+the original and is refunded through the existing admin refund action.
 
 ### 4.7 Fulfillment (facility-side)
 ```
@@ -226,6 +248,98 @@ LoginAttempt (issue #35)
 `User` fields added in Phase 8 live in §4.1; the `email_verified_at` /
 `EmailVerificationToken` pair (issue #34) is in §4.1 as well.
 
+### 4.10 Audit trail (Phase 8, issue #43)
+```
+AuditEvent
+  id, actor_user_id (nullable — null = system), actor_role (nullable Role)
+  entity_type ('Appointment' | 'DoctorProfile' | 'PaymentIntent' | 'Consultation' | 'Prescription' | 'LabOrder'), entity_id
+  action (dotted, e.g. 'appointment.booked'), from_state, to_state (nullable)
+  request_id (X-Request-Id of the causing request), metadata (jsonb, nullable)
+  created_at
+  # APPEND-ONLY: no update/delete path in code, and BEFORE UPDATE/DELETE
+    (row) + BEFORE TRUNCATE (statement) triggers reject mutation in the
+    database. A future retention policy must drop/recreate them in its own
+    reviewed migration.
+  # No foreign keys on purpose: an ON DELETE action would have to rewrite
+    audit rows (forbidden), and RESTRICT would let the trail block account
+    lifecycle (e.g. issue #41's purge). Ids are recorded as facts.
+  # Written only by audit.record() inside the transaction of the change it
+    describes — the event exists iff the change committed.
+  # metadata: <= 16 flat scalar keys, strings <= 200 chars; keys that look
+    like personal/secret data (name, email, phone, dob, notes, intake,
+    password, secret, token, key, body, payload, …) are refused. Never PHI.
+  # created_at is stamped by Prisma on the app server per row (ms
+    precision); same-millisecond rows are ordered by id.
+  # indexes: (entity_type, entity_id, created_at), (actor_user_id,
+    created_at), (created_at, id) — the last backs the admin cursor.
+```
+Transitions recorded (action: from → to):
+- `appointment.booked`: `null → scheduled` (metadata: slot id, doctor profile id, origin)
+- `doctor.verification_status_changed`: previous → new verification status (read under `FOR UPDATE`; a no-op set records nothing)
+- `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
+### 4.11 Patient data export (Phase 8, issue #40)
+```
+PatientExport
+  id, patient_profile_id (FK -> PatientProfile, cascade — a derived copy)
+  status (enum: pending|processing|ready|failed|expired)
+  schema_version (nullable int — bundle format written), attempt (int, fencing token)
+  started_at, generated_at, expires_at (nullable)
+  size_bytes, chunk_count (nullable — set on ready)
+  failure_code, failed_section (nullable — machine-readable only, never an error message)
+  created_at, updated_at
+  # Every transition is a conditional UPDATE on the expected status (and
+    attempt), so two workers can't both generate one job and a stale claim
+    can't publish over a newer one. One in-flight job per patient (request
+    locks the PatientProfile row FOR UPDATE).
+  # The row is kept after expiry (no patient data in it) so status reads
+    answer "expired" rather than 404.
+
+PatientExportChunk
+  export_id (FK -> PatientExport, cascade), attempt, seq — composite PK
+  data (text — one slice of the JSON bundle, ~PATIENT_EXPORT_CHUNK_BYTES)
+  # Only chunks of the export's current attempt are ever served; the cleanup
+    job deletes other attempts' and expired/failed exports' chunks.
+```
+Bundle format (schemaVersion 1): `{ format: "docforum.patient-export",
+schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }`
+— see §3.1 for where sections come from.
+
+### 4.12 Escrow chain event observations (issue #86)
+
+EscrowEventCursor has one row per deployed escrow contract and persists the Soroban RPC pagination cursor and retention error. EscrowChainEvent is uniquely keyed by (contractId, eventId) and records the contract event, ledger, transaction hash, escrow id, match state, and alert timestamp. These are observations, not a source of payment state: matching checks the locally owned PaymentIntent; the poller never mutates a payment transition.
+### 4.11 PHI read-access log (Phase 8, issue #45)
+```
+AccessLog
+  id, accessed_by (nullable FK → User, SET NULL on delete — the row keeps
+    its timestamp and entity while the PII pointer is removed)
+  patient_profile_id (nullable FK → PatientProfile, CASCADE — the record
+    owner, whose data was viewed; used by the patient-facing query)
+  entity_type ('IntakeForm' | 'Consultation' | 'Prescription' |
+    'PrescriptionItem' | 'LabOrder' | 'LabResult' | 'Referral' |
+    'PaymentIntent' | 'PatientProfile' | 'Appointment'), entity_id
+  route (nullable — the HTTP route that returned the payload),
+    detail (nullable — context string, never PHI)
+  accessed_at (default now)
+  # indexes: (accessed_at), (accessed_by), (patient_profile_id,
+    accessed_at), (entity_type, entity_id).
+```
+Answers "who looked at this" — distinct from `AuditEvent`'s "who changed
+this" (§4.10). Reads are far higher volume than state changes, so:
+- writes go through `auditService.recordAccess()`, which is
+  **fire-and-forget** (never awaited on the read path — a unit test pins
+  sub-50ms return with a hanging insert) and **fail-open** (a logging
+  failure never fails the read, but is counted and surfaced via
+  `GET /admin/access-logs/stats` for alerting);
+- rows are **retention-managed**, not append-only: `pruneOldAccessLogs()`
+  (wired into the prune interval in `src/server.ts`) deletes rows older
+  than `ACCESS_LOG_RETENTION_DAYS` (default 365). That delete is the only
+  one in the audit repositories and is bounded to the retention cutoff.
+Patient-facing query (`GET /patients/me/access-log`) is scoped server-side
+to the caller's own profile (resolved from the authenticated user, never
+from the request) and strips all viewer PII to a role — a deleted viewer
+surfaces as `deleted_user`.
+
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)
@@ -259,13 +373,14 @@ LoginAttempt (issue #35)
 1. What happens to `AvailabilitySlot.status = 'held'` if a booking transaction fails/times out mid-flight — is there a TTL to release the hold? (Needed or slots leak into permanent limbo.)
 2. Referral `expired` status exists in the enum but no expiry job is designed yet — orphaned referrals (PRD 8.1.3 sibling problem).
 3. No schema support yet for a doctor working across multiple facilities/locations (PRD edge case 6) — `AvailabilitySlot` currently assumes one calendar per doctor.
-4. No audit-log table — every FR around auditability (PRD §7) currently relies on `created_at/updated_at` timestamps only, which is not sufficient for "who changed what." A dedicated `AuditEvent` table is likely needed before this ships to real patients.
+4. No audit-log table — every FR around auditability (PRD §7) currently relies on `created_at/updated_at` timestamps only, which is not sufficient for "who changed what." A dedicated `AuditEvent` table is likely needed before this ships to real patients. **Foundation resolved 2026-10-17 (issue #43):** `AuditEvent` (§4.10) + `audit.record()` in the same transaction as the change, append-only at the DB level, wired into booking, doctor verification and payment fund/release/refund. **Still open:** Phase 3/4 transitions (referrals, prescriptions, lab orders, fulfillment) must be wired as they're built; the admin login-throttle clear (`/auth/login-attempts/clear`) still only logs to the console; the app connects as the database owner, which could disable the triggers — enforcing append-only against the owner needs a separate least-privilege DB role (deployment work, issue #22).
 5. CSRF on the cookie-authenticated routes — the refresh cookie has to be `SameSite=None; Secure` (the Pages frontend is a different site — see `docs/adr/0003`), which means any site the patient visits can make their browser send it to `/auth/refresh` and `/auth/logout`. **Resolved 2026-10-15 (issue #37):** a per-session CSRF token is bound into the refresh token and required in the `X-CSRF-Token` header, the `Origin` header is validated against an explicit allowlist, and CORS is now a per-environment allowlist (`CORS_ORIGINS`) instead of one configured string. The double-submit cookie pattern — the usual answer — is *not* usable here: a cookie set by this API is a third-party cookie to `docforum.github.io`, so the frontend's JavaScript can never read it; the token travels in the login/refresh response body instead. A request with no `Origin` (curl, server-to-server) is allowed through the Origin check but still needs the token. See `backend/src/middleware/csrf.ts`, and `docs/api/README.md` for what the client must send. Consequence: refresh cookies issued before this change carry no `csrf` claim and are rejected, i.e. existing sessions need one re-login.
 
 ### 6.3 What's overengineered (architecture-level, for v1)?
 1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is.
 2. BullMQ/Redis job queue before there's a single job that needs it — fine to stub with a simple cron/interval check initially and introduce a real queue when reminder/expiry logic actually exists.
 3. Designing for horizontal service extraction (module boundary purity, §3) before there's a single reason to split — worth doing lightly (it's cheap discipline), but not worth extra ceremony (e.g., separate repos, separate CI, internal API versioning) yet.
+4. **Added 2026-10-17 (issue #40):** export bundles are stored as text chunks in Postgres (`PatientExportChunk`, §4.11), not in object storage as §2's file-storage row prescribes — no object-storage provider is integrated yet, and a filesystem store would break on Render's ephemeral disk and on any second instance. The chunks are read/written only by `patients/repositories`, are short-lived (`PATIENT_EXPORT_TTL_HOURS`, default 24) and are deleted by the cleanup job, so moving to S3 later swaps one storage seam rather than the design. Revisit when lab-result storage (Phase 5, issue #16) picks a provider.
 
 ## 7. Non-functional / cross-cutting
 

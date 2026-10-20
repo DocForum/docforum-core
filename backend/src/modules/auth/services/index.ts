@@ -26,7 +26,9 @@ import {
   resetLoginThrottle,
 } from './login-throttle';
 import { csrfTokensMatch, generateCsrfToken } from '../../../middleware/csrf';
+import { redeemAdminInvite } from '../../users/services';
 import type { Role } from '@prisma/client';
+import type { PatientExportSection } from '../../patients/services';
 
 // Re-exported so middleware/auth.ts (shared infra, not a peer module) can
 // verify tokens through this module's service surface rather than
@@ -141,6 +143,40 @@ export async function signup(input: SignupInput): Promise<AuthSession> {
   return { user: toPublicUser(user), ...tokens };
 }
 
+/**
+ * Redeems an admin invite and signs the new admin in (Phase 8, issue #39).
+ *
+ * The invite itself belongs to the users module — this module only hashes
+ * the password and issues the session, calling that module's service rather
+ * than its repository (AGENTS.md hard rule 4).
+ */
+export interface SignupWithInviteInput {
+  token: string;
+  email: string;
+  password: string;
+}
+
+export async function signupWithInvite(input: SignupWithInviteInput): Promise<AuthSession> {
+  const passwordHash = await hashPassword(input.password);
+  const user = await redeemAdminInvite({ token: input.token, email: input.email, passwordHash });
+
+  const tokens = issueSession(user);
+  return {
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      // No verification email is sent on the invite path — the invite itself
+      // is the admin-vetted proof of address, so this stays null rather than
+      // claiming a verification that never happened.
+      emailVerifiedAt: null,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    },
+    ...tokens,
+  };
+}
+
 export interface LoginInput {
   email: string;
   password: string;
@@ -185,6 +221,13 @@ export async function login(input: LoginInput): Promise<AuthSession> {
   }
 
   await resetLoginThrottle(throttleKeys.emailKey);
+
+  // Checked *after* the password: a deactivated account must not be
+  // distinguishable from a non-existent one without knowing the password
+  // (Phase 8, issue #39).
+  if (user.deactivatedAt) {
+    throw new HttpError(403, 'This account has been deactivated. Contact an administrator.');
+  }
 
   const tokens = issueSession(user);
   return { user: toPublicUser(user), ...tokens };
@@ -323,6 +366,65 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   const user = await findUserById(payload.sub);
   if (!user) throw new HttpError(401, 'Invalid or expired refresh token.');
 
+  // Deactivated accounts can't refresh out of their deactivation, and a
+  // session revoked by deactivation/reactivation can't come back to life
+  // through a refresh cookie either (Phase 8, issue #39).
+  if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
+  if (isSessionRevoked(user.sessionsInvalidatedAt, payload.iat)) {
+    throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
+  }
+
   const tokens = issueSession(user);
   return { user: toPublicUser(user), ...tokens };
 }
+
+/**
+ * Guards every authenticated request (Phase 8, issue #39). The access token
+ * is otherwise stateless, so a deactivated account's token would keep
+ * working for up to 15 minutes; this is the DB read that closes that gap.
+ *
+ * Deliberately narrow: it answers "is this account still active, and was
+ * this token issued after the last deactivation/reactivation", not "is this
+ * token on a revocation list" — a general revocation list is issue #18 and
+ * is still unbuilt. Because it's a per-request read, tokens carrying no
+ * `iat` are treated as revoked once `sessionsInvalidatedAt` is set (fail
+ * closed).
+ */
+export async function assertActiveSession(userId: string, issuedAtSeconds?: number): Promise<void> {
+  const user = await findUserById(userId);
+  if (!user) throw new HttpError(401, 'Invalid or expired access token.');
+  if (user.deactivatedAt) throw new HttpError(401, 'This account has been deactivated.');
+  if (isSessionRevoked(user.sessionsInvalidatedAt, issuedAtSeconds)) {
+    throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
+  }
+}
+
+function isSessionRevoked(sessionsInvalidatedAt: Date | null, issuedAtSeconds: number | undefined): boolean {
+  if (!sessionsInvalidatedAt) return false;
+  // `iat` has second precision, so a token minted in the same second as the
+  // invalidation counts as revoked — the safe direction.
+  return (issuedAtSeconds ?? 0) * 1000 < sessionsInvalidatedAt.getTime();
+}
+
+/** This module's contribution to the patient data export (issue #40): the
+ * login identity itself. Explicit allowlist — never the password hash, and
+ * no verification/throttle bookkeeping. */
+export const accountExportSection: PatientExportSection = {
+  name: 'account',
+  version: 1,
+  async *pages(subject) {
+    const user = await findUserById(subject.userId);
+    if (!user) return;
+    yield [
+      {
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        emailVerifiedAt: user.emailVerifiedAt,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+    ];
+  },
+};

@@ -23,6 +23,15 @@ jobs:
 
       - run: npm ci
 
+      # Phase 8, issue #47: gate against high/critical advisories in
+      # production dependencies (`npm audit --omit=dev --audit-level=high`
+      # semantics — see backend/scripts/audit-gate.mjs for the one
+      # documented, unfixable-from-here axios chain it tolerates, and why).
+      # Deliberately NOT `continue-on-error`: a new vulnerable package must
+      # fail this build.
+      - name: Audit production dependencies (high+)
+        run: npm run audit:prod
+
       - run: npm run prisma:generate
 
       - run: npm run typecheck

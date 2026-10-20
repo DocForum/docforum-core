@@ -3,6 +3,8 @@ import { HttpError } from '../../../http-error';
 import * as appointmentsRepo from '../repositories';
 import * as availabilityService from '../../availability/services';
 import * as patientsService from '../../patients/services';
+import * as doctorsService from '../../doctors/services';
+import * as auditService from '../../audit/services';
 
 /**
  * Books a slot for the calling patient. This is the correctness-critical
@@ -19,9 +21,15 @@ import * as patientsService from '../../patients/services';
  *
  * See backend/tests/integration/booking.test.ts for the concurrency proof
  * this is built to satisfy.
+ *
+ * Phase 8, issue #43: the booking's AuditEvent is written as a third step
+ * of the same transaction, after the Appointment row exists — so an event
+ * exists if and only if the booking committed. A caller that loses the
+ * race fails at step 1 and never reaches it.
  */
-export async function bookSlot(userId: string, availabilitySlotId: string) {
-  const patientProfile = await patientsService.getMyPatientProfile(userId);
+export async function bookSlot(actor: auditService.AuditActor, availabilitySlotId: string) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
 
   return prisma.$transaction(async (tx) => {
     const claimed = await availabilityService.claimOpenSlot(tx, availabilitySlotId);
@@ -36,15 +44,65 @@ export async function bookSlot(userId: string, availabilitySlotId: string) {
       throw new HttpError(404, 'Slot not found.');
     }
 
-    return appointmentsRepo.createAppointment(tx, {
+    const appointment = await appointmentsRepo.createAppointment(tx, {
       patientProfileId: patientProfile.id,
       doctorProfileId: slot.doctorProfileId,
       availabilitySlotId,
     });
+
+    await auditService.record(tx, actor, {
+      entityType: 'Appointment',
+      entityId: appointment.id,
+      action: 'appointment.booked',
+      fromState: null,
+      toState: appointment.status,
+      metadata: { availabilitySlotId, doctorProfileId: slot.doctorProfileId, origin: appointment.origin },
+    });
+
+    return appointment;
   });
 }
 
 export async function listMyAppointments(userId: string) {
   const patientProfile = await patientsService.getMyPatientProfile(userId);
   return appointmentsRepo.findAppointmentsForPatient(patientProfile.id);
+}
+
+/** This module's contribution to the patient data export (issue #40).
+ * Slot times and the doctor's name are fetched per page through the
+ * availability and doctors services — never by joining their tables. */
+export const appointmentsExportSection: patientsService.PatientExportSection = {
+  name: 'appointments',
+  version: 1,
+  pages(subject, pageSize) {
+    return patientsService.paginate(
+      pageSize,
+      (cursor, take) => appointmentsRepo.findAppointmentsPageForPatient(subject.patientProfileId, cursor, take),
+      async (rows) => {
+        const [slots, doctors] = await Promise.all([
+          availabilityService.getSlotTimesByIds(rows.map((row) => row.availabilitySlotId)),
+          doctorsService.getDoctorSummariesByIds(rows.map((row) => row.doctorProfileId)),
+        ]);
+        return rows.map((row) => ({
+          id: row.id,
+          status: row.status,
+          origin: row.origin,
+          slot: slots.get(row.availabilitySlotId) ?? null,
+          doctor: doctors.get(row.doctorProfileId) ?? null,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        }));
+      },
+    );
+  },
+};
+
+/** Resolves an appointment for a doctor-owned consultation without exposing
+ * the appointments repository across the module boundary. */
+export async function getDoctorAppointmentContext(userId: string, appointmentId: string) {
+  const appointment = await appointmentsRepo.findAppointmentDoctorContext(appointmentId);
+  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  if (appointment.doctorProfile.userId !== userId) throw new HttpError(403, 'You can only issue orders for your own appointments.');
+  if (appointment.doctorProfile.verificationStatus !== 'verified') throw new HttpError(403, 'A verified doctor profile is required to issue orders.');
+  return { id: appointment.id, patientProfileId: appointment.patientProfileId, doctorProfileId: appointment.doctorProfileId };
 }

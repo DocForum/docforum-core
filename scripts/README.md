@@ -37,3 +37,40 @@ Postgres as Prisma's shadow database). Usage:
 `node scripts/gen-migration.mjs <migration_name>` — review the generated SQL
 before committing, and add any data backfill it can't express as a schema
 diff.
+
+Changed by the Prisma 7 upgrade (Phase 8, issue #47): the shadow database is
+now passed as the `SHADOW_DATABASE_URL` environment variable rather than a
+`--shadow-database-url` CLI flag (removed in Prisma 7), and the diff target is
+`--to-schema` (renamed from `--to-schema-datamodel`). Run it from `backend/`
+as before.
+
+## `backend/scripts/check-migration-drift.mjs`
+
+Proves the committed migrations and `prisma/schema.prisma` still agree —
+applies the migrations to a throwaway embedded Postgres with
+`prisma migrate deploy` (the same command Render's start command runs), then
+diffs that database against the schema with `--exit-code`. Exits non-zero if
+anything has drifted. Added with the Prisma 7 upgrade, since a change to the
+CLI or the schema without a matching migration is exactly what this catches.
+
+```
+node backend/scripts/check-migration-drift.mjs
+```
+
+Self-contained: no local dev DB, no Docker. Deliberately not wired into CI
+(it spins its own Postgres cluster, and CI already runs the integration
+suite's) — run it before merging a schema or Prisma change.
+
+## `backend/scripts/audit-gate.mjs`
+
+CI's production-dependency audit gate (Phase 8, issue #47), wired up as
+`npm run audit:prod` and run on every PR. It runs
+`npm audit --omit=dev --json` and fails on any **high or critical** advisory
+that is not on its explicit, commented allowlist — so a newly added
+vulnerable package fails the build.
+
+The allowlist holds exactly one chain: `axios`, reached through
+`@docforum/escrow-sdk`'s pinned `@stellar/stellar-sdk`. The fix lives in
+`docforum-escrow` (the SDK must build on a patched `stellar-sdk`), not in this
+repo, and no version bump here resolves it. Remove those entries once the
+escrow SDK ships a patched release.
