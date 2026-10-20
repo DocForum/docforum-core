@@ -10,6 +10,7 @@ import { prisma } from '../../../db/prisma-client';
 import type { ConsultationOutcome } from '@prisma/client';
 
 export function createConsultation(data: {
+  appointmentId: string;
   doctorProfileId: string;
   notes?: string;
   outcome?: ConsultationOutcome;

@@ -7,6 +7,7 @@ import { authRouter } from './modules/auth/routes';
 import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
+import { consultationsRouter } from './modules/consultations/routes';
 import { ordersRouter } from './modules/orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
@@ -43,6 +44,7 @@ export function createApp() {
   app.use('/doctors', doctorsRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
+  app.use('/consultations', consultationsRouter);
   app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);

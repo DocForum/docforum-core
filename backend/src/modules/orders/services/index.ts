@@ -17,6 +17,7 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
     return await prisma.$transaction(async (tx) => {
       const consultation = await ordersRepo.createConsultation(tx, {
         ...input,
+        doctorProfileId: appointment.doctorProfileId,
         notes: encryptField(input.notes) ?? null,
       });
       await auditService.record(tx, actor, {

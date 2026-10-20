@@ -9,6 +9,7 @@
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import * as doctorsService from '../../doctors/services';
+import * as appointmentsService from '../../appointments/services';
 import * as consultationsRepo from '../repositories';
 import type { ConsultationOutcome } from '@prisma/client';
 
@@ -69,11 +70,16 @@ async function requireOwnConsultation(userId: string, consultationId: string) {
 
 export async function createConsultation(
   userId: string,
-  input: { notes?: string; outcome?: ConsultationOutcome },
+  input: { appointmentId: string; notes?: string; outcome?: ConsultationOutcome },
 ): Promise<ConsultationReadModel> {
-  const doctorProfile = await requireAuthoringDoctor(userId);
+  // The appointment is what a consultation closes (one per appointment,
+  // unique). Resolved through the appointments module's service, which
+  // also proves the appointment belongs to this doctor — never by reading
+  // another module's table (AGENTS.md hard rule 4).
+  const appointment = await appointmentsService.getDoctorAppointmentContext(userId, input.appointmentId);
   const consultation = await consultationsRepo.createConsultation({
-    doctorProfileId: doctorProfile.id,
+    appointmentId: appointment.id,
+    doctorProfileId: appointment.doctorProfileId,
     notes: input.notes,
     outcome: input.outcome,
   });
@@ -155,10 +161,9 @@ export async function addAddendum(
  * interval job in src/jobs (kept as a plain interval per
  * ARCHITECTURE.md §6.3.2 — no queue until a real job needs one).
  *
- * Caveat, flagged: the window is measured from `createdAt` because the
- * appointment that a consultation closes isn't linked yet (#4 owns
- * `Consultation.appointmentId`). Once that lands this should key off the
- * appointment's completion time instead.
+ * Caveat, flagged: the window is measured from `createdAt`, not from the
+ * appointment's completion time — `Appointment` has no completed-at stamp
+ * yet (#4 owns the appointment lifecycle).
  */
 export async function autoSignOffDueConsultations(now: Date = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - config.consultations.autoSignoffHours * 60 * 60 * 1000);

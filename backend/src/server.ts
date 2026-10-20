@@ -4,6 +4,7 @@ import { pruneLoginAttempts } from './modules/auth/services';
 import { pruneOldAccessLogs } from './modules/audit/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
 import { startEscrowEventPoller } from './jobs/escrow-events';
+import { startConsultationAutoSignOffJob } from './jobs/consultation-auto-sign-off';
 import { validatePlatformSigners } from './modules/payments/services/platform-signers';
 import { verifyPaymentsNetwork } from './modules/payments/services';
 
@@ -63,3 +64,6 @@ pruneTimer.unref();
 // Patient data export worker + expiry cleanup (Phase 8, issue #40).
 startPatientExportJobs();
 startEscrowEventPoller();
+// Consultation drafts past their edit window are signed off automatically
+// (issue #64).
+startConsultationAutoSignOffJob();

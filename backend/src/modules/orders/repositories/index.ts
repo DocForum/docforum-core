@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
-export function createConsultation(db: DbClient, input: { appointmentId: string; outcome: 'resolved' | 'referred' | 'follow_up_needed' | null; notes: string | null }) {
+export function createConsultation(db: DbClient, input: { appointmentId: string; doctorProfileId: string; outcome: 'resolved' | 'referred' | 'follow_up_needed' | null; notes: string | null }) {
   return db.consultation.create({ data: input });
 }
 

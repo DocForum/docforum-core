@@ -13,7 +13,9 @@ export async function createOrderFixture(
   const appointment = await prisma.appointment.create({ data: {
     patientProfileId: input.patientProfileId, doctorProfileId: doctor.id, availabilitySlotId: slot.id,
   } });
-  const consultation = await prisma.consultation.create({ data: { appointmentId: appointment.id } });
+  const consultation = await prisma.consultation.create({
+    data: { appointmentId: appointment.id, doctorProfileId: doctor.id },
+  });
   if (input.kind === 'prescription') {
     const order = await prisma.prescription.create({ data: {
       consultationId: consultation.id, patientProfileId: input.patientProfileId, prescribingDoctorId: doctor.id,

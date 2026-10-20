@@ -162,8 +162,10 @@ IntakeForm
 ```
 Consultation
   id, appointment_id (FK, unique)
+  doctor_profile_id (FK -> DoctorProfile — the authoring doctor, issue #64)
   notes [ENCRYPTED — Phase 8 issue #46, see §2 field-level encryption row]
   outcome (enum: resolved|referred|follow_up_needed)
+  signed_at (nullable — null = editable draft, set = immutable, issue #64)
   created_at
 
 ConsultationAddendum (issue #64)

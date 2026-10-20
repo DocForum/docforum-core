@@ -44,9 +44,17 @@ describe('consultation sign-off', () => {
   let authorToken: string;
   let otherDoctorToken: string;
   let consultationId: string;
+  // A consultation closes exactly one appointment (unique FK), so each test
+  // that creates a note gets its own seeded appointment.
+  let appointmentIds: string[] = [];
 
   function create(token: string, body: Record<string, unknown> = {}) {
-    return request(app).post('/consultations').set('Authorization', `Bearer ${token}`).send(body);
+    const appointmentId = appointmentIds.shift();
+    if (!appointmentId) throw new Error('no seeded appointment left for this test');
+    return request(app)
+      .post('/consultations')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ appointmentId, ...body });
   }
 
   function get(token: string, id = consultationId) {
@@ -96,6 +104,43 @@ describe('consultation sign-off', () => {
       .send({ role: 'doctor', email: `consult-other-${runId}@example.com`, password: 'doctor-pass-2', fullName: 'Other Doctor' });
     expect(other.status).toBe(200);
     otherDoctorToken = other.body.accessToken as string;
+
+    // A consultation is written against a doctor-owned appointment, and the
+    // appointments service requires a verified doctor, so verify the author
+    // and seed a patient + three booked appointments directly.
+    const patient = await request(app)
+      .post('/auth/signup')
+      .send({ role: 'patient', email: `consult-patient-${runId}@example.com`, password: 'patient-pass-1', fullName: 'Consult Patient' });
+    expect(patient.status).toBe(200);
+
+    const patientProfile = await prisma.patientProfile.findUniqueOrThrow({
+      where: { userId: (await prisma.user.findUniqueOrThrow({ where: { email: `consult-patient-${runId}@example.com` } })).id },
+    });
+    const authorUser = await prisma.user.findUniqueOrThrow({ where: { email: `consult-author-${runId}@example.com` } });
+    const authorProfile = await prisma.doctorProfile.update({
+      where: { userId: authorUser.id },
+      data: { verificationStatus: 'verified' },
+    });
+
+    for (let index = 0; index < 3; index += 1) {
+      const startTime = new Date(Date.now() + (index + 1) * 60 * 60 * 1000);
+      const slot = await prisma.availabilitySlot.create({
+        data: {
+          doctorProfileId: authorProfile.id,
+          status: 'booked',
+          startTime,
+          endTime: new Date(startTime.getTime() + 30 * 60 * 1000),
+        },
+      });
+      const appointment = await prisma.appointment.create({
+        data: {
+          patientProfileId: patientProfile.id,
+          doctorProfileId: authorProfile.id,
+          availabilitySlotId: slot.id,
+        },
+      });
+      appointmentIds.push(appointment.id);
+    }
 
     const created = await create(authorToken, { notes: 'Initial assessment', outcome: 'follow_up_needed' });
     expect(created.status).toBe(201);

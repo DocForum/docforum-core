@@ -43,6 +43,16 @@ export const config = {
     accessTtl: '15m',
     refreshTtl: '30d',
   },
+  consultations: {
+    // How long a consultation note stays editable before it's signed off
+    // automatically (issue #64) — notes shouldn't be editable forever.
+    // Measured from `createdAt` for now (the note is created against a
+    // completed appointment); see the caveat in consultations/services.
+    autoSignoffHours: Number(process.env.CONSULTATION_AUTO_SIGNOFF_HOURS ?? 24),
+    autoSignoffCheckIntervalMinutes: Number(
+      process.env.CONSULTATION_AUTO_SIGNOFF_CHECK_INTERVAL_MINUTES ?? 15,
+    ),
+  },
   // Phase 8 hardening knobs (issues #34/#35/#37). Env-configurable so a
   // preview deployment can be tightened without a code change, and so
   // tests can set short windows instead of waiting real minutes.
