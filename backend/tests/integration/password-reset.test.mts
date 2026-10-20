@@ -4,7 +4,7 @@
 // and old refresh tokens die after a reset. A mocked repository would not
 // prove any of that.
 //
-// Self-contained like booking.test.mts: throwaway Postgres on port 5436
+// Self-contained like booking.test.mts: throwaway Postgres on port 5449
 // (distinct port per integration file — vitest runs files in parallel).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -17,7 +17,7 @@ import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5436;
+const PORT = 5449;
 const runId = Date.now();
 
 // Must be set before anything from src/ is imported: config/index.ts reads
@@ -27,9 +27,9 @@ process.env.PASSWORD_RESET_REQUESTS_PER_IP_PER_HOUR = '1000';
 process.env.PASSWORD_RESET_REQUESTS_PER_EMAIL_PER_HOUR = '3';
 process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES = '30';
 // vitest.config.mts points DATABASE_URL at booking.test.mts's cluster
-// (5433); this file runs its own on 5436, so it has to say so before
+// (5433); this file runs its own on 5449, so it has to say so before
 // src/db/prisma-client.ts constructs the client at import time.
-process.env.DATABASE_URL = 'postgresql://docforum:docforum@localhost:5436/docforum_test';
+process.env.DATABASE_URL = 'postgresql://docforum:docforum@localhost:5449/docforum_test';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-reset-pg-'));
 const pg = new EmbeddedPostgres({
