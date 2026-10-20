@@ -2,7 +2,6 @@ import { Router } from 'express';
 import { authenticate, requireRole } from '../../../middleware/auth';
 import { requireAllowedOrigin } from '../../../middleware/csrf';
 import * as authController from '../controllers';
-import { authenticate } from '../../../middleware/auth';
 
 export const authRouter = Router();
 
@@ -28,3 +27,13 @@ authRouter.post('/login-attempts/clear', authenticate, requireRole('admin'), aut
 // /logout. See middleware/csrf.ts for the choice and its justification.
 authRouter.post('/refresh', requireAllowedOrigin, authController.refresh);
 authRouter.post('/logout', requireAllowedOrigin, authController.logout);
+
+// TOTP two-factor auth (Phase 8 #36).
+// Setup/enable/status/disable all require a full session; `/verify` is the
+// second step of login and takes the mfa_pending token in its *body*, not
+// an Authorization header — it is the only route that accepts one.
+authRouter.get('/2fa', authenticate, authController.getTwoFactorStatus);
+authRouter.post('/2fa/setup', authenticate, authController.setupTwoFactor);
+authRouter.post('/2fa/enable', authenticate, authController.enableTwoFactor);
+authRouter.post('/2fa/verify', authController.verifyTwoFactor);
+authRouter.post('/2fa/disable', authenticate, authController.disableTwoFactor);

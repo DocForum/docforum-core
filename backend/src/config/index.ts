@@ -43,6 +43,24 @@ export const config = {
     accessTtl: '15m',
     refreshTtl: '30d',
   },
+  // TOTP two-factor auth (Phase 8 #36). The encryption key is read here but
+  // deliberately NOT required at boot (same reasoning as payments below) —
+  // the 2FA service itself fails loudly with a named error if it's missing
+  // when a secret actually has to be encrypted or decrypted.
+  twoFactor: {
+    encryptionKey: process.env.TOTP_ENCRYPTION_KEY,
+    issuer: process.env.TOTP_ISSUER ?? 'DocForum',
+    // Short-lived, single-purpose token handed back instead of a session
+    // when a password step succeeds but the TOTP step hasn't happened yet.
+    // Accepted only by POST /auth/2fa/verify.
+    mfaPendingTtl: '5m',
+    recoveryCodeCount: 10,
+    // When true, an admin account must have 2FA enabled to log in at all —
+    // enforced at login. Defaults to false so enabling it can't lock out an
+    // admin who hasn't enrolled yet without that being a deliberate ops
+    // decision; see the bootstrap caveat in ARCHITECTURE_ESSENTIALS.md.
+    requireForAdmin: process.env.REQUIRE_2FA_FOR_ADMIN === 'true',
+  },
   // Phase 8 hardening knobs (issues #34/#35/#37). Env-configurable so a
   // preview deployment can be tightened without a code change, and so
   // tests can set short windows instead of waiting real minutes.

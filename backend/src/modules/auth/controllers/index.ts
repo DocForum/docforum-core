@@ -5,6 +5,8 @@ import {
   loginSchema,
   signupSchema,
   signupWithInviteSchema,
+  twoFactorCodeSchema,
+  twoFactorVerifySchema,
   verifyEmailSchema,
 } from '../validation';
 import { HttpError } from '../../../http-error';
@@ -52,8 +54,16 @@ export async function login(req: Request, res: Response) {
     // Express's `req.ip` honours the `trust proxy` setting (app.ts) — it is
     // the whole reason the throttle keys on the IP the client believes it
     // is, rather than Render's proxy address (see config.trustProxy).
-    const session = await authService.login({ ...input, ip: req.ip });
-    sessionResponse(res, session);
+    const result = await authService.login({ ...input, ip: req.ip });
+
+    // Two-step login: no cookie, no access token yet — just a short-lived
+    // token that only POST /auth/2fa/verify accepts.
+    if ('mfaRequired' in result) {
+      res.status(200).json(result);
+      return;
+    }
+
+    sessionResponse(res, result);
   } catch (err) {
     // Phase 8, issue #35: a throttled attempt must tell the client how long
     // to wait, both as a header and in the message (see LoginThrottledError).

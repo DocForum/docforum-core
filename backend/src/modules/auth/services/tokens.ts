@@ -17,6 +17,9 @@ export interface AccessTokenPayload {
    * compare against `User.sessionsInvalidatedAt` (Phase 8, issue #39) —
    * tokens minted before a deactivation must stop working immediately. */
   iat?: number;
+  /** Present only on single-purpose tokens (currently `mfa_pending`). All
+   * other token types must leave it undefined. */
+  scope?: 'mfa_pending';
 }
 
 /**
