@@ -3,7 +3,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
-import { authRouter } from './modules/auth/routes';
+import { adminAuthRouter, authRouter } from './modules/auth/routes';
 import { doctorsRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
@@ -42,6 +42,9 @@ export function createApp() {
   app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 
   app.use('/auth', authRouter);
+  // Admin surface. Currently only the auth module's session administration
+  // (Phase 8 #38) — other modules' admin routes can hang off the same mount.
+  app.use('/admin', adminAuthRouter);
   app.use('/doctors', doctorsRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
