@@ -1,15 +1,16 @@
 import type { Request, Response } from 'express';
 import * as paymentsService from '../services';
-import { linkWalletSchema, createPaymentIntentSchema } from '../validation';
+import { linkWalletSchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
+import { auditActor } from '../../../middleware/request-id';
 
 // BigInt doesn't serialize via JSON.stringify by default — every response
 // here that carries one converts to a string explicitly.
 function serializeIntent(intent: {
   id: string;
-  orderType: string;
-  orderId: string;
+  prescriptionId: string | null;
+  labOrderId: string | null;
   status: string;
   patientProfileId: string;
   facilityId: string;
@@ -43,12 +44,6 @@ export async function getOwnWallet(req: Request, res: Response) {
   res.status(200).json(link);
 }
 
-export async function createIntent(req: Request, res: Response) {
-  const input = createPaymentIntentSchema.parse(req.body);
-  const intent = await paymentsService.createPaymentIntent(input);
-  res.status(201).json(serializeIntent(intent));
-}
-
 export async function getIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const intent = await paymentsService.getPaymentIntent(id);
@@ -57,18 +52,18 @@ export async function getIntent(req: Request, res: Response) {
 
 export async function fundIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
-  const intent = await paymentsService.fundPaymentIntent(id);
+  const intent = await paymentsService.fundPaymentIntent(auditActor(req), id);
   res.status(200).json(serializeIntent(intent));
 }
 
 export async function releaseIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
-  const intent = await paymentsService.releasePaymentIntent(id);
+  const intent = await paymentsService.releasePaymentIntent(auditActor(req), id);
   res.status(200).json(serializeIntent(intent));
 }
 
 export async function refundIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
-  const intent = await paymentsService.refundPaymentIntent(id);
+  const intent = await paymentsService.refundPaymentIntent(auditActor(req), id);
   res.status(200).json(serializeIntent(intent));
 }

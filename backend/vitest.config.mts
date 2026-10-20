@@ -7,6 +7,12 @@ export default defineConfig({
     // Booking-concurrency tests fire real concurrent transactions against
     // a real Postgres — a bit more headroom than vitest's 5s default.
     testTimeout: 15_000,
+    // The integration beforeAll hooks do even more than one test: start an
+    // embedded Postgres, run `prisma migrate deploy`, import the app and
+    // seed actors. Several such files run in parallel, so on a loaded CI
+    // runner the 10s default cut the hook off mid-seed (issue #39 CI run:
+    // access-control timed out at 101 tests skipped).
+    hookTimeout: 30_000,
     env: {
       JWT_ACCESS_SECRET: 'test-access-secret',
       JWT_REFRESH_SECRET: 'test-refresh-secret',
