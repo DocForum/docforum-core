@@ -35,6 +35,29 @@ import type { PatientExportSection } from '../../patients/services';
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
 
+// Password reset (Phase 8 #33) lives in its own file; re-exported here so
+// controllers keep calling a single service surface.
+export {
+  confirmPasswordReset,
+  hashResetToken,
+  requestPasswordReset,
+  resetPasswordResetRateLimits,
+  type ConfirmPasswordResetInput,
+  type RequestPasswordResetInput,
+} from './password-reset';
+
+export {
+  assertSessionUsable,
+  listSessions,
+  recordSessionUse,
+  revokeAllUserSessions,
+  revokeOtherSessions,
+  revokeSession,
+  startSession,
+  type SessionContext,
+  type SessionSummary,
+} from './sessions';
+
 // Re-exported for the same reason: tests (and, at Phase 6, the provider
 // integration) replace the outbound email sender through this module's
 // service surface, not by importing the dispatcher file directly.
@@ -87,12 +110,11 @@ function toPublicUser(user: {
   };
 }
 
-function issueSession(user: { id: string; role: Role }): {
-  accessToken: string;
-  refreshToken: string;
-  csrfToken: string;
-} {
-  const payload = { sub: user.id, role: user.role };
+function issueTokensForSession(
+  user: { id: string; role: Role; tokenVersion?: number },
+  sessionId: string,
+): { accessToken: string; refreshToken: string; csrfToken: string } {
+  const payload = { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0 };
   // A fresh CSRF token per session, and per rotation — bound into the
   // refresh token so verifying it needs no server-side state (issue #37).
   const csrfToken = generateCsrfToken();
@@ -101,6 +123,15 @@ function issueSession(user: { id: string; role: Role }): {
     refreshToken: signRefreshToken({ ...payload, csrf: csrfToken }),
     csrfToken,
   };
+}
+
+/** Starts a new session (one per login) and issues its first token pair. */
+async function issueNewSession(
+  user: { id: string; role: Role; tokenVersion?: number },
+  context: SessionContext,
+): Promise<{ accessToken: string; refreshToken: string; csrfToken: string; sessionId: string }> {
+  const session = await startSession({ userId: user.id, ...context });
+  return { ...issueTokensForSession(user, session.id), sessionId: session.id };
 }
 
 export interface SignupInput {
@@ -324,8 +355,77 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   const user = await findUserById(payload.sub);
   if (!user) throw new HttpError(401, 'Invalid or expired refresh token.');
 
-  const tokens = issueSession(user);
-  return { user: toPublicUser(user), ...tokens };
+  // Deactivated accounts can't refresh out of their deactivation, and a
+  // session revoked by deactivation/reactivation can't come back to life
+  // through a refresh cookie either (Phase 8, issue #39).
+  if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
+
+  // `tv` check: a password reset (or anything else that bumps
+  // `User.tokenVersion`) kills every refresh token issued before it. Tokens
+  // predating this field carry no `tv` and read as version 0, which is
+  // exactly right — they stay valid only while the user has never had a
+  // version bump.
+  if ((payload.tv ?? 0) !== user.tokenVersion) {
+    throw new HttpError(401, 'Invalid or expired refresh token.');
+  }
+
+  if (isSessionRevoked(user.sessionsInvalidatedAt, payload.iat)) {
+    throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
+  }
+
+  // Tokens minted before session records existed carry no `sid` and are
+  // rejected: the migration logs existing sessions out once, which is the
+  // honest trade for actually having a revocation store.
+  if (!payload.sid) throw new HttpError(401, 'Invalid or expired refresh token.');
+
+  await assertSessionUsable({ sessionId: payload.sid, userId: user.id });
+  await recordSessionUse(payload.sid);
+
+  // Rotation keeps the same session (same family, same `sid`) — a new
+  // session row per refresh would make "list my sessions" useless.
+  const tokens = issueTokensForSession(user, payload.sid);
+  return { user: toPublicUser(user), ...tokens, sessionId: payload.sid };
+}
+
+/** The session id behind a refresh cookie, for endpoints that need to know
+ * which of the caller's sessions is the current one. Returns undefined for
+ * a missing/unverifiable cookie rather than throwing — "which session am
+ * I" is never the reason a request should fail. */
+export function sessionIdFromRefreshToken(refreshToken: string | undefined): string | undefined {
+  if (!refreshToken) return undefined;
+  try {
+    return verifyRefreshToken(refreshToken).sid;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Guards every authenticated request (Phase 8, issue #39). The access token
+ * is otherwise stateless, so a deactivated account's token would keep
+ * working for up to 15 minutes; this is the DB read that closes that gap.
+ *
+ * Deliberately narrow: it answers "is this account still active, and was
+ * this token issued after the last deactivation/reactivation", not "is this
+ * token on a revocation list" — a general revocation list is issue #18 and
+ * is still unbuilt. Because it's a per-request read, tokens carrying no
+ * `iat` are treated as revoked once `sessionsInvalidatedAt` is set (fail
+ * closed).
+ */
+export async function assertActiveSession(userId: string, issuedAtSeconds?: number): Promise<void> {
+  const user = await findUserById(userId);
+  if (!user) throw new HttpError(401, 'Invalid or expired access token.');
+  if (user.deactivatedAt) throw new HttpError(401, 'This account has been deactivated.');
+  if (isSessionRevoked(user.sessionsInvalidatedAt, issuedAtSeconds)) {
+    throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
+  }
+}
+
+function isSessionRevoked(sessionsInvalidatedAt: Date | null, issuedAtSeconds: number | undefined): boolean {
+  if (!sessionsInvalidatedAt) return false;
+  // `iat` has second precision, so a token minted in the same second as the
+  // invalidation counts as revoked — the safe direction.
+  return (issuedAtSeconds ?? 0) * 1000 < sessionsInvalidatedAt.getTime();
 }
 
 /** This module's contribution to the patient data export (issue #40): the

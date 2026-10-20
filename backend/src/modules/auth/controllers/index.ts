@@ -1,6 +1,14 @@
 import type { Request, Response } from 'express';
 import * as authService from '../services';
-import { clearLoginAttemptsSchema, loginSchema, signupSchema, verifyEmailSchema } from '../validation';
+import {
+  clearLoginAttemptsSchema,
+  loginSchema,
+  passwordResetConfirmSchema,
+  passwordResetRequestSchema,
+  signupSchema,
+  signupWithInviteSchema,
+  verifyEmailSchema,
+} from '../validation';
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import { readCsrfHeader } from '../../../middleware/csrf';
@@ -113,4 +121,79 @@ export function logout(req: Request, res: Response) {
   }
   res.clearCookie(REFRESH_COOKIE, config.cookie);
   res.status(204).send();
+}
+
+// Both reset endpoints answer identically for known and unknown emails —
+// same status, same body, no branch on the result of the lookup. Rate
+// limiting is the one intentional exception (429), and it fires before any
+// account lookup, so it can't leak existence either.
+export async function requestPasswordReset(req: Request, res: Response) {
+  const { email } = passwordResetRequestSchema.parse(req.body);
+  await authService.requestPasswordReset({ email, ip: req.ip ?? 'unknown' });
+  res.status(202).json({
+    message: 'If an account exists for that email, a password reset link has been sent.',
+  });
+}
+
+export async function confirmPasswordReset(req: Request, res: Response) {
+  const input = passwordResetConfirmSchema.parse(req.body);
+  await authService.confirmPasswordReset(input);
+  // The reset already killed every refresh token for this user
+  // (tokenVersion bump) — clear the caller's cookie too so a browser that
+  // still holds the old one isn't left sending a dead token.
+  res.clearCookie(REFRESH_COOKIE, config.cookie);
+  res.status(200).json({ message: 'Password updated. Please sign in with your new password.' });
+}
+
+// --- Session management (Phase 8 #38) -----------------------------------
+
+function refreshCookieValue(req: Request): string | undefined {
+  return (req.cookies as Record<string, string> | undefined)?.[REFRESH_COOKIE];
+}
+
+function requireUserId(req: Request): string {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  return req.user.id;
+}
+
+export async function listSessions(req: Request, res: Response) {
+  const sessions = await authService.listSessions({
+    userId: requireUserId(req),
+    currentSessionId: authService.sessionIdFromRefreshToken(refreshCookieValue(req)),
+  });
+  res.status(200).json(sessions);
+}
+
+/** Revokes one of the caller's own sessions. A session id belonging to
+ * someone else is simply not found (404) — scoped update, and no signal
+ * about whether that id exists. */
+export async function revokeSession(req: Request, res: Response) {
+  const currentSessionId = authService.sessionIdFromRefreshToken(refreshCookieValue(req));
+  const result = await authService.revokeSession({
+    userId: requireUserId(req),
+    sessionId: getParam(req, 'id'),
+    currentSessionId,
+  });
+
+  if (!result.revoked) throw new HttpError(404, 'Session not found.');
+  // Revoking the session you're using has to clear the cookie in the same
+  // response, or the browser keeps sending a dead refresh token.
+  if (result.wasCurrent) res.clearCookie(REFRESH_COOKIE, config.cookie);
+  res.status(204).send();
+}
+
+/** "Sign out everywhere else" — keeps the caller's current session. */
+export async function revokeOtherSessions(req: Request, res: Response) {
+  const revoked = await authService.revokeOtherSessions({
+    userId: requireUserId(req),
+    currentSessionId: authService.sessionIdFromRefreshToken(refreshCookieValue(req)),
+  });
+  res.status(200).json({ revoked });
+}
+
+/** Admin: revoke every session a given user has. Mounted under /admin, not
+ * /auth — it acts on someone else's sessions. */
+export async function revokeUserSessions(req: Request, res: Response) {
+  const revoked = await authService.revokeAllUserSessions(getParam(req, 'id'));
+  res.status(200).json({ revoked });
 }

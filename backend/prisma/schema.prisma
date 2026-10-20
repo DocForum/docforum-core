@@ -119,6 +119,23 @@ model User {
   // DoctorProfile.verificationStatus, which is the separate, manual
   // admin verification of a doctor's credentials — do not conflate.
   emailVerifiedAt DateTime?
+  // Phase 8 (issue #39): null = active. Deactivating never deletes anything
+  // — no clinical or payment record is keyed to this flag, and none of the
+  // deactivation paths remove rows. Login, refresh and access tokens are all
+  // refused while this is set.
+  deactivatedAt DateTime?
+  // Phase 8 (issue #39): bumped when an account is deactivated/reactivated,
+  // so access tokens minted before that moment stop working immediately
+  // instead of living out their 15-minute TTL. There is still no general
+  // refresh-token revocation list (issue #18) — this is the narrow "revoke
+  // everything for one account" case that deactivation needs.
+  sessionsInvalidatedAt DateTime?
+  // Per-user refresh-token version. Embedded in every access/refresh token
+  // as `tv` and compared against this column at refresh time. Bumping it
+  // (password reset, Phase 8 #33) invalidates every outstanding refresh
+  // token for the user, since none of them carry the new value — the
+  // interim kill switch issue #33 asked for while #18 doesn't exist yet.
+  tokenVersion Int @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -127,7 +144,11 @@ model User {
   facilityProfile FacilityProfile?
 
   emailVerificationTokens EmailVerificationToken[]
-  disputeResolutions      OrderDisputeResolution[]
+  passwordResetTokens     PasswordResetToken[]
+  adminInvitesSent AdminInvite[]
+  // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
+  // Opposite of AccessLog.accessedByUser.
+  accessLogs AccessLog[]
 
   @@index([role])
 }
@@ -147,6 +168,41 @@ model EmailVerificationToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+// Password reset tokens (Phase 8 #33). Only the SHA-256 hash of the
+// token is ever stored — the raw token exists exactly once, in the
+// notification that carries the reset link, and is never logged or
+// persisted. Single-use (`usedAt`) and expiring (`expiresAt`).
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // SHA-256 hex of the raw token. Unique so lookup-by-hash is a single
+  // indexed read, and a duplicate hash (astronomically unlikely) is a
+  // constraint violation rather than a silent overwrite.
+  tokenHash String    @unique
+  expiresAt DateTime
+  // Non-null once used or superseded by a newer request — either way the
+  // token is dead. Requesting a second reset marks the first one used.
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model AdminInvite {
+  id              String    @id @default(uuid())
+  email           String
+  tokenHash       String    @unique
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  invitedByUserId String
+  createdAt       DateTime  @default(now())
+
+  invitedBy User @relation(fields: [invitedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([email])
 }
 
 // Phase 8 (issue #35): login-throttle state. Deliberately in Postgres and

@@ -1,11 +1,14 @@
 # ROADMAP.md — DocForum
 
-Last updated: 2026-10-20
-Status: Phase 0, Phase 1, Phase 5.5 (Payments, custodial v1 — see
-`docs/adr/0004-custodial-payments-v1.md`), and Order Fulfillment Proof & Patient Confirm/Dispute (issue #76) built and tested. Phases 2-6
-and 8-9 scoped into GitHub issues (#1-#22, #21 closed); Phase 7 is
-superseded by `docforum-web`'s own roadmap. See each phase section below
-for status and issue links.
+Last updated: 2026-10-22
+Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
+`docs/adr/0004-custodial-payments-v1.md`) built and tested. Phase 3
+(Referrals) is **in progress**: #5, #7 and #65–#68 implemented and
+tested on branch `feat/referral-phase3-cascade-multi-loop-admin`, #6 and
+#8 open. Phase 2 is partially unblocked by that work (#3/#4 minimal
+slices). Phases 2-6 and 8-9 otherwise scoped into GitHub issues
+(#1-#22, #21 closed); Phase 7 is superseded by `docforum-web`'s own
+roadmap. See each phase section below for status and issue links.
 
 > **Org note:** this repo (`docforum-core`) is the hub of a 3-repo `DocForum` org. Frontend work is tracked in `docforum-web`'s own roadmap. Stellar contract/SDK work is tracked in `docforum-escrow`'s own roadmap. This file tracks only what runs inside `docforum-core` — including the `payments` module, which *consumes* `docforum-escrow`'s published package but doesn't implement contract logic itself.
 
@@ -123,12 +126,15 @@ for status and issue links.
 - [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence). Tracked as [issue #20](https://github.com/DocForum/docforum-core/issues/20) (Trivial, 100 pts) — a decision task, unblocked now.
 
 ## Phase 9 — Deploy & CI
-**Status: Not started for real production. A Render free-tier preview exists — see note. Remaining items scoped into issues #21–#22.**
+**Status: In progress. A Render free-tier preview exists — see note. Load tests (k6) for search, slot listing and booking contention added. Automated Postgres backups with a tested restore drill are now implemented (issue #30). Remaining items scoped into issues #21–#22.**
+- [x] **PR malware scan** — `.github/workflows/pr-malware-scan.yml` + `.github/scripts/pr-malware-scan.cjs`, on every PR push. Flags editor/devcontainer autorun tasks, npm install hooks, typosquatted packages and Actions, non-registry dependency sources, payloads disguised as fonts/images, base64/whitespace obfuscation, exfiltration endpoints, reverse shells and miners. HIGH findings fail the `Malware scan` check, label the PR `security-review` and @mention the author; one comment per PR, updated in place. Reads the PR as data only (never checks out or runs it). Added 2026-10-20 after a VS Code autorun payload (escrow #163) and a typosquatted action (escrow #176). Manual backfill (Actions → PR malware scan → Run workflow, `prs: all`) scans PRs opened before the scanner and records a `Malware scan` commit status, which satisfies the required check.
 - [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Still not resolved.** A Render free-tier web service + Postgres now runs `backend/`, so `docforum-web`'s GitHub Pages preview has a live API to call — see `docs/adr/0003-render-preview-deployment.md`. This is explicitly a preview, not the production decision: no secrets manager, no backups, no staging/prod split, free-tier Postgres expires 2026-11-06 (renewed 2026-10-07; 30 days, 14-day grace period) unless recreated/upgraded before then — renewal steps in ADR 0003's "Renewing the free database" section. Tracked as [issue #22](https://github.com/DocForum/docforum-core/issues/22) (Medium, 150 pts).
 - [x] Real CI pipeline (replaced `.github/workflows/ci.yml` placeholder — was `pull_request`-only, `echo "TODO"`, never once run). Now runs on push to `main` and on PRs: `npm audit --omit=dev` at high severity (`audit:prod`, Phase 8 issue #47) → `prisma:generate` → `typecheck` → unit tests → **integration tests (the self-contained embedded-Postgres double-booking proof)** → `build`. Verified locally end-to-end before pushing (14 unit + 1 integration test passing) and confirmed green in Actions. No lint script exists yet in `backend/package.json` — not added; `tsc --noEmit` is the closest static check currently available. Lint now tracked as [issue #28](https://github.com/DocForum/docforum-core/issues/28) (Trivial, 100 pts). Closes [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
 - [ ] Staging environment. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [ ] Production environment + secrets management. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
 - [x] Docs site deployed — `docs/site/` (VitePress) via `.github/workflows/deploy-docs.yml`, live at https://docforum.github.io/docforum-core/. Unrelated to the production-deploy decision above; this is a static site with no backend of its own.
+- [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
+- [x] **Load tests (k6)** — `backend/tests/load/` (`search.js`, `slots.js`, `booking-contention.js`), `backend/scripts/seed-load-test.mjs` (thousands of doctors + slots), and `.github/workflows/load-tests.yml` (manual/nightly, never against the shared Render preview). Thresholds enforce p95 latency on read paths and zero double-bookings; the contention scenario asserts correctness from the database afterwards (exactly one booking per slot), not just response codes. First results committed in `backend/tests/load/REPORT.md`.
 
 ## Explicitly deferred (not on this roadmap, tracked so they aren't forgotten)
 - In-app video/voice consultation (PRD OQ-1 — v1 assumes in-person + async messaging).
@@ -405,5 +411,89 @@ for status and issue links.
   payment fund/release/refund (status writes now conditional on the
   observed state, so a racing second action gets 409 instead of silently
   overwriting). Rollback coupling proven with a real injected DB failure,
-  not a mock. Phase 3/4 wiring explicitly left pending.
-- 2026-10-20 — Implemented facility-side fulfillment proof and patient confirm-receipt & dispute workflow (issue #76): added Order, FulfillmentProof, OrderDispute, and OrderDisputeResolution models with migration. Implemented facility fulfillment for pharmacy and lab orders requiring a reference number and supporting optional attachment storage. Built POST /orders/:id/confirm-receipt and POST /orders/:id/dispute (patient-only, mutually exclusive via conditional UPDATEs). Built the "confirmed" signal calculation and an idempotent unconfirmed order expiry job (recording source 'timeout', never confirming disputed orders). Created admin dispute queue and resolution endpoints (append-only resolution log). Fully tested with unit and integration suites.
+  not a mock. Phase 4 wiring explicitly left pending.
+- 2026-10-20 — Added the PR conflict notifier workflow (see the CI item above): maintainers no longer need to manually ask authors to rebase after each merge.
+- 2026-10-20 — Rebased the Phase 3 referral branch onto the current `main`
+  and resolved the merge by hand. The earlier merge commit had resolved
+  conflicts by taking `main`'s model definitions wholesale, which dropped
+  the branch's own work (the appointment lifecycle the referral cascade
+  depends on, the `Referral` relation fields, and the `Consultation`↔
+  appointment link) and left two `AuditEvent` models in one schema — the
+  `prisma generate` failure CI reported (P1012). The branch is now
+  `main` + two commits (Phase 3 referral core, ADR 0006) with the union of
+  both sides' work, and the referral audit events go into `main`'s single
+  `AuditEvent` table instead of a second one.
+- 2026-10-17 — Built the Phase 3 referral core on branch
+  `feat/referral-phase3-cascade-multi-loop-admin`: issues #5, #7 and
+  #65–#68 (plus the minimal #3/#4 slices they depend on — appointment
+  status transitions and a one-per-appointment `Consultation` record).
+  Schema: `Referral` filled in from its sketch, `Consultation` linked to
+  its appointment, `Appointment.availabilitySlotId` made nullable so a
+  cancellation can release a slot. The referral↔appointments cycle is
+  service-to-service in both directions (accept books through
+  `bookForReferral` → `claimOpenSlot`; status transitions call back into
+  `applyAppointmentOutcome` inside the same transaction) — never a
+  repository import across the boundary. 42 unit tests + 55 integration
+  tests pass, including 8 genuinely concurrent accepts on one referral
+  (exactly one wins — the same proof shape as the booking test), batch
+  rollback, loop chains, cascade idempotency and admin-role gating.
+
+  **One deliberate re-scope to review, not silently absorbed:** (1)
+  `target_doctor_id` is required, so the routing gap (ARCHITECTURE.md
+  §6.1.2 / issue #6) is closed for v1 by making unassigned referrals
+  impossible — and with it, PRD §8.2.2's distinct "waiting for a
+  specialist" state is unreachable rather than implemented. The ADR is
+  still owed. (2) `Referral.snapshotIntakeId` has no column, because
+  `IntakeForm` (issue #1) doesn't exist yet — the notes half of the
+  snapshot rule is real and enforced, the intake half is structurally
+  impossible to enforce and is noted as such rather than faked.
+  Issue #8 (time-based expiry) remains open: only the no-show cascade
+  reaches `expired`. The multi-referral decision (#66's ADR requirement)
+  is recorded as `docs/adr/0006-multiple-referrals-per-consultation.md`,
+  and the referral status machine is drawn out in ARCHITECTURE.md §4.4
+  (#67's state-diagram DoD). Docs reconciled in the same change:
+  ARCHITECTURE.md §4.2–§4.4/§4.10/§5.2/§6.1.2/§6.2.2/§6.2.4,
+  ARCHITECTURE_ESSENTIALS.md data-model map + known gaps, PRD
+  §8.1.2–§8.1.4 and §8.2.1–§8.2.4, `docs/api/README.md` (which also still
+  listed `payments` as unimplemented — corrected), and this file's
+  Phase 2/3 status.
+
+  **Audit trail (re-scoped 2026-10-20):** the referral admin actions are
+  recorded in the *existing* `AuditEvent` table (issue #43) as
+  `entity_type = 'Referral'` rows written through `auditService.record()`
+  in the same transaction as the referral change — not in a second,
+  referral-specific table. One audit trail, one set of append-only
+  triggers, one writer; `GET /referrals/admin/:id/audit-events` reads the
+  same rows the admin-wide `GET /admin/audit-events` serves.
+
+- 2026-10-20 — Closed an audit gap the Phase 3 referral work had
+  introduced: the referral **accept** path created an `Appointment`
+  through `bookForReferral` without writing an audit row, so it was the
+  one way to create an appointment that left no trail — and the existing
+  `appointment.booked` event's `origin` metadata (always `direct` until
+  then) was clearly built to tell the two booking paths apart. Fixed by
+  having the appointments module write `appointment.booked` for the
+  referral-origin booking too (`origin: 'referral'`, plus the referral id
+  it came from), and by recording the patient's own state change on the
+  referral as `referral.accepted` / `referral.declined` — both inside the
+  accept's transaction, so the decision and the appointment it produced
+  are recorded together or not at all. `declineReferral` now runs in a
+  transaction (it previously used the root client, which the audit helper
+  refuses by design).
+
+  Two referral transitions are still **not** audited, and are recorded as
+  an open gap in ARCHITECTURE.md §4.10 rather than silently dropped: the
+  referral's *creation* (`null → pending`) and the two the appointment
+  cascade drives (`accepted → completed`, `accepted → expired`), because
+  the cascade fires from inside the appointment's status transition, which
+  has no actor of its own to attribute. Both are owed when Phase 4/6
+  wire the remaining state changes. Tests: two new integration cases
+  asserting the audit rows (the accept's two events, the decline's one)
+  against the real `AuditEvent` table.
+- 2026-10-20 — Docs site: `docs/site/scripts/sync-docs.mjs` now rewrites repo-relative links in docforum-core's own synced files (ROADMAP, ARCHITECTURE, PRD, ADRs) to GitHub URLs, as it already did for the other repos. #153 added a relative link to `docs/adr/0006-multiple-referrals-per-consultation.md` in ROADMAP.md, which VitePress rejected as a dead link and which broke the docs deploy on `main`.
+- 2026-10-21 — Added Phase 9 load tests (k6): doctor search, slot listing, and a booking-contention scenario (many VUs against a small slot pool). A seeding script creates realistic volumes (thousands of doctors and slots); a manual/nightly workflow runs them against a seeded local stack with enforced thresholds (p95 latency, zero double-bookings, error budget) and never against the shared Render preview. The contention scenario verifies exactly one booking per slot from the database after the run. First results and any motivated index/query fixes recorded in `backend/tests/load/REPORT.md`.
+- 2026-10-22 — Fixed syntax errors in the Phase 9 k6 load scripts (`backend/tests/load/search.js`, `slots.js`, `booking-contention.js`) that failed the local syntax check before push (unterminated string literal, missing commas, stray identifier). No behaviour change to the scenarios or thresholds; the load-tests workflow and `REPORT.md` are unchanged.
+- 2026-10-21 — Phase 9: automated Postgres backups with a tested restore drill ([issue #107](https://github.com/DocForum/docforum-core/issues/107)): `scripts/backup-postgres.sh` (gpg-encrypted `pg_dump`, retention), `scripts/restore-drill.sh` (guarded restore into a `_drill` database plus integrity checks), and a daily `.github/workflows/backup-restore-drill.yml`. ADR 0007. No schema or endpoint changes, so `ARCHITECTURE.md` §4 and `docs/api/README.md` are untouched.
+- 2026-10-20 — Fixed the backup drill shipped above, which had never run. `backup-restore-drill.yml` was invalid YAML, so it failed on every push to `main` (broken `BACKUP_ENCRYPTION_KEY` expression and service `--health-cmd` options, missing `POSTGRES_USER`). Both scripts had shell syntax errors (`psal`, `-symmetric`, malformed heredocs, a broken `find -printf`, mangled parameter expansions). Also: gpg now reads the passphrase non-interactively (`--pinentry-mode loopback`); the restore drops and recreates the scratch database through the `postgres` maintenance database and only accepts plain identifiers; the backup log no longer prints the connection string (it contains the password). Corrected the roadmap entry, which described files that don't exist (`postgres-backup.yml`, `restore-drill.mjs`, `age`, `docs/backups.md`). Separately, `tests/integration/sessions.test.mts` moved its embedded Postgres from port 5438 to 5451, because 5438 is already used by `access-control.test.mts` and vitest runs integration files in parallel.
+- 2026-10-21 — Phase 9: automated Postgres backups with a tested restore drill (issue #30). Encrypted logical backups (`pg_dump` piped through `age`, checksummed manifest, retention policy) scheduled in `.github/workflows/postgres-backup.yml`; a restore script (`scripts/restore-drill.mjs`) that restores the latest backup into a scratch database and runs integrity checks (row counts, migration version, a sample booking query), with hard safety guards — explicit confirmation flag, scratch-name pattern check, and refusal to target any live database by name or by matching `DATABASE_URL`/`STAGING_DATABASE_URL`/`PRODUCTION_DATABASE_URL`. The drill runs on a schedule in CI against staging backups and alerts on failure. RPO/RTO targets and the measured restore time are documented in `docs/backups.md`. Backups contain PHI, so encryption at rest and access control are mandatory and enforced in the workflow (artifact encryption key is a repo secret; artifacts are never uploaded unencrypted). No schema or endpoint changes, so `ARCHITECTURE.md` §4 and `docs/api/README.md` are untouched.
+- 2026-10-20 — Hardened the PR automation against transient GitHub API errors. Today a single 500/503 response aborted a whole conflict-notifier run, so no PR after it got labelled. Both `pr-conflict-notifier.yml` and `pr-malware-scan.yml` now set `retries: 3` on `actions/github-script`, so 5xx responses are retried. The notifier also isolates each PR: a PR whose API calls still fail is skipped with a warning, listed as "API error, retried next run" in the run summary, and the remaining PRs are processed normally.
