@@ -124,6 +124,12 @@ model User {
   // refresh-token revocation list (issue #18) — this is the narrow "revoke
   // everything for one account" case that deactivation needs.
   sessionsInvalidatedAt DateTime?
+  // Per-user refresh-token version. Embedded in every access/refresh token
+  // as `tv` and compared against this column at refresh time. Bumping it
+  // (password reset, Phase 8 #33) invalidates every outstanding refresh
+  // token for the user, since none of them carry the new value — the
+  // interim kill switch issue #33 asked for while #18 doesn't exist yet.
+  tokenVersion Int @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -133,6 +139,7 @@ model User {
   refreshSessions RefreshSession[]
 
   emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
   adminInvitesSent AdminInvite[]
   // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
   // Opposite of AccessLog.accessedByUser.
@@ -154,6 +161,27 @@ model EmailVerificationToken {
   createdAt  DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Password reset tokens (Phase 8 #33). Only the SHA-256 hash of the
+// token is ever stored — the raw token exists exactly once, in the
+// notification that carries the reset link, and is never logged or
+// persisted. Single-use (`usedAt`) and expiring (`expiresAt`).
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // SHA-256 hex of the raw token. Unique so lookup-by-hash is a single
+  // indexed read, and a duplicate hash (astronomically unlikely) is a
+  // constraint violation rather than a silent overwrite.
+  tokenHash String    @unique
+  expiresAt DateTime
+  // Non-null once used or superseded by a newer request — either way the
+  // token is dead. Requesting a second reset marks the first one used.
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 
   @@index([userId])
 }

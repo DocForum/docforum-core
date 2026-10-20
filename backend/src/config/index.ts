@@ -43,6 +43,21 @@ export const config = {
     accessTtl: '15m',
     refreshTtl: '30d',
   },
+  // Base URL of docforum-web, used to build the link in outbound
+  // notifications (password reset today). Not a provider decision — see
+  // issue #17 — just the URL the recipient is sent to.
+  appBaseUrl: process.env.APP_BASE_URL ?? 'http://localhost:5173',
+  passwordReset: {
+    // Raw tokens are single-use and short-lived; only their SHA-256 hash
+    // is stored (see PasswordResetToken in schema.prisma).
+    tokenTtlMinutes: Number(process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES ?? 30),
+    // Rate limits on POST /auth/password-reset/request, so the endpoint
+    // can't be used to spam an inbox. Applied per email AND per IP —
+    // either limit being hit returns 429. See auth/services/rate-limit.ts
+    // for the (in-memory, single-process) caveat.
+    requestsPerEmailPerHour: Number(process.env.PASSWORD_RESET_REQUESTS_PER_EMAIL_PER_HOUR ?? 3),
+    requestsPerIpPerHour: Number(process.env.PASSWORD_RESET_REQUESTS_PER_IP_PER_HOUR ?? 10),
+  },
   // Phase 8 hardening knobs (issues #34/#35/#37). Env-configurable so a
   // preview deployment can be tightened without a code change, and so
   // tests can set short windows instead of waiting real minutes.
