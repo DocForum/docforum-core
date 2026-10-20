@@ -15,7 +15,8 @@
     "test:integration": "vitest run tests/integration",
     "test:integration:payments-testnet": "DATABASE_URL_TEST=postgresql://docforum:docforum@localhost:5435/docforum_payments_test vitest run tests/testnet-integration",
     "test:all": "vitest run",
-    "audit:prod": "node scripts/audit-gate.mjs",
+    "audit:prod": "node scripts/audit-gate.m",
+    "postinstall": "node scripts/verify-escrow-sdk.mjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },
@@ -46,6 +47,6 @@
     "supertest": "^7.2.2",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11
   }
 }
