@@ -130,7 +130,7 @@ model User {
   patientProfile  PatientProfile?
   doctorProfile   DoctorProfile?
   facilityProfile FacilityProfile?
-  twoFactorAuth   TwoFactorAuth?
+  refreshSessions RefreshSession[]
 
   emailVerificationTokens EmailVerificationToken[]
   adminInvitesSent AdminInvite[]
@@ -201,43 +201,31 @@ model LoginAttempt {
   @@index([lastFailedAt])
 }
 
-// TOTP two-factor authentication (Phase 8 #36). One row per user who has
-// started (or completed) enrollment.
-model TwoFactorAuth {
+// One row per refresh-token *family*, i.e. per login. This is the
+// revocation store session management needs (Phase 8 #38) and the shape
+// issue #18's refresh-token revocation wanted: the refresh JWT carries
+// `sid`, and a refresh is only honoured while the row exists with
+// `revokedAt` still null.
+//
+// Collecting a coarse IP and user agent here is deliberate — it is what
+// makes "sign out that other device" usable. Nothing clinical or
+// identifying beyond what the request itself already carried.
+model RefreshSession {
   id     String @id @default(uuid())
-  userId String @unique
+  userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // The TOTP shared secret (RFC 6238), AES-256-GCM encrypted at rest with
-  // TOTP_ENCRYPTION_KEY. Never returned by the API after the initial
-  // enrollment URI — see auth/services/secret-crypto.ts.
-  secretEncrypted String
+  createdAt  DateTime @default(now())
+  // Updated on refresh only — never on every access-token-authenticated
+  // request, so this doesn't become a write hot-spot on the User row.
+  lastUsedAt DateTime @default(now())
+  revokedAt  DateTime?
 
-  // Null until POST /auth/2fa/enable confirms a first code. An enrollment
-  // in this state does NOT count as enabled (login stays single-step).
-  enabledAt DateTime?
+  userAgent String?
+  ip        String?
 
-  // Highest TOTP time step ever accepted for this user. A code whose step
-  // is <= this is a replay and is rejected, even inside the ±1 window.
-  lastUsedTimeStep BigInt?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  recoveryCodes TwoFactorRecoveryCode[]
-}
-
-// Single-use recovery codes: 10 generated at enable time, stored hashed
-// (bcrypt, same as passwords — the plaintext is shown once, never again).
-model TwoFactorRecoveryCode {
-  id              String        @id @default(uuid())
-  twoFactorAuthId String
-  twoFactorAuth   TwoFactorAuth @relation(fields: [twoFactorAuthId], references: [id], onDelete: Cascade)
-  codeHash        String
-  usedAt          DateTime?
-  createdAt       DateTime      @default(now())
-
-  @@index([twoFactorAuthId])
+  @@index([userId])
+  @@index([userId, revokedAt])
 }
 
 model PatientProfile {

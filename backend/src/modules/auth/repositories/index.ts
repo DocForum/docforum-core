@@ -13,60 +13,50 @@ export function findUserById(id: string) {
   return prisma.user.findUnique({ where: { id } });
 }
 
-// --- TOTP two-factor auth (Phase 8 #36) ---------------------------------
+// --- Refresh sessions (Phase 8 #38) -------------------------------------
 
-export function findTwoFactorByUserId(userId: string) {
-  return prisma.twoFactorAuth.findUnique({
-    where: { userId },
-    include: { recoveryCodes: { where: { usedAt: null }, orderBy: { createdAt: 'asc' } } },
+export function createRefreshSession(input: { userId: string; userAgent?: string; ip?: string }) {
+  return prisma.refreshSession.create({
+    data: { userId: input.userId, userAgent: input.userAgent, ip: input.ip },
   });
 }
 
-/** Starts (or restarts) enrollment. Re-enrolling replaces the pending
- * secret; the service refuses this once `enabledAt` is set, so a live
- * second factor can't be silently swapped out by an unauthenticated
- * enrollment call. */
-export function upsertTwoFactorEnrollment(input: { userId: string; secretEncrypted: string }) {
-  return prisma.twoFactorAuth.upsert({
-    where: { userId: input.userId },
-    create: { userId: input.userId, secretEncrypted: input.secretEncrypted },
-    update: { secretEncrypted: input.secretEncrypted, lastUsedTimeStep: null },
+export function findRefreshSessionById(id: string) {
+  return prisma.refreshSession.findUnique({ where: { id } });
+}
+
+/** The only write a session takes outside of creation/revocation — called
+ * from refresh, not from every authenticated request. */
+export function touchRefreshSession(id: string) {
+  return prisma.refreshSession.update({ where: { id }, data: { lastUsedAt: new Date() } });
+}
+
+export function listRefreshSessions(userId: string) {
+  return prisma.refreshSession.findMany({
+    where: { userId, revokedAt: null },
+    orderBy: { lastUsedAt: 'desc' },
   });
 }
 
-/** Confirms enrollment and installs a fresh set of recovery codes in one
- * transaction — there is never a moment where 2FA is enabled with no
- * recovery path. */
-export function confirmTwoFactorEnablement(input: {
-  twoFactorId: string;
-  recoveryCodeHashes: string[];
-  enabledAt: Date;
-}) {
-  return prisma.$transaction(async (tx) => {
-    await tx.twoFactorRecoveryCode.deleteMany({ where: { twoFactorAuthId: input.twoFactorId } });
-    await tx.twoFactorAuth.update({
-      where: { id: input.twoFactorId },
-      data: {
-        enabledAt: input.enabledAt,
-        recoveryCodes: { create: input.recoveryCodeHashes.map((codeHash) => ({ codeHash })) },
-      },
-    });
+/** Scoped by `userId` in the WHERE clause rather than checked afterwards —
+ * revoking someone else's session is a 0-row update, not a logic branch
+ * that could be got wrong. */
+export function revokeRefreshSession(id: string, userId: string) {
+  return prisma.refreshSession.updateMany({
+    where: { id, userId, revokedAt: null },
+    data: { revokedAt: new Date() },
   });
 }
 
-export function recordTotpTimeStep(twoFactorId: string, timeStep: number) {
-  return prisma.twoFactorAuth.update({
-    where: { id: twoFactorId },
-    data: { lastUsedTimeStep: BigInt(timeStep) },
+export function revokeRefreshSessionsForUser(input: { userId: string; exceptSessionId?: string }) {
+  return prisma.refreshSession.updateMany({
+    where: {
+      userId: input.userId,
+      revokedAt: null,
+      ...(input.exceptSessionId ? { id: { not: input.exceptSessionId } } : {}),
+    },
+    data: { revokedAt: new Date() },
   });
-}
-
-export function markRecoveryCodeUsed(id: string) {
-  return prisma.twoFactorRecoveryCode.update({ where: { id }, data: { usedAt: new Date() } });
-}
-
-export function deleteTwoFactor(userId: string) {
-  return prisma.twoFactorAuth.deleteMany({ where: { userId } });
 }
 
 export interface CreateSelfServeUserInput {

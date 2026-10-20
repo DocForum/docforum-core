@@ -14,14 +14,8 @@ import {
   replaceVerificationToken,
 } from '../repositories';
 import { hashPassword, verifyPassword } from './password';
-import {
-  signAccessToken,
-  signMfaPendingToken,
-  signRefreshToken,
-  verifyMfaPendingToken,
-  verifyRefreshToken,
-} from './tokens';
-import { isTwoFactorEnabled, verifyTwoFactorLogin } from './two-factor';
+import { signAccessToken, signRefreshToken, verifyRefreshToken } from './tokens';
+import { assertSessionUsable, recordSessionUse, startSession, type SessionContext } from './sessions';
 import { generateVerificationToken, hashVerificationToken } from './verification-tokens';
 import { sendEmail } from './email-dispatcher';
 import {
@@ -43,16 +37,17 @@ import type { PatientExportSection } from '../../patients/services';
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
 
-// TOTP two-factor auth (Phase 8 #36) — its own file, exposed through this
-// module's single service surface.
 export {
-  disableTwoFactor,
-  enableTwoFactor,
-  getTwoFactorStatus,
-  normalizeRecoveryCode,
-  setupTwoFactor,
-  type TwoFactorStatus,
-} from './two-factor';
+  assertSessionUsable,
+  listSessions,
+  recordSessionUse,
+  revokeAllUserSessions,
+  revokeOtherSessions,
+  revokeSession,
+  startSession,
+  type SessionContext,
+  type SessionSummary,
+} from './sessions';
 
 // Re-exported for the same reason: tests (and, at Phase 6, the provider
 // integration) replace the outbound email sender through this module's
@@ -86,6 +81,9 @@ export interface AuthSession {
    * It deliberately is NOT a JS-readable cookie: docforum-web is a different
    * site from this API, so it couldn't read one. */
   csrfToken: string;
+  /** The refresh-session id this pair belongs to (Phase 8 #38) — lets the
+   * client mark its own entry in `GET /auth/sessions` as "this device". */
+  sessionId: string;
 }
 
 function toPublicUser(user: {
@@ -106,20 +104,31 @@ function toPublicUser(user: {
   };
 }
 
-function issueSession(user: { id: string; role: Role }): {
-  accessToken: string;
-  refreshToken: string;
-  csrfToken: string;
-} {
+function issueTokensForSession(
+  user: { id: string; role: Role },
+  sessionId: string,
+): { accessToken: string; refreshToken: string; csrfToken: string } {
   const payload = { sub: user.id, role: user.role };
   // A fresh CSRF token per session, and per rotation — bound into the
   // refresh token so verifying it needs no server-side state (issue #37).
   const csrfToken = generateCsrfToken();
+  // `sid` rides on the refresh token only: access tokens stay stateless so
+  // no protected request needs a session lookup (issue #38's "no write
+  // hot-spot" requirement).
   return {
     accessToken: signAccessToken(payload),
-    refreshToken: signRefreshToken({ ...payload, csrf: csrfToken }),
+    refreshToken: signRefreshToken({ ...payload, csrf: csrfToken, sid: sessionId }),
     csrfToken,
   };
+}
+
+/** Starts a new session (one per login) and issues its first token pair. */
+async function issueNewSession(
+  user: { id: string; role: Role },
+  context: SessionContext,
+): Promise<{ accessToken: string; refreshToken: string; csrfToken: string; sessionId: string }> {
+  const session = await startSession({ userId: user.id, ...context });
+  return { ...issueTokensForSession(user, session.id), sessionId: session.id };
 }
 
 export interface SignupInput {
@@ -129,7 +138,7 @@ export interface SignupInput {
   fullName: string;
 }
 
-export async function signup(input: SignupInput): Promise<AuthSession> {
+export async function signup(input: SignupInput, context: SessionContext = {}): Promise<AuthSession> {
   // Facility accounts are admin-invited only (PRD OQ-2) — enforced here,
   // not just in docforum-web's UI. `Extract<Role, 'patient'|'doctor'>` on
   // the type already narrows this at compile time; this is the runtime
@@ -157,7 +166,7 @@ export async function signup(input: SignupInput): Promise<AuthSession> {
   // the link is redeemed.
   await issueEmailVerification(user);
 
-  const tokens = issueSession(user);
+  const tokens = await issueNewSession(user, context);
   return { user: toPublicUser(user), ...tokens };
 }
 
@@ -174,11 +183,11 @@ export interface SignupWithInviteInput {
   password: string;
 }
 
-export async function signupWithInvite(input: SignupWithInviteInput): Promise<AuthSession> {
+export async function signupWithInvite(input: SignupWithInviteInput, context: SessionContext = {}): Promise<AuthSession> {
   const passwordHash = await hashPassword(input.password);
   const user = await redeemAdminInvite({ token: input.token, email: input.email, passwordHash });
 
-  const tokens = issueSession(user);
+  const tokens = await issueNewSession(user, context);
   return {
     user: {
       id: user.id,
@@ -211,17 +220,7 @@ export interface LoginInput {
  * response body is identical. */
 const ABSENT_ACCOUNT_HASH = '$2b$12$z8J5gwFm9TiwC.YpeD6yguMkgakFPA8egT1KEKYiaeVkmb3CHRGXu';
 
-/** Returned instead of a session when the password step passed but the
- * second factor is still outstanding. Contains a short-lived token that
- * is accepted by exactly one route — POST /auth/2fa/verify. */
-export interface MfaRequiredResult {
-  mfaRequired: true;
-  mfaPendingToken: string;
-}
-
-export type LoginResult = AuthSession | MfaRequiredResult;
-
-export async function login(input: LoginInput): Promise<LoginResult> {
+export async function login(input: LoginInput, context: SessionContext = {}): Promise<AuthSession> {
   const throttleKeys = {
     emailKey: emailThrottleKey(input.email),
     ipKey: normalizeClientIp(input.ip),
@@ -257,50 +256,7 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     throw new HttpError(403, 'This account has been deactivated. Contact an administrator.');
   }
 
-  // Two-step login for enrolled users. The password step deliberately
-  // yields no access token at all — an mfa_pending token can't be used
-  // anywhere except the verify endpoint (see services/tokens.ts).
-  if (await isTwoFactorEnabled(user.id)) {
-    return {
-      mfaRequired: true,
-      mfaPendingToken: signMfaPendingToken({ sub: user.id, role: user.role }),
-    };
-  }
-
-  // Config flag: admin accounts must have 2FA on to sign in. Checked after
-  // the password is verified, so it can't be used to enumerate admin
-  // accounts without credentials. NOTE (flagged, not hidden): an admin who
-  // has not enrolled yet cannot sign in to enroll while this flag is on —
-  // see ARCHITECTURE_ESSENTIALS.md known gaps.
-  if (config.twoFactor.requireForAdmin && user.role === 'admin') {
-    throw new HttpError(403, 'Two-factor authentication is required for admin accounts. Enable it before signing in.');
-  }
-
-  const tokens = issueSession(user);
-  return { user: toPublicUser(user), ...tokens };
-}
-
-/**
- * Second step of a two-factor login: exchanges an `mfa_pending` token plus
- * a TOTP (or recovery) code for a real session.
- */
-export async function completeTwoFactorLogin(input: {
-  mfaPendingToken: string;
-  code: string;
-}): Promise<AuthSession> {
-  let payload;
-  try {
-    payload = verifyMfaPendingToken(input.mfaPendingToken);
-  } catch {
-    throw new HttpError(401, 'Invalid or expired two-factor session. Sign in again.');
-  }
-
-  const user = await findUserById(payload.sub);
-  if (!user) throw new HttpError(401, 'Invalid or expired two-factor session. Sign in again.');
-
-  await verifyTwoFactorLogin({ userId: user.id, code: input.code });
-
-  const tokens = issueSession(user);
+  const tokens = await issueNewSession(user, context);
   return { user: toPublicUser(user), ...tokens };
 }
 
@@ -445,8 +401,31 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
     throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
   }
 
-  const tokens = issueSession(user);
-  return { user: toPublicUser(user), ...tokens };
+  // Tokens minted before session records existed carry no `sid` and are
+  // rejected: the migration logs existing sessions out once, which is the
+  // honest trade for actually having a revocation store.
+  if (!payload.sid) throw new HttpError(401, 'Invalid or expired refresh token.');
+
+  await assertSessionUsable({ sessionId: payload.sid, userId: user.id });
+  await recordSessionUse(payload.sid);
+
+  // Rotation keeps the same session (same family, same `sid`) — a new
+  // session row per refresh would make "list my sessions" useless.
+  const tokens = issueTokensForSession(user, payload.sid);
+  return { user: toPublicUser(user), ...tokens, sessionId: payload.sid };
+}
+
+/** The session id behind a refresh cookie, for endpoints that need to know
+ * which of the caller's sessions is the current one. Returns undefined for
+ * a missing/unverifiable cookie rather than throwing — "which session am
+ * I" is never the reason a request should fail. */
+export function sessionIdFromRefreshToken(refreshToken: string | undefined): string | undefined {
+  if (!refreshToken) return undefined;
+  try {
+    return verifyRefreshToken(refreshToken).sid;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
