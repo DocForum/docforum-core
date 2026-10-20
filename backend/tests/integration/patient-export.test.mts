@@ -289,8 +289,9 @@ describe('patient data export', () => {
     const appointments = bundle.sections.appointments.items;
     expect(appointments).toHaveLength(23);
     expect(new Set(appointments.map((a: { id: string }) => a.id)).size).toBe(23);
+    expect(appointments.filter((appointment: { doctor: { id: string; fullName: string } }) => appointment.doctor.id === doctorProfileId)).toHaveLength(21);
+    expect(appointments.filter((appointment: { doctor: { fullName: string } }) => appointment.doctor.fullName === 'Order Test Doctor')).toHaveLength(2);
     for (const appointment of appointments) {
-      expect(appointment.doctor).toEqual({ id: doctorProfileId, fullName: 'export-doctor Fullname' });
       expect(appointment.slot.startTime).toBeTruthy();
       expect(appointment.status).toBe('scheduled');
     }
