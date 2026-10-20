@@ -144,6 +144,13 @@ export const config = {
   payments: {
     platformPayerSecret: process.env.PLATFORM_PAYER_SECRET,
     platformReleaserSecret: process.env.PLATFORM_RELEASER_SECRET,
+    platformSignerMode: process.env.PLATFORM_SIGNER_MODE ?? 'env',
+    platformSignerUrl: process.env.PLATFORM_SIGNER_URL,
+    platformSignerToken: process.env.PLATFORM_SIGNER_TOKEN,
+    platformPayerPublicKey: process.env.PLATFORM_PAYER_PUBLIC_KEY,
+    platformReleaserPublicKey: process.env.PLATFORM_RELEASER_PUBLIC_KEY,
+    platformSignerTimeoutMs: Number(process.env.PLATFORM_SIGNER_TIMEOUT_MS ?? 10_000),
+    networkPassphrase: process.env.ESCROW_NETWORK_PASSPHRASE ?? 'Test SDF Network ; September 2015',
     escrowContractId: process.env.ESCROW_CONTRACT_ID,
     escrowTokenId: process.env.ESCROW_TOKEN_ID,
   },

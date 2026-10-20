@@ -2,12 +2,22 @@ import { createApp } from './app';
 import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
+import { validatePlatformSigners } from './modules/payments/services/platform-signers';
 
 const app = createApp();
 
-app.listen(config.port, () => {
+async function startServer() {
+  await validatePlatformSigners();
+  app.listen(config.port, () => {
+    // eslint-disable-next-line no-console
+    console.log(`docforum-core backend listening on :${config.port}`);
+  });
+}
+
+void startServer().catch((error: unknown) => {
   // eslint-disable-next-line no-console
-  console.log(`docforum-core backend listening on :${config.port}`);
+  console.error('[startup] backend startup failed:', error);
+  process.exitCode = 1;
 });
 
 // Login-throttle cleanup (Phase 8, issue #35). A plain interval, per
