@@ -2,6 +2,7 @@ import { HttpError } from '../../../http-error';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
 import * as doctorsRepo from '../repositories';
+import { createHash, randomBytes } from 'node:crypto';
 import type { VerificationStatus } from '@prisma/client';
 
 export async function getMyDoctorProfile(userId: string) {
@@ -16,7 +17,7 @@ export async function getDoctorProfileById(doctorProfileId: string) {
   return profile;
 }
 
-/** Batch id -> { id, fullName } lookup for other modules (patient data
+/* Batch id -> { id, fullName } lookup for other modules (patient data
  * export, issue #40). Public-facing fields only. */
 export async function getDoctorSummariesByIds(ids: string[]): Promise<Map<string, { id: string; fullName: string }>> {
   if (ids.length === 0) return new Map();
@@ -99,4 +100,55 @@ export async function assertDoctorVerifiedInSpecialty(doctorProfileId: string, s
 export async function listDoctorSpecialtyIds(doctorProfileId: string) {
   const specialties = await doctorsRepo.findDoctorSpecialties(doctorProfileId);
   return specialties.map((link) => link.specialtyId);
+}
+
+/**
+ * Phase 2, issue #49: per-doctor ICS feed tokens. The token is a
+ * random opaque string; only its hash is stored, so a DB leak cannot
+ * be used to subscribe to a doctor's feed. Rotation revokes the
+ * previous token (old URL dead immediately); revocation leaves no
+ * active token. The token is never logged.
+ */
+
+function generateCalendarToken(): string {
+  // 32 bytes = 256 bits of entropy, url-safe base64 without padding.
+  return randomBytes(32).toString('base64url').replace(/=$/, '');
+}
+
+function hashCalendarToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+export async function getCalendarFeedToken(userId: string) {
+  const profile = await getMyDoctorProfile(userId);
+  const active = await doctorsRepo.findActiveCalendarFeedTokenForDoctor(profile.id);
+  // The plaintext token is only known at creation/toration time,
+  // so this returns whether a feed is currently active.
+  return { active: active !== null };
+}
+
+export async function rotateCalendarFeedToken(userId: string) {
+  const profile = await getMyDoctorProfile(userId);
+  const token = generateCalendarToken();
+  const tokenHash = hashCalendarToken(token);
+  await prisma.$transaction(async (tx) => {
+    await doctorsRepo.revokeCalendarFeedTokensForDoctor(tx, profile.id, new Date());
+    await doctorsRepo.createCalendarFeedToken(tx, { doctorProfileId: profile.id, tokenHash });
+  });
+  return { token };
+}
+
+export async function revokeCalendarFeedToken(userId: string) {
+  const profile = await getMyDoctorProfile(userId);
+  await doctorsRepo.revokeCalendarFeedTokensForDoctor(prisma, profile.id, new Date());
+  return { token: null };
+}
+
+/** Resolve a feed token to its doctor profile. Returns null for any
+ * unknown, rotated-away or revoked token — callers must not distinguish. */
+export async function findDoctorByCalendarFeedToken(token: string) {
+  if (!token) return null;
+  const row = await doctorsRepo.findCalendarFeedTokenByHash(hashCalendarToken(token));
+  if (!row) return null;
+  return doctorsRepo.findDoctorProfileById(row.doctorProfileId);
 }

@@ -38,3 +38,29 @@ export function findDoctorSpecialties(doctorProfileId: string) {
     include: { specialty: true },
   });
 }
+
+/** Calendar feed token management (Phase 2). Tokens are stored hashed
+ * so a database leak cannot be used to subscribe to a doctor's feed. */
+
+export function findCalendarFeedTokenByHash(hash: string) {
+  return prisma.doctorCalendarFeedToken.findFirst({
+    where: { tokenHash: hash, revokedAt: null },
+  });
+}
+
+export function findActiveCalendarFeedTokenForDoctor(doctorProfileId: string) {
+  return prisma.doctorCalendarFeedToken.findFirst({
+    where: { doctorProfileId: doctorProfileId, revokedAt: null },
+  });
+}
+
+export function createCalendarFeedToken(db: DbClient, data: { doctorProfileId: string; tokenHash: string }) {
+  return db.doctorCalendarFeedToken.create({ data });
+}
+
+export function revokeCalendarFeedTokensForDoctor(db: DbClient, doctorProfileId: string, revokedAt: Date) {
+  return db.doctorCalendarFeedToken.updateMany({
+    where: { doctorProfileId: doctorProfileId, revokedAt: null },
+    data: { revokedAt },
+  });
+}

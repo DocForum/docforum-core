@@ -15,7 +15,7 @@ import * as referralsService from '../../referrals/services';
  *
  * Two steps, one transaction:
  *   1. `availabilityService.claimOpenSlot` — a conditional `UPDATE ...
- *      WHERE status = 'open'`, atomic at the DB level. Exactly one
+ *      WHERE status = 'open'`, atomic at the DV level. Exactly one
  *      concurrent caller can ever see `count === 1` for a given slot.
  *   2. Create the `Appointment` row.
  * Both inside the same transaction so a failure between them can never
@@ -271,7 +271,10 @@ export async function forceCancelAppointment(db: Prisma.TransactionClient, appoi
     return null; // already terminal — idempotent for the caller
   }
   const updated = await appointmentsRepo.updateStatusIfScheduled(db, appointmentId, 'cancelled');
-  if (updated.count === 1 && appointment.availabilitySlotId) {
+  if (updated.count !== 1) {
+    return null;
+  }
+  if (appointment.availabilitySlotId) {
     const released = await availabilityService.releaseBookedSlotIfFuture(db, appointment.availabilitySlotId);
     if (released) {
       await appointmentsRepo.clearAvailabilitySlotLink(db, appointmentId);
