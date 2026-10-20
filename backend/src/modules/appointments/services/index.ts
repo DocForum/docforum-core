@@ -1,5 +1,5 @@
 import { prisma } from '../../../db/prisma-client';
-import { HttpError } from '../../../http-error';
+import { HttpError, ErrorCode } from '../../../http-error';
 import type { AppointmentStatus, Prisma } from '@prisma/client';
 import * as appointmentsRepo from '../repositories';
 import * as availabilityService from '../../availability/services';
@@ -29,21 +29,21 @@ import * as referralsService from '../../referrals/services';
  * exists if and only if the booking committed. A caller that loses the
  * race fails at step 1 and never reaches it.
  */
-export async function bookSlot(actor: auditService.AuditActor, availabilitySlotId: string) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+export async function bookSlot(actor: auditService.AuditACtor, availabilitySlotId: string) {
+  if (!actor.userId) throw new HttpError(401, ErrorCode.UNAUTHORIZED, 'Authentication required.');
   const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
 
   return prisma.$transaction(async (tx) => {
     const claimed = await availabilityService.claimOpenSlot(tx, availabilitySlotId);
     if (!claimed) {
-      throw new HttpError(409, 'This slot is no longer available.');
+      throw new HttpError(409, ErrorCode.SLOT_TAKEN, 'This slot is no longer available.');
     }
 
     const slot = await availabilityService.getSlot(tx, availabilitySlotId);
     if (!slot) {
       // Can't happen in practice (claimOpenSlot just matched this id), but
       // keeps TypeScript honest and fails loudly instead of silently.
-      throw new HttpError(404, 'Slot not found.');
+      throw new HttpError(404, ErrorCode.SLOT_NOT_FOUND, 'Slot not found.');
     }
 
     const appointment = await appointmentsRepo.createAppointment(tx, {
@@ -82,8 +82,7 @@ export const appointmentsExportSection: patientsService.PatientExportSection = {
       (cursor, take) => appointmentsRepo.findAppointmentsPageForPatient(subject.patientProfileId, cursor, take),
       async (rows) => {
         // `availabilitySlotId` is nullable (Phase 3): a CANCELLED
-        // appointment releases its slot back to the calendar, so its row
-        // keeps its history but no longer points at one. Those rows export
+        // appointment releases its slot back to the calendar, so its row keeps its history but no longer points at one. Those rows export
         // with a null slot rather than a stale one.
         const slotIds = rows.map((row) => row.availabilitySlotId).filter((id): id is string => id !== null);
         const [slots, doctors] = await Promise.all([
@@ -108,9 +107,9 @@ export const appointmentsExportSection: patientsService.PatientExportSection = {
  * the appointments repository across the module boundary. */
 export async function getDoctorAppointmentContext(userId: string, appointmentId: string) {
   const appointment = await appointmentsRepo.findAppointmentDoctorContext(appointmentId);
-  if (!appointment) throw new HttpError(404, 'Appointment not found.');
-  if (appointment.doctorProfile.userId !== userId) throw new HttpError(403, 'You can only issue orders for your own appointments.');
-  if (appointment.doctorProfile.verificationStatus !== 'verified') throw new HttpError(403, 'A verified doctor profile is required to issue orders.');
+  if (!appointment) throw new HttpError(404, ErrorCode.APPOINTMENT_NOT_FOUND, 'Appointment not found.');
+  if (appointment.doctorProfile.userId !== userId) throw new HttpError(403, ErrorCode.NOT_APPOINTMENT_DOCTOR, 'You can only issue orders for your own appointments.');
+  if (appointment.doctorProfile.verificationStatus !== 'verified') throw new HttpError(403, ErrorCode.DOCTOR_NOT_VERIFIED, 'A verified doctor profile is required to issue orders.');
   return { id: appointment.id, patientProfileId: appointment.patientProfileId, doctorProfileId: appointment.doctorProfileId };
 }
 
@@ -134,15 +133,15 @@ export async function bookForReferral(
 ) {
   const claimed = await availabilityService.claimOpenSlot(db, input.availabilitySlotId);
   if (!claimed) {
-    throw new HttpError(409, 'This slot is no longer available.');
+    throw new HttpError(409, ErrorCode.SLOT_TAKEN, 'This slot is no longer available.');
   }
 
   const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
   if (!slot) {
-    throw new HttpError(404, 'Slot not found.');
+    throw new HttpError(404, ErrorCode.SLOT_NOT_FOUND, 'Slot not found.');
   }
   if (slot.doctorProfileId !== input.doctorProfileId) {
-    throw new HttpError(409, 'That slot does not belong to the referral’s target doctor.');
+    throw new HttpError(409, ErrorCode.SLOT_DOCTOR_MISMATCH, 'That slot does not belong to the referral’s target doctor.');
   }
 
   const appointment = await appointmentsRepo.createAppointment(db, {
@@ -181,7 +180,7 @@ export async function bookForReferral(
  * and — if the appointment came from a referral — the cascade reaction in
  * the referrals module (issue #67, PRD §8.2.3). Running the transition
  * twice is impossible by construction: the conditional UPDATE only ever
- * matches a still-`scheduled` row, so the cascade hook below can only fire
+ * matches a still 'scheduled' row, so the cascade hook below can only fire
  * once per real transition (and the cascade itself is additionally
  * conditional — see referralsService.applyAppointmentOutcome).
  */
@@ -192,7 +191,7 @@ async function applyScheduledTransition(
 ) {
   const updated = await appointmentsRepo.updateStatusIfScheduled(tx, appointment.id, newStatus);
   if (updated.count !== 1) {
-    throw new HttpError(409, 'This appointment is no longer scheduled.');
+    throw new HttpError(409, ErrorCode.APPOINTMENT_NOT_SCHEDULED, 'This appointment is no longer scheduled.');
   }
 
   // Only cancellations free the calendar slot, and only while it's still
@@ -222,10 +221,10 @@ async function applyScheduledTransition(
  */
 export async function updateStatusByDoctor(userId: string, appointmentId: string, newStatus: AppointmentStatus) {
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
-  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  if (!appointment) throw new HttpError(404, ErrorCode.APPOINTMENT_NOT_FOUND, 'Appointment not found.');
   await doctorsService.assertOwnsDoctorProfile(userId, appointment.doctorProfileId);
   if (appointment.status !== 'scheduled') {
-    throw new HttpError(409, 'Only a scheduled appointment can change status.');
+    throw new HttpError(409, ErrorCode.APPOINTMENT_NOT_SCHEDULED, 'Only a scheduled appointment can change status.');
   }
 
   return prisma.$transaction(async (tx) => {
@@ -244,12 +243,12 @@ export async function updateStatusByDoctor(userId: string, appointmentId: string
 export async function cancelByPatient(userId: string, appointmentId: string) {
   const patientProfile = await patientsService.getMyPatientProfile(userId);
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
-  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  if (!appointment) throw new HttpError(404, ErrorCode.APPOINTMENT_NOT_FOUND, 'Appointment not found.');
   if (appointment.patientProfileId !== patientProfile.id) {
-    throw new HttpError(403, 'You can only cancel your own appointments.');
+    throw new HttpError(403, ErrorCode.NOT_APPOINTMENT_PATIENT, 'You can only cancel your own appointments.');
   }
   if (appointment.status !== 'scheduled') {
-    throw new HttpError(409, 'Only a scheduled appointment can be cancelled.');
+    throw new HttpError(409, ErrorCode.APPOINTMENT_NOT_SCHEDULED, 'Only a scheduled appointment can be cancelled.');
   }
 
   return prisma.$transaction(async (tx) => {
@@ -261,21 +260,20 @@ export async function cancelByPatient(userId: string, appointmentId: string) {
 /**
  * Called by the referrals module's admin cancel (#68) inside its
  * transaction: close a live appointment without firing the referral
- * cascade back (the caller already knows it's cancelling the referral).
- * Appointment rows are still only ever written by this module — the
- * boundary holds.
+ * cascade.
  */
-export async function forceCancelAppointment(db: Prisma.TransactionClient, appointmentId: string) {
-  const appointment = await appointmentsRepo.findAppointmentById(db, appointmentId);
-  if (!appointment || appointment.status !== 'scheduled') {
-    return null; // already terminal — idempotent for the caller
-  }
-  const updated = await appointmentsRepo.updateStatusIfScheduled(db, appointmentId, 'cancelled');
-  if (updated.count === 1 && appointment.availabilitySlotId) {
-    const released = await availabilityService.releaseBookedSlotIfFuture(db, appointment.availabilitySlotId);
+export async function cancelForReferralCancellation(tx: Prisma.TransactionClient, appointmentId: string) {
+  const appointment = await appointmentsRepo.findAppointmentById(tx, appointmentId);
+  if (!appointment) throw new HttpError(404, ErrorCode.APPOINTMENT_NOT_FOUND, 'Appointment not found.');
+  if (appointment.status !== 'scheduled') return;
+
+  const updated = await appointmentsRepo.updateStatusIfScheduled(tx, appointment.id, 'cancelled');
+  if (updated.count !== 1) return;
+
+  if (appointment.availabilitySlotId) {
+    const released = await availabilityService.releaseBookedSlotIfFuture(tx, appointment.availabilitySlotId);
     if (released) {
-      await appointmentsRepo.clearAvailabilitySlotLink(db, appointmentId);
+      await appointmentsRepo.clearAvailabilitySlotLink(tx, appointment.id);
     }
   }
-  return appointmentsRepo.findAppointmentById(db, appointmentId);
 }
