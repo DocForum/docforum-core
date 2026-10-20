@@ -4,7 +4,7 @@
 // the repository entirely. A mock can't demonstrate that.
 //
 // Self-contained like the other integration suites: throwaway Postgres on
-// port 5439 (one port per file — vitest runs files in parallel).
+// port 5448 (one port per file — vitest runs files in parallel).
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,7 +15,7 @@ import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5439;
+const PORT = 5448;
 const runId = Date.now();
 
 // Set before importing anything from src/ — config/index.ts reads process.env
@@ -137,6 +137,8 @@ describe('consultation sign-off', () => {
           patientProfileId: patientProfile.id,
           doctorProfileId: authorProfile.id,
           availabilitySlotId: slot.id,
+          // A consultation is recorded once the visit is over.
+          status: 'completed',
         },
       });
       appointmentIds.push(appointment.id);

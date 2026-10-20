@@ -468,15 +468,16 @@ model IntakeForm {
 // record of a doctor having seen the patient at a specific appointment.
 // `appointmentId` is the lineage seam — Referral.parentReferralId is
 // derived through it (consultation → appointment → referral), which is
-// what loop detection walks. Full consultation-note workflow (append-only
-// addenda, sign-off) stays issue #4/#64's scope.
+// what loop detection walks.
+//
+// Clinical notes are legal records (issue #64): once signed off, the note
+// and outcome are immutable. Corrections are *addenda*, never edits — the
+// same reason Prescription/LabOrder are append-only (hard rule 1).
+// Immutability is enforced twice: the repository only writes drafts, and a
+// BEFORE UPDATE trigger in the sign-off migration rejects anything else.
 model Consultation {
   id            String              @id @default(uuid())
   appointmentId String              @unique
-  outcome       ConsultationOutcome?
-  notes         String?
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
 
   // The authoring doctor — the only account that may sign off, edit the
   // draft, or add addenda. Denormalised from the appointment so the
@@ -490,6 +491,7 @@ model Consultation {
   // Null = draft (editable). Set = signed off (immutable).
   signedAt  DateTime?
   createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   appointment  Appointment             @relation(fields: [appointmentId], references: [id])
   addenda      ConsultationAddendum[]
@@ -498,6 +500,25 @@ model Consultation {
   // Phase 3: the referrals that grew out of this consultation (the
   // opposite side of Referral.sourceConsultationId).
   referrals     Referral[]
+
+  @@index([doctorProfileId])
+  // Auto sign-off scans for drafts past their edit window (see
+  // CONSULTATION_AUTO_SIGNOFF_HOURS).
+  @@index([signedAt])
+}
+
+model ConsultationAddendum {
+  id             String       @id @default(uuid())
+  consultationId String
+  consultation   Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+
+  // Only the authoring doctor may add an addendum (enforced in the service,
+  // not just the controller).
+  authorDoctorProfileId String
+  body                  String
+  createdAt             DateTime @default(now())
+
+  @@index([consultationId])
 }
 
 // Phase 3 (issues #5/#65/#66/#67/#68). Snapshot rule (FR-7/FR-8, hard
