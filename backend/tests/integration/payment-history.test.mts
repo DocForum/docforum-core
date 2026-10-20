@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import EmbeddedPostgres from 'embedded-postgres';
+import { createOrderFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5442;
@@ -30,14 +31,20 @@ describe('payment history and facility ledger APIs', () => {
   async function createIntent(input: {
     patientProfileId: string;
     facilityId: string;
-    status: 'created' | 'escrowed' | 'released' | 'refunded' | 'failed';
+    status: 'created' | 'escrowed' | 'released' | 'refunded';
     amountStroops: bigint;
     createdAt: Date;
   }) {
+    const order = await createOrderFixture(prisma, {
+      patientProfileId: input.patientProfileId,
+      facilityProfileId: input.facilityId,
+      kind: 'lab_order',
+      amountStroops: input.amountStroops,
+      tag: `payment-history-${runId}-${Math.random().toString(36).slice(2)}`,
+    });
     return prisma.paymentIntent.create({
       data: {
-        orderType: 'lab_order',
-        orderId: `order-${Math.random()}`,
+        labOrderId: order.id,
         patientProfileId: input.patientProfileId,
         facilityId: input.facilityId,
         status: input.status,

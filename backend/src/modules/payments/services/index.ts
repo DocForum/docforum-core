@@ -158,8 +158,8 @@ function paymentPage(filters: PaymentHistoryFilters, owner: { patientProfileId: 
 function serializePayment(payment: PaymentIntent) {
   return {
     id: payment.id,
-    orderType: payment.orderType,
-    orderId: payment.orderId,
+    orderType: payment.prescriptionId ? 'prescription' : 'lab_order',
+    orderId: payment.prescriptionId ?? payment.labOrderId,
     status: payment.status,
     amountStroops: payment.amountStroops.toString(),
     asset: { type: 'native', code: 'XLM' },
