@@ -1,13 +1,20 @@
-// payments repositories — PaymentIntent, WalletLink data access only.
-// Never store PHI here. Never call docforum-escrow directly from here —
-// go through services/.
+// payments repositories — PaymentIntent, WalletLink and PatientWalletLink
+// data access only. Never store PHI here. Never call docforum-escrow
+// directly from here — go through services/.
 import { prisma } from '../../../db/prisma-client';
-import type { PaymentIntentStatus, Prisma } from '@prisma/client';
+import type { PaymentIntent, PaymentIntentStatus, Prisma } from '@prisma/client';
 
 /** Reads FacilityProfile directly — a Phase 1 core identity model, not
  * something the (still-placeholder) facilities module exclusively owns. */
 export function findFacilityProfileByUserId(userId: string) {
   return prisma.facilityProfile.findUnique({ where: { userId } });
+}
+
+/** Same reasoning as findFacilityProfileByUserId — PatientProfile is a
+ * Phase 1 identity model, and the payments module needs the caller's
+ * patient-scoped id to own-check an intent (issue #80). */
+export function findPatientProfileByUserId(userId: string) {
+  return prisma.patientProfile.findUnique({ where: { userId } });
 }
 
 export function upsertWalletLink(facilityId: string, stellarPublicKey: string) {
@@ -20,6 +27,36 @@ export function upsertWalletLink(facilityId: string, stellarPublicKey: string) {
 
 export function findWalletLinkByFacilityId(facilityId: string) {
   return prisma.walletLink.findUnique({ where: { facilityId } });
+}
+
+/** The patient's payer wallet (ADR 0005). Rows are created by the SEP-10
+ * linking flow once it exists — not by this module's HTTP surface yet. */
+export function findPatientWalletLinkByPatientProfileId(patientProfileId: string) {
+  return prisma.patientWalletLink.findUnique({ where: { patientProfileId } });
+}
+
+export function createPaymentIntent(input: {
+  orderType: 'prescription' | 'lab_order';
+  orderId: string;
+  patientProfileId: string;
+  facilityId: string;
+  assetCode: string;
+  tokenContractId: string;
+  amount: bigint;
+}) {
+  const orderPointer = input.orderType === 'prescription'
+    ? { prescriptionId: input.orderId, labOrderId: null }
+    : { prescriptionId: null, labOrderId: input.orderId };
+  return prisma.paymentIntent.create({
+    data: {
+      ...orderPointer,
+      patientProfileId: input.patientProfileId,
+      facilityId: input.facilityId,
+      assetCode: input.assetCode,
+      tokenContractId: input.tokenContractId,
+      amount: input.amount,
+    },
+  });
 }
 
 export function findPaymentIntentById(id: string) {
@@ -73,16 +110,17 @@ export function findPaymentHistoryPage(
   });
 }
 
-/** Aggregate each lifecycle bucket in PostgreSQL; amountStroops stays BigInt end to end. */
+/** Aggregate each lifecycle bucket, per asset, in PostgreSQL. The amount
+ * stays BigInt end to end; mixing assets in one total would be meaningless. */
 export function aggregateFacilityPayments(facilityId: string, from?: Date, to?: Date) {
   return prisma.paymentIntent.groupBy({
-    by: ['status'],
+    by: ['status', 'assetCode'],
     where: {
       facilityId,
       status: { in: ['escrowed', 'released', 'refunded'] },
       ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
     },
-    _sum: { amountStroops: true },
+    _sum: { amount: true },
   });
 }
 
@@ -94,22 +132,77 @@ export function findFacilityNamesByIds(ids: string[]) {
 
 /**
  * Status writes are conditional on the state the caller observed (issue
- * #43): `created -> escrowed`, `escrowed -> released|refunded`. They run in
- * the caller's transaction alongside the AuditEvent, and return null if the
- * row was no longer in the expected state (a concurrent action won), so an
- * audit event can never claim a transition that didn't happen. The
- * check-then-act gap before the on-chain call is issue #24's to close.
+ * #43): `created -> escrowed`, `created -> awaiting_signature`,
+ * `awaiting_signature -> created` (expiry), `escrowed -> released|refunded`.
+ * They run in the caller's transaction alongside the AuditEvent, and return
+ * null if the row was no longer in the expected state (a concurrent action
+ * won), so an audit event can never claim a transition that didn't happen.
+ * The check-then-act gap before the on-chain call is issue #24's to close.
  */
 export async function markEscrowed(
   tx: Prisma.TransactionClient,
   id: string,
-  input: { escrowId: bigint; stellarTxHash: string; sorobanContractId: string },
+  input: { escrowId: bigint; stellarTxHash: string; sorobanContractId: string; tokenContractId?: string },
 ) {
   const result = await tx.paymentIntent.updateMany({
     where: { id, status: 'created' },
     data: { status: 'escrowed', ...input },
   });
   return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
+}
+
+/** `created -> awaiting_signature` (issue #80). Conditional, so two
+ * concurrent prepare requests can never both produce a live transaction. */
+export async function markAwaitingSignature(
+  tx: Prisma.TransactionClient,
+  id: string,
+  input: {
+    preparedTxHash: string;
+    preparedXdr: string;
+    preparedExpiryLedger: number;
+    preparedExpiresAt: Date;
+    refundAfter: Date;
+  },
+): Promise<PaymentIntent | null> {
+  const result = await tx.paymentIntent.updateMany({
+    where: { id, status: 'created' },
+    data: { status: 'awaiting_signature', ...input },
+  });
+  return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
+}
+
+/** `awaiting_signature -> created`, only if the prepared transaction is
+ * actually past its window (issue #80). A prepare that raced this update
+ * sees zero rows and re-reads instead of clobbering it. */
+export async function expirePrepared(
+  tx: Prisma.TransactionClient,
+  id: string,
+  now: Date,
+): Promise<PaymentIntent | null> {
+  const result = await tx.paymentIntent.updateMany({
+    where: { id, status: 'awaiting_signature', preparedExpiresAt: { lte: now } },
+    data: {
+      status: 'created',
+      preparedTxHash: null,
+      preparedXdr: null,
+      preparedExpiryLedger: null,
+      preparedExpiresAt: null,
+      refundAfter: null,
+    },
+  });
+  return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
+}
+
+/** Ids for one expiry-sweep page, oldest deadline first. */
+export function findExpiredPreparedIntentIds(now: Date, take: number): Promise<string[]> {
+  return prisma.paymentIntent
+    .findMany({
+      where: { status: 'awaiting_signature', preparedExpiresAt: { lte: now } },
+      orderBy: [{ preparedExpiresAt: 'asc' }, { id: 'asc' }],
+      take,
+      select: { id: true },
+    })
+    .then((rows) => rows.map((row) => row.id));
 }
 
 export async function markStatus(

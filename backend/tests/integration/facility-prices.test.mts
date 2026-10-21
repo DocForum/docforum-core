@@ -211,14 +211,14 @@ describe('facility price lists and intent pricing (issue #127)', () => {
 
     expect(order.amountStroops).toBe(30_000_000n);
     const intent = await prisma.paymentIntent.findUniqueOrThrow({ where: { id: order.paymentIntent.id } });
-    expect(intent.amountStroops).toBe(30_000_000n);
+    expect(intent.amount).toBe(30_000_000n);
     expect(intent.catalogItemCode).toBe('cbc-panel');
     expect(intent.facilityId).toBe(facilityId);
 
     // A later price change must not re-price an existing intent.
     await publish({ catalogItemCode: 'cbc-panel', amount: '99000000' });
     const afterChange = await prisma.paymentIntent.findUniqueOrThrow({ where: { id: intent.id } });
-    expect(afterChange.amountStroops).toBe(30_000_000n);
+    expect(afterChange.amount).toBe(30_000_000n);
     expect(afterChange.catalogItemCode).toBe('cbc-panel');
   });
 
@@ -246,7 +246,7 @@ describe('facility price lists and intent pricing (issue #127)', () => {
     });
     expect(order.amountStroops).toBe(4_200_000n);
     const intent = await prisma.paymentIntent.findUniqueOrThrow({ where: { id: order.paymentIntent.id } });
-    expect(intent.amountStroops).toBe(4_200_000n);
+    expect(intent.amount).toBe(4_200_000n);
     expect(intent.catalogItemCode).toBeNull();
   });
 });
