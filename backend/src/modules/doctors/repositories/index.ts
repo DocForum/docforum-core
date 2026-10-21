@@ -143,6 +143,24 @@ export function updateVerificationStatus(db: DbClient, id: string, status: Verif
   return db.doctorProfile.update({ where: { id }, data: { verificationStatus: status } });
 }
 
+/**
+ * Eligible referral recipients for a specialty (issue #6, ADR 0008):
+ * verified profiles that hold the specialty, whose owning account is
+ * still active. Selection among them happens in the referrals module —
+ * this module only answers "who is eligible?".
+ */
+export function findEligibleDoctorsForSpecialty(specialtyId: string, excludeDoctorProfileIds: string[]) {
+  return prisma.doctorSpecialty.findMany({
+    where: {
+      specialtyId,
+      ...(excludeDoctorProfileIds.length > 0 ? { doctorProfileId: { notIn: excludeDoctorProfileIds } } : {}),
+      doctorProfile: { verificationStatus: 'verified', user: { deactivatedAt: null } },
+    },
+    select: { doctorProfileId: true },
+    orderBy: { doctorProfileId: 'asc' },
+  });
+}
+
 export function findDoctorSpecialties(doctorProfileId: string) {
   return prisma.doctorSpecialty.findMany({
     where: { doctorProfileId },

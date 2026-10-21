@@ -8,6 +8,7 @@
 // email/SMS provider is issue #17 and deliberately does NOT block the
 // features that need to send a message — only the adapter changes.
 import { config } from '../../../config';
+import { formatMessage, resolveLocale } from '../../../i18n';
 
 export interface NotificationMessage {
   /** Destination address — an email for now (the only channel interface we need). */
@@ -52,17 +53,14 @@ export async function sendPasswordResetLink(input: {
   email: string;
   token: string;
   expiresAt: Date;
+  locale?: string;
 }): Promise<void> {
   const link = `${config.appBaseUrl}/reset-password?token=${encodeURIComponent(input.token)}`;
   const minutes = Math.round((input.expiresAt.getTime() - Date.now()) / 60_000);
+  const locale = resolveLocale(input.locale);
   await send({
     to: input.email,
-    subject: 'Reset your DocForum password',
-    body: [
-      'A password reset was requested for this account.',
-      `Open this single-use link within ${minutes} minutes to choose a new password:`,
-      link,
-      'If you did not request this, you can ignore this message — your password is unchanged.',
-    ].join('\n'),
+    subject: formatMessage(locale, 'notifications.passwordReset.subject'),
+    body: formatMessage(locale, 'notifications.passwordReset.body', { minutes, link }),
   });
 }

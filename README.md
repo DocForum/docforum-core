@@ -189,10 +189,11 @@ is built and tested** — referral model with an immutable notes snapshot,
 patient accept/decline producing a real pre-populated appointment through
 the same slot-claim path, no-show/cancellation cascade, loop detection
 with a hop limit, multi-referral bundles from one consultation, and an
-admin queue with audited reassign/cancel. Still open within Phase 3: the
-routing ADR for specialty-only referrals (issue #6) and a time-based
-expiry job (issue #8). Phase 2's remaining pieces (intake, doctor's
-today view, specialty discovery) come next.
+admin queue with audited reassign/cancel, and specialty-only referrals
+routed at creation to the least-loaded eligible doctor (issue #6,
+`docs/adr/0008-referral-routing-without-target-doctor.md`). Still open
+within Phase 3: a time-based expiry job (issue #8). Phase 2's remaining
+pieces (intake, doctor's today view, specialty discovery) come next.
 
 Full phase breakdown: [`ROADMAP.md`](ROADMAP.md).
 

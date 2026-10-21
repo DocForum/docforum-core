@@ -26,6 +26,24 @@ describe('referral validation schemas', () => {
     expect(() => createReferralBatchSchema.parse({ targets: [] })).toThrow();
   });
 
+  it('accepts a specialty-only target (issue #6 routing) and rejects one with neither', () => {
+    const specialtyOnly = createReferralSchema.parse({
+      sourceConsultationId: 'c1',
+      targetSpecialtyId: 's1',
+      snapshotNotes: 'needs a cardiologist',
+    });
+    expect(specialtyOnly.targetDoctorId).toBeUndefined();
+    expect(specialtyOnly.targetSpecialtyId).toBe('s1');
+
+    // Neither a doctor nor a specialty is not a target — routing has
+    // nothing to resolve against, so this must fail validation rather
+    // than reach the service.
+    expect(() =>
+      createReferralSchema.parse({ sourceConsultationId: 'c1', snapshotNotes: 'notes' }),
+    ).toThrow();
+    expect(() => createReferralBatchSchema.parse({ targets: [{ snapshotNotes: 'notes' }] })).toThrow();
+  });
+
   it('parses admin queue filters', () => {
     expect(adminQueueQuerySchema.parse({ status: 'pending', olderThan: '48h', loopFlagged: 'true' })).toEqual({
       status: 'pending',

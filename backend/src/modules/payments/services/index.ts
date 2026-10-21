@@ -18,6 +18,8 @@ import { paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
 import type { Prisma } from '@prisma/client';
+import type { PaymentIntentStatus } from '@prisma/client';
+import { transitionPaymentIntentStatus } from './state-machine';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
 
 // Test seam re-exported through the service surface (same convention as the
@@ -128,9 +130,12 @@ async function commitTransition(
   // client types may not match the expected exports.
   intent: any,
   action: string,
-  to: any,
+  to: PaymentIntentStatus,
   write: (tx: any) => Promise<any>,
 ): Promise<any> {
+  if (transitionPaymentIntentStatus(intent.status, to) !== to) {
+    throw new HttpError(409, `PaymentIntent cannot transition from '${intent.status}' to '${to}'.`);
+  }
   return prisma.$transaction(async (tx) => {
     const updated = await write(tx);
     if (!updated) {
@@ -160,7 +165,7 @@ async function commitTransition(
 /** Funds the escrow from the platform's own payer identity. The intent must be `created` and its facility must have a linked wallet (the on-chain payee). */
 export async function fundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
-  if (intent.status !== 'created') {
+  if (transitionPaymentIntentStatus(intent.status, 'escrowed') !== 'escrowed') {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
   }
 
@@ -193,7 +198,7 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
 /** Releases the escrow to the facility's linked wallet. v1: admin-triggered (see ADR 0004 "Consequences") — no automatic FulfillmentRecord trigger yet, since that model doesn't exist. */
 export async function releasePaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
-  if (intent.status !== 'escrowed' || intent.escrowId === null) {
+  if (transitionPaymentIntentStatus(intent.status, 'released') !== 'released' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
   }
 
@@ -210,7 +215,7 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
 /** Refunds the escrow back toward the platform payer. v1: admin-triggered, same reasoning as release. */
 export async function refundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
-  if (intent.status !== 'escrowed' || intent.escrowId === null) {
+  if (transitionPaymentIntentStatus(intent.status, 'refunded') !== 'refunded' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot refund.`);
   }
 
