@@ -1,0 +1,129 @@
+name: Nightly testnet payments
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+    inputs:
+      simulate_failure:
+        description: Exercise the failure-reporting path without running the test suite
+        type: boolean
+        default: false
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: nightly-testnet-payments
+  cancel-in-progress: false
+
+jobs:
+  testnet-payments:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+      - run: npm run prisma:generate
+
+      # These are public testnet identifiers from backend/.env.example, not
+      # preview deployment secrets. Repository variables can rotate them.
+      - name: Generate fresh testnet identities and fund with Friendbot
+        id: identities
+        continue-on-error: true
+        env:
+          ESCROW_CONTRACT_ID: ${{ vars.ESCROW_CONTRACT_ID || 'CAXESEEAJILFFCN3PH2HHNMWAAHLEB64UTJHZ6IP7C5BBICT3S3VODSM' }}
+          ESCROW_TOKEN_ID: ${{ vars.ESCROW_TOKEN_ID || 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC' }}
+        run: node scripts/gen-platform-identities.mjs
+
+      - name: Simulate a test failure
+        id: simulated_failure
+        if: github.event_name == 'workflow_dispatch' && inputs.simulate_failure
+        continue-on-error: true
+        run: |
+          echo 'Deliberate failure to verify the workflow failure reporter.'
+          exit 1
+
+      # The test suite starts and tears down its own isolated PostgreSQL
+      # cluster, so no shared service database or credentials are needed.
+      - name: Run payments against Stellar testnet
+        id: test_suite
+        if: steps.identities.outcome == 'success' && steps.simulated_failure.outcome != 'failure'
+        continue-on-error: true
+        env:
+          ESCROW_CONTRACT_ID: ${{ vars.ESCROW_CONTRACT_ID || 'CAXESEEAJILFFCN3PH2HHNMWAAHLEB64UTJHZ6IP7C5BBICT3S3VODSM' }}
+          ESCROW_TOKEN_ID: ${{ vars.ESCROW_TOKEN_ID || 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC' }}
+        run: |
+          set +e
+          npm run test:integration:payments-testnet > "$RUNNER_TEMP/payments-testnet.log" 2>&1
+          result=$?
+          cat "$RUNNER_TEMP/payments-testnet.log"
+          set -e
+          if [[ "$result" -eq 0 ]]; then
+            echo 'failure_class=none' >> "$GITHUB_OUTPUT"
+          elif grep -Eiq 'friendbot|ECONN|ETIMEDOUT|ENOTFOUND|fetch failed|MissingValue|NoSuchContract|contract.{0,40}(missing|not found|does not exist)|(missing|not found|does not exist).{0,40}contract' "$RUNNER_TEMP/payments-testnet.log"; then
+            echo 'failure_class=infrastructure_or_contract_reset' >> "$GITHUB_OUTPUT"
+          else
+            echo 'failure_class=test_failure' >> "$GITHUB_OUTPUT"
+          fi
+
+          exit "$result"
+
+      - name: Update failure summary and tracking issue
+        if: always() && (steps.identities.outcome == 'failure' || steps.simulated_failure.outcome == 'failure' || steps.test_suite.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IDENTITY_OUTCOME: ${{ steps.identities.outcome }}
+          SIMULATED_OUTCOME: ${{ steps.simulated_failure.outcome }}
+          TEST_OUTCOME: ${{ steps.test_suite.outcome }}
+          TEST_FAILURE_CLASS: ${{ steps.test_suite.outputs.failure_class }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ "$IDENTITY_OUTCOME" == failure ]]; then
+            failure_class='Infrastructure failure: Friendbot funding or identity setup failed.'
+          elif [[ "$SIMULATED_OUTCOME" == failure ]]; then
+            failure_class='Simulated test failure: the manual failure-reporting check was requested.'
+          elif [[ "$TEST_FAILURE_CLASS" == infrastructure_or_contract_reset ]]; then
+            failure_class='Infrastructure failure: Friendbot/RPC outage or missing/reset testnet contract.'
+          else
+            failure_class='Payment test failure: the test suite failed without a recognized infrastructure signature.'
+          fi
+
+          {
+            echo '### Nightly testnet payments failed'
+            echo
+            echo "**Classification:** $failure_class"
+            echo "**Run:** $RUN_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          body=$(printf 'The scheduled/manual Stellar testnet payment run failed.\n\n**Classification:** %s\n**Run:** %s\n\nThis issue is updated in place on subsequent failures to avoid notification spam.' "$failure_class" "$RUN_URL")
+          issue_number=$(gh issue list --state all --limit 100 --json number,title --jq '.[] | select(.title == "[Nightly Testnet Payments] Failure") | .number' | head -n 1)
+          if [[ -n "$issue_number" ]]; then
+            gh issue reopen "$issue_number" 2>/dev/null || true
+            gh issue edit "$issue_number" --body "$body"
+          else
+            gh issue create --title '[Nightly Testnet Payments] Failure' --body "$body"
+          fi
+
+      - name: Fail the workflow when a required step failed
+        if: always()
+        env:
+          IDENTITY_OUTCOME: ${{ steps.identities.outcome }}
+          SIMULATED_OUTCOME: ${{ steps.simulated_failure.outcome }}
+          TEST_OUTCOME: ${{ steps.test_suite.outcome }}
+        run: |
+          if [[ "$IDENTITY_OUTCOME" == failure || "$SIMULATED_OUTCOME" == failure || "$TEST_OUTCOME" == failure ]]; then
+            exit 1
+          fi

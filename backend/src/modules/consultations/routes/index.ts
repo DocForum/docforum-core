@@ -2,11 +2,32 @@ import { Router } from 'express';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
 import * as consultationsController from '../controllers';
 
+/**
+ * Appointment-scoped router. Mounted at /appointments in src/app.ts, so the
+ * full path is POST /appointments/:appointmentId/consultation. It is a
+ * separate router from `consultationsRouter` because this module's other
+ * routes live under /consultations — mounting one router at both prefixes
+ * would also publish `/appointments/:consultationId`.
+ *
+ * Closing is doctor-only and restricted to the doctor's own appointment via
+ * the service layer; the one-per-appointment guarantee is enforced at the DB
+ * level (`Consultation.appointmentId UNIQUE`). Verified-address bar, same as
+ * booking and the create route below — closing a consultation is what
+ * referrals and orders hang off.
+ */
+export const appointmentConsultationsRouter = Router();
+
+appointmentConsultationsRouter.post(
+  '/:appointmentId/consultation',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  consultationsController.closeConsultation,
+);
+
+/** Mounted at /consultations. */
 export const consultationsRouter = Router();
 
-// Recording a consultation and spawning referrals from it both hand a
-// patient onward with clinical context — verified-address bar, same as
-// booking and referral creation itself.
 consultationsRouter.post(
   '/',
   authenticate,

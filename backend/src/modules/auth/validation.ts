@@ -36,3 +36,14 @@ export const clearLoginAttemptsSchema = z
   .refine((value) => Boolean(value.email || value.ip), {
     message: 'Provide an email or an ip to clear.',
   });
+
+// Phase 8, issue #33 — password reset. The confirm schema repeats signup's
+// minimum password length so a reset can't weaken the account.
+export const passwordResetRequestSchema = z.object({
+  email: z.string().email(),
+});
+
+export const passwordResetConfirmSchema = z.object({
+  token: z.string().min(1),
+  newPassword: z.string().min(8),
+});
