@@ -7,7 +7,7 @@ declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
-      user?: { id: string; role: Role };
+      user?: { id: string; role: Role; locale?: string };
     }
   }
 }
@@ -35,7 +35,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
   }
 
   await assertActiveSession(payload.sub, payload.iat);
-  req.user = { id: payload.sub, role: payload.role };
+  req.user = { id: payload.sub, role: payload.role, locale: payload.locale };
   next();
 }
 

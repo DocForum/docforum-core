@@ -20,10 +20,10 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
-`User` → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
+`User` (including `locale`, default `en`, Phase 9 #133) → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` (`availability_slot_id` nullable — a cancelled appointment releases its slot; booking safety is `claimOpenSlot`, not that column) → `IntakeForm`, `Consultation`
-`Consultation` → (outcome=referred) → `Referral` (snapshot! required `target_doctor_id`, self-FK lineage `parent_referral_id`, no-show/loop/admin flags) → new `Appointment`
+`Consultation` (`appointmentId` **UNIQUE** — closing a consultation is a create-once operation, `409` on a second attempt; one writer, `consultationsService.createConsultation`, reached from `POST /consultations`, `POST /appointments/:id/consultation` and the orders flow; see docs/adr/0009) → (outcome=referred) → `Referral` (snapshot! required `target_doctor_id` — routed at creation when only a specialty is named, ADR 0008; self-FK lineage `parent_referral_id`, no-show/loop/admin flags) → new `Appointment`
 `Appointment` → `Consultation` → immutable `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
 `User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking, consultation/referral mutations and payment mutations, never login/browsing).
@@ -40,7 +40,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - The actual Stellar contract calls go through `@docforum/escrow-sdk` (`backend/src/modules/payments/services/escrow-sdk-loader.ts` — dynamic `import()`, the SDK is ESM-only and this backend is CommonJS). Never reimplement contract-calling logic in this repo.
 
 ## Known unresolved design gaps (do not silently "fix" without flagging in PR description)
-- No routing rule yet for a referral with no specific target doctor (which specialist gets it?). **v1 re-scope (2026-10-17): `target_doctor_id` is required, so unassigned referrals can't exist — but that makes PRD §8.2.2's "waiting for a specialist" state unreachable rather than implemented. ADR still owed (issue #6).**
+- ~~No routing rule for a referral with no specific target doctor~~ **Resolved (issue #6, `docs/adr/0008-referral-routing-without-target-doctor.md`):** a specialty-only referral is routed **at creation** to the least-loaded eligible doctor (verified, holds the specialty, not the referring doctor, account not deactivated; fewest `pending`+`accepted` referrals, ties broken by doctor id). `target_doctor_id` stays NOT NULL — zero eligible doctors fails the creation with `422 REFERRAL_NO_ELIGIBLE_TARGET` and writes no row. PRD §8.2.2's "waiting for a specialist" state is still not built (deferred on purpose: it needs a nullable target, which this ADR rejects).
 - No time-based expiry/TTL job for held slots or pending referrals — the referral *no-show* cascade (#67) now reaches `expired`, but nothing expires a referral (or a held slot) purely by age. Issue #8 / #19.
 - `AuditEvent` exists (§4.10 of ARCHITECTURE.md) and records booking (both booking paths), doctor verification, payment fund/release/refund, the patient's referral accept/decline and the referral admin actions — auth (the admin login-throttle clear), the referral's creation + cascade transitions, and the remaining Phase 4 order transitions are still unaudited. PRD §7 is not satisfied yet.
 - `Referral.snapshotIntakeId` has no column — `IntakeForm` doesn't exist yet (issue #1); the notes half of the snapshot rule is real and enforced.

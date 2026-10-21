@@ -28,6 +28,11 @@ authRouter.post('/login-attempts/clear', authenticate, requireRole('admin'), aut
 authRouter.post('/refresh', requireAllowedOrigin, authController.refresh);
 authRouter.post('/logout', requireAllowedOrigin, authController.logout);
 
+// Password reset (Phase 8 #33) — both unauthenticated; possession of the
+// emailed single-use token is the credential for the confirm step.
+authRouter.post('/password-reset/request', authController.requestPasswordReset);
+authRouter.post('/password-reset/confirm', authController.confirmPasswordReset);
+
 // Session management (Phase 8 #38). Note the ordering: `DELETE /sessions`
 // (revoke all others) is registered before `DELETE /sessions/:id` — Express
 // matches in registration order, and `/sessions` must not be read as an id.

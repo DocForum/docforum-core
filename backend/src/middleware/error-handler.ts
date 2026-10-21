@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { HttpError } from '../http-error';
 import type { Logger } from 'pino';
 import { logger as rootLogger } from '../logger';
+import { localizedErrorMessage, resolveLocale } from '../i18n';
 
 // docforum-web's api-client.ts assumes an error envelope of
 // `{ code: string } (documented as unconfirmed there) — this is the
@@ -14,13 +15,15 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
 
   if (err instanceof HttpError) {
     // `code` is only present when the thrower supplied one — the envelope
-    // for every existing error is unchanged (`{' message' }`).
+    // for every existing error is unchanged (`{ message }`).
     if (err.status >= 500) {
       requestLogger.error({ err }, 'Request failed');
     } else {
       requestLogger.warn({ err }, 'Request rejected');
     }
-    res.status(err.status).json(err.code ? { message: err.message, code: err.code } : { message: err.message });
+    const locale = resolveLocale(req.user?.locale, req.headers['accept-language']);
+    const message = localizedErrorMessage(locale, err.code, err.message);
+    res.status(err.status).json(err.code ? { message, code: err.code } : { message });
     return;
   }
 
