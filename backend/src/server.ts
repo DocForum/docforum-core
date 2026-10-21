@@ -6,13 +6,20 @@ import { startPatientExportJobs } from './jobs/patient-exports';
 import { startEscrowEventPoller } from './jobs/escrow-events';
 import { validatePlatformSigners } from './modules/payments/services/platform-signers';
 import { verifyPaymentsNetwork } from './modules/payments/services';
+import { prisma } from './db/prisma-client';
 
 
 const app = createApp();
 
+let server: ReturnType<typeof app.listen> | undefined;
+let shuttingDown = false;
+const stopPatientExports = startPatientExportJobs();
+const stopEscrowEventPoller = startEscrowEventPoller();
+
 async function startServer() {
   await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork()]);
-  app.listen(config.port, () => {
+  if (shuttingDown) return;
+  server = app.listen(config.port, () => {
     // eslint-disable-next-line no-console
     console.log(`docforum-core backend listening on :${config.port}`);
   });
@@ -23,6 +30,29 @@ void startServer().catch((error: unknown) => {
   console.error('[startup] backend startup failed:', error);
   process.exitCode = 1;
 });
+
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // eslint-disable-next-line no-console
+  console.log(`[shutdown] ${signal} received; draining HTTP requests`);
+  clearInterval(pruneTimer);
+  stopPatientExports();
+  stopEscrowEventPoller();
+  if (server) {
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => server?.closeAllConnections(), 10_000);
+      server!.close(() => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+  }
+  await prisma.$disconnect();
+}
+
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
 
 // Login-throttle cleanup (Phase 8, issue #35). A plain interval, per
 // ARCHITECTURE_ESSENTIALS.md ("keep jobs simple until a real job exists —
@@ -61,5 +91,3 @@ const pruneTimer = setInterval(() => {
 pruneTimer.unref();
 
 // Patient data export worker + expiry cleanup (Phase 8, issue #40).
-startPatientExportJobs();
-startEscrowEventPoller();
