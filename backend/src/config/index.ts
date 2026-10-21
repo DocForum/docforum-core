@@ -137,6 +137,15 @@ export const config = {
     staleAfterSeconds: Number(process.env.PATIENT_EXPORT_STALE_AFTER_SECONDS ?? 15 * 60),
     maxAttempts: Number(process.env.PATIENT_EXPORT_MAX_ATTEMPTS ?? 3),
   },
+
+  // Account deletion purge (Phase 8, issue #41, docs/adr/0010). Only
+  // tombstones with no retained records are ever purged; the grace period is
+  // operational (lets requests in flight under a still-valid access token
+  // finish), not a legal retention period — that one is an open decision.
+  accountPurge: {
+    graceHours: Number(process.env.ACCOUNT_PURGE_GRACE_HOURS ?? 24),
+    intervalSeconds: Number(process.env.ACCOUNT_PURGE_INTERVAL_SECONDS ?? 6 * 60 * 60),
+  },
   // Explicit, per-environment CORS allowlist (Phase 8, issue #37). A single
   // configured origin string was one typo away from "reflect whatever origin
   // asked"; an allowlist makes every permitted frontend a deliberate entry.
@@ -167,5 +176,14 @@ export const config = {
     ...parsePaymentsConfig(process.env),
     payoutPrivacyMode,
     payoutPrivacyPoolAddress: process.env.PAYOUT_PRIVACY_POOL_ADDRESS,
+  },
+  // Structured logging (Phase 9). Level is configurable per environment;
+  // tests run quiet by default so captured output stays readable.
+  log: {
+    level:
+      process.env.LOG_LEVEL ??
+      (process.env.NODE_ENV === 'test' ? 'silent' : process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
+    // Header carrying the request id; accepted from the client or generated.
+    requestIdHeader: 'x-request-id',
   },
 } as const;
