@@ -3,9 +3,12 @@ dist/
 build/
 .env
 .env.local
+temp_auto_push.bat
 *.log
 .DS_Store
 # Local Postgres data dirs (embedded-postgres, used for dev/test — see
 # infra/docker/README.md and backend/tests/integration/)
 .devdb/
 *.tsbuildinfo
+.gitignore
+branch_structure.json
