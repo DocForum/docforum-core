@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate, requireRole } from '../../../middleware/auth';
+import { requireIfMatch } from '../../../middleware/optimistic-concurrency';
 import * as doctorsController from '../controllers';
 
 export const doctorsRouter = Router();

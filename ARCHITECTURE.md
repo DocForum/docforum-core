@@ -151,6 +151,8 @@ PatientProfile (1:1 User)
 
 DoctorProfile (1:1 User)
   id, user_id, full_name, verification_status (enum: pending|verified|rejected)
+  version (int, default 1 — issue #49, §5.4. Bumped by the admin
+    verification transition too)
   specialties: DoctorSpecialty[]
 
 Specialty (controlled vocabulary, admin-managed)
@@ -160,11 +162,24 @@ DoctorSpecialty (join table)
   id, doctor_profile_id, specialty_id
 
 FacilityProfile (1:1 User)
-  id, user_id, name, type (enum: lab|pharmacy), capabilities: FacilityCapability[]
+  id, user_id, name, type (enum: lab|pharmacy), version (int, default 1 — issue #49, §5.4)
+  capabilities: FacilityCapability[]
 
 FacilityCapability
   id, facility_profile_id, capability_type (enum: lab_test|medication_dispense), detail (e.g. test category)
+  version (int, default 1 — issue #49, §5.4)
 ```
+**`version` columns (Phase 8, issue #49):** added by
+`backend/prisma/migrations/20261019090000_add_optimistic_concurrency/` as
+`INTEGER NOT NULL DEFAULT 1` on exactly the mutable records above plus
+`Appointment` (§4.2) and `PaymentIntent`. They are the storage half of the
+`ETag`/`If-Match` convention in §5.4 and carry no meaning on their own —
+nothing may treat a higher `version` as "more correct", and no code may
+compare-then-write instead of guarding the UPDATE itself. Tables that are
+append-only (`Prescription`, `LabOrder`) or immutable
+(`Specialty`, `WalletLink`, `AuditEvent`, the export tables) deliberately do
+**not** have one; the integration test asserts that set so a later change
+can't quietly widen it.
 
 ### 4.2 Availability & Appointments
 ```
@@ -172,12 +187,16 @@ AvailabilitySlot
   id, doctor_profile_id, start_time, end_time, status (enum: open|held|booked)
   # Uniqueness/exclusion constraint at DB level on (doctor_profile_id, start_time, end_time)
   # to make double-booking a constraint violation, not an app-logic bug.
+  # No `version`: a slot is only ever moved by the conditional claim in §5.1,
+    not edited.
 
 Appointment
   id, patient_profile_id, doctor_profile_id, availability_slot_id (FK, unique, NULLABLE)
   intake_id (FK -> IntakeForm — still not a column, Phase 2 issue #1/#2)
   status (enum: scheduled|completed|cancelled|no_show)
   origin (enum: direct_booking|referral), referral_id (nullable FK -> Referral)
+  version (int, default 1 — issue #49, §5.4; no If-Match-guarded route exists
+    for appointments yet, but every future status write must move it)
   created_at, updated_at
   # availability_slot_id is nullable (Phase 3): a cancelled appointment
   # releases its slot back to `open` and drops the unique link, so the
@@ -481,6 +500,48 @@ surfaces as `deleted_user`.
 4. Facility updates its own `FulfillmentRecord` status; for labs, attaches `LabResult`.
 5. Order's own `status` field is updated to `fulfilled` only via this facility-confirmed path — patient/doctor cannot self-mark it.
 
+### 5.4 Mutable-record optimistic concurrency (Phase 8, issue #49)
+Slot booking (§5.1) is protected by a conditional update, but nothing else was: a
+doctor editing their profile in one tab and an admin in another, or two tabs
+updating the same appointment, silently overwrote each other — last write wins,
+and the loser never finds out. This is the convention that closes that whole
+class of bug, and **new mutable-resource routes must follow it.**
+
+1. An individual mutable-resource read returns a strong `ETag` carrying the row's
+   integer `version`, e.g. `ETag: "4"` (also mirrored as `version` in the JSON
+   body). Collection reads deliberately do not get one: a client fetches the
+   individual resource before editing.
+2. `PATCH`/`PUT` sends that exact value back in `If-Match`. Missing header →
+   `428 Precondition Required` (`code: 'IF_MATCH_REQUIRED'`); weak validator, a
+   validator list, or anything else that isn't one strong `"<int>"` → `400`
+   (`code: 'INVALID_IF_MATCH'`) rather than a guess at which member was meant;
+   a version that no longer matches → `412 Precondition Failed`
+   (`code: 'VERSION_CONFLICT'`).
+3. The repository performs **one** conditional update — `UPDATE ... WHERE id = ?
+   AND version = ?` with `version = version + 1` in the same statement — and
+   returns the row that statement wrote. A zero-row result is a stale write.
+   Read-compare-write is forbidden: it reopens the exact race it closes, because
+   two callers can both read version 4 and both pass a check made before the
+   write. In Prisma that is `updateManyAndReturn` / `updateMany` with
+   `count === 1`, never `findUnique` → compare → `update`.
+4. Everything else keeps working the way it did. Endpoints whose state
+   transition is *already* conditional (booking's slot claim, payment
+   fund/release/refund, doctor verification, token redemption) keep that status
+   guard and are **not** additionally `If-Match`-gated — two guards on one write
+   produce two different failure modes and the second one teaches clients
+   nothing. They do still increment `version`, and still publish the new `ETag`,
+   so a client can precondition whatever it does next. Every other write to a
+   versioned row increments it too, including system writes (email verification).
+5. Applies to `User`, `PatientProfile`, `DoctorProfile`, `FacilityProfile`,
+   `FacilityCapability`, `Appointment` and `PaymentIntent` (columns documented in
+   §4.1/§4.2). Append-only `Prescription`/`LabOrder` are excluded by design —
+   a correction is a new row (`supersedes_*`), so there is nothing to lose.
+6. Shared pieces live in `backend/src/middleware/optimistic-concurrency.ts`
+   (`requireIfMatch`, `expectedVersion`, `setVersionEtag`, `versionConflict`) so
+   every module answers with the same status, message and code. Proof:
+   `backend/tests/integration/optimistic-concurrency.test.mts`, including eight
+   simultaneous writes on one version where exactly one succeeds.
+
 ## 6. Hard questions (architecture-level — see PRD §8 for product-level)
 
 ### 6.1 What do we think would break?
@@ -489,6 +550,7 @@ surfaces as `deleted_user`.
 3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final.
 4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
 5. **Discovered 2026-10-15 while building email verification (Phase 8, issue #34):** the email/SMS provider is still undecided (Phase 6, issue #17), so verification links can't actually be delivered in a hosted environment yet — `backend/src/modules/auth/services/email-dispatcher.ts` is a no-op seam until a provider is integrated. Until then `backend/scripts/mark-email-verified.mjs` is the documented out-of-band path for an operator with DB access. Not a reason to skip the guard: the guard is what makes the flow safe once delivery exists, and shipping it locked-off would just mean shipping it untested.
+6. **Resolved 2026-10-19 (issue #49):** silent last-write-wins on every mutable record that wasn't the slot claim — a doctor in one tab and an admin in another, or two tabs editing one appointment, each wrote and the second erased the first with no signal to either. §5.4 now makes the compare and the write one conditional statement behind an `If-Match` precondition. **Still open:** the convention is only *enforced* where a route opts in, so a future mutable route that forgets `requireIfMatch` silently opts out — there is no lint or schema-level way to catch that yet, and ESLint itself is still untracked (issue #28).
 
 6. **Discovered 2026-10-17 (issue #41):** after `DELETE /patients/me`, the caller's access token (stateless JWT, 15-minute TTL) still passes `authenticate` until it expires — there's no revocation list (item 4 above, issue #18). It can't reach anything: every patient route resolves the caller through `getMyPatientProfile`, which refuses an anonymised profile; booking/payments refuse it via `requireVerifiedEmail` (verification is cleared); refresh refuses `deleted_at`. Closing the window itself is #18's job. Also: Postgres reports `ON DELETE RESTRICT` as SQLSTATE 23001, which Prisma surfaces as an *unknown* request error, not `P2003` — `patients/services` `isForeignKeyRefusal` handles both; `middleware/error-handler.ts` currently maps neither to a 4xx.
 

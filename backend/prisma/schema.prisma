@@ -372,6 +372,7 @@ model PatientExportChunk {
 
 model DoctorProfile {
   id                 String             @id @default(uuid())
+  version            Int                @default(1)
   userId             String             @unique
   fullName           String
   verificationStatus VerificationStatus @default(pending)
@@ -414,6 +415,7 @@ model DoctorSpecialty {
 
 model FacilityProfile {
   id        String       @id @default(uuid())
+  version   Int          @default(1)
   userId    String       @unique
   name      String
   type      FacilityType
@@ -432,6 +434,7 @@ model FacilityProfile {
 
 model FacilityCapability {
   id                String         @id @default(uuid())
+  version           Int            @default(1)
   facilityProfileId String
   capabilityType    CapabilityType
   // e.g. a lab test category, or a medication class — free text on purpose,
@@ -494,6 +497,7 @@ model AvailabilitySlot {
 
 model Appointment {
   id                 String            @id @default(uuid())
+  version            Int               @default(1)
   patientProfileId   String
   doctorProfileId    String
   // Nullable because a CANCELLED appointment releases its slot back to

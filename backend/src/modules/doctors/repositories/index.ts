@@ -122,6 +122,25 @@ export function findDoctorProfileById(id: string, db: DbClient = prisma) {
   return db.doctorProfile.findUnique({ where: { id } });
 }
 
+/**
+ * The optimistic-locking write (ARCHITECTURE.md §5.4, issue #49).
+ *
+ * One statement: the row is only updated if it still carries the version the
+ * caller read, and that same statement bumps it. `updateManyAndReturn` gives
+ * back the row *this* statement wrote, so the response the caller sees is the
+ * state it produced — a re-read would be a second window in which someone
+ * else's write could land first. Null means the guard didn't match: the
+ * caller is stale and must re-read.
+ */
+export function updateDoctorProfile(id: string, version: number, fullName: string) {
+  return prisma.doctorProfile
+    .updateManyAndReturn({
+      where: { id, version },
+      data: { fullName, version: { increment: 1 } },
+    })
+    .then((rows) => rows[0] ?? null);
+}
+
 export function findDoctorSummariesByIds(ids: string[]) {
   return prisma.doctorProfile.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true } });
 }
@@ -140,7 +159,7 @@ export async function lockVerificationStatus(
 }
 
 export function updateVerificationStatus(db: DbClient, id: string, status: VerificationStatus) {
-  return db.doctorProfile.update({ where: { id }, data: { verificationStatus: status } });
+  return db.doctorProfile.update({ where: { id }, data: { verificationStatus: status, version: { increment: 1 } } });
 }
 
 /**

@@ -1,5 +1,6 @@
 import { HttpError } from '../../../http-error';
 import { prisma } from '../../../db/prisma-client';
+import { versionConflict } from '../../../middleware/optimistic-concurrency';
 import * as auditService from '../../audit/services';
 import * as doctorsRepo from '../repositories';
 import type { VerificationStatus } from '@prisma/client';

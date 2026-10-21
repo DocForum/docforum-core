@@ -107,7 +107,7 @@ export async function markEscrowed(
 ) {
   const result = await tx.paymentIntent.updateMany({
     where: { id, status: 'created' },
-    data: { status: 'escrowed', ...input },
+    data: { status: 'escrowed', ...input, version: { increment: 1 } },
   });
   return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
 }
@@ -118,7 +118,10 @@ export async function markStatus(
   from: PaymentIntentStatus,
   to: PaymentIntentStatus,
 ) {
-  const result = await tx.paymentIntent.updateMany({ where: { id, status: from }, data: { status: to } });
+  const result = await tx.paymentIntent.updateMany({
+    where: { id, status: from },
+    data: { status: to, version: { increment: 1 } },
+  });
   return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
 }
 
