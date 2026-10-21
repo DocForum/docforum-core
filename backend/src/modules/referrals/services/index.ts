@@ -19,6 +19,7 @@ import * as auditService from '../../audit/services';
 import * as doctorsService from '../../doctors/services';
 import * as patientsService from '../../patients/services';
 import { evaluateReferralLoop, LoopGuardError, REFERRAL_MAX_HOPS } from '../loop';
+import { selectLeastLoaded } from '../routing';
 
 /** How many referral-origin no-shows it takes to give up on a referral
  * (PRD §8.2.3: "repeated no-shows → expired"). Two is a deliberately
@@ -28,7 +29,9 @@ import { evaluateReferralLoop, LoopGuardError, REFERRAL_MAX_HOPS } from '../loop
 export const NO_SHOW_EXPIRY_THRESHOLD = 2;
 
 export interface ReferralTargetInput {
-  targetDoctorId: string;
+  /** Explicit recipient. When omitted, `targetSpecialtyId` is required and
+   * routing picks a doctor (issue #6, docs/adr/0008). */
+  targetDoctorId?: string;
   targetSpecialtyId?: string;
   snapshotNotes: string;
 }
@@ -50,11 +53,70 @@ interface PreparedReferral {
 }
 
 /**
+ * Resolve a target to a concrete doctor (issue #6, docs/adr/0008):
+ * an explicit `targetDoctorId` is returned untouched; a specialty-only
+ * target is routed to the least-loaded eligible doctor in that specialty.
+ * `excludeDoctorIds` carries the ids this batch must not route to (the
+ * referring doctor is always excluded by the eligibility query).
+ *
+ * Throws 422 when nobody is eligible — creation then fails wholesale and
+ * no unassigned referral row exists. That is the deliberate v1 answer to
+ * PRD §8.2.2: the referring doctor learns at the point of referral that
+ * no specialist is available, rather than handing the patient a referral
+ * nobody owns.
+ */
+async function resolveTargetDoctor(
+  db: Prisma.TransactionClient,
+  referringDoctorId: string,
+  target: ReferralTargetInput,
+  excludeDoctorIds: string[],
+): Promise<string> {
+  if (target.targetDoctorId) return target.targetDoctorId;
+
+  if (!target.targetSpecialtyId) {
+    throw new HttpError(422, 'A referral needs either a target doctor or a target specialty.');
+  }
+
+  const eligibleDoctorIds = await doctorsService.listEligibleReferralTargets(target.targetSpecialtyId, [
+    referringDoctorId,
+    ...excludeDoctorIds,
+  ]);
+  if (eligibleDoctorIds.length === 0) {
+    throw new HttpError(
+      422,
+      'No verified doctor is available to receive a referral for this specialty. Name a specific doctor instead.',
+      'REFERRAL_NO_ELIGIBLE_TARGET',
+    );
+  }
+
+  const loadRows = await referralsRepo.countActiveReferralsByTargetDoctor(db, eligibleDoctorIds);
+  const loadByDoctorId = new Map(loadRows.map((row) => [row.targetDoctorId, row._count._all]));
+  const chosen = selectLeastLoaded(
+    eligibleDoctorIds.map((doctorProfileId) => ({
+      doctorProfileId,
+      activeReferralCount: loadByDoctorId.get(doctorProfileId) ?? 0,
+    })),
+  );
+  if (!chosen) {
+    // Unreachable: the candidate list is non-empty. Kept so the return
+    // type is honest instead of asserted away.
+    throw new HttpError(
+      422,
+      'No verified doctor is available to receive a referral for this specialty.',
+      'REFERRAL_NO_ELIGIBLE_TARGET',
+    );
+  }
+  return chosen.doctorProfileId;
+}
+
+/**
  * Shared validation for one referral target against its source
  * consultation. Returns the fully-prepared row data (lineage + loop flag
  * resolved) or throws. `existingTargets` guards the multi-referral batch
  * case (#66): two targets in one batch may not share a doctor or
- * specialty.
+ * specialty. `excludeFromRouting` carries the batch's explicit targets
+ * and already-routed ones, so one batch never routes a specialty-only
+ * target onto a doctor the same batch named explicitly (ADR 0008 §5).
  */
 async function prepareReferralTarget(
   db: Prisma.TransactionClient,
@@ -65,6 +127,7 @@ async function prepareReferralTarget(
   referringDoctorId: string,
   target: ReferralTargetInput,
   existingTargets: { targetDoctorId: string; targetSpecialtyId?: string | null }[],
+  excludeFromRouting: string[] = [],
 ): Promise<PreparedReferral> {
   if (!consultation.appointment) {
     throw new HttpError(422, 'Consultation has no appointment; lineage cannot be established.');
@@ -78,17 +141,22 @@ async function prepareReferralTarget(
 
   const patientProfileId = consultation.appointment.patientProfileId;
 
-  if (target.targetDoctorId === referringDoctorId) {
+  // Routing first: everything below (self-referral gate, verification,
+  // duplicate checks, loop walk) then sees one resolved doctor regardless
+  // of whether the referring doctor named them or the rule picked them.
+  const targetDoctorId = await resolveTargetDoctor(db, referringDoctorId, target, excludeFromRouting);
+
+  if (targetDoctorId === referringDoctorId) {
     throw new HttpError(422, 'A doctor cannot refer a patient to themselves.');
   }
-  await doctorsService.assertDoctorVerified(target.targetDoctorId);
+  await doctorsService.assertDoctorVerified(targetDoctorId);
   if (target.targetSpecialtyId) {
-    await doctorsService.assertDoctorVerifiedInSpecialty(target.targetDoctorId, target.targetSpecialtyId);
+    await doctorsService.assertDoctorVerifiedInSpecialty(targetDoctorId, target.targetSpecialtyId);
   }
 
   const duplicateInBatch = existingTargets.some(
     (other) =>
-      other.targetDoctorId === target.targetDoctorId ||
+      other.targetDoctorId === targetDoctorId ||
       (!!target.targetSpecialtyId && other.targetSpecialtyId === target.targetSpecialtyId),
   );
   if (duplicateInBatch) {
@@ -96,7 +164,7 @@ async function prepareReferralTarget(
   }
 
   const duplicateInConsultation = await referralsRepo.findByConsultationAndTarget(db, consultation.id, {
-    targetDoctorId: target.targetDoctorId,
+    targetDoctorId,
     targetSpecialtyId: target.targetSpecialtyId ?? null,
   });
   if (duplicateInConsultation) {
@@ -113,7 +181,7 @@ async function prepareReferralTarget(
     try {
       const evaluation = evaluateReferralLoop(ancestors, {
         referringDoctorId,
-        targetDoctorId: target.targetDoctorId,
+        targetDoctorId,
         targetSpecialtyId: target.targetSpecialtyId ?? null,
       });
       if (evaluation.flagged) {
@@ -132,7 +200,7 @@ async function prepareReferralTarget(
     patientProfileId,
     sourceConsultationId: consultation.id,
     referringDoctorId,
-    targetDoctorId: target.targetDoctorId,
+    targetDoctorId,
     targetSpecialtyId: target.targetSpecialtyId,
     snapshotNotes: target.snapshotNotes,
     parentReferralId,
@@ -187,12 +255,22 @@ export async function createReferralBatch(
   return prisma.$transaction(async (tx) => {
     const consultation = await loadConsultationForReferringDoctor(tx, sourceConsultationId);
     const accepted: { targetDoctorId: string; targetSpecialtyId?: string | null }[] = [];
+    // Explicitly named doctors are off-limits to this batch's routing
+    // regardless of target order (ADR 0008 §5), so "cardiology (any) +
+    // Dr A" can never route the specialty half onto Dr A and then fail
+    // the duplicate check for a reason the doctor never chose.
+    const explicitlyTargeted = targets
+      .map((target) => target.targetDoctorId)
+      .filter((id): id is string => !!id);
     const created = [];
     for (const target of targets) {
-      const prepared = await prepareReferralTarget(tx, consultation, referringDoctor.id, target, accepted);
+      const prepared = await prepareReferralTarget(tx, consultation, referringDoctor.id, target, accepted, [
+        ...explicitlyTargeted,
+        ...accepted.map((entry) => entry.targetDoctorId),
+      ]);
       created.push(await referralsRepo.createReferral(tx, prepared));
       accepted.push({
-        targetDoctorId: target.targetDoctorId,
+        targetDoctorId: prepared.targetDoctorId,
         targetSpecialtyId: target.targetSpecialtyId ?? null,
       });
     }
