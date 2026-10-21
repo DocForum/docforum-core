@@ -1,0 +1,1 @@
+Phase 9: added user locale preference, request and recipient locale resolution, ICU-formatted coded errors and password-reset notifications, English/French message catalogs, and a CI key-parity check ([issue #133](https://github.com/DocForum/docforum-core/issues/133)). Existing uncatalogued server messages still use their English fallback.

@@ -1,24 +1,21 @@
 import type { Prisma } from '@prisma/client';
 
-export async function findOrderForPatient(
-  tx: Prisma.TransactionClient,
-  orderId: string,
-  patientProfileId: string,
-) {
-  return tx.order.findFirst({
-    where: {
-      id: orderId,
-      patientProfileId,
-    },
-    include: {
-      fulfillmentProofs: true,
-      disputes: {
-        include: {
-          resolutions: true,
-        },
-      },
-    },
-  });
+type DbClient = typeof prisma | Prisma.TransactionClient;
+
+// Consultation rows are owned by the consultations module; this module goes
+// through its services (see orders/services) rather than writing them here.
+
+export function findPrescriptionForCorrection(id: string, db: DbClient = prisma) {
+  return db.prescription.findUnique({ where: { id }, include: { correctedBy: true } });
+}
+
+export function createPrescription(db: DbClient, input: {
+  consultationId: string; patientProfileId: string; prescribingDoctorId: string;
+  facilityProfileId: string; amountStroops: bigint; supersedesPrescriptionId: string | null;
+  items: Array<{ drugName: string; dosage: string; frequency: string; duration: string }>;
+}) {
+  const { items, ...data } = input;
+  return db.prescription.create({ data: { ...data, items: { create: items } }, include: { items: true } });
 }
 
 export async function confirmOrderReceiptConditional(

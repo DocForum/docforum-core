@@ -1,25 +1,38 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
-import { config } from '../../../config';
-import { record, type AuditActor } from '../../audit/services';
-import { formatOrderResponse } from '../../../utils/order-utils';
-import * as repo from '../repositories';
+import * as appointmentsService from '../../appointments/services';
+import * as consultationsService from '../../consultations/services';
+import * as paymentsService from '../../payments/services';
+import * as auditService from '../../audit/services';
+import { encryptField, decryptField } from '../../../utils/field-encryption';
+import * as ordersRepo from '../repositories';
+import type { Prisma } from '@prisma/client';
+import { paginate, type PatientExportSection } from '../../patients/services';
 
-export async function confirmOrderReceipt(
-  orderId: string,
-  patientUserId: string,
-  actor: AuditActor,
-) {
-  if (!orderId || typeof orderId !== 'string') {
-    throw new HttpError(400, 'Order ID is required.');
-  }
+/** The consultation step of the ordering flow.
+ *
+ * The Consultation row is owned by the consultations module, which is also
+ * where "one per appointment", the completed-appointment rule, note
+ * encryption, the `consultation.closed` audit event and the P2002 → 409 race
+ * handling live. This function adds only the stricter gate this module already
+ * had (a **verified** doctor profile, via getDoctorAppointmentContext) and then
+ * delegates — it must never write the table itself. */
+export async function createConsultation(actor: auditService.AuditActor, input: {
+  appointmentId: string; outcome: 'resolved' | 'referred' | 'follow_up_needed' | null; notes: string | null;
+}) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  await appointmentsService.getDoctorAppointmentContext(actor.userId, input.appointmentId);
+  const { consultation } = await consultationsService.createConsultation(actor, input);
+  return consultation;
+}
 
-  const patientProfile = await prisma.patientProfile.findUnique({
-    where: { userId: patientUserId },
-  });
-  if (!patientProfile) {
-    throw new HttpError(403, 'Patient profile required.');
-  }
+async function consultationContext(actor: auditService.AuditActor, id: string) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  // Read through the consultations service, never its table (AGENTS.md hard rule 4).
+  const consultation = await consultationsService.getConsultationRecord(id);
+  const appointment = await appointmentsService.getDoctorAppointmentContext(actor.userId, consultation.appointmentId);
+  return { consultation, appointment };
+}
 
   const windowStart = new Date(
     Date.now() - config.orders.confirmationWindowHours * 60 * 60 * 1000,
