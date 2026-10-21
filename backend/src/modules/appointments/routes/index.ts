@@ -15,6 +15,7 @@ appointmentsRouter.post(
   appointmentsController.book,
 );
 appointmentsRouter.get('/mine', authenticate, requireRole('patient'), appointmentsController.listMine);
+appointmentsRouter.get('/doctor/today', authenticate, requireRole('doctor'), appointmentsController.listDoctorToday);
 
 // Lifecycle (issue #3 + the cascade trigger for issue #67): only the
 // treating doctor moves an appointment through completed/cancelled/

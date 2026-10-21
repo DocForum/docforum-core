@@ -1,6 +1,7 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import type { AppointmentStatus, Prisma } from '@prisma/client';
+import { transitionAppointmentStatus } from '../state-machine';
 import * as appointmentsRepo from '../repositories';
 import * as availabilityService from '../../availability/services';
 import * as doctorsService from '../../doctors/services';
@@ -68,6 +69,32 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
 export async function listMyAppointments(userId: string) {
   const patientProfile = await patientsService.getMyPatientProfile(userId);
   return appointmentsRepo.findAppointmentsForPatient(patientProfile.id);
+}
+
+/**
+ * Cross-module entry point for the consultations module: return the
+ * appointment a doctor may act on, or null if the appointment doesn't exist
+ * or isn't theirs. The consultations module never queries `Appointment`
+ * directly — it calls this service instead (AGENTS.md hard rule 4).
+ */
+export async function getAppointmentForDoctor(doctorUserId: string, appointmentId: string) {
+  const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
+  if (!appointment) return null;
+
+  const doctorProfile = await doctorsService.getDoctorProfileById(appointment.doctorProfileId);
+  if (doctorProfile.userId !== doctorUserId) return null;
+
+  return appointment;
+}
+
+/** Doctor's own scheduled appointments whose booked slot falls on the
+ * current server-local calendar day. */
+export async function listDoctorAppointmentsToday(userId: string) {
+  const doctor = await doctorsService.getMyDoctorProfile(userId);
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return appointmentsRepo.findAppointmentsForDoctorOnDay(doctor.id, start, end);
 }
 
 /** This module's contribution to the patient data export (issue #40).
@@ -224,7 +251,7 @@ export async function updateStatusByDoctor(userId: string, appointmentId: string
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
   if (!appointment) throw new HttpError(404, 'Appointment not found.');
   await doctorsService.assertOwnsDoctorProfile(userId, appointment.doctorProfileId);
-  if (appointment.status !== 'scheduled') {
+  if (transitionAppointmentStatus(appointment.status, newStatus) === null) {
     throw new HttpError(409, 'Only a scheduled appointment can change status.');
   }
 

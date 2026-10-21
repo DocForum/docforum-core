@@ -1,6 +1,7 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import * as appointmentsService from '../../appointments/services';
+import * as consultationsService from '../../consultations/services';
 import * as paymentsService from '../../payments/services';
 import * as auditService from '../../audit/services';
 import { encryptField, decryptField } from '../../../utils/field-encryption';
@@ -8,34 +9,27 @@ import * as ordersRepo from '../repositories';
 import type { Prisma } from '@prisma/client';
 import { paginate, type PatientExportSection } from '../../patients/services';
 
+/** The consultation step of the ordering flow.
+ *
+ * The Consultation row is owned by the consultations module, which is also
+ * where "one per appointment", the completed-appointment rule, note
+ * encryption, the `consultation.closed` audit event and the P2002 → 409 race
+ * handling live. This function adds only the stricter gate this module already
+ * had (a **verified** doctor profile, via getDoctorAppointmentContext) and then
+ * delegates — it must never write the table itself. */
 export async function createConsultation(actor: auditService.AuditActor, input: {
   appointmentId: string; outcome: 'resolved' | 'referred' | 'follow_up_needed' | null; notes: string | null;
 }) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const appointment = await appointmentsService.getDoctorAppointmentContext(actor.userId, input.appointmentId);
-  try {
-    return await prisma.$transaction(async (tx) => {
-      const consultation = await ordersRepo.createConsultation(tx, {
-        ...input,
-        notes: encryptField(input.notes) ?? null,
-      });
-      await auditService.record(tx, actor, {
-        entityType: 'Consultation', entityId: consultation.id, action: 'consultation.created',
-        fromState: null, toState: consultation.outcome,
-        metadata: { appointmentId: appointment.id },
-      });
-      return { ...consultation, notes: input.notes };
-    });
-  } catch (error) {
-    if (isUniqueViolation(error)) throw new HttpError(409, 'A consultation already exists for this appointment.');
-    throw error;
-  }
+  await appointmentsService.getDoctorAppointmentContext(actor.userId, input.appointmentId);
+  const { consultation } = await consultationsService.createConsultation(actor, input);
+  return consultation;
 }
 
 async function consultationContext(actor: auditService.AuditActor, id: string) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const consultation = await ordersRepo.findConsultation(id);
-  if (!consultation) throw new HttpError(404, 'Consultation not found.');
+  // Read through the consultations service, never its table (AGENTS.md hard rule 4).
+  const consultation = await consultationsService.getConsultationRecord(id);
   const appointment = await appointmentsService.getDoctorAppointmentContext(actor.userId, consultation.appointmentId);
   return { consultation, appointment };
 }
