@@ -82,3 +82,8 @@ export function updateStatusIfScheduled(db: DbClient, id: string, status: Appoin
 export function clearAvailabilitySlotLink(db: DbClient, id: string) {
   return db.appointment.updateMany({ where: { id }, data: { availabilitySlotId: null } });
 }
+
+/** Existence check for the account-deletion retention hold (issue #41). */
+export async function patientHasAppointments(patientProfileId: string): Promise<boolean> {
+  return (await prisma.appointment.findFirst({ where: { patientProfileId }, select: { id: true } })) !== null;
+}

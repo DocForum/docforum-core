@@ -134,6 +134,13 @@ model User {
   // token for the user, since none of them carry the new value — the
   // interim kill switch issue #33 asked for while #18 doesn't exist yet.
   tokenVersion             Int       @default(0)
+  // Phase 8 (issue #41, docs/adr/0010): set once, irreversibly, when the
+  // account is deleted. The row is anonymised in place (email tombstoned,
+  // phone cleared, password unusable) rather than deleted, because clinical
+  // and payment records still reference its patient profile. Refresh is
+  // refused once set. Distinct from admin deactivation (#39), which is
+  // reversible.
+  deletedAt                DateTime?
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
@@ -270,10 +277,19 @@ model PatientProfile {
   // resolved here. Don't build on top of this field assuming it means
   // anything enforced yet.
   guardianUserId String?
+  // Phase 8 (issue #41, docs/adr/0010): set when the owner deleted their
+  // account. fullName/dateOfBirth/guardianUserId are anonymised at the same
+  // moment; the row itself stays so appointments and payments keep their
+  // foreign key. getMyPatientProfile refuses an anonymised profile.
+  anonymizedAt   DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // RESTRICT, not CASCADE (issue #41): a patient's User row is never
+  // hard-deleted while this profile exists — deletion is anonymisation
+  // (ADR 0010), and an accidental user delete must fail loudly rather than
+  // take the clinical identity anchor with it.
+  user           User            @relation(fields: [userId], references: [id], onDelete: Restrict)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
   prescriptions  Prescription[]
@@ -410,11 +426,8 @@ model FacilityProfile {
   labOrders      LabOrder[]
   labResults     LabResult[]
   paymentIntents PaymentIntent[]
-  // NOTE: no `walletLink` relation anymore — WalletLink is generalized to
-  // a polymorphic owner (patient | facility) as of issue #78, so it
-  // carries no FK relation to either profile (same shape as
-  // FulfillmentRecord's polymorphic order ref, §6.1.3). Ownership is
-  // validated in the payments service, not by the schema.
+  walletLink     WalletLink?
+  prices         FacilityPrice[]
 }
 
 model FacilityCapability {
@@ -428,6 +441,33 @@ model FacilityCapability {
   facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id], onDelete: Cascade)
 
   @@unique([facilityProfileId, capabilityType, detail])
+}
+
+/// Versioned facility price list (issue #127). Rows are append-only: changing
+/// a price inserts a new row with a later `effectiveFrom`, so history is kept
+/// and an intent priced earlier keeps resolving against what was in force at
+/// its selection time. Amounts are stroops (BigInt) like PaymentIntent.
+///
+/// `catalogItemCode` is deliberately an open vocabulary (a lab test or
+/// medication code the facility publishes), matching FacilityCapability.detail
+/// — no controlled vocabulary has been decided yet.
+model FacilityPrice {
+  id              String   @id @default(uuid())
+  facilityId      String
+  facility        FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  catalogItemCode String
+  // Stellar asset the price is denominated in. v1 quotes native XLM
+  // ('native'); the column exists so a price list can add assets without a
+  // schema change when multi-asset payments land.
+  asset           String
+  amount          BigInt
+  effectiveFrom   DateTime
+  createdAt       DateTime @default(now())
+
+  // Two versions of the same item/asset cannot share an effective instant.
+  @@unique([facilityId, catalogItemCode, asset, effectiveFrom])
+  @@index([facilityId, catalogItemCode, asset, effectiveFrom])
+  @@index([catalogItemCode, asset, effectiveFrom])
 }
 
 model AvailabilitySlot {
@@ -474,7 +514,9 @@ model Appointment {
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
-  patientProfile   PatientProfile    @relation(fields: [patientProfileId], references: [id])
+  // Explicit RESTRICT (was the Prisma default — same SQL): an appointment is
+  // a clinical record and must outlive any account deletion (ADR 0010).
+  patientProfile   PatientProfile    @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
   doctorProfile    DoctorProfile     @relation(fields: [doctorProfileId], references: [id])
   availabilitySlot AvailabilitySlot? @relation(fields: [availabilitySlotId], references: [id])
   referral         Referral?         @relation("ReferralOriginatedAppointments", fields: [referralId], references: [id])
@@ -766,7 +808,9 @@ model PaymentIntent {
   labOrder     LabOrder?     @relation(fields: [labOrderId], references: [id])
 
   patientProfileId String
-  patientProfile   PatientProfile  @relation(fields: [patientProfileId], references: [id])
+  // Explicit RESTRICT (was the Prisma default — same SQL): a payment record
+  // must outlive any account deletion (ADR 0010).
+  patientProfile   PatientProfile  @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
   facilityId       String
   facility         FacilityProfile @relation(fields: [facilityId], references: [id])
 
@@ -778,6 +822,12 @@ model PaymentIntent {
   // testnet (see ADR 0004). Multi-asset support is a future addition,
   // not assumed by this field.
   amountStroops BigInt
+
+  // Which facility price list entry priced this intent (issue #127). The
+  // amount above is the snapshot; this code records *which* item it was for,
+  // so a later price change can be explained without re-deriving it. Null for
+  // intents priced from an admin-supplied amount.
+  catalogItemCode String?
 
   // Set once funded (create_escrow succeeds) — needed to later call
   // release/refund against the right on-chain escrow.
