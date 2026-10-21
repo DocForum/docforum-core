@@ -11,6 +11,7 @@ import { appointmentConsultationsRouter, consultationsRouter } from './modules/c
 import { ordersRouter } from './modules/orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
+import { facilitiesRouter } from './modules/facilities/routes';
 import { adminRouter } from './modules/users/routes';
 import { registerPatientExportSections } from './export-sections';
 import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
@@ -61,6 +62,7 @@ export function createApp() {
   app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
+  app.use('/facilities', facilitiesRouter);
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);
