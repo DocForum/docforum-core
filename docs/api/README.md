@@ -139,8 +139,16 @@ against `tokenVersion` on every `POST /auth/refresh`.
 
 | Method & path | Auth | Notes |
 |---|---|---|
+| `GET /doctors` | none | Query: optional `specialty` slug, typo-tolerant `q`, `limit` (1–50, default 20), and keyset `cursor`. Returns `{ items: [{ id, fullName, specialties: [{ id, name, slug }] }], nextCursor }`; only verified profiles and public fields are returned. One/two-character queries use prefix matching; longer queries use `pg_trgm` similarity. The frontend fetches slot details separately. |
 | `GET /doctors/me` | doctor | Returns the caller's own `DoctorProfile`. |
+| `PUT /doctors/me/specialties` | doctor | Body `{ specialtyIds: string[] }`; replaces the caller's specialty assignments. Unknown ids return `400`. |
 | `PATCH /doctors/:doctorProfileId/verification` | admin | Body `{ status: 'pending'|'verified'|'rejected' }`. Manual, admin-gated per PRD FR-3 — there is no automated verification pipeline. |
+
+## Specialties (`/specialties`) — `backend/src/modules/doctors`
+
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /specialties` | none | Lists the seeded specialty catalog as `{ id, name, slug }` records. |
 
 ## Availability (`/availability`) — `backend/src/modules/availability`
 
