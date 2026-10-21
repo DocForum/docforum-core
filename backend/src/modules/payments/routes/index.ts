@@ -4,15 +4,10 @@ import * as paymentsController from '../controllers';
 
 export const paymentsRouter = Router();
 
-// Wallet links (issue #78): patients link the wallet they pay FROM
-// (ADR 0005 v2 payer), facilities the wallet they are paid TO. Only
-// these two roles can own a link — resolved to the caller's OWN profile
-// in the service, so linking for an owner you don't control is a 403.
-//
-// The body is a signed SEP-10 challenge, never an address (see
-// validation.ts); still verified-email-gated like every payments
-// mutation here (issue #34 — and ADR 0005's replacement for the old
-// typed-in endpoint, which was gated the same way).
+paymentsRouter.get('/mine', authenticate, requireRole('patient'), paymentsController.listMyPayments);
+paymentsRouter.get('/facility/ledger', authenticate, requireRole('facility'), paymentsController.listFacilityLedger);
+
+// Facility manages its own payout wallet.
 paymentsRouter.post(
   '/wallet-link',
   authenticate,

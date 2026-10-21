@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import * as paymentsService from '../services';
-import { linkWalletSchema } from '../validation';
+import { linkWalletSchema, paymentHistoryQuerySchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
@@ -75,5 +75,14 @@ export async function refundIntent(req: Request, res: Response) {
   res.status(200).json(serializeIntent(intent));
 }
 
-// SEP-10 Stellar Web Authentication (issue #77) — see ./sep10.ts.
-export { sep10Challenge, sep10Verify } from './sep10';
+export async function listMyPayments(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const filters = paymentHistoryQuerySchema.parse(req.query);
+  res.status(200).json(await paymentsService.listMyPayments(req.user.id, filters));
+}
+
+export async function listFacilityLedger(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const filters = paymentHistoryQuerySchema.parse(req.query);
+  res.status(200).json(await paymentsService.listFacilityPaymentLedger(req.user.id, filters));
+}
