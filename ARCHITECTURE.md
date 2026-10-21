@@ -54,6 +54,7 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `lab-orders` — lab order issuance and versioning.
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
+- `payments` — `PaymentIntent`, the facility payee `WalletLink`, and the patient payer `PatientWalletLink` (§4.13). Relational metadata only; every Stellar call goes through `@docforum/escrow-sdk` via `services/escrow-sdk-loader.ts`. Assets are allowlisted per environment (issue #79), and the prepare half of ADR 0005 (issue #80) builds the unsigned patient transaction without moving funds.
 - `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking (both the direct and the referral-origin path), consultation closing (Phase 2, issue #4), doctor verification, payment fund/release/refund, the patient's referral accept/decline, and the referral admin actions (Phase 3, issue #68 — `referral.reassign` / `referral.cancel`, recorded as `entityType: 'Referral'` rows; there is no second, referral-specific audit table). **Phase 4 transitions (fulfillment) must call `record()` in the same transaction when they're built** — prescriptions and lab orders already do. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
 
 ### 3.1 Patient data export registry (Phase 8, issue #40)
@@ -377,7 +378,8 @@ Transitions recorded (action: from → to):
 - `appointment.booked`: `null → scheduled` (metadata: slot id, doctor profile id, origin). Written by the appointments module for **both** booking paths — a direct booking and a referral-origin booking (the accept path), which is what the `origin` metadata distinguishes; there is no way to create an appointment that leaves no trail.
 - `consultation.closed`: `null → outcome` (metadata: appointment id; never the notes — that's PHI). Written by the consultations module for every consultation write, whichever route addressed it (`POST /consultations`, `POST /appointments/:id/consultation`, or the orders flow).
 - `doctor.verification_status_changed`: previous → new verification status (read under `FOR UPDATE`; a no-op set records nothing)
-- `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
+- `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, asset code, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
+- `payment_intent.prepared` `created → awaiting_signature`, `payment_intent.prepare_expired` `awaiting_signature → created` (issue #80). Actor is the patient for prepare and the system for expiry; metadata adds the prepared transaction hash.
 - `referral.accepted`: `pending → accepted` (metadata: the appointment id the accept booked). Written by the referrals module in the same transaction as the accept, so the patient's decision and the appointment it produced are both recorded or neither is.
 - `referral.declined`: `pending → declined`.
 - `referral.reassign`: `null → null` — the referral is retargeted, not
@@ -458,6 +460,45 @@ Patient-facing query (`GET /patients/me/access-log`) is scoped server-side
 to the caller's own profile (resolved from the authenticated user, never
 from the request) and strips all viewer PII to a role — a deleted viewer
 surfaces as `deleted_user`.
+
+### 4.13 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
+```
+PaymentIntent
+  id, prescription_id / lab_order_id (exactly one typed FK — issue #85)
+  status (enum: created|awaiting_signature|submitting|escrowed|released|refunded|failed)
+  patient_profile_id (FK, RESTRICT), facility_id (FK)
+  amount (bigint — smallest unit of asset_code; never scaled in this repo)
+  asset_code, token_contract_id (SAC address; token_contract_id is nullable
+    only for pre-#79 rows, which resolve ESCROW_TOKEN_ID as native XLM)
+  escrow_id, stellar_tx_hash, soroban_contract_id (nullable — set on fund)
+  prepared_tx_hash, prepared_xdr, prepared_expiry_ledger, prepared_expires_at,
+    refund_after (nullable — live only in awaiting_signature; cleared on expiry)
+  created_at, updated_at
+  # Every status write is a conditional UPDATE on the observed state, in the
+    same transaction as its AuditEvent (§4.10). Prepare is
+    created -> awaiting_signature; expiry is awaiting_signature -> created.
+    `submitting` is reserved for ADR 0005's submit half (not built). Orders
+    are priced in XLM today, so issuance writes asset_code='XLM'.
+
+PatientWalletLink
+  patient_profile_id (unique FK -> PatientProfile, cascade)
+  stellar_public_key, verified_at
+  # The PAYER wallet (ADR 0005). Rows are written by the SEP-10 flow, which
+    is not built yet; prepare requires one and returns 409
+    WALLET_NOT_LINKED otherwise.
+
+WalletLink
+  facility_id (unique FK -> FacilityProfile, cascade)
+  stellar_public_key
+  # The PAYEE/payout wallet, facility-managed (ADR 0004). Unchanged by #79.
+```
+Assets are an environment allowlist (`PAYMENT_ASSETS`; testnet defaults XLM +
+USDC SACs) rather than a fixed enum: an intent in any other asset is
+rejected at creation. Before funding (and preparing) an issued asset, the
+payee's Horizon account is checked for an authorised trustline
+(`PAYEE_TRUSTLINE_MISSING`); native XLM needs none. Only assets without
+clawback/transfer fees/rebasing belong on the list — escrow threat model
+T5, enforced as a curated config policy.
 
 ## 5. Key flows (sequence-level, not code)
 

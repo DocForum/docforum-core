@@ -31,7 +31,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
 Account deletion (Phase 8, issue #41 — docs/adr/0010): anonymise in place (`User.deletedAt`, `PatientProfile.anonymizedAt`), never cascade. `PatientProfile.userId` is ON DELETE RESTRICT; new patient-linked clinical tables must be RESTRICT too **and** register a retention hold in `src/retention-holds.ts`.
-`FacilityProfile` → `WalletLink` (payout address) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85)
+`FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile` → `PatientWalletLink` (payer address, ADR 0005) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85), whose `amount` is in the smallest unit of a per-environment allowlisted `assetCode` (issue #79)
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
 - **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule.

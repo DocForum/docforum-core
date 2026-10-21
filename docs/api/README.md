@@ -31,7 +31,7 @@ depend on a trustworthy contact address:
 - `POST /consultations`, `POST /consultations/:id/referrals`
 - `POST /referrals`, `POST /referrals/from-consultation/:id`,
   `POST /referrals/:id/{accept,decline}`
-- `POST /payments/wallet-link`, `POST /payments/intents`,
+- `POST /payments/wallet-link`, `POST /payments/intents/:id/prepare`,
   `POST /payments/intents/:id/{fund,release,refund}`
 
 (`GET`-style routes — lists, availability, the admin referral queue —
@@ -255,11 +255,24 @@ issuance with `422 { code: 'PRICE_ON_REQUEST' }` and writes no order.
 
 Phase 5.5 (custodial v1 — `docs/adr/0004-custodial-payments-v1.md`):
 `POST /payments/wallet-link` (facility, sets its Stellar payout address),
-and admin-gated `/payments/intents` (`POST`, `GET /:id`, plus
-`POST /intents/:id/{fund,release,refund}`). `PaymentIntent.orderType` /
-`orderId` are opaque and **not** FK-validated — `Prescription`/`LabOrder`
-don't exist yet (Phase 4). Admin-triggered release/refund is the interim
-design, not the final one.
+and admin-gated `GET /payments/intents/:id` plus
+`POST /intents/:id/{fund,release,refund}`. Intents are created only as part
+of order issuance and carry a typed `Prescription`/`LabOrder` FK. Amounts
+are in the smallest unit of `assetCode` (issue #79); the allowed assets are
+an environment allowlist (`PAYMENT_ASSETS`, testnet XLM + USDC by default).
+Admin-triggered release/refund is the interim design, not the final one.
+
+`POST /payments/intents/:id/prepare` (patient, verified email; issue #80)
+owns the caller's intent in the service — someone else's intent is `404`.
+It requires a verified `PatientWalletLink` (`409 WALLET_NOT_LINKED`) and a
+linked facility payee (`409 FACILITY_WALLET_NOT_LINKED`), checks an issued
+asset's payee trustline (`409 PAYEE_TRUSTLINE_MISSING`), then builds and
+simulates the patient-as-payer `create_escrow`. It returns the intent plus
+`{ xdr, txHash, expiryLedger }` and moves the intent to `awaiting_signature`;
+re-preparing while live returns the same transaction, and an expiry sweep
+moves stale prepared intents back to `created`. Against `@docforum/escrow-sdk`
+0.2.0 the real prepare call does not exist, so this returns
+`503 ESCROW_SDK_PREPARE_UNSUPPORTED` until issue #32 lands.
 
 ## Orders (`/orders`) — `backend/src/modules/orders`
 
@@ -362,7 +375,7 @@ Bundle (`schemaVersion` 1):
   "sections": {
     "account":      { "version": 1, "items": [{ "id", "email", "phone", "role", "emailVerifiedAt", "createdAt", "updatedAt" }] },
     "appointments": { "version": 1, "items": [{ "id", "status", "origin", "slot": { "startTime", "endTime" }, "doctor": { "id", "fullName" }, "createdAt", "updatedAt" }] },
-    "payments":     { "version": 1, "items": [{ "id", "prescriptionId", "labOrderId", "status", "amountStroops", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
+    "payments":     { "version": 2, "items": [{ "id", "prescriptionId", "labOrderId", "status", "amount", "assetCode", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
     "profile":      { "version": 1, "items": [{ "id", "fullName", "dateOfBirth", "createdAt", "updatedAt" }] }
   }
 }
