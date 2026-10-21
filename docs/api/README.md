@@ -172,8 +172,8 @@ against `tokenVersion` on every `POST /auth/refresh`.
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
-| `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md §5.1` and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. Load-tested under contention (Phase 9, issue #86) — see `backend/tests/load/README.md`. |
-| `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
+| `POST /appointments` | patient | `{ availabilitySlotId, patientProfileId? }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md §5.1` and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. Load-tested under contention (Phase 9, issue #86) — see `backend/tests/load/README.md`. `patientProfileId` (Phase 8, issue #42) books for a dependent you're an active guardian of; omit it (or pass your own profile id) to book for yourself. Someone else's profile or dependent: `404`, checked before anything is booked. A dependent whose guardianship ended (revoked / reached majority): `403 GUARDIANSHIP_INACTIVE`. |
+| `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. `?patientProfileId=` lists an active dependent's instead (same authorisation as booking). |
 | `GET /appointments/doctor/today` | doctor | — | Caller's scheduled appointments for the current server-local calendar day, ordered by slot start time. |
 | `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'\|'cancelled'\|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
 | `PATCH /appointments/:appointmentId/cancel` | patient (own appointment) | — | Patient-side cancellation, `scheduled` only. Same slot-release + cascade behaviour as above. |
@@ -335,6 +335,19 @@ clinical order details are exposed. The facility totals object contains
 BigInt-safe decimal string.
 ## Patients (`/patients`) — `backend/src/modules/patients`
 
+### Dependents (Phase 8, issue #42 — `docs/adr/0011`)
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /patients/me/dependents` | patient, verified email | `{ fullName, dateOfBirth: 'YYYY-MM-DD' }` | Creates a **new** dependent profile (no login) with you as guardian. `201 { id, fullName, dateOfBirth, guardianSince }` — `id` is the dependent's `patientProfileId` for booking. Strict body: any other field (e.g. `patientProfileId`, `userId`) is `400` — an existing profile can never be linked. `400 DEPENDENT_NOT_A_MINOR` at or over `AGE_OF_MAJORITY_YEARS` (default 18); `400` for a future/invalid date. |
+| `GET /patients/me/dependents` | patient | — | Your **active** dependents only (not revoked, still under the age of majority), oldest guardianship first. Never another guardian's. |
+
+Guardian access ends automatically on the dependent's majority birthday
+(00:00 UTC): they drop out of the list and booking for them returns
+`403 GUARDIANSHIP_INACTIVE`. Their profile and appointments are kept. There's
+no revoke endpoint in v1 (the model's `revokedAt` is honoured everywhere;
+guardian/admin revocation is a follow-up).
+
 ### Data export — right of access (Phase 8, issue #40)
 
 | Method & path | Auth | Notes |
@@ -423,6 +436,11 @@ stateless JWT and stays syntactically valid until its 15-minute TTL ends (no
 revocation list yet, issue #18), but every patient route returns `404` for
 it and booking/payment routes return `403 EMAIL_NOT_VERIFIED`. Clients should
 discard their tokens on `204`.
+
+A guardian who deletes their account (issue #42, `docs/adr/0011`) has every
+guardianship revoked in the same transaction; their dependents' profiles and
+appointments are untouched, and the revoked rows are kept as the access
+record.
 
 A scheduled purge later hard-deletes deleted accounts that have **no**
 retained records, `ACCOUNT_PURGE_GRACE_HOURS` (default 24) after deletion.

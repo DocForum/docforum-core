@@ -155,6 +155,8 @@ model User {
   // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
   // Opposite of AccessLog.accessedByUser.
   accessLogs              AccessLog[]
+  // Phase 8 (issue #42, docs/adr/0011): dependents this user is guardian of.
+  guardianships           Guardianship[]
 
   @@index([role])
 }
@@ -268,28 +270,29 @@ model RefreshSession {
 }
 
 model PatientProfile {
-  id             String    @id @default(uuid())
-  userId         String    @unique
-  fullName       String
-  dateOfBirth    DateTime?
-  // Nullable, no FK relation on purpose — the minor/dependent consent and
-  // account-ownership model is an explicit open PRD question (§8.2.5), not
-  // resolved here. Don't build on top of this field assuming it means
-  // anything enforced yet.
-  guardianUserId String?
+  id           String    @id @default(uuid())
+  // Null for a dependent (Phase 8, issue #42, docs/adr/0011): a
+  // guardian-owned profile with no login of its own. Still unique, so a
+  // login owns at most one profile. A DB CHECK (see the
+  // guardian_dependent_profiles migration) requires dateOfBirth whenever
+  // userId is null — the age-of-majority rule depends on it.
+  userId       String?   @unique
+  fullName     String
+  dateOfBirth  DateTime?
   // Phase 8 (issue #41, docs/adr/0010): set when the owner deleted their
-  // account. fullName/dateOfBirth/guardianUserId are anonymised at the same
-  // moment; the row itself stays so appointments and payments keep their
-  // foreign key. getMyPatientProfile refuses an anonymised profile.
-  anonymizedAt   DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  // account. fullName/dateOfBirth are anonymised at the same moment; the row
+  // itself stays so appointments and payments keep their foreign key.
+  // getMyPatientProfile refuses an anonymised profile.
+  anonymizedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   // RESTRICT, not CASCADE (issue #41): a patient's User row is never
   // hard-deleted while this profile exists — deletion is anonymisation
   // (ADR 0010), and an accidental user delete must fail loudly rather than
-  // take the clinical identity anchor with it.
-  user           User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  // take the clinical identity anchor with it. Optional since issue #42: a
+  // dependent profile has no login.
+  user           User?           @relation(fields: [userId], references: [id], onDelete: Restrict)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
   prescriptions  Prescription[]
@@ -305,6 +308,9 @@ model PatientProfile {
 
   // Phase 8 (issue #45): who viewed this patient's records.
   accessLogs AccessLog[]
+
+  // Phase 8 (issue #42, docs/adr/0011): guardians of this (dependent) profile.
+  guardians  Guardianship[]
 }
 
 // Phase 8 (issue #40): right-of-access export jobs. One row per request;
@@ -372,6 +378,30 @@ model PatientExportChunk {
   export PatientExport @relation(fields: [exportId], references: [id], onDelete: Cascade)
 
   @@id([exportId, attempt, seq])
+}
+
+// Phase 8 (issue #42, docs/adr/0011): replaces the unenforced
+// PatientProfile.guardianUserId string. A guardian (a patient User) owns a
+// dependent PatientProfile they created; there is deliberately no way to
+// link an existing profile. Active = revokedAt is null AND the dependent is
+// under AGE_OF_MAJORITY_YEARS (checked at request time from the DOB — no
+// job flips anything). Never deleted: ending a guardianship sets revokedAt,
+// so who had access, and when, stays on record.
+model Guardianship {
+  id                 String    @id @default(uuid())
+  guardianUserId     String
+  dependentProfileId String
+  createdAt          DateTime  @default(now())
+  revokedAt          DateTime?
+
+  guardian         User           @relation(fields: [guardianUserId], references: [id], onDelete: Restrict)
+  dependentProfile PatientProfile @relation(fields: [dependentProfileId], references: [id], onDelete: Restrict)
+
+  // One row per (guardian, dependent) pair — no duplicate or ambiguous
+  // relationships. More than one guardian per dependent is allowed by the
+  // model (two parents), though v1's API only creates one.
+  @@unique([guardianUserId, dependentProfileId])
+  @@index([dependentProfileId])
 }
 
 model DoctorProfile {

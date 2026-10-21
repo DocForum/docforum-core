@@ -115,7 +115,7 @@ Canonical source of truth: `backend/prisma/schema.prisma`. This section is the h
 
 **Phase 1 models are real** (User, PatientProfile, DoctorProfile, Specialty, DoctorSpecialty, FacilityProfile, FacilityCapability, AvailabilitySlot, Appointment) — migrated via `backend/prisma/migrations/20260914110638_init/`. **Phase 3 added the real `Referral` and the `Consultation`↔appointment link** — migrated via `backend/prisma/migrations/20261016214929_referral_phase3/`; §4.3 and §4.4 describe what actually shipped, not a sketch. The audit trail (`AuditEvent`, §4.10) is the Phase 8 one (issue #43, `20261017212335_add_audit_event`) — the referral admin actions live in it rather than in a second table. Everything else below (§4.5 onward) is still the Phase 0 structural placeholder.
 
-Three intentional deviations from the original sketches, all flagged in the schema file itself: `Appointment.intakeId` is deferred (nullable-by-omission, not yet a column) since `IntakeForm` doesn't exist until Phase 2; `PatientProfile.guardianUserId` is a plain string with no FK relation, since the minor/dependent consent model (§8.2.5 in PRD.md) is still an open question, not resolved here; and `Referral.snapshotIntakeId` likewise has no column yet (there is no `IntakeForm` to snapshot) — the intake half of the snapshot rule cannot be violated while there is no intake data at all, and the column must be added (as a copy) when issue #1 lands.
+Three intentional deviations from the original sketches, all flagged in the schema file itself: `Appointment.intakeId` is deferred (nullable-by-omission, not yet a column) since `IntakeForm` doesn't exist until Phase 2; `PatientProfile.guardianUserId` was a plain string with no FK relation while the minor/dependent consent model (PRD §8.2.5) was open — **replaced in Phase 8 (issue #42, `docs/adr/0011`)** by the `Guardianship` relation (§4.1); and `Referral.snapshotIntakeId` likewise has no column yet (there is no `IntakeForm` to snapshot) — the intake half of the snapshot rule cannot be violated while there is no intake data at all, and the column must be added (as a copy) when issue #1 lands.
 
 ### 4.1 User / Role model
 ```
@@ -143,12 +143,29 @@ EmailVerificationToken (Phase 8 issue #34)
     UPDATE (consumed_at IS NULL), same single-use shape as §5.1's booking
     guarantee, so two concurrent redemptions can't both win.
 
-PatientProfile (1:1 User)
-  id, user_id (FK -> User, ON DELETE RESTRICT since issue #41 — was CASCADE)
-  full_name, date_of_birth, guardian_user_id (nullable — see PRD edge case: minors)
+PatientProfile (1:1 User, or 0:1 for a dependent)
+  id, user_id (nullable since issue #42 — null = a guardian-owned dependent
+    with no login; still unique. FK -> User, ON DELETE RESTRICT since issue
+    #41 — was CASCADE), full_name, date_of_birth
   anonymized_at (nullable — issue #41; set with full_name -> 'Deleted patient',
-    date_of_birth/guardian_user_id -> null. The row stays so Appointment and
+    date_of_birth -> null. The row stays so Appointment and
     PaymentIntent keep their FK; both of those reference it ON DELETE RESTRICT.)
+  # CHECK (user_id IS NOT NULL OR date_of_birth IS NOT NULL): a dependent
+    always has a DOB, because guardian access ends at the age of majority.
+  # guardian_user_id (unenforced string) was dropped in issue #42; the
+    migration refuses to run if any row still had a value.
+
+Guardianship (Phase 8, issue #42 — docs/adr/0011)
+  id, guardian_user_id (FK -> User, RESTRICT), dependent_profile_id (FK -> PatientProfile, RESTRICT)
+  created_at, revoked_at (nullable)
+  # unique (guardian_user_id, dependent_profile_id) — no duplicate pairs.
+  # Created only together with a new dependent profile (POST
+    /patients/me/dependents); there is no way to link an existing profile.
+  # Active = revoked_at IS NULL AND the dependent is under
+    AGE_OF_MAJORITY_YEARS (UTC calendar date, checked at request time).
+    Never deleted — ending access sets revoked_at, or happens by age.
+  # All dependent-scoped access goes through
+    patients/services resolveActingProfile (booking, appointment listing).
 
 DoctorProfile (1:1 User)
   id, user_id, full_name, verification_status (enum: pending|verified|rejected)
