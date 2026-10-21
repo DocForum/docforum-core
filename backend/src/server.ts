@@ -7,6 +7,7 @@ import { startEscrowEventPoller } from './jobs/escrow-events';
 import { validatePlatformSigners } from './modules/payments/services/platform-signers';
 import { verifyPaymentsNetwork } from './modules/payments/services';
 import { startAccountPurgeJob } from './jobs/account-purge';
+import { expireUnfulfilledOrders } from './jobs/order-expiry';
 
 const app = createApp();
 
@@ -65,3 +66,6 @@ startPatientExportJobs();
 startEscrowEventPoller();
 // Deleted-account tombstone purge (Phase 8, issue #41, docs/adr/0010).
 startAccountPurgeJob();
+
+const orderExpiryTimer = setInterval(() => { void expireUnfulfilledOrders().catch((err) => console.error("[jobs] order expiry failed:", err)); }, 60 * 60 * 1000);
+orderExpiryTimer.unref();
