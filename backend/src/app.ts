@@ -17,6 +17,7 @@ import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
 import { consultationsRouter } from './modules/consultations/routes';
+import { intakeRouter } from './modules/intake/routes';
 
 export function createApp() {
   const app = express();
@@ -48,6 +49,7 @@ export function createApp() {
   app.use('/doctors', doctorsRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
+  app.use('/intake', intakeRouter);
   app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
