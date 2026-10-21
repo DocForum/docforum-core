@@ -251,6 +251,53 @@ snapshots the amount in force at issuance plus the code, so publishing a new
 price later cannot re-price an existing intent; a missing price fails the
 issuance with `422 { code: 'PRICE_ON_REQUEST' }` and writes no order.
 
+Prescription items accept optional `medicationId` (FK to `Medication` catalog)
+— when provided, snapshot fields (`medicationName`, `medicationStrength`,
+`medicationForm`, `medicationRoute`) are auto-populated. When omitted, free-text
+`drugName` is used and flagged for pharmacist review.
+
+Lab orders accept optional `testCodes[]` array with `labTestId` (FK to `LabTest`
+catalog) — when provided, snapshot fields (`testCode`, `testName`) are
+auto-populated. Legacy `testType` field retained for backward compatibility.
+
+## Medications (`/medications`) — `backend/src/modules/medications`
+
+| Method & path | Auth | Query / Body | Notes |
+|---|---|---|---|
+| `GET /medications?q=` | none | query: `q` (min 2 chars), `limit?` (1–100, default 20) | Autocomplete search with trigram similarity. Returns `{ medications: [{ id, genericName, strength, form, route, displayName }] }`. |
+| `GET /admin/medications` | admin | query: `cursor?`, `limit?` (1–100, default 50) | Paginated list of all medications. |
+| `POST /admin/medications` | admin | body: `{ genericName, strength?, form?, route?, externalCode?, externalSystem? }` | Creates or upserts (by `externalCode`) a medication. `externalCode` unique (e.g., RxNorm CUI). |
+
+## Lab tests (`/lab-tests`) — `backend/src/modules/lab-tests`
+
+| Method & path | Auth | Query / Body | Notes |
+|---|---|---|---|
+| `GET /lab-tests?q=` | none | query: `q` (min 2 chars), `limit?` (1–100, default 20) | Autocomplete search with trigram similarity. Returns `{ labTests: [{ id, code, name, specimenType, category, displayName }] }`. |
+| `GET /admin/lab-tests` | admin | query: `cursor?`, `limit?` (1–100, default 50) | Paginated list of all lab tests. |
+| `POST /admin/lab-tests` | admin | body: `{ code, name, specimenType?, category?, panelOfIds? }` | Creates or upserts (by `code`) a lab test. `panelOfIds` links component tests for panels. |
+
+## Order tokens (`/order-tokens`) — `backend/src/modules/order-tokens`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /order-tokens` | doctor, admin | `{ orderType: 'prescription'|'lab_order', orderId }` | Issues a verifiable HMAC token for an order. Called automatically on order creation; exposed for testing. |
+| `POST /facilities/me/verify-order` | facility | `{ token }` | Verifies an order token. Returns `{ valid, orderType, orderId, facilityId, version, status, superseded?, fulfilled?, expired?, error? }`. Facility must be the order's assigned facility. Superseded/fulfilled/expired orders return `valid: false` with reason. Rate-limited. |
+
+## Lab orders (`/lab-orders`) — `backend/src/modules/lab-orders`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /lab-orders/:id/result` | facility | `{ resultFileUrl?, summary?, abnormalityFlag: 'normal'|'abnormal'|'critical' }` | Attaches a lab result. Creates `LabResultAcknowledgement` for ordering doctor if flag is abnormal/critical. |
+| `POST /lab-orders/results/:id/acknowledge` | doctor (ordering) | — | Acknowledges an abnormal/critical result. Only the ordering doctor may acknowledge. |
+| `GET /lab-orders/results/unacknowledged` | doctor | — | Lists pending acknowledgements for the calling doctor. |
+
+## Prescriptions (`/prescriptions`) — `backend/src/modules/prescriptions`
+
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /prescriptions/:id` | patient, doctor | Returns prescription with items including medication snapshot. |
+| `GET /prescriptions` | patient | Lists caller's prescriptions (paginated). |
+
 ## Payments (`/payments`) — `backend/src/modules/payments`
 
 Phase 5.5 (custodial v1 — `docs/adr/0004-custodial-payments-v1.md`):

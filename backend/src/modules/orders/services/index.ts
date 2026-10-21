@@ -9,6 +9,7 @@ import { encryptField, decryptField } from '../../../utils/field-encryption';
 import * as ordersRepo from '../repositories';
 import type { Prisma } from '@prisma/client';
 import { paginate, type PatientExportSection } from '../../patients/services';
+import * as orderTokensService from '../../order-tokens/services';
 
 /** The consultation step of the ordering flow.
  *
@@ -80,7 +81,7 @@ async function createOrderPayment(tx: Prisma.TransactionClient, input: {
 export async function issuePrescription(actor: auditService.AuditActor, input: {
   consultationId: string; facilityProfileId: string; amountStroops?: bigint; catalogItemCode?: string;
   supersedesPrescriptionId?: string;
-  items: Array<{ drugName: string; dosage: string; frequency: string; duration: string }>;
+  items: Array<{ drugName: string; dosage: string; frequency: string; duration: string; medicationId?: string }>;
 }) {
   const { consultation, appointment } = await consultationContext(actor, input.consultationId);
   let predecessor = null;
@@ -90,13 +91,32 @@ export async function issuePrescription(actor: auditService.AuditActor, input: {
       throw new HttpError(409, 'The prescription to correct does not exist, belongs to another consultation, or already has a correction.');
     }
   }
+
+  // Resolve medication snapshots for items with medicationId
+  const itemsWithSnapshots = await Promise.all(input.items.map(async (item) => {
+    if (item.medicationId) {
+      const medication = await prisma.medication.findUnique({ where: { id: item.medicationId } });
+      if (!medication) {
+        throw new HttpError(400, `Medication with id ${item.medicationId} not found`);
+      }
+      return {
+        ...item,
+        medicationName: medication.genericName,
+        medicationStrength: medication.strength ?? undefined,
+        medicationForm: medication.form ?? undefined,
+        medicationRoute: medication.route ?? undefined,
+      };
+    }
+    return item;
+  }));
+
   try {
     return await prisma.$transaction(async (tx) => {
       const pricing = await resolveOrderAmount(tx, input);
       const order = await ordersRepo.createPrescription(tx, {
         consultationId: consultation.id, patientProfileId: appointment.patientProfileId,
         prescribingDoctorId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
-        amountStroops: pricing.amountStroops, supersedesPrescriptionId: predecessor?.id ?? null, items: input.items,
+        amountStroops: pricing.amountStroops, supersedesPrescriptionId: predecessor?.id ?? null, items: itemsWithSnapshots,
       });
       const paymentIntent = await createOrderPayment(tx, {
         kind: 'prescription', orderId: order.id, patientProfileId: appointment.patientProfileId,
@@ -113,6 +133,14 @@ export async function issuePrescription(actor: auditService.AuditActor, input: {
           catalogItemCode: pricing.catalogItemCode,
         },
       });
+
+      // Issue order token for verification
+      await orderTokensService.issueOrderToken({
+        orderType: 'prescription',
+        orderId: order.id,
+        facilityId: input.facilityProfileId,
+      });
+
       return { ...order, paymentIntent };
     });
   } catch (error) {
@@ -124,6 +152,7 @@ export async function issuePrescription(actor: auditService.AuditActor, input: {
 export async function issueLabOrder(actor: auditService.AuditActor, input: {
   consultationId: string; facilityProfileId: string; amountStroops?: bigint; catalogItemCode?: string; testType: string;
   urgency: 'routine' | 'urgent'; notes?: string; supersedesLabOrderId?: string;
+  testCodes?: Array<{ labTestId: string }>;
 }) {
   const { consultation, appointment } = await consultationContext(actor, input.consultationId);
   let predecessor = null;
@@ -133,6 +162,27 @@ export async function issueLabOrder(actor: auditService.AuditActor, input: {
       throw new HttpError(409, 'The lab order to correct does not exist, belongs to another consultation, or already has a correction.');
     }
   }
+
+  // Resolve lab test code snapshots
+  let testCodeSnapshots: Array<{ labTestId: string; testCode: string; testName: string }> = [];
+  if (input.testCodes && input.testCodes.length > 0) {
+    const labTestIds = input.testCodes.map((tc) => tc.labTestId);
+    const labTests = await prisma.labTest.findMany({ where: { id: { in: labTestIds } } });
+    const labTestMap = new Map(labTests.map((t) => [t.id, t]));
+
+    testCodeSnapshots = input.testCodes.map((tc) => {
+      const test = labTestMap.get(tc.labTestId);
+      if (!test) {
+        throw new HttpError(400, `Lab test with id ${tc.labTestId} not found`);
+      }
+      return {
+        labTestId: tc.labTestId,
+        testCode: test.code,
+        testName: test.name,
+      };
+    });
+  }
+
   try {
     return await prisma.$transaction(async (tx) => {
       const pricing = await resolveOrderAmount(tx, input);
@@ -141,6 +191,7 @@ export async function issueLabOrder(actor: auditService.AuditActor, input: {
         orderingDoctorId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
         amountStroops: pricing.amountStroops, testType: input.testType, urgency: input.urgency,
         notes: encryptField(input.notes) ?? null, supersedesLabOrderId: predecessor?.id ?? null,
+        testCodes: testCodeSnapshots,
       });
       const paymentIntent = await createOrderPayment(tx, {
         kind: 'lab_order', orderId: order.id, patientProfileId: appointment.patientProfileId,
@@ -157,6 +208,14 @@ export async function issueLabOrder(actor: auditService.AuditActor, input: {
           catalogItemCode: pricing.catalogItemCode,
         },
       });
+
+      // Issue order token for verification
+      await orderTokensService.issueOrderToken({
+        orderType: 'lab_order',
+        orderId: order.id,
+        facilityId: input.facilityProfileId,
+      });
+
       return { ...order, notes: decryptField(order.notes), paymentIntent };
     });
   } catch (error) {

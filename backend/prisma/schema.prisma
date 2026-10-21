@@ -97,6 +97,18 @@ enum Urgency {
   urgent
 }
 
+enum AbnormalityFlag {
+  normal
+  abnormal
+  critical
+}
+
+enum AcknowledgementStatus {
+  pending
+  acknowledged
+  escalated
+}
+
 // =========================================================================
 // Phase 1 models — identity, DB, safe booking foundation. See ROADMAP.md.
 // =========================================================================
@@ -389,6 +401,8 @@ model DoctorProfile {
   // they ultimately see the patient or not).
   referringReferrals Referral[]         @relation("ReferralReferringDoctor")
   targetedReferrals  Referral[]         @relation("ReferralTargetDoctor")
+  // Lab result acknowledgements (issue #72)
+  labResultAcknowledgements LabResultAcknowledgement[]
 
   @@index([verificationStatus])
 }
@@ -437,10 +451,20 @@ model FacilityCapability {
   // e.g. a lab test category, or a medication class — free text on purpose,
   // no controlled vocabulary decided yet (out of Phase 1 scope).
   detail            String?
+  // Controlled vocabulary references (issues #69, #70)
+  medicationId      String?
+  labTestId         String?
+  createdAt         DateTime       @default(now())
 
   facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id], onDelete: Cascade)
+  medication      Medication?      @relation(fields: [medicationId], references: [id])
+  labTest         LabTest?         @relation(fields: [labTestId], references: [id])
 
   @@unique([facilityProfileId, capabilityType, detail])
+  @@unique([facilityProfileId, capabilityType, medicationId])
+  @@unique([facilityProfileId, capabilityType, labTestId])
+  @@index([medicationId])
+  @@index([labTestId])
 }
 
 /// Versioned facility price list (issue #127). Rows are append-only: changing
@@ -704,16 +728,45 @@ model Prescription {
 }
 
 model PrescriptionItem {
-  id             String @id @default(uuid())
+  id             String   @id @default(uuid())
   prescriptionId String
   drugName       String
   dosage         String
   frequency      String
   duration       String
+  // Controlled vocabulary reference (issue #69)
+  medicationId   String?
+  // Snapshot of medication details at issuance time (append-only rule)
+  medicationName String?
+  medicationStrength String?
+  medicationForm String?
+  medicationRoute String?
+  createdAt      DateTime @default(now())
 
-  prescription Prescription @relation(fields: [prescriptionId], references: [id])
+  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  medication   Medication?  @relation(fields: [medicationId], references: [id])
 
   @@index([prescriptionId])
+  @@index([medicationId])
+}
+
+model Medication {
+  id              String   @id @default(uuid())
+  genericName     String
+  strength        String?  // e.g., "500mg", "10mg/mL"
+  form            String?  // e.g., "tablet", "capsule", "syrup", "injection"
+  route           String?  // e.g., "oral", "intravenous", "topical"
+  // External code (RxNorm, local formulary, etc.)
+  externalCode    String?  @unique
+  externalSystem  String?  // e.g., "rxnorm", "local"
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  prescriptionItems PrescriptionItem[]
+  facilityCapabilities FacilityCapability[]
+
+  @@index([genericName])
+  @@index([externalCode])
 }
 
 model LabOrder {
@@ -738,22 +791,78 @@ model LabOrder {
   correctedBy     LabOrder?       @relation("LabOrderCorrections")
   result          LabResult?
   paymentIntent   PaymentIntent?
+  testCodes       LabOrderTestCode[]
 
   @@unique([supersedesLabOrderId])
   @@index([patientProfileId, createdAt])
   @@index([consultationId])
 }
 
+model LabOrderTestCode {
+  id         String   @id @default(uuid())
+  labOrderId String
+  labTestId  String
+  // Snapshot of the test code/name at issuance time (append-only rule)
+  testCode   String
+  testName   String
+  createdAt  DateTime @default(now())
+
+  labOrder LabOrder @relation(fields: [labOrderId], references: [id], onDelete: Cascade)
+  labTest  LabTest  @relation(fields: [labTestId], references: [id])
+
+  @@unique([labOrderId, labTestId])
+  @@index([labOrderId])
+  @@index([labTestId])
+}
+
+model LabTest {
+  id              String   @id @default(uuid())
+  code            String   @unique // LOINC code or local formulary code
+  name            String
+  specimenType    String?  // e.g., "blood", "urine", "tissue"
+  category        String?  // e.g., "hematology", "chemistry", "microbiology"
+  panelOf         LabTest[] @relation("TestPanel")
+  panelComponents LabTest[] @relation("TestPanel")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  labOrderTestCodes LabOrderTestCode[]
+  facilityCapabilities FacilityCapability[]
+
+  @@index([name])
+  @@index([category])
+}
+
 model LabResult {
-  id                   String   @id @default(uuid())
-  labOrderId           String   @unique
+  id                   String            @id @default(uuid())
+  labOrderId           String            @unique
   fulfillingFacilityId String
   resultFileUrl        String?
   summary              String?
-  createdAt            DateTime @default(now())
+  // Abnormality flag set by facility (issue #72)
+  abnormalityFlag      AbnormalityFlag   @default(normal)
+  createdAt            DateTime          @default(now())
 
   labOrder           LabOrder        @relation(fields: [labOrderId], references: [id])
   fulfillingFacility FacilityProfile @relation(fields: [fulfillingFacilityId], references: [id])
+  acknowledgement    LabResultAcknowledgement?
+}
+
+model LabResultAcknowledgement {
+  id          String               @id @default(uuid())
+  labResultId String               @unique
+  doctorId    String
+  status      AcknowledgementStatus @default(pending)
+  acknowledgedAt DateTime?
+  escalatedAt   DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  labResult LabResult @relation(fields: [labResultId], references: [id], onDelete: Cascade)
+  doctor    DoctorProfile @relation(fields: [doctorId], references: [id])
+
+  @@index([doctorId, status])
+  @@index([status, createdAt])
 }
 
 model FulfillmentRecord {
@@ -767,6 +876,21 @@ model FulfillmentRecord {
   // NOTE: this polymorphic (orderType, orderId) pair is flagged in
   // ARCHITECTURE.md §6.1.3 as a design smell to revisit — may be split
   // into PrescriptionFulfillment / LabOrderFulfillment before implementation.
+}
+
+model OrderToken {
+  id              String   @id @default(uuid())
+  orderType       String   // "prescription" | "lab_order"
+  orderId         String
+  // HMAC-SHA256 or Ed25519 signature (opaque, no PHI encoded)
+  token           String   @unique
+  // Token version for revocation on supersede
+  version         Int      @default(1)
+  expiresAt       DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([orderType, orderId])
+  @@index([token])
 }
 
 model Notification {
