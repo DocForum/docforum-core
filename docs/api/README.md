@@ -1,12 +1,12 @@
 # API docs
 
-Phases 1, 3 (referrals/consultations) and 5.5 (payments) endpoints are
-real and tested (see `backend/tests/`). Everything else is still
-unimplemented — see `ROADMAP.md` for phase order. Keep this file in sync
-with `backend/src/modules/*/routes` (AGENTS.md doc-update rule).
+Endpoints are grouped by module below. Which phases are built is tracked
+in `ROADMAP.md`, not here. Keep this file in sync with
+`backend/src/modules/*/routes` (AGENTS.md doc-update rule): when you add or
+change an endpoint, add or edit its row in that module's table, and leave
+the rest of the file alone.
 
-Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI
-spec yet — TBD, tracked informally, not blocking Phase 1.
+Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
 
 ## Auth (`/auth`) — `backend/src/modules/auth`
 
@@ -138,6 +138,14 @@ cookie, 30-day TTL, `SameSite=None; Secure` in production and
 (`backend/src/config/index.ts`) so the refresh and CSRF cookies can never
 drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 
+Every token carries a `tv` claim (the user's `tokenVersion` at issue time).
+Bumping `User.tokenVersion` — which password reset does — invalidates every
+outstanding refresh token for that user at the next refresh. This is the
+interim kill switch for issue #33; the fuller revocation list (per-session
+revocation, #18) is still open, so a bumped-away **access** token keeps
+working until its 15-minute TTL elapses. Refresh tokens are checked
+against `tokenVersion` on every `POST /auth/refresh`.
+
 ## Doctors (`/doctors`) — `backend/src/modules/doctors`
 
 | Method & path | Auth | Notes |
@@ -156,7 +164,7 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
-| `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
+| `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md §5.1` and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. Load-tested under contention (Phase 9, issue #86) — see `backend/tests/load/README.md`. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
 | `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'\|'cancelled'\|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
 | `PATCH /appointments/:appointmentId/cancel` | patient (own appointment) | — | Patient-side cancellation, `scheduled` only. Same slot-release + cascade behaviour as above. |

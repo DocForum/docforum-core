@@ -141,7 +141,7 @@ git rebase upstream/${base}
 git push --force-with-lease
 \`\`\`
 
-The usual culprits are shared files like \`ROADMAP.md\` and \`ARCHITECTURE*.md\`. CI re-runs when you push, and the \`${LABEL}\` label is removed automatically once the conflicts are resolved.
+The usual culprits are shared docs like \`ROADMAP.md\` and \`ARCHITECTURE*.md\`. If the conflict is in the \`ROADMAP.md\` changelog, move your entry into a new file under \`changelog.d/\` (see \`changelog.d/README.md\`) rather than resolving it in place, so it can't conflict again. CI re-runs when you push, and the \`${LABEL}\` label is removed automatically once the conflicts are resolved.
 
 <sub>Automated message. It won't repeat unless the PR conflicts again after your next push.</sub>`;
 }

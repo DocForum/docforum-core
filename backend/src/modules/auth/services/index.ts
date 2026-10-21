@@ -37,6 +37,17 @@ import type { PatientExportSection } from '../../patients/services';
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
 
+// Password reset (Phase 8 #33) lives in its own file; re-exported here so
+// controllers keep calling a single service surface.
+export {
+  confirmPasswordReset,
+  hashResetToken,
+  requestPasswordReset,
+  resetPasswordResetRateLimits,
+  type ConfirmPasswordResetInput,
+  type RequestPasswordResetInput,
+} from './password-reset';
+
 export {
   assertSessionUsable,
   listSessions,
@@ -105,10 +116,10 @@ function toPublicUser(user: {
 }
 
 function issueTokensForSession(
-  user: { id: string; role: Role },
+  user: { id: string; role: Role; tokenVersion?: number },
   sessionId: string,
 ): { accessToken: string; refreshToken: string; csrfToken: string } {
-  const payload = { sub: user.id, role: user.role };
+  const payload = { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0 };
   // A fresh CSRF token per session, and per rotation — bound into the
   // refresh token so verifying it needs no server-side state (issue #37).
   const csrfToken = generateCsrfToken();
@@ -124,7 +135,7 @@ function issueTokensForSession(
 
 /** Starts a new session (one per login) and issues its first token pair. */
 async function issueNewSession(
-  user: { id: string; role: Role },
+  user: { id: string; role: Role; tokenVersion?: number },
   context: SessionContext,
 ): Promise<{ accessToken: string; refreshToken: string; csrfToken: string; sessionId: string }> {
   const session = await startSession({ userId: user.id, ...context });
@@ -397,6 +408,16 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   // session revoked by deactivation/reactivation can't come back to life
   // through a refresh cookie either (Phase 8, issue #39).
   if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
+
+  // `tv` check: a password reset (or anything else that bumps
+  // `User.tokenVersion`) kills every refresh token issued before it. Tokens
+  // predating this field carry no `tv` and read as version 0, which is
+  // exactly right — they stay valid only while the user has never had a
+  // version bump.
+  if ((payload.tv ?? 0) !== user.tokenVersion) {
+    throw new HttpError(401, 'Invalid or expired refresh token.');
+  }
+
   if (isSessionRevoked(user.sessionsInvalidatedAt, payload.iat)) {
     throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
   }

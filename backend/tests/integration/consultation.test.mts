@@ -46,6 +46,13 @@ const pg = new EmbeddedPostgres({
 // Matches vitest.config.mts's DATABASE_URL convention: the client built at
 // import time in src/db/prisma-client.ts connects lazily with this URL.
 const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_test`;
+// vitest.config.mts points DATABASE_URL at booking.test.mts's cluster
+// (5433); this file runs its own on 5452, so it has to say so before
+// src/db/prisma-client.ts constructs the client at import time. Without
+// this the app talks to whatever is on 5433 — nothing when the file runs
+// alone (ECONNREFUSED), and *booking's* database when the suite runs in
+// parallel, which would make these assertions pass against the wrong DB.
+process.env.DATABASE_URL = databaseUrl;
 
 /** Booking requires a verified email (Phase 8, issue #34), so the suite
  * installs its own email sender and reads the verification token out of the
