@@ -13,7 +13,7 @@ export function findPrescriptionForCorrection(id: string, db: DbClient = prisma)
 export function createPrescription(db: DbClient, input: {
   consultationId: string; patientProfileId: string; prescribingDoctorId: string;
   facilityProfileId: string; amountStroops: bigint; supersedesPrescriptionId: string | null;
-  items: Array<{ drugName: string; dosage: string; frequency: string; duration: string }>;
+  items: Array<{ drugName: string; dosage: string; frequency: string; duration: string; medicationId?: string; medicationName?: string; medicationStrength?: string; medicationForm?: string; medicationRoute?: string }>;
 }) {
   const { items, ...data } = input;
   return db.prescription.create({ data: { ...data, items: { create: items } }, include: { items: true } });
@@ -27,8 +27,13 @@ export function createLabOrder(db: DbClient, input: {
   consultationId: string; patientProfileId: string; orderingDoctorId: string;
   facilityProfileId: string; amountStroops: bigint; testType: string; urgency: 'routine' | 'urgent';
   notes: string | null; supersedesLabOrderId: string | null;
+  testCodes?: Array<{ labTestId: string; testCode: string; testName: string }>;
 }) {
-  return db.labOrder.create({ data: input });
+  const { testCodes, ...data } = input;
+  return db.labOrder.create({
+    data: { ...data, testCodes: testCodes ? { create: testCodes } : undefined },
+    include: { testCodes: true },
+  });
 }
 export function findPrescriptionExportPage(patientProfileId: string, cursor: string | undefined, take: number) {
   return prisma.prescription.findMany({

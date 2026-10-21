@@ -2,7 +2,17 @@ import { z } from 'zod';
 
 const amountStroops = z.string().regex(/^[1-9][0-9]*$/, 'amountStroops must be a positive integer string.').transform(BigInt);
 const catalogItemCode = z.string().trim().min(1).max(100);
-const item = z.object({ drugName: z.string().trim().min(1).max(200), dosage: z.string().trim().min(1).max(200), frequency: z.string().trim().min(1).max(200), duration: z.string().trim().min(1).max(200) });
+const item = z.object({
+  drugName: z.string().trim().min(1).max(200),
+  dosage: z.string().trim().min(1).max(200),
+  frequency: z.string().trim().min(1).max(200),
+  duration: z.string().trim().min(1).max(200),
+  medicationId: z.string().uuid().optional(),
+});
+
+const labTestCodeInput = z.object({
+  labTestId: z.string().uuid(),
+});
 
 /** Either an explicit amount (legacy: the doctor types the price) or a
  * catalog item code priced from the facility's published list (issue #127).
@@ -35,4 +45,5 @@ export const labOrderSchema = requireExactlyOnePrice({
   urgency: z.enum(['routine', 'urgent']).default('routine'),
   notes: z.string().max(20000).optional(),
   supersedesLabOrderId: z.string().uuid().optional(),
+  testCodes: z.array(labTestCodeInput).optional(),
 });
