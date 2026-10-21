@@ -22,16 +22,6 @@ export function findWalletLinkByFacilityId(facilityId: string) {
   return prisma.walletLink.findUnique({ where: { facilityId } });
 }
 
-export function createPaymentIntent(input: {
-  orderType: 'prescription' | 'lab_order';
-  orderId: string;
-  patientProfileId: string;
-  facilityId: string;
-  amountStroops: bigint;
-}) {
-  return prisma.paymentIntent.create({ data: input });
-}
-
 export function findPaymentIntentById(id: string) {
   return prisma.paymentIntent.findUnique({ where: { id } });
 }
@@ -44,6 +34,55 @@ export function findPaymentIntentsPageForPatient(patientProfileId: string, curso
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     take,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  });
+}
+
+type PaymentHistoryFilter = {
+  status?: PaymentIntentStatus;
+  from?: Date;
+  to?: Date;
+  before?: { createdAt: Date; id: string };
+  take: number;
+};
+
+function paymentHistoryWhere(filter: PaymentHistoryFilter) {
+  return {
+    ...(filter.status ? { status: filter.status } : {}),
+    ...(filter.from || filter.to
+      ? { createdAt: { ...(filter.from ? { gte: filter.from } : {}), ...(filter.to ? { lte: filter.to } : {}) } }
+      : {}),
+    ...(filter.before
+      ? {
+          OR: [
+            { createdAt: { lt: filter.before.createdAt } },
+            { createdAt: filter.before.createdAt, id: { lt: filter.before.id } },
+          ],
+        }
+      : {}),
+  };
+}
+
+export function findPaymentHistoryPage(
+  owner: { patientProfileId: string } | { facilityId: string },
+  filter: PaymentHistoryFilter,
+) {
+  return prisma.paymentIntent.findMany({
+    where: { ...paymentHistoryWhere(filter), ...owner },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: filter.take,
+  });
+}
+
+/** Aggregate each lifecycle bucket in PostgreSQL; amountStroops stays BigInt end to end. */
+export function aggregateFacilityPayments(facilityId: string, from?: Date, to?: Date) {
+  return prisma.paymentIntent.groupBy({
+    by: ['status'],
+    where: {
+      facilityId,
+      status: { in: ['escrowed', 'released', 'refunded'] },
+      ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+    },
+    _sum: { amountStroops: true },
   });
 }
 
@@ -81,4 +120,9 @@ export async function markStatus(
 ) {
   const result = await tx.paymentIntent.updateMany({ where: { id, status: from }, data: { status: to } });
   return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
+}
+
+/** Existence check for the account-deletion retention hold (issue #41). */
+export async function patientHasPaymentIntents(patientProfileId: string): Promise<boolean> {
+  return (await prisma.paymentIntent.findFirst({ where: { patientProfileId }, select: { id: true } })) !== null;
 }

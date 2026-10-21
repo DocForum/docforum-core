@@ -1,4 +1,10 @@
 import 'dotenv/config';
+import { parsePaymentsConfig } from './payments';
+
+const payoutPrivacyMode = process.env.PAYOUT_PRIVACY_MODE ?? 'facility';
+if (payoutPrivacyMode !== 'facility' && payoutPrivacyMode !== 'pooled') {
+  throw new Error('PAYOUT_PRIVACY_MODE must be either "facility" or "pooled".');
+}
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -41,6 +47,21 @@ export const config = {
     // until that's built (Phase 8).
     accessTtl: '15m',
     refreshTtl: '30d',
+  },
+  // Base URL of docforum-web, used to build the link in outbound
+  // notifications (password reset today). Not a provider decision — see
+  // issue #17 — just the URL the recipient is sent to.
+  appBaseUrl: process.env.APP_BASE_URL ?? 'http://localhost:5173',
+  passwordReset: {
+    // Raw tokens are single-use and short-lived; only their SHA-256 hash
+    // is stored (see PasswordResetToken in schema.prisma).
+    tokenTtlMinutes: Number(process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES ?? 30),
+    // Rate limits on POST /auth/password-reset/request, so the endpoint
+    // can't be used to spam an inbox. Applied per email AND per IP —
+    // either limit being hit returns 429. See auth/services/rate-limit.ts
+    // for the (in-memory, single-process) caveat.
+    requestsPerEmailPerHour: Number(process.env.PASSWORD_RESET_REQUESTS_PER_EMAIL_PER_HOUR ?? 3),
+    requestsPerIpPerHour: Number(process.env.PASSWORD_RESET_REQUESTS_PER_IP_PER_HOUR ?? 10),
   },
   // Phase 8 hardening knobs (issues #34/#35/#37). Env-configurable so a
   // preview deployment can be tightened without a code change, and so
@@ -86,6 +107,13 @@ export const config = {
     pruneIntervalSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_INTERVAL_SECONDS ?? 60 * 60),
     pruneAfterSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_AFTER_SECONDS ?? 24 * 60 * 60),
   },
+  // PHI read-access log (Phase 8, issue #45). How long AccessLog rows are
+  // kept before the prune job (src/server.ts) deletes them. Reads are far
+  // higher volume than AuditEvent writes, so this gets its own, shorter
+  // retention instead of AuditEvent's append-forever lifetime.
+  accessLog: {
+    retentionDays: Number(process.env.ACCESS_LOG_RETENTION_DAYS ?? 365),
+  },
   // Patient data export (Phase 8, issue #40). Env-configurable so a
   // deployment can tune retention and memory bounds without a code change.
   patientExport: {
@@ -109,6 +137,15 @@ export const config = {
     staleAfterSeconds: Number(process.env.PATIENT_EXPORT_STALE_AFTER_SECONDS ?? 15 * 60),
     maxAttempts: Number(process.env.PATIENT_EXPORT_MAX_ATTEMPTS ?? 3),
   },
+
+  // Account deletion purge (Phase 8, issue #41, docs/adr/0010). Only
+  // tombstones with no retained records are ever purged; the grace period is
+  // operational (lets requests in flight under a still-valid access token
+  // finish), not a legal retention period — that one is an open decision.
+  accountPurge: {
+    graceHours: Number(process.env.ACCOUNT_PURGE_GRACE_HOURS ?? 24),
+    intervalSeconds: Number(process.env.ACCOUNT_PURGE_INTERVAL_SECONDS ?? 6 * 60 * 60),
+  },
   // Explicit, per-environment CORS allowlist (Phase 8, issue #37). A single
   // configured origin string was one typo away from "reflect whatever origin
   // asked"; an allowlist makes every permitted frontend a deliberate entry.
@@ -129,16 +166,24 @@ export const config = {
     sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
     path: '/',
   },
-  // Deliberately NOT required at startup via requireEnv() — unrelated
-  // parts of the app (auth, availability, etc.) shouldn't fail to boot
-  // just because payments isn't configured. The payments module itself
-  // (services/index.ts) validates these are present before doing
-  // anything that needs them, with a clear error naming which is
-  // missing. See docs/adr/0004-custodial-payments-v1.md.
+  // Admin invites (Phase 8, issue #39). `acceptUrl` is where the invite link
+  // points — docforum-web owns the page that consumes `?token=`.
+  adminInvites: {
+    ttlHours: Number(process.env.ADMIN_INVITE_TTL_HOURS ?? 72),
+    acceptUrl: process.env.ADMIN_INVITE_ACCEPT_URL ?? 'http://localhost:5173/accept-admin-invite',
+  },
   payments: {
-    platformPayerSecret: process.env.PLATFORM_PAYER_SECRET,
-    platformReleaserSecret: process.env.PLATFORM_RELEASER_SECRET,
-    escrowContractId: process.env.ESCROW_CONTRACT_ID,
-    escrowTokenId: process.env.ESCROW_TOKEN_ID,
+    ...parsePaymentsConfig(process.env),
+    payoutPrivacyMode,
+    payoutPrivacyPoolAddress: process.env.PAYOUT_PRIVACY_POOL_ADDRESS,
+  },
+  // Structured logging (Phase 9). Level is configurable per environment;
+  // tests run quiet by default so captured output stays readable.
+  log: {
+    level:
+      process.env.LOG_LEVEL ??
+      (process.env.NODE_ENV === 'test' ? 'silent' : process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
+    // Header carrying the request id; accepted from the client or generated.
+    requestIdHeader: 'x-request-id',
   },
 } as const;

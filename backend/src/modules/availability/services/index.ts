@@ -1,6 +1,7 @@
 import { HttpError } from '../../../http-error';
 import * as availabilityRepo from '../repositories';
 import * as doctorsService from '../../doctors/services';
+import { buildSlotRanges } from '../slot-generation';
 
 export function listOpenSlots(doctorProfileId: string) {
   return availabilityRepo.findOpenSlots(doctorProfileId);
@@ -18,28 +19,18 @@ export interface GenerateSlotsInput {
 }
 
 export async function generateSlots(input: GenerateSlotsInput) {
-  const { doctorProfileId, date, startHour, endHour, slotLengthMinutes } = input;
-
-  if (slotLengthMinutes <= 0) throw new HttpError(400, 'slotLengthMinutes must be positive.');
-  if (startHour < 0 || endHour > 24 || startHour >= endHour) {
-    throw new HttpError(400, 'startHour must be before endHour, both within 0-24.');
+  const { doctorProfileId, date, startHour, endHour } = input;
+  try {
+    buildSlotRanges(input);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
   }
-
   const dayStart = new Date(`${date}T00:00:00.000Z`);
-  if (Number.isNaN(dayStart.getTime())) throw new HttpError(400, 'date must be a valid ISO date.');
-
-  const rangeStart = new Date(dayStart.getTime() + startHour * 60 * 60 * 1000);
-  const rangeEnd = new Date(dayStart.getTime() + endHour * 60 * 60 * 1000);
-
+  const rangeStart = new Date(dayStart.getTime() + startHour * 60 * 60 * 1_000);
+  const rangeEnd = new Date(dayStart.getTime() + endHour * 60 * 60 * 1_000);
   const existing = await availabilityRepo.findExistingSlotRanges(doctorProfileId, rangeStart, rangeEnd);
-  const existingStarts = new Set(existing.map((slot) => slot.startTime.getTime()));
-
-  const rows: { doctorProfileId: string; startTime: Date; endTime: Date }[] = [];
-  const stepMs = slotLengthMinutes * 60 * 1000;
-  for (let start = rangeStart.getTime(); start + stepMs <= rangeEnd.getTime(); start += stepMs) {
-    if (existingStarts.has(start)) continue; // idempotent: skip slots already generated
-    rows.push({ doctorProfileId, startTime: new Date(start), endTime: new Date(start + stepMs) });
-  }
+  const existingStarts = existing.map((slot) => slot.startTime.getTime());
+  const rows = buildSlotRanges(input, existingStarts);
 
   if (rows.length === 0) return { created: 0 };
 
@@ -48,9 +39,10 @@ export async function generateSlots(input: GenerateSlotsInput) {
 }
 
 /** Re-exported for appointments/services — the only cross-module entry
- * points into this module's booking-concurrency primitive and slot reads.
- * Never import availability/repositories from another module directly. */
-export { claimOpenSlot, findSlotById as getSlot } from '../repositories';
+ * points into this module's booking-concurrency primitive, slot reads and
+ * slot release. Never import availability/repositories from another
+ * module directly. */
+export { claimOpenSlot, findSlotById as getSlot, releaseBookedSlotIfFuture } from '../repositories';
 
 /** Batch slot-time lookup for other modules (patient data export, issue
  * #40). Times only — no status or doctor internals. */

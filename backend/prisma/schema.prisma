@@ -72,6 +72,10 @@ enum ReferralStatus {
   declined
   completed
   expired
+  // Admin-initiated termination (issue #68) — distinct from `expired`
+  // (the cascade gave up after repeated no-shows) and `declined` (the
+  // patient said no) so audit/metrics can tell the three exits apart.
+  cancelled
 }
 
 enum OrderStatus {
@@ -123,25 +127,59 @@ enum Urgency {
 // =========================================================================
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  phone        String?
-  passwordHash String
-  role         Role
+  id                    String    @id @default(uuid())
+  email                 String    @unique
+  phone                 String?
+  passwordHash          String
+  role                  Role
   // Phase 8 (issue #34): null = never verified. Self-serve signup leaves
   // this null; existing rows were backfilled to `createdAt` in the
   // add_email_verification migration. Distinct from
   // DoctorProfile.verificationStatus, which is the separate, manual
   // admin verification of a doctor's credentials — do not conflate.
-  emailVerifiedAt DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  emailVerifiedAt       DateTime?
+  // Phase 9, issue #133: server-generated text preference. Values are
+  // normalized to a supported language tag at signup; unsupported tags
+  // fall back to English.
+  locale                String    @default("en")
+  // Phase 8 (issue #39): null = active. Deactivating never deletes anything
+  // — no clinical or payment record is keyed to this flag, and none of the
+  // deactivation paths remove rows. Login, refresh and access tokens are all
+  // refused while this is set.
+  deactivatedAt         DateTime?
+  // Phase 8 (issue #39): bumped when an account is deactivated/reactivated,
+  // so access tokens minted before that moment stop working immediately
+  // instead of living out their 15-minute TTL. There is still no general
+  // refresh-token revocation list (issue #18) — this is the narrow "revoke
+  // everything for one account" case that deactivation needs.
+  sessionsInvalidatedAt DateTime?
+  // Per-user refresh-token version. Embedded in every access/refresh token
+  // as `tv` and compared against this column at refresh time. Bumping it
+  // (password reset, Phase 8 #33) invalidates every outstanding refresh
+  // token for the user, since none of them carry the new value — the
+  // interim kill switch issue #33 asked for while #18 doesn't exist yet.
+  tokenVersion             Int       @default(0)
+  // Phase 8 (issue #41, docs/adr/0010): set once, irreversibly, when the
+  // account is deleted. The row is anonymised in place (email tombstoned,
+  // phone cleared, password unusable) rather than deleted, because clinical
+  // and payment records still reference its patient profile. Refresh is
+  // refused once set. Distinct from admin deactivation (#39), which is
+  // reversible.
+  deletedAt                DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   patientProfile  PatientProfile?
   doctorProfile   DoctorProfile?
   facilityProfile FacilityProfile?
+  refreshSessions RefreshSession[]
 
   emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  adminInvitesSent        AdminInvite[]
+  // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
+  // Opposite of AccessLog.accessedByUser.
+  accessLogs              AccessLog[]
 
   @@index([role])
 }
@@ -161,6 +199,41 @@ model EmailVerificationToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+// Password reset tokens (Phase 8 #33). Only the SHA-256 hash of the
+// token is ever stored — the raw token exists exactly once, in the
+// notification that carries the reset link, and is never logged or
+// persisted. Single-use (`usedAt`) and expiring (`expiresAt`).
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // SHA-256 hex of the raw token. Unique so lookup-by-hash is a single
+  // indexed read, and a duplicate hash (astronomically unlikely) is a
+  // constraint violation rather than a silent overwrite.
+  tokenHash String    @unique
+  expiresAt DateTime
+  // Non-null once used or superseded by a newer request — either way the
+  // token is dead. Requesting a second reset marks the first one used.
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model AdminInvite {
+  id              String    @id @default(uuid())
+  email           String
+  tokenHash       String    @unique
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  invitedByUserId String
+  createdAt       DateTime  @default(now())
+
+  invitedBy User @relation(fields: [invitedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([email])
 }
 
 // Phase 8 (issue #35): login-throttle state. Deliberately in Postgres and
@@ -192,23 +265,67 @@ model LoginAttempt {
   @@index([lastFailedAt])
 }
 
+// One row per refresh-token *family*, i.e. per login. This is the
+// revocation store session management needs (Phase 8 #38) and the shape
+// issue #18's refresh-token revocation wanted: the refresh JWT carries
+// `sid`, and a refresh is only honoured while the row exists with
+// `revokedAt` still null.
+//
+// Collecting a coarse IP and user agent here is deliberate — it is what
+// makes "sign out that other device" usable. Nothing clinical or
+// identifying beyond what the request itself already carried.
+model RefreshSession {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime  @default(now())
+  // Updated on refresh only — never on every access-token-authenticated
+  // request, so this doesn't become a write hot-spot on the User row.
+  lastUsedAt DateTime  @default(now())
+  revokedAt  DateTime?
+
+  userAgent String?
+  ip        String?
+
+  @@index([userId])
+  @@index([userId, revokedAt])
+}
+
 model PatientProfile {
-  id          String    @id @default(uuid())
-  userId      String    @unique
-  fullName    String
-  dateOfBirth DateTime?
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  fullName       String
+  dateOfBirth    DateTime?
   // Nullable, no FK relation on purpose — the minor/dependent consent and
   // account-ownership model is an explicit open PRD question (§8.2.5), not
   // resolved here. Don't build on top of this field assuming it means
   // anything enforced yet.
   guardianUserId String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  // Phase 8 (issue #41, docs/adr/0010): set when the owner deleted their
+  // account. fullName/dateOfBirth/guardianUserId are anonymised at the same
+  // moment; the row itself stays so appointments and payments keep their
+  // foreign key. getMyPatientProfile refuses an anonymised profile.
+  anonymizedAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // RESTRICT, not CASCADE (issue #41): a patient's User row is never
+  // hard-deleted while this profile exists — deletion is anonymisation
+  // (ADR 0010), and an accidental user delete must fail loudly rather than
+  // take the clinical identity anchor with it.
+  user           User            @relation(fields: [userId], references: [id], onDelete: Restrict)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
+  prescriptions  Prescription[]
+  labOrders      LabOrder[]
   dataExports    PatientExport[]
+  // Phase 3: the referrals this patient is the subject of (the opposite
+  // side of Referral.patientProfileId).
+  referrals      Referral[]
+
+  // Phase 8 (issue #45): who viewed this patient's records.
+  accessLogs AccessLog[]
 }
 
 // Phase 8 (issue #40): right-of-access export jobs. One row per request;
@@ -286,10 +403,17 @@ model DoctorProfile {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
-  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  specialties       DoctorSpecialty[]
-  availabilitySlots AvailabilitySlot[]
-  appointments      Appointment[]
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialties        DoctorSpecialty[]
+  availabilitySlots  AvailabilitySlot[]
+  appointments       Appointment[]
+  prescriptions      Prescription[]
+  labOrders          LabOrder[]
+  // Referral sides a doctor can sit on: `referringReferrals` are ones
+  // they created; `targetedReferrals` are ones aimed at them (whether
+  // they ultimately see the patient or not).
+  referringReferrals Referral[]         @relation("ReferralReferringDoctor")
+  targetedReferrals  Referral[]         @relation("ReferralTargetDoctor")
 
   @@index([verificationStatus])
 }
@@ -331,16 +455,12 @@ model FacilityProfile {
 
   user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   capabilities   FacilityCapability[]
+  prescriptions  Prescription[]
+  labOrders      LabOrder[]
+  labResults     LabResult[]
   paymentIntents PaymentIntent[]
   walletLink     WalletLink?
-  fulfillmentRecords FulfillmentRecord[]
-
-  // Composite b-tree index backing the "indexed bounding box" prefilter
-  // of the distance query (issue #74). Chosen over PostGIS: no extension
-  // dependency on every deployment (incl. the Render free-tier preview),
-  // and a bounding box + haversine is exact for the ORDER BY once the box
-  // is a superset of the radius. See ARCHITECTURE.md §5.4.
-  @@index([latitude, longitude])
+  prices         FacilityPrice[]
 }
 
 model FacilityCapability {
@@ -349,11 +469,38 @@ model FacilityCapability {
   capabilityType    CapabilityType
   // e.g. a lab test category, or a medication class — free text on purpose,
   // no controlled vocabulary decided yet (out of Phase 1 scope).
-  detail String?
+  detail            String?
 
   facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id], onDelete: Cascade)
 
   @@unique([facilityProfileId, capabilityType, detail])
+}
+
+/// Versioned facility price list (issue #127). Rows are append-only: changing
+/// a price inserts a new row with a later `effectiveFrom`, so history is kept
+/// and an intent priced earlier keeps resolving against what was in force at
+/// its selection time. Amounts are stroops (BigInt) like PaymentIntent.
+///
+/// `catalogItemCode` is deliberately an open vocabulary (a lab test or
+/// medication code the facility publishes), matching FacilityCapability.detail
+/// — no controlled vocabulary has been decided yet.
+model FacilityPrice {
+  id              String   @id @default(uuid())
+  facilityId      String
+  facility        FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  catalogItemCode String
+  // Stellar asset the price is denominated in. v1 quotes native XLM
+  // ('native'); the column exists so a price list can add assets without a
+  // schema change when multi-asset payments land.
+  asset           String
+  amount          BigInt
+  effectiveFrom   DateTime
+  createdAt       DateTime @default(now())
+
+  // Two versions of the same item/asset cannot share an effective instant.
+  @@unique([facilityId, catalogItemCode, asset, effectiveFrom])
+  @@index([facilityId, catalogItemCode, asset, effectiveFrom])
+  @@index([catalogItemCode, asset, effectiveFrom])
 }
 
 model AvailabilitySlot {
@@ -382,24 +529,72 @@ model Appointment {
   id                 String            @id @default(uuid())
   patientProfileId   String
   doctorProfileId    String
-  availabilitySlotId String            @unique
+  // Nullable because a CANCELLED appointment releases its slot back to
+  // `open` (referral cascade / patient cancel) — the appointment keeps its
+  // history row but must stop holding the unique claim on the slot, or
+  // re-booking the freed slot would violate the unique constraint.
+  // The booking guarantee itself is unchanged: claimOpenSlot's
+  // conditional UPDATE on SlotStatus is what prevents double-booking.
+  availabilitySlotId String?           @unique
   status             AppointmentStatus @default(scheduled)
   origin             AppointmentOrigin @default(direct_booking)
+  // Set when this appointment was produced by accepting a Referral (issue
+  // #7). The cascade rules (#67 / PRD §8.2.3) react to status transitions
+  // on exactly these appointments. NOT unique: one referral can produce
+  // several appointments over its life (re-booking after a cancellation).
+  // Referral.resultingAppointmentId is the unique "current" pointer.
+  referralId         String?
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
-  patientProfile   PatientProfile   @relation(fields: [patientProfileId], references: [id])
-  doctorProfile    DoctorProfile    @relation(fields: [doctorProfileId], references: [id])
-  availabilitySlot AvailabilitySlot @relation(fields: [availabilitySlotId], references: [id])
+  // Explicit RESTRICT (was the Prisma default — same SQL): an appointment is
+  // a clinical record and must outlive any account deletion (ADR 0010).
+  patientProfile   PatientProfile    @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
+  doctorProfile    DoctorProfile     @relation(fields: [doctorProfileId], references: [id])
+  availabilitySlot AvailabilitySlot? @relation(fields: [availabilitySlotId], references: [id])
+  referral         Referral?         @relation("ReferralOriginatedAppointments", fields: [referralId], references: [id])
+  // Non-owning side of Referral.resultingAppointmentId (the FK lives on
+  // Referral) — which referral currently points at this appointment as
+  // the one it produced.
+  referralResultOf Referral?         @relation("ReferralResultingAppointment")
+  // Phase 2 (issue #4): the appointment's consultation. 1:1 — the uniqueness
+  // is Consultation.appointmentId UNIQUE (docs/adr/0009), so this side is a
+  // plain back-relation.
+  consultation     Consultation?
 
   // TODO Phase 2: intakeId (FK -> IntakeForm). PRD FR-5 requires intake
   // before confirmation, not enforced yet — booking works without it in
   // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
   // existing. Flagged, not silently dropped.
-  // TODO Phase 3: referralId (nullable FK -> Referral).
 }
 
 // =========================================================================
+model AccessLog {
+  id               String   @id @default(uuid())
+  // Who viewed. SetNull on user delete keeps the log row (timestamp +
+  // entity remain) while removing the PII pointer.
+  accessedBy       String?
+  // Which patient's records were viewed (the record owner, not the viewer).
+  patientProfileId String?
+  // Entity that was read: 'IntakeForm' | 'Consultation' | 'Prescription' |
+  // 'LabOrder' | 'LabResult' | 'Referral' | 'PaymentIntent' | 'PatientProfile'
+  entityType       String
+  entityId         String
+  // The HTTP route that returned the payload (for correlating with access logs).
+  route            String?
+  // Free-text detail — no PHI here, just context like "GET /appointments/mine".
+  detail           String?
+  accessedAt       DateTime @default(now())
+
+  accessedByUser User?           @relation(fields: [accessedBy], references: [id], onDelete: SetNull)
+  patientProfile PatientProfile? @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+
+  @@index([accessedAt])
+  @@index([accessedBy])
+  @@index([patientProfileId, accessedAt])
+  @@index([entityType, entityId])
+}
+
 // Below this line: Phase 0 structural placeholders, not yet implemented.
 // See ROADMAP.md for phase order.
 // =========================================================================
@@ -410,67 +605,188 @@ model IntakeForm {
   // TODO: patientProfileId, symptoms (Json), freeTextNotes
 }
 
+// Phase 3 (issue #5 minimal + lineage for #65): a Consultation is the
+// record of a doctor having seen the patient at a specific appointment.
+// `appointmentId` is the lineage seam — Referral.parentReferralId is
+// derived through it (consultation → appointment → referral), which is
+// what loop detection walks. Full consultation-note workflow (append-only
+// addenda, sign-off) stays issue #4/#64's scope.
 model Consultation {
-  id        String              @id @default(uuid())
-  outcome   ConsultationOutcome?
-  notes     String?
-  createdAt DateTime            @default(now())
-  // TODO: appointmentId (unique)
+  id            String               @id @default(uuid())
+  // unique = "a consultation is closed once per appointment", enforced by the
+  // database rather than by a read-then-write check (docs/adr/0009).
+  appointmentId String               @unique
+  // Nullable so a consultation can exist before sign-off (Phase 3's referral
+  // slice); the close routes require it, so a closed record always has one.
+  outcome       ConsultationOutcome?
+  // Clinical free text: stored as an AES-256-GCM envelope by
+  // consultations/services (issue #46 — ARCHITECTURE.md §4.3), never plaintext.
+  notes         String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  // RESTRICT (Prisma's default for a required relation) is what the existing
+  // migration created: a clinical record must not disappear because an
+  // appointment row was deleted.
+  appointment   Appointment    @relation(fields: [appointmentId], references: [id])
+  prescriptions Prescription[]
+  labOrders     LabOrder[]
+  // Phase 3: the referrals that grew out of this consultation (the
+  // opposite side of Referral.sourceConsultationId).
+  referrals     Referral[]
 }
 
+// Phase 3 (issues #5/#65/#66/#67/#68). Snapshot rule (FR-7/FR-8, hard
+// rule 3): `snapshotNotes` is a copy taken at creation, never a live
+// reference — reassign/cancel/cascade never touch it.
 model Referral {
-  id             String         @id @default(uuid())
-  status         ReferralStatus @default(pending)
-  snapshotNotes  String
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-  // TODO: sourceConsultationId, referringDoctorId, targetSpecialtyId,
-  // targetDoctorId (nullable), snapshotIntakeId, resultingAppointmentId (nullable)
-  // IMPORTANT: snapshotNotes / snapshotIntakeId must be copies, not live
-  // references — see ARCHITECTURE.md §4.4 design note.
+  id                        String         @id @default(uuid())
+  status                    ReferralStatus @default(pending)
+  patientProfileId          String
+  // The consultation this referral grew out of. Required: every referral
+  // is created from a consultation (PRD FR-7), which is also what gives
+  // loop detection its lineage.
+  sourceConsultationId      String
+  referringDoctorId         String
+  // Always a concrete doctor: a "specialty, no specific doctor" referral
+  // is routed to one at creation (least-loaded eligible doctor — issue
+  // #6, docs/adr/0008). The column stays NOT NULL on purpose, so an
+  // unassigned referral cannot exist; when nobody is eligible the
+  // creation fails instead of writing a row.
+  targetDoctorId            String
+  // Optional denormalised label of the target specialty, used by the
+  // loop guard and admin views. Not a substitute for issue #23's real
+  // per-doctor specialty management.
+  targetSpecialtyId         String?
+  snapshotNotes             String
+  // Issue #65: the referral whose appointment produced the consultation
+  // this referral came from — the chain loop detection walks (bounded).
+  parentReferralId          String?
+  // Issue #67 bookkeeping: how many times a referral-origin appointment
+  // has no-showed, and the "the referring doctor must know" flag set
+  // when repeated no-shows expire the referral. Both live on the
+  // referral (not a Notification row) because Phase 6's dispatch layer
+  // doesn't exist yet — the flag is the seam it will read.
+  noShowCount               Int            @default(0)
+  referringDoctorNotifiedAt DateTime?
+  // Issue #65: set (with a reason naming the matching hop) when the
+  // target doctor/specialty was already in the ancestor chain — the
+  // referral is still created (a human decides), but surfaces in the
+  // admin queue.
+  loopFlaggedAt             DateTime?
+  loopFlagReason            String?
+  // Issue #68: admin-initiated cancellation carries its reason; the
+  // audit trail proper is the AuditEvent row written alongside.
+  cancelledReason           String?
+  // The appointment this referral currently produced (null while
+  // pending/declined, or after a cancelled/no-showed appointment returns
+  // it to pending). Kept pointing at the last no-show when expired —
+  // that appointment is why it expired.
+  resultingAppointmentId    String?        @unique
+  createdAt                 DateTime       @default(now())
+  updatedAt                 DateTime       @updatedAt
+
+  sourceConsultation   Consultation   @relation(fields: [sourceConsultationId], references: [id])
+  patientProfile       PatientProfile @relation(fields: [patientProfileId], references: [id])
+  referringDoctor      DoctorProfile  @relation("ReferralReferringDoctor", fields: [referringDoctorId], references: [id])
+  targetDoctor         DoctorProfile  @relation("ReferralTargetDoctor", fields: [targetDoctorId], references: [id])
+  parentReferral       Referral?      @relation("ReferralLineage", fields: [parentReferralId], references: [id])
+  childReferrals       Referral[]     @relation("ReferralLineage")
+  resultingAppointment Appointment?   @relation("ReferralResultingAppointment", fields: [resultingAppointmentId], references: [id])
+  // Every appointment this referral ever produced (including cancelled/
+  // no-showed ones) — history survives the resultingAppointmentId link
+  // being cleared when the referral returns to pending.
+  appointments         Appointment[]  @relation("ReferralOriginatedAppointments")
+
+  @@index([patientProfileId])
+  @@index([referringDoctorId])
+  @@index([targetDoctorId])
+  @@index([status])
+  @@index([loopFlaggedAt])
 }
+
+// Issue #68: who did what to a referral, when, and why. Deliberately NOT a
+// second audit table: the append-only `AuditEvent` in this schema (Phase 8,
+// issue #43) is the one audit trail, so referral admin actions are recorded
+// as `entityType: 'Referral'` rows through the audit module
+// (`auditService.record`) — same table, same triggers, same writer.
 
 model Prescription {
-  id                     String      @id @default(uuid())
-  status                 OrderStatus @default(issued)
-  createdAt              DateTime    @default(now())
-  // TODO: consultationId, patientProfileId, prescribingDoctorId, supersedesPrescriptionId (nullable, self-relation)
+  id                       String      @id @default(uuid())
+  consultationId           String
+  patientProfileId         String
+  prescribingDoctorId      String
+  facilityProfileId        String
+  amountStroops            BigInt
+  status                   OrderStatus @default(issued)
+  supersedesPrescriptionId String?
+  createdAt                DateTime    @default(now())
 
-  items PrescriptionItem[]
+  consultation      Consultation       @relation(fields: [consultationId], references: [id])
+  patientProfile    PatientProfile     @relation(fields: [patientProfileId], references: [id])
+  prescribingDoctor DoctorProfile      @relation(fields: [prescribingDoctorId], references: [id])
+  facilityProfile   FacilityProfile    @relation(fields: [facilityProfileId], references: [id])
+  supersedes        Prescription?      @relation("PrescriptionCorrections", fields: [supersedesPrescriptionId], references: [id])
+  correctedBy       Prescription?      @relation("PrescriptionCorrections")
+  items             PrescriptionItem[]
+  paymentIntent     PaymentIntent?
+
+  @@unique([supersedesPrescriptionId])
+  @@index([patientProfileId, createdAt])
+  @@index([consultationId])
 }
 
 model PrescriptionItem {
-  id       String @id @default(uuid())
-  drugName String
-  dosage   String
-  frequency String
-  duration String
-  // Phase 5 (issue #73): items must be addressable under their
-  // prescription for item-level fulfillment (partial dispensing, split
-  // routing). Matches ARCHITECTURE.md §4.5, which has always listed this
-  // FK — the schema placeholder was behind the doc.
+  id             String @id @default(uuid())
   prescriptionId String
+  drugName       String
+  dosage         String
+  frequency      String
+  duration       String
 
-  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  prescription Prescription @relation(fields: [prescriptionId], references: [id])
 
   @@index([prescriptionId])
 }
 
 model LabOrder {
-  id        String      @id @default(uuid())
-  testType  String
-  urgency   Urgency     @default(routine)
-  status    OrderStatus @default(issued)
-  createdAt DateTime    @default(now())
-  // TODO: consultationId, patientProfileId, orderingDoctorId, supersedesLabOrderId (nullable, self-relation)
+  id                   String      @id @default(uuid())
+  consultationId       String
+  patientProfileId     String
+  orderingDoctorId     String
+  facilityProfileId    String
+  amountStroops        BigInt
+  testType             String
+  urgency              Urgency     @default(routine)
+  notes                String?
+  status               OrderStatus @default(issued)
+  supersedesLabOrderId String?
+  createdAt            DateTime    @default(now())
+
+  consultation    Consultation    @relation(fields: [consultationId], references: [id])
+  patientProfile  PatientProfile  @relation(fields: [patientProfileId], references: [id])
+  orderingDoctor  DoctorProfile   @relation(fields: [orderingDoctorId], references: [id])
+  facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id])
+  supersedes      LabOrder?       @relation("LabOrderCorrections", fields: [supersedesLabOrderId], references: [id])
+  correctedBy     LabOrder?       @relation("LabOrderCorrections")
+  result          LabResult?
+  paymentIntent   PaymentIntent?
+
+  @@unique([supersedesLabOrderId])
+  @@index([patientProfileId, createdAt])
+  @@index([consultationId])
 }
 
 model LabResult {
-  id            String   @id @default(uuid())
-  resultFileUrl String?
-  summary       String?
-  createdAt     DateTime @default(now())
-  // TODO: labOrderId (unique), fulfillingFacilityId
+  id                   String   @id @default(uuid())
+  labOrderId           String   @unique
+  fulfillingFacilityId String
+  resultFileUrl        String?
+  summary              String?
+  createdAt            DateTime @default(now())
+
+  labOrder           LabOrder        @relation(fields: [labOrderId], references: [id])
+  fulfillingFacility FacilityProfile @relation(fields: [fulfillingFacilityId], references: [id])
 }
 
 model FulfillmentRecord {
@@ -546,11 +862,11 @@ model FulfillmentItem {
 }
 
 model Notification {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   type      String
   payload   Json
   readAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
   // TODO: userId
 }
 
@@ -563,12 +879,8 @@ model Notification {
 // in this schema. See docs/adr/0002-stellar-escrow-for-fulfillment-payout.md
 // and docs/adr/0004-custodial-payments-v1.md.
 //
-// Deliberately decoupled from Prescription/LabOrder/FulfillmentRecord
-// below — those are still Phase 0 placeholders (Phase 4/5, not built).
-// `orderType`/`orderId` stay opaque, unvalidated references rather than
-// real foreign keys, so this phase is buildable independently rather than
-// blocked behind two unbuilt phases. Revisit once Phase 4/5 are real —
-// see ADR 0004's "Known gap."
+// One of prescriptionId/labOrderId is required by a PostgreSQL check
+// constraint. Amount and recipient are snapshotted from the issued order.
 
 enum PaymentIntentStatus {
   created
@@ -578,21 +890,19 @@ enum PaymentIntentStatus {
   failed
 }
 
-enum OrderTypeForPayment {
-  prescription
-  lab_order
-}
-
 model PaymentIntent {
-  id         String              @id @default(uuid())
-  orderType  OrderTypeForPayment
-  // Opaque — Prescription/LabOrder don't exist as real records yet
-  // (Phase 4). Not validated against anything until then.
-  orderId    String
-  status     PaymentIntentStatus @default(created)
+  id             String              @id @default(uuid())
+  prescriptionId String?             @unique
+  labOrderId     String?             @unique
+  status         PaymentIntentStatus @default(created)
+
+  prescription Prescription? @relation(fields: [prescriptionId], references: [id])
+  labOrder     LabOrder?     @relation(fields: [labOrderId], references: [id])
 
   patientProfileId String
-  patientProfile   PatientProfile @relation(fields: [patientProfileId], references: [id])
+  // Explicit RESTRICT (was the Prisma default — same SQL): a payment record
+  // must outlive any account deletion (ADR 0010).
+  patientProfile   PatientProfile  @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
   facilityId       String
   facility         FacilityProfile @relation(fields: [facilityId], references: [id])
 
@@ -604,6 +914,12 @@ model PaymentIntent {
   // testnet (see ADR 0004). Multi-asset support is a future addition,
   // not assumed by this field.
   amountStroops BigInt
+
+  // Which facility price list entry priced this intent (issue #127). The
+  // amount above is the snapshot; this code records *which* item it was for,
+  // so a later price change can be explained without re-deriving it. Null for
+  // intents priced from an admin-supplied amount.
+  catalogItemCode String?
 
   // Set once funded (create_escrow succeeds) — needed to later call
   // release/refund against the right on-chain escrow.
@@ -634,6 +950,42 @@ model WalletLink {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// Soroban event ingestion (issue #86). Cursors are per contract deployment;
+// persisted events are immutable observations used for reconciliation/alerts.
+enum EscrowChainEventState {
+  pending
+  matched
+  unmatched
+}
+
+model EscrowEventCursor {
+  contractId   String   @id
+  startLedger  Int
+  cursor       String?
+  lastLedger   Int?
+  catchupError String?
+  updatedAt    DateTime @updatedAt
+}
+
+model EscrowChainEvent {
+  id              String                @id @default(uuid())
+  eventId         String
+  contractId      String
+  ledger          Int
+  txHash          String?
+  escrowId        BigInt?
+  eventType       String
+  state           EscrowChainEventState @default(pending)
+  paymentIntentId String?
+  payload         Json?
+  detectedAt      DateTime              @default(now())
+  alertedAt       DateTime?
+
+  @@unique([contractId, eventId])
+  @@index([state, detectedAt])
+  @@index([contractId, ledger])
 }
 
 // --- Audit trail (Phase 8, issue #43) -------------------------------------

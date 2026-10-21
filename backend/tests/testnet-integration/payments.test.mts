@@ -27,6 +27,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import EmbeddedPostgres from 'embedded-postgres';
+import { createOrderFixture, createPaymentIntentForFixture } from '../integration/order-fixtures.mjs';
 import { Keypair } from '@stellar/stellar-sdk';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -41,6 +42,7 @@ const pg = new EmbeddedPostgres({
   port: PORT,
   persistent: false,
 });
+
 const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_payments_test`;
 
 // Phase 8, issue #43: fund/release/refund now take the audit actor. This
@@ -50,9 +52,22 @@ const TEST_ACTOR = { userId: null, role: null, requestId: `testnet-${runId}` };
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
-  const res = await fetch(`https://friendbot.stellar.org?addr=${encodeURIComponent(kp.publicKey())}`);
-  if (!res.ok) throw new Error(`Friendbot funding failed: ${res.status} ${await res.text()}`);
-  return kp;
+  let lastFailure: string | undefined;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const res = await fetch(`https://friendbot.stellar.org?addr=${encodeURIComponent(kp.publicKey())}`);
+      if (res.ok) return kp;
+      lastFailure = `HTTP ${res.status}`;
+      if (res.status !== 429 && res.status < 500) break;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.name : 'network error';
+    }
+    if (attempt < 4) {
+      const backoff = Math.min(1000 * 2 ** attempt, 16_000);
+      await new Promise((resolve) => setTimeout(resolve, backoff + Math.floor(Math.random() * 500)));
+    }
+  }
+  throw new Error(`Friendbot funding failed after 5 attempts (${lastFailure}).`);
 }
 
 describe('payments module against live testnet', () => {
@@ -60,6 +75,7 @@ describe('payments module against live testnet', () => {
   let paymentsService: typeof import('../../src/modules/payments/services/index.js');
   let facilityId: string;
   let patientProfileId: string;
+  let pharmacyFacilityId: string;
 
   beforeAll(async () => {
     await pg.initialise();
@@ -91,6 +107,11 @@ describe('payments module against live testnet', () => {
     });
     facilityId = facility.id;
 
+    const pharmacyUser = await prisma.user.create({ data: { email: `pharmacy-${runId}@example.com`, passwordHash: 'unused', role: 'facility' } });
+    const pharmacy = await prisma.facilityProfile.create({ data: { userId: pharmacyUser.id, name: 'Test Pharmacy', type: 'pharmacy' } });
+    pharmacyFacilityId = pharmacy.id;
+    await paymentsService.linkWallet(pharmacyFacilityId, (await fundedKeypair()).publicKey());
+
     const patientUser = await prisma.user.create({
       data: { email: `patient-${runId}@example.com`, passwordHash: 'unused', role: 'patient' },
     });
@@ -106,16 +127,12 @@ describe('payments module against live testnet', () => {
   afterAll(async () => {
     await prisma?.$disconnect();
     await pg.stop();
+    fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
   it('funds and releases a payment intent end-to-end on testnet', async () => {
-    const intent = await paymentsService.createPaymentIntent({
-      orderType: 'lab_order',
-      orderId: 'test-order-release',
-      patientProfileId,
-      facilityId,
-      amountStroops: 500_000n, // 0.05 XLM
-    });
+    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: 500_000n, tag: `release-${runId}` });
+    const intent = await createPaymentIntentForFixture(prisma, order);
     expect(intent.status).toBe('created');
 
     const funded = await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
@@ -123,18 +140,22 @@ describe('payments module against live testnet', () => {
     expect(funded.escrowId).not.toBeNull();
     expect(funded.stellarTxHash).toBeTruthy();
 
+    const transactionResponse = await fetch(`https://horizon-testnet.stellar.org/transactions/${funded.stellarTxHash}`);
+    if (!transactionResponse.ok) {
+      throw new Error(`Unable to retrieve testnet fee measurement: HTTP ${transactionResponse.status}`);
+    }
+    const transaction = (await transactionResponse.json()) as { fee_charged: string };
+    console.log(
+      `[payout privacy testnet] ${process.env.PAYOUT_PRIVACY_MODE ?? 'facility'} funding fee: ${transaction.fee_charged} stroops`,
+    );
+
     const released = await paymentsService.releasePaymentIntent(TEST_ACTOR, intent.id);
     expect(released.status).toBe('released');
   }, 60_000);
 
   it('funds and refunds a payment intent end-to-end on testnet', async () => {
-    const intent = await paymentsService.createPaymentIntent({
-      orderType: 'prescription',
-      orderId: 'test-order-refund',
-      patientProfileId,
-      facilityId,
-      amountStroops: 500_000n,
-    });
+    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: pharmacyFacilityId, kind: 'prescription', amountStroops: 500_000n, tag: `refund-${runId}` });
+    const intent = await createPaymentIntentForFixture(prisma, order);
 
     await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
     const refunded = await paymentsService.refundPaymentIntent(TEST_ACTOR, intent.id);
@@ -149,13 +170,8 @@ describe('payments module against live testnet', () => {
       data: { userId: unlinkedFacilityUser.id, name: 'Unlinked Facility', type: 'pharmacy' },
     });
 
-    const intent = await paymentsService.createPaymentIntent({
-      orderType: 'prescription',
-      orderId: 'test-order-unlinked',
-      patientProfileId,
-      facilityId: unlinkedFacility.id,
-      amountStroops: 500_000n,
-    });
+    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: unlinkedFacility.id, kind: 'prescription', amountStroops: 500_000n, tag: `unlinked-${runId}` });
+    const intent = await createPaymentIntentForFixture(prisma, order);
 
     await expect(paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id)).rejects.toThrow(/no linked wallet/);
   }, 30_000);

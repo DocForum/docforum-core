@@ -4,6 +4,9 @@ import * as paymentsController from '../controllers';
 
 export const paymentsRouter = Router();
 
+paymentsRouter.get('/mine', authenticate, requireRole('patient'), paymentsController.listMyPayments);
+paymentsRouter.get('/facility/ledger', authenticate, requireRole('facility'), paymentsController.listFacilityLedger);
+
 // Facility manages its own payout wallet.
 paymentsRouter.post(
   '/wallet-link',
@@ -14,16 +17,6 @@ paymentsRouter.post(
 );
 paymentsRouter.get('/wallet-link', authenticate, requireRole('facility'), paymentsController.getOwnWallet);
 
-// v1 (custodial, admin-triggered — see docs/adr/0004-custodial-payments-v1.md
-// "Consequences"): Phase 4/5 (Orders/Fulfillment) don't exist yet, so
-// there's no automatic trigger to wire these to. Restricted to admin
-// rather than exposed as an open action.
-//
-// Every money-moving route requires a verified address (Phase 8, issue
-// #34) — including the admin-only ones, since an admin account that can't
-// receive mail can't complete the account lifecycle (invites, deactivation
-// notices) this phase adds either.
-paymentsRouter.post('/intents', authenticate, requireRole('admin'), requireVerifiedEmail, paymentsController.createIntent);
 paymentsRouter.get('/intents/:id', authenticate, requireRole('admin'), paymentsController.getIntent);
 paymentsRouter.post(
   '/intents/:id/fund',
