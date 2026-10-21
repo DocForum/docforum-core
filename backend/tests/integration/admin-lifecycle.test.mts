@@ -356,7 +356,12 @@ describe('admin account lifecycle', () => {
     // The appointment and the slot it consumed are untouched.
     const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: booking.body.id as string } });
     expect(appointment.patientProfileId).toBeTruthy();
-    const slot = await prisma.availabilitySlot.findUniqueOrThrow({ where: { id: appointment.availabilitySlotId } });
+    // availabilitySlotId is nullable (a cancelled appointment releases its
+    // slot) — this booking is live, so it still holds the slot.
+    expect(appointment.availabilitySlotId).toBeTruthy();
+    const slot = await prisma.availabilitySlot.findUniqueOrThrow({
+      where: { id: appointment.availabilitySlotId as string },
+    });
     expect(slot.status).toBe('booked');
   });
 });

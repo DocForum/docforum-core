@@ -3,10 +3,11 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
-import { authRouter } from './modules/auth/routes';
-import { doctorsRouter } from './modules/doctors/routes';
+import { adminAuthRouter, authRouter } from './modules/auth/routes';
+import { doctorsRouter, specialtiesRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
+import { appointmentConsultationsRouter, consultationsRouter } from './modules/consultations/routes';
 import { ordersRouter } from './modules/orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
@@ -15,6 +16,7 @@ import { registerPatientExportSections } from './export-sections';
 import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
 import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
+import { referralsRouter } from './modules/referrals/routes';
 
 export function createApp() {
   const app = express();
@@ -40,9 +42,17 @@ export function createApp() {
   app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 
   app.use('/auth', authRouter);
+  // Admin surface. Currently only the auth module's session administration
+  // (Phase 8 #38) — other modules' admin routes can hang off the same mount.
+  app.use('/admin', adminAuthRouter);
   app.use('/doctors', doctorsRouter);
+  app.use('/specialties', specialtiesRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
+  // Closing a consultation is addressable from the appointment it belongs to
+  // (POST /appointments/:appointmentId/consultation) as well as from
+  // /consultations below — same service, one write path.
+  app.use('/appointments', appointmentConsultationsRouter);
   app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
@@ -56,6 +66,8 @@ export function createApp() {
   // paths match the issue's spec exactly: /admin/access-logs, /patients/me/access-log.
   app.use('/admin', adminAuditRouter);
   app.use('/patients', patientAuditRouter);
+  app.use('/referrals', referralsRouter);
+  app.use('/consultations', consultationsRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.

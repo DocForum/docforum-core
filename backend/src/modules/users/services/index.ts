@@ -13,6 +13,7 @@ export interface PublicUser {
   id: string;
   email: string;
   role: Role;
+  locale: string;
   deactivatedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -22,6 +23,7 @@ type UserRow = {
   id: string;
   email: string;
   role: Role;
+  locale: string;
   deactivatedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -32,6 +34,7 @@ function toPublicUser(user: UserRow): PublicUser {
     id: user.id,
     email: user.email,
     role: user.role,
+    locale: user.locale,
     deactivatedAt: user.deactivatedAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,

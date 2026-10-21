@@ -11,13 +11,16 @@
 // Patients never hold or sign with a wallet in this design.
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
+import type { PaymentIntent, PaymentIntentStatus } from '@prisma/client';
 import * as paymentsRepo from '../repositories';
 import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
 import { getPlatformSigners } from './platform-signers';
-import { paginate, type PatientExportSection } from '../../patients/services';
+import { resolveEscrowPayee } from './payout-privacy';
+import { getMyPatientProfile, paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
 import type { Prisma } from '@prisma/client';
+import { transitionPaymentIntentStatus } from './state-machine';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
 
 // Test seam re-exported through the service surface (same convention as the
@@ -120,6 +123,91 @@ export async function getPaymentIntent(id: string) {
   return intent;
 }
 
+export interface PaymentHistoryFilters {
+  status?: PaymentIntentStatus;
+  from?: Date;
+  to?: Date;
+  cursor?: string;
+  limit: number;
+}
+
+function encodePaymentCursor(payment: { createdAt: Date; id: string }): string {
+  return Buffer.from(`${payment.createdAt.toISOString()}|${payment.id}`, 'utf8').toString('base64url');
+}
+
+function decodePaymentCursor(cursor: string): { createdAt: Date; id: string } {
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const separator = raw.indexOf('|');
+  const createdAt = new Date(raw.slice(0, separator));
+  const id = raw.slice(separator + 1);
+  if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
+    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+  }
+  return { createdAt, id };
+}
+
+function paymentPage(filters: PaymentHistoryFilters, owner: { patientProfileId: string } | { facilityId: string }) {
+  return paymentsRepo.findPaymentHistoryPage(owner, {
+    status: filters.status,
+    from: filters.from,
+    to: filters.to,
+    before: filters.cursor ? decodePaymentCursor(filters.cursor) : undefined,
+    take: filters.limit + 1,
+  });
+}
+
+function serializePayment(payment: PaymentIntent) {
+  return {
+    id: payment.id,
+    orderType: payment.prescriptionId ? 'prescription' : 'lab_order',
+    orderId: payment.prescriptionId ?? payment.labOrderId,
+    status: payment.status,
+    amountStroops: payment.amountStroops.toString(),
+    asset: { type: 'native', code: 'XLM' },
+    escrowId: payment.escrowId?.toString() ?? null,
+    stellarTxHash: payment.stellarTxHash,
+    sorobanContractId: payment.sorobanContractId,
+    refundAfter: null,
+    createdAt: payment.createdAt,
+    updatedAt: payment.updatedAt,
+  };
+}
+
+async function listPayments(filters: PaymentHistoryFilters, owner: { patientProfileId: string } | { facilityId: string }) {
+  const rows = await paymentPage(filters, owner);
+  const page = rows.slice(0, filters.limit);
+  const last = page[page.length - 1];
+  return {
+    items: page.map(serializePayment),
+    nextCursor: rows.length > filters.limit && last ? encodePaymentCursor(last) : null,
+  };
+}
+
+export async function listMyPayments(userId: string, filters: PaymentHistoryFilters) {
+  const profile = await getMyPatientProfile(userId);
+  return listPayments(filters, { patientProfileId: profile.id });
+}
+
+export async function listFacilityPaymentLedger(userId: string, filters: PaymentHistoryFilters) {
+  const facilityId = await getOwnFacilityProfileId(userId);
+  const [page, aggregates] = await Promise.all([
+    listPayments(filters, { facilityId }),
+    paymentsRepo.aggregateFacilityPayments(facilityId, filters.from, filters.to),
+  ]);
+  const totals = new Map(aggregates.map((row) => [row.status, row._sum.amountStroops ?? 0n]));
+  return {
+    ...page,
+    totals: [
+      {
+        asset: { type: 'native', code: 'XLM' },
+        escrowed: (totals.get('escrowed') ?? 0n).toString(),
+        released: (totals.get('released') ?? 0n).toString(),
+        refunded: (totals.get('refunded') ?? 0n).toString(),
+      },
+    ],
+  };
+}
+
 /** Commits a status change and its AuditEvent together (issue #43). If the
  * row moved on concurrently, nothing is written and the caller gets 409. */
 async function commitTransition(
@@ -128,9 +216,12 @@ async function commitTransition(
   // client types may not match the expected exports.
   intent: any,
   action: string,
-  to: any,
+  to: PaymentIntentStatus,
   write: (tx: any) => Promise<any>,
 ): Promise<any> {
+  if (transitionPaymentIntentStatus(intent.status, to) !== to) {
+    throw new HttpError(409, `PaymentIntent cannot transition from '${intent.status}' to '${to}'.`);
+  }
   return prisma.$transaction(async (tx) => {
     const updated = await write(tx);
     if (!updated) {
@@ -160,7 +251,7 @@ async function commitTransition(
 /** Funds the escrow from the platform's own payer identity. The intent must be `created` and its facility must have a linked wallet (the on-chain payee). */
 export async function fundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
-  if (intent.status !== 'created') {
+  if (transitionPaymentIntentStatus(intent.status, 'escrowed') !== 'escrowed') {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
   }
 
@@ -171,11 +262,17 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   if (config.payments.assetAllowlist.length > 0 && !config.payments.assetAllowlist.includes(escrowTokenId)) {
     throw new HttpError(500, 'Configured escrow token is not in the payments asset allowlist.');
   }
+  const payee = resolveEscrowPayee({
+    facilityAddress: walletLink.stellarPublicKey,
+    mode: config.payments.payoutPrivacyMode,
+    poolAddress: config.payments.payoutPrivacyPoolAddress,
+    production: process.env.NODE_ENV === 'production',
+  });
   const client = await escrowClient(escrowContractId);
 
   const { escrowId, txHash } = await client.createEscrow({
     payer: platformPayer as unknown as EscrowSdkKeypair,
-    payee: walletLink.stellarPublicKey,
+    payee,
     token: escrowTokenId,
     amount: intent.amountStroops,
     // The PaymentIntent's own id is the opaque condition_ref — the
@@ -193,7 +290,7 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
 /** Releases the escrow to the facility's linked wallet. v1: admin-triggered (see ADR 0004 "Consequences") — no automatic FulfillmentRecord trigger yet, since that model doesn't exist. */
 export async function releasePaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
-  if (intent.status !== 'escrowed' || intent.escrowId === null) {
+  if (transitionPaymentIntentStatus(intent.status, 'released') !== 'released' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
   }
 
@@ -210,7 +307,7 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
 /** Refunds the escrow back toward the platform payer. v1: admin-triggered, same reasoning as release. */
 export async function refundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
-  if (intent.status !== 'escrowed' || intent.escrowId === null) {
+  if (transitionPaymentIntentStatus(intent.status, 'refunded') !== 'refunded' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot refund.`);
   }
 
