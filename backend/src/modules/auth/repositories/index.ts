@@ -65,6 +65,7 @@ export interface CreateSelfServeUserInput {
   passwordHash: string;
   role: Extract<Role, 'patient' | 'doctor'>;
   fullName: string;
+  locale?: string;
 }
 
 /** Creates the User row and its matching profile row in one transaction —
@@ -77,6 +78,7 @@ export function createSelfServeUser(input: CreateSelfServeUserInput) {
         phone: input.phone,
         passwordHash: input.passwordHash,
         role: input.role,
+        locale: input.locale ?? 'en',
       },
     });
 
