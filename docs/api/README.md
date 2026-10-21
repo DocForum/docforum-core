@@ -331,6 +331,39 @@ the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZ
 `PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
 `backend/src/jobs/README.md`.
 
+### Account deletion (Phase 8, issue #41)
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `DELETE /patients/me` | patient | `{ password }` | **Deletes the caller's account** (Phase 8, issue #41 — `docs/adr/0010`). `204 No Content`. Irreversible. |
+
+What deletion does: the login identity and profile are **anonymised in
+place** — email becomes `deleted+<userId>@deleted.invalid` (so the original
+address is free to sign up again, as a new empty account), phone/DOB are
+cleared, the name becomes `Deleted patient`, the password becomes unusable,
+verification tokens and the address's login-throttle bucket are deleted.
+**Appointments and payment records are kept unchanged** (clinical and
+financial records; see the ADR's retention table), still linked to the
+anonymised profile.
+
+Errors: `400` without a `password`; `403 PASSWORD_CONFIRMATION_FAILED` for a
+wrong one; `403` for non-patient roles. Wrong confirmations count against the
+account's login throttle (issue #35), so repeated guesses get `429` with
+`Retry-After`. Not gated on email verification — an unverified account can
+delete itself.
+
+Idempotent: a repeat request from the same (still unexpired) access token
+returns `204` and changes nothing; concurrent requests anonymise once.
+
+After deletion: login and `/auth/refresh` return `401`. The access token is a
+stateless JWT and stays syntactically valid until its 15-minute TTL ends (no
+revocation list yet, issue #18), but every patient route returns `404` for
+it and booking/payment routes return `403 EMAIL_NOT_VERIFIED`. Clients should
+discard their tokens on `204`.
+
+A scheduled purge later hard-deletes deleted accounts that have **no**
+retained records, `ACCOUNT_PURGE_GRACE_HOURS` (default 24) after deletion.
+
 ## Not yet implemented
 
 `patients`, `facilities`, `prescriptions`, `lab-orders`,

@@ -91,6 +91,23 @@ immediately by a new request). Sections run one at a time and the bundle is
 flushed in bounded chunks to `PatientExportChunk` (§4.11), so memory is
 bounded by one page of rows plus one chunk regardless of history length.
 
+### 3.1 Account deletion and retention holds (Phase 8, issue #41)
+
+`DELETE /patients/me` is orchestrated by `patients` and anonymises in one
+transaction: the `User` row through `auth`'s service (`anonymizeAccount`,
+which takes the caller's transaction client) and the `PatientProfile`
+through `patients`' own repository. Nothing is cascaded; see
+`docs/adr/0010` for the per-model retention table.
+
+The scheduled purge (`src/jobs/account-purge.ts`) may only hard-delete a
+*tombstone*: an anonymised patient that no module still holds records for.
+"Holds records" is answered by each owning module through its own service,
+registered in `src/retention-holds.ts` (wiring, outside `modules/`, because
+`patients` can't import modules that already import it). The RESTRICT
+foreign keys are the backstop. **A new module with patient-linked records
+must do both:** reference `PatientProfile` with `onDelete: Restrict`, and add
+a hold.
+
 ## 4. Data models
 
 Canonical source of truth: `backend/prisma/schema.prisma`. This section is the human-readable mirror — if they drift, the schema file wins and this doc should be corrected in the same PR.
@@ -111,6 +128,10 @@ User
     Accept-Language at signup, unsupported tags fall back to `en`)
   locale (string, default `en` — Phase 9 issue #133; supported language
     selected from Accept-Language at signup, unsupported tags fall back to `en`)
+  deleted_at (nullable — Phase 8 issue #41, docs/adr/0010; set once,
+    irreversibly, when the account is deleted. The row is anonymised in
+    place: email -> deleted+<id>@deleted.invalid, phone null, password
+    unusable, email_verified_at null. Login and refresh refuse it.)
   created_at, updated_at
 
 EmailVerificationToken (Phase 8 issue #34)
@@ -122,7 +143,11 @@ EmailVerificationToken (Phase 8 issue #34)
     guarantee, so two concurrent redemptions can't both win.
 
 PatientProfile (1:1 User)
-  id, user_id, full_name, date_of_birth, guardian_user_id (nullable — see PRD edge case: minors)
+  id, user_id (FK -> User, ON DELETE RESTRICT since issue #41 — was CASCADE)
+  full_name, date_of_birth, guardian_user_id (nullable — see PRD edge case: minors)
+  anonymized_at (nullable — issue #41; set with full_name -> 'Deleted patient',
+    date_of_birth/guardian_user_id -> null. The row stays so Appointment and
+    PaymentIntent keep their FK; both of those reference it ON DELETE RESTRICT.)
 
 DoctorProfile (1:1 User)
   id, user_id, full_name, verification_status (enum: pending|verified|rejected)
@@ -464,6 +489,8 @@ surfaces as `deleted_user`.
 3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final.
 4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
 5. **Discovered 2026-10-15 while building email verification (Phase 8, issue #34):** the email/SMS provider is still undecided (Phase 6, issue #17), so verification links can't actually be delivered in a hosted environment yet — `backend/src/modules/auth/services/email-dispatcher.ts` is a no-op seam until a provider is integrated. Until then `backend/scripts/mark-email-verified.mjs` is the documented out-of-band path for an operator with DB access. Not a reason to skip the guard: the guard is what makes the flow safe once delivery exists, and shipping it locked-off would just mean shipping it untested.
+
+6. **Discovered 2026-10-17 (issue #41):** after `DELETE /patients/me`, the caller's access token (stateless JWT, 15-minute TTL) still passes `authenticate` until it expires — there's no revocation list (item 4 above, issue #18). It can't reach anything: every patient route resolves the caller through `getMyPatientProfile`, which refuses an anonymised profile; booking/payments refuse it via `requireVerifiedEmail` (verification is cleared); refresh refuses `deleted_at`. Closing the window itself is #18's job. Also: Postgres reports `ON DELETE RESTRICT` as SQLSTATE 23001, which Prisma surfaces as an *unknown* request error, not `P2003` — `patients/services` `isForeignKeyRefusal` handles both; `middleware/error-handler.ts` currently maps neither to a 4xx.
 
 ### 6.2 What edge cases are we missing (architecture-level)?
 1. What happens to `AvailabilitySlot.status = 'held'` if a booking transaction fails/times out mid-flight — is there a TTL to release the hold? (Needed or slots leak into permanent limbo.)
