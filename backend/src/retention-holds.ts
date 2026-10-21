@@ -14,7 +14,7 @@ import { hasAccessLogsForPatient } from './modules/audit/services';
 import { hasOrdersForPatient } from './modules/orders/services';
 import { hasPaymentIntentsForPatient } from './modules/payments/services';
 import { hasReferralsForPatient } from './modules/referrals/services';
-import { registerRetentionHold, type RetentionHold } from './modules/patients/services';
+import { hasGuardianshipsAsGuardian, registerRetentionHold, type RetentionHold } from './modules/patients/services';
 
 export const RETENTION_HOLDS: RetentionHold[] = [
   { name: 'appointments', holds: hasAppointmentsForPatient },
@@ -22,6 +22,7 @@ export const RETENTION_HOLDS: RetentionHold[] = [
   { name: 'orders', holds: hasOrdersForPatient },
   { name: 'referrals', holds: hasReferralsForPatient },
   { name: 'access_logs', holds: hasAccessLogsForPatient },
+  { name: 'guardianships', holds: hasGuardianshipsAsGuardian },
 ];
 
 export function registerRetentionHolds(): void {

@@ -113,7 +113,7 @@ export const ANONYMIZED_PATIENT_NAME = 'Deleted patient';
 export async function anonymizeProfile(db: DbClient, profileId: string, anonymizedAt: Date): Promise<boolean> {
   const result = await db.patientProfile.updateMany({
     where: { id: profileId, anonymizedAt: null },
-    data: { fullName: ANONYMIZED_PATIENT_NAME, dateOfBirth: null, guardianUserId: null, anonymizedAt },
+    data: { fullName: ANONYMIZED_PATIENT_NAME, dateOfBirth: null, anonymizedAt },
   });
   return result.count === 1;
 }
@@ -212,4 +212,57 @@ export function findAnonymizedProfilesPage(anonymizedBefore: Date, cursor: strin
 export async function deleteAnonymizedProfile(db: DbClient, profileId: string): Promise<boolean> {
   const result = await db.patientProfile.deleteMany({ where: { id: profileId, anonymizedAt: { not: null } } });
   return result.count === 1;
+}
+
+// --- Guardians and dependents (Phase 8, issue #42, docs/adr/0011) --------
+
+/** Creates a login-less dependent profile and its guardianship together:
+ * a dependent with no guardian (or a guardianship with no dependent) is
+ * never observable. */
+export function createDependentWithGuardianship(input: {
+  guardianUserId: string;
+  fullName: string;
+  dateOfBirth: Date;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const profile = await tx.patientProfile.create({
+      data: { userId: null, fullName: input.fullName, dateOfBirth: input.dateOfBirth },
+    });
+    const guardianship = await tx.guardianship.create({
+      data: { guardianUserId: input.guardianUserId, dependentProfileId: profile.id },
+    });
+    return { profile, guardianship };
+  });
+}
+
+/** The guardian's non-revoked guardianships with their dependent profiles.
+ * Majority is applied by the service (it needs the configured age). */
+export function findUnrevokedGuardianshipsForGuardian(guardianUserId: string) {
+  return prisma.guardianship.findMany({
+    where: { guardianUserId, revokedAt: null },
+    include: { dependentProfile: true },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+/** The guardianship between this guardian and this profile, if any (revoked
+ * or not), with the dependent profile. */
+export function findGuardianship(guardianUserId: string, dependentProfileId: string) {
+  return prisma.guardianship.findUnique({
+    where: { guardianUserId_dependentProfileId: { guardianUserId, dependentProfileId } },
+    include: { dependentProfile: true },
+  });
+}
+
+/** Account deletion (issues #41/#42, docs/adr/0010 + 0011): a deleted
+ * guardian's access to their dependents ends with the account. Revoked, never
+ * deleted — the rows are the record of who had access and when. */
+export function revokeGuardianshipsOfGuardian(db: DbClient, guardianUserId: string, revokedAt: Date) {
+  return db.guardianship
+    .updateMany({ where: { guardianUserId, revokedAt: null }, data: { revokedAt } })
+    .then((result) => result.count);
+}
+
+export async function guardianHasGuardianships(guardianUserId: string): Promise<boolean> {
+  return (await prisma.guardianship.findFirst({ where: { guardianUserId }, select: { id: true } })) !== null;
 }
