@@ -121,3 +121,8 @@ export async function markStatus(
   const result = await tx.paymentIntent.updateMany({ where: { id, status: from }, data: { status: to } });
   return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
 }
+
+/** Existence check for the account-deletion retention hold (issue #41). */
+export async function patientHasPaymentIntents(patientProfileId: string): Promise<boolean> {
+  return (await prisma.paymentIntent.findFirst({ where: { patientProfileId }, select: { id: true } })) !== null;
+}

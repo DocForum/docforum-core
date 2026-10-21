@@ -141,6 +141,13 @@ model User {
   // token for the user, since none of them carry the new value — the
   // interim kill switch issue #33 asked for while #18 doesn't exist yet.
   tokenVersion             Int       @default(0)
+  // Phase 8 (issue #41, docs/adr/0010): set once, irreversibly, when the
+  // account is deleted. The row is anonymised in place (email tombstoned,
+  // phone cleared, password unusable) rather than deleted, because clinical
+  // and payment records still reference its patient profile. Refresh is
+  // refused once set. Distinct from admin deactivation (#39), which is
+  // reversible.
+  deletedAt                DateTime?
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
@@ -281,10 +288,19 @@ model PatientProfile {
   // resolved here. Don't build on top of this field assuming it means
   // anything enforced yet.
   guardianUserId String?
+  // Phase 8 (issue #41, docs/adr/0010): set when the owner deleted their
+  // account. fullName/dateOfBirth/guardianUserId are anonymised at the same
+  // moment; the row itself stays so appointments and payments keep their
+  // foreign key. getMyPatientProfile refuses an anonymised profile.
+  anonymizedAt   DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // RESTRICT, not CASCADE (issue #41): a patient's User row is never
+  // hard-deleted while this profile exists — deletion is anonymisation
+  // (ADR 0010), and an accidental user delete must fail loudly rather than
+  // take the clinical identity anchor with it.
+  user           User            @relation(fields: [userId], references: [id], onDelete: Restrict)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
   prescriptions  Prescription[]
@@ -524,7 +540,9 @@ model Appointment {
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
-  patientProfile   PatientProfile    @relation(fields: [patientProfileId], references: [id])
+  // Explicit RESTRICT (was the Prisma default — same SQL): an appointment is
+  // a clinical record and must outlive any account deletion (ADR 0010).
+  patientProfile   PatientProfile    @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
   doctorProfile    DoctorProfile     @relation(fields: [doctorProfileId], references: [id])
   availabilitySlot AvailabilitySlot? @relation(fields: [availabilitySlotId], references: [id])
   referral         Referral?         @relation("ReferralOriginatedAppointments", fields: [referralId], references: [id])
@@ -820,7 +838,9 @@ model PaymentIntent {
   labOrder     LabOrder?     @relation(fields: [labOrderId], references: [id])
 
   patientProfileId String
-  patientProfile   PatientProfile  @relation(fields: [patientProfileId], references: [id])
+  // Explicit RESTRICT (was the Prisma default — same SQL): a payment record
+  // must outlive any account deletion (ADR 0010).
+  patientProfile   PatientProfile  @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
   facilityId       String
   facility         FacilityProfile @relation(fields: [facilityId], references: [id])
 

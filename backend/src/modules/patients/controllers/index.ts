@@ -3,6 +3,8 @@ import { once } from 'node:events';
 import * as patientsService from '../services';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
+import { deleteAccountSchema } from '../validation';
+import { LoginThrottledError } from '../../auth/services';
 
 // Phase 8, issue #40 — right of access. The subject is always `req.user`;
 // no route here accepts a patient id.
@@ -48,4 +50,19 @@ export async function downloadExport(req: Request, res: Response) {
     // the connection rather than end a truncated document cleanly.
     res.destroy(err instanceof Error ? err : new Error('EXPORT_STREAM_FAILED'));
   }
+}
+
+/** Phase 8, issue #41 — account deletion (docs/adr/0010). 204 whether this
+ * call anonymised the account or it was already deleted (idempotent). */
+export async function deleteMe(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const { password } = deleteAccountSchema.parse(req.body ?? {});
+  try {
+    await patientsService.deleteMyAccount(req.user.id, password, req.ip);
+  } catch (err) {
+    // Password re-confirmation shares the login throttle (issue #35).
+    if (err instanceof LoginThrottledError) res.set('Retry-After', String(err.retryAfterSeconds));
+    throw err;
+  }
+  res.status(204).send();
 }
