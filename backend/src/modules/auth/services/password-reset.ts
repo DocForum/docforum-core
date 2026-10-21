@@ -73,7 +73,7 @@ export async function requestPasswordReset(input: RequestPasswordResetInput): Pr
   const expiresAt = new Date(Date.now() + config.passwordReset.tokenTtlMinutes * 60_000);
 
   await createPasswordResetToken({ userId: user.id, tokenHash: hashResetToken(rawToken), expiresAt });
-  await sendPasswordResetLink({ email: user.email, token: rawToken, expiresAt });
+  await sendPasswordResetLink({ email: user.email, token: rawToken, expiresAt, locale: user.locale });
 }
 
 export interface ConfirmPasswordResetInput {
