@@ -271,6 +271,30 @@ endpoint, and the table rejects UPDATE/DELETE in the database.
 Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
 return `409` when the intent changed state concurrently between the check
 and the write (previously the second write silently overwrote the first).
+
+### Payment history and facility ledger (Phase 5.5, issue #90)
+
+| Method & path | Auth | Query | Notes |
+|---|---|---|---|
+| `GET /payments/mine` | patient | `status`, `from`, `to`, `limit`, `cursor` | Lists only the caller's payment intents, newest first. |
+| `GET /payments/facility/ledger` | facility | `status`, `from`, `to`, `limit`, `cursor` | Lists only the caller facility's intents and includes SQL-aggregated lifecycle totals. |
+
+`limit` defaults to 50 and is capped at 100. `from` and `to` are inclusive
+ISO-8601 dates or date-times; `status` is one of `created`, `escrowed`,
+`released`, `refunded`, or `failed`. The opaque `nextCursor` can be passed
+as `cursor`; ordering is stable by `(createdAt DESC, id DESC)`. Facility
+totals apply the date filters but intentionally remain split across all
+three summary statuses even when the row list has a `status` filter.
+
+Rows include `orderType`, `orderId`, lifecycle status, amount, and the
+contract/escrow/transaction references needed for an explorer link. Stroop
+amounts and escrow ids are decimal strings. The current schema supports
+native XLM only, so `asset` is `{ "type": "native", "code": "XLM" }`.
+`refundAfter` is currently `null`: this custodial v1 contract path does not
+set an on-chain refund deadline, and the schema has no such field. No
+clinical order details are exposed. The facility totals object contains
+`escrowed` (pending in escrow), `released`, and `refunded` sums, each as a
+BigInt-safe decimal string.
 ## Patients (`/patients`) — `backend/src/modules/patients`
 
 ### Data export — right of access (Phase 8, issue #40)
