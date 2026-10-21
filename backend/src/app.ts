@@ -4,9 +4,10 @@ import cookieParser from 'cookie-parser';
 import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
 import { adminAuthRouter, authRouter } from './modules/auth/routes';
-import { doctorsRouter } from './modules/doctors/routes';
+import { doctorsRouter, specialtiesRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
+import { appointmentConsultationsRouter, consultationsRouter } from './modules/consultations/routes';
 import { ordersRouter } from './modules/orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
@@ -16,7 +17,6 @@ import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/aud
 import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
-import { consultationsRouter } from './modules/consultations/routes';
 
 export function createApp() {
   const app = express();
@@ -46,8 +46,13 @@ export function createApp() {
   // (Phase 8 #38) — other modules' admin routes can hang off the same mount.
   app.use('/admin', adminAuthRouter);
   app.use('/doctors', doctorsRouter);
+  app.use('/specialties', specialtiesRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
+  // Closing a consultation is addressable from the appointment it belongs to
+  // (POST /appointments/:appointmentId/consultation) as well as from
+  // /consultations below — same service, one write path.
+  app.use('/appointments', appointmentConsultationsRouter);
   app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
