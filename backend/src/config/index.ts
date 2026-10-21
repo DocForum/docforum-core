@@ -1,6 +1,11 @@
 import 'dotenv/config';
 import { parsePaymentsConfig } from './payments';
 
+const payoutPrivacyMode = process.env.PAYOUT_PRIVACY_MODE ?? 'facility';
+if (payoutPrivacyMode !== 'facility' && payoutPrivacyMode !== 'pooled') {
+  throw new Error('PAYOUT_PRIVACY_MODE must be either "facility" or "pooled".');
+}
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required env var: ${name}`);
@@ -158,5 +163,9 @@ export const config = {
     ttlHours: Number(process.env.ADMIN_INVITE_TTL_HOURS ?? 72),
     acceptUrl: process.env.ADMIN_INVITE_ACCEPT_URL ?? 'http://localhost:5173/accept-admin-invite',
   },
-  payments: parsePaymentsConfig(process.env),
+  payments: {
+    ...parsePaymentsConfig(process.env),
+    payoutPrivacyMode,
+    payoutPrivacyPoolAddress: process.env.PAYOUT_PRIVACY_POOL_ADDRESS,
+  },
 } as const;
