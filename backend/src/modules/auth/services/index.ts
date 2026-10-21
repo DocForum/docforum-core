@@ -15,6 +15,7 @@ import {
 } from '../repositories';
 import { hashPassword, verifyPassword } from './password';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from './tokens';
+import { assertSessionUsable, recordSessionUse, startSession, type SessionContext } from './sessions';
 import { generateVerificationToken, hashVerificationToken } from './verification-tokens';
 import { sendEmail } from './email-dispatcher';
 import {
@@ -29,12 +30,37 @@ import { csrfTokensMatch, generateCsrfToken } from '../../../middleware/csrf';
 import { redeemAdminInvite } from '../../users/services';
 import type { Role } from '@prisma/client';
 import type { PatientExportSection } from '../../patients/services';
+import type { Locale } from '../../../i18n';
+import { formatMessage, resolveLocale } from '../../../i18n';
 
 // Re-exported so middleware/auth.ts (shared infra, not a peer module) can
 // verify tokens through this module's service surface rather than
 // reaching into services/tokens.ts directly.
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
+
+// Password reset (Phase 8 #33) lives in its own file; re-exported here so
+// controllers keep calling a single service surface.
+export {
+  confirmPasswordReset,
+  hashResetToken,
+  requestPasswordReset,
+  resetPasswordResetRateLimits,
+  type ConfirmPasswordResetInput,
+  type RequestPasswordResetInput,
+} from './password-reset';
+
+export {
+  assertSessionUsable,
+  listSessions,
+  recordSessionUse,
+  revokeAllUserSessions,
+  revokeOtherSessions,
+  revokeSession,
+  startSession,
+  type SessionContext,
+  type SessionSummary,
+} from './sessions';
 
 // Re-exported for the same reason: tests (and, at Phase 6, the provider
 // integration) replace the outbound email sender through this module's
@@ -51,6 +77,7 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   role: Role;
+  locale: string;
   // Phase 8, issue #34 — exposed so docforum-web can gate booking UI on it
   // without a second round trip. The server-side guard is the real
   // enforcement point (`assertEmailVerified`).
@@ -68,12 +95,16 @@ export interface AuthSession {
    * It deliberately is NOT a JS-readable cookie: docforum-web is a different
    * site from this API, so it couldn't read one. */
   csrfToken: string;
+  /** The refresh-session id this pair belongs to (Phase 8 #38) — lets the
+   * client mark its own entry in `GET /auth/sessions` as "this device". */
+  sessionId: string;
 }
 
 function toPublicUser(user: {
   id: string;
   email: string;
   role: Role;
+  locale?: string;
   emailVerifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -82,26 +113,38 @@ function toPublicUser(user: {
     id: user.id,
     email: user.email,
     role: user.role,
+    locale: user.locale ?? 'en',
     emailVerifiedAt: user.emailVerifiedAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
 }
 
-function issueSession(user: { id: string; role: Role }): {
-  accessToken: string;
-  refreshToken: string;
-  csrfToken: string;
-} {
-  const payload = { sub: user.id, role: user.role };
+function issueTokensForSession(
+  user: { id: string; role: Role; tokenVersion?: number; locale?: string },
+  sessionId: string,
+): { accessToken: string; refreshToken: string; csrfToken: string } {
+  const payload = { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0, locale: user.locale ?? 'en' };
   // A fresh CSRF token per session, and per rotation — bound into the
   // refresh token so verifying it needs no server-side state (issue #37).
   const csrfToken = generateCsrfToken();
+  // `sid` rides on the refresh token only: access tokens stay stateless so
+  // no protected request needs a session lookup (issue #38's "no write
+  // hot-spot" requirement).
   return {
     accessToken: signAccessToken(payload),
-    refreshToken: signRefreshToken({ ...payload, csrf: csrfToken }),
+    refreshToken: signRefreshToken({ ...payload, csrf: csrfToken, sid: sessionId }),
     csrfToken,
   };
+}
+
+/** Starts a new session (one per login) and issues its first token pair. */
+async function issueNewSession(
+  user: { id: string; role: Role; tokenVersion?: number; locale?: string },
+  context: SessionContext,
+): Promise<{ accessToken: string; refreshToken: string; csrfToken: string; sessionId: string }> {
+  const session = await startSession({ userId: user.id, ...context });
+  return { ...issueTokensForSession(user, session.id), sessionId: session.id };
 }
 
 export interface SignupInput {
@@ -109,9 +152,10 @@ export interface SignupInput {
   email: string;
   password: string;
   fullName: string;
+  locale?: Locale;
 }
 
-export async function signup(input: SignupInput): Promise<AuthSession> {
+export async function signup(input: SignupInput, context: SessionContext = {}): Promise<AuthSession> {
   // Facility accounts are admin-invited only (PRD OQ-2) — enforced here,
   // not just in docforum-web's UI. `Extract<Role, 'patient'|'doctor'>` on
   // the type already narrows this at compile time; this is the runtime
@@ -131,6 +175,7 @@ export async function signup(input: SignupInput): Promise<AuthSession> {
     passwordHash,
     role: input.role,
     fullName: input.fullName,
+    locale: input.locale,
   });
 
   // Phase 8, issue #34: the account is created and usable for browsing
@@ -139,7 +184,7 @@ export async function signup(input: SignupInput): Promise<AuthSession> {
   // the link is redeemed.
   await issueEmailVerification(user);
 
-  const tokens = issueSession(user);
+  const tokens = await issueNewSession(user, context);
   return { user: toPublicUser(user), ...tokens };
 }
 
@@ -156,16 +201,17 @@ export interface SignupWithInviteInput {
   password: string;
 }
 
-export async function signupWithInvite(input: SignupWithInviteInput): Promise<AuthSession> {
+export async function signupWithInvite(input: SignupWithInviteInput, context: SessionContext = {}): Promise<AuthSession> {
   const passwordHash = await hashPassword(input.password);
   const user = await redeemAdminInvite({ token: input.token, email: input.email, passwordHash });
 
-  const tokens = issueSession(user);
+  const tokens = await issueNewSession(user, context);
   return {
     user: {
       id: user.id,
       email: user.email,
       role: user.role,
+      locale: user.locale,
       // No verification email is sent on the invite path — the invite itself
       // is the admin-vetted proof of address, so this stays null rather than
       // claiming a verification that never happened.
@@ -193,7 +239,7 @@ export interface LoginInput {
  * response body is identical. */
 const ABSENT_ACCOUNT_HASH = '$2b$12$z8J5gwFm9TiwC.YpeD6yguMkgakFPA8egT1KEKYiaeVkmb3CHRGXu';
 
-export async function login(input: LoginInput): Promise<AuthSession> {
+export async function login(input: LoginInput, context: SessionContext = {}): Promise<AuthSession> {
   const throttleKeys = {
     emailKey: emailThrottleKey(input.email),
     ipKey: normalizeClientIp(input.ip),
@@ -229,7 +275,7 @@ export async function login(input: LoginInput): Promise<AuthSession> {
     throw new HttpError(403, 'This account has been deactivated. Contact an administrator.');
   }
 
-  const tokens = issueSession(user);
+  const tokens = await issueNewSession(user, context);
   return { user: toPublicUser(user), ...tokens };
 }
 
@@ -237,24 +283,20 @@ export async function login(input: LoginInput): Promise<AuthSession> {
 
 /** Mints a fresh token, retires any outstanding one, and hands the link to
  * the email dispatcher. The raw token is never persisted and never logged. */
-async function issueEmailVerification(user: { id: string; email: string }): Promise<void> {
+async function issueEmailVerification(user: { id: string; email: string; locale?: string }): Promise<void> {
   const token = generateVerificationToken();
   const expiresAt = new Date(Date.now() + config.auth.emailVerification.tokenTtlMinutes * 60_000);
 
   await replaceVerificationToken({ userId: user.id, tokenHash: hashVerificationToken(token), expiresAt });
 
   const link = `${config.auth.emailVerification.landingUrl}?token=${encodeURIComponent(token)}`;
+  const locale = resolveLocale(user.locale);
+  const minutes = config.auth.emailVerification.tokenTtlMinutes;
   try {
     await sendEmail({
       to: user.email,
-      subject: 'Verify your DocForum email address',
-      text: [
-        'Confirm this email address to book appointments and pay for orders:',
-        '',
-        link,
-        '',
-        `The link expires in ${Math.round(config.auth.emailVerification.tokenTtlMinutes / 60)} hour(s).`,
-      ].join('\n'),
+      subject: formatMessage(locale, 'notifications.emailVerification.subject'),
+      text: formatMessage(locale, 'notifications.emailVerification.body', { minutes, link }),
     });
   } catch (err) {
     // A provider hiccup must not fail signup — the account exists and is
@@ -370,12 +412,45 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   // session revoked by deactivation/reactivation can't come back to life
   // through a refresh cookie either (Phase 8, issue #39).
   if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
+
+  // `tv` check: a password reset (or anything else that bumps
+  // `User.tokenVersion`) kills every refresh token issued before it. Tokens
+  // predating this field carry no `tv` and read as version 0, which is
+  // exactly right — they stay valid only while the user has never had a
+  // version bump.
+  if ((payload.tv ?? 0) !== user.tokenVersion) {
+    throw new HttpError(401, 'Invalid or expired refresh token.');
+  }
+
   if (isSessionRevoked(user.sessionsInvalidatedAt, payload.iat)) {
     throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
   }
 
-  const tokens = issueSession(user);
-  return { user: toPublicUser(user), ...tokens };
+  // Tokens minted before session records existed carry no `sid` and are
+  // rejected: the migration logs existing sessions out once, which is the
+  // honest trade for actually having a revocation store.
+  if (!payload.sid) throw new HttpError(401, 'Invalid or expired refresh token.');
+
+  await assertSessionUsable({ sessionId: payload.sid, userId: user.id });
+  await recordSessionUse(payload.sid);
+
+  // Rotation keeps the same session (same family, same `sid`) — a new
+  // session row per refresh would make "list my sessions" useless.
+  const tokens = issueTokensForSession(user, payload.sid);
+  return { user: toPublicUser(user), ...tokens, sessionId: payload.sid };
+}
+
+/** The session id behind a refresh cookie, for endpoints that need to know
+ * which of the caller's sessions is the current one. Returns undefined for
+ * a missing/unverifiable cookie rather than throwing — "which session am
+ * I" is never the reason a request should fail. */
+export function sessionIdFromRefreshToken(refreshToken: string | undefined): string | undefined {
+  if (!refreshToken) return undefined;
+  try {
+    return verifyRefreshToken(refreshToken).sid;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

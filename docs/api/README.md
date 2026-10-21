@@ -1,18 +1,18 @@
 # API docs
 
-Phases 1, 3 (referrals/consultations), 5 (facilities) and 5.5 (payments)
-endpoints are real and tested (see `backend/tests/`). Everything else is
-still unimplemented — see `ROADMAP.md` for phase order. Keep this file in sync
-with `backend/src/modules/*/routes` (AGENTS.md doc-update rule).
+Endpoints are grouped by module below. Which phases are built is tracked
+in `ROADMAP.md`, not here. Keep this file in sync with
+`backend/src/modules/*/routes` (AGENTS.md doc-update rule): when you add or
+change an endpoint, add or edit its row in that module's table, and leave
+the rest of the file alone.
 
-Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI
-spec yet — TBD, tracked informally, not blocking Phase 1.
+Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
 
 ## Auth (`/auth`) — `backend/src/modules/auth`
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
-| `POST /auth/signup` | none | `{ role: 'patient'\|'doctor', email, password, fullName }` | **`role` is restricted to `patient`/`doctor` server-side, not just in docforum-web's UI** — facility accounts are admin-invited only (PRD OQ-2). Returns `{ user, accessToken }`; sets an httpOnly refresh cookie. |
+| `POST /auth/signup` | none | `{ role: 'patient'\|'doctor', email, password, fullName }` | **`role` is restricted to `patient`/`doctor` server-side, not just in docforum-web's UI** — facility accounts are admin-invited only (PRD OQ-2). Returns `{ user, accessToken }`; sets an httpOnly refresh cookie. Stores the best supported language from `Accept-Language` (`en` fallback) as `user.locale`. |
 | `POST /auth/login` | none | `{ email, password }` | Same response shape as signup. **Throttled** (Phase 8, issue #35) — see below. |
 | `POST /auth/refresh` | refresh cookie + `X-CSRF-Token` | — | Reads the httpOnly cookie (not the body). Returns a fresh `{ user, accessToken, csrfToken }` and rotates the cookie **and** the CSRF token. `403` if the CSRF token is missing/wrong or the `Origin` isn't allowlisted. |
 | `POST /auth/logout` | `X-CSRF-Token` | — | Clears the refresh cookie. `204 No Content`; `403` without the CSRF header or from a disallowed `Origin`. |
@@ -138,12 +138,28 @@ cookie, 30-day TTL, `SameSite=None; Secure` in production and
 (`backend/src/config/index.ts`) so the refresh and CSRF cookies can never
 drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 
+Every token carries a `tv` claim (the user's `tokenVersion` at issue time).
+Bumping `User.tokenVersion` — which password reset does — invalidates every
+outstanding refresh token for that user at the next refresh. This is the
+interim kill switch for issue #33; the fuller revocation list (per-session
+revocation, #18) is still open, so a bumped-away **access** token keeps
+working until its 15-minute TTL elapses. Refresh tokens are checked
+against `tokenVersion` on every `POST /auth/refresh`.
+
 ## Doctors (`/doctors`) — `backend/src/modules/doctors`
 
 | Method & path | Auth | Notes |
 |---|---|---|
+| `GET /doctors` | none | Query: optional `specialty` slug, typo-tolerant `q`, `limit` (1–50, default 20), and keyset `cursor`. Returns `{ items: [{ id, fullName, specialties: [{ id, name, slug }] }], nextCursor }`; only verified profiles and public fields are returned. One/two-character queries use prefix matching; longer queries use `pg_trgm` similarity. The frontend fetches slot details separately. |
 | `GET /doctors/me` | doctor | Returns the caller's own `DoctorProfile`. |
+| `PUT /doctors/me/specialties` | doctor | Body `{ specialtyIds: string[] }`; replaces the caller's specialty assignments. Unknown ids return `400`. |
 | `PATCH /doctors/:doctorProfileId/verification` | admin | Body `{ status: 'pending'\|'verified'\|'rejected' }`. Manual, admin-gated per PRD FR-3 — there is no automated verification pipeline. |
+
+## Specialties (`/specialties`) — `backend/src/modules/doctors`
+
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /specialties` | none | Lists the seeded specialty catalog as `{ id, name, slug }` records. |
 
 ## Availability (`/availability`) — `backend/src/modules/availability`
 
@@ -156,25 +172,51 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
-| `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
+| `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md §5.1` and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. Load-tested under contention (Phase 9, issue #86) — see `backend/tests/load/README.md`. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
+| `GET /appointments/doctor/today` | doctor | — | Caller's scheduled appointments for the current server-local calendar day, ordered by slot start time. |
 | `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'\|'cancelled'\|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
 | `PATCH /appointments/:appointmentId/cancel` | patient (own appointment) | — | Patient-side cancellation, `scheduled` only. Same slot-release + cascade behaviour as above. |
 
-## Consultations (`/consultations`) — `backend/src/modules/consultations`
+## Consultations (`/consultations` + `/appointments`) — `backend/src/modules/consultations`
+
+Phase 2, issue #4 (close-once) and Phase 3's referral slice. The module owns
+the `Consultation` row: **one writer**, `consultationsService.createConsultation`,
+reached through three addresses — the appointment-scoped close route, the
+`/consultations` create route, and the orders flow's consultation step (which
+adds its own verified-doctor gate and delegates). Same guarantees regardless
+of the address.
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
-| `POST /consultations` | doctor (own appointment) | `{ appointmentId, outcome?, notes? }` | Issue #4's minimal slice. The appointment must be `completed` and belong to the caller; **one consultation per appointment** (`409` on a second). `outcome` is `resolved\|referred\|follow_up_needed`. |
-| `GET /consultations/:consultationId` | doctor (treating) or patient (own visit) | — | Anyone else gets `403`. |
-| `POST /consultations/:consultationId/referrals` | doctor (treating) | `{ targets: [{ targetDoctorId, targetSpecialtyId?, snapshotNotes }] }` | Issue #66 — atomic all-or-none multi-referral. Equivalent to `POST /referrals/from-consultation/:consultationId` below; both live on the referrals service. |
+| `POST /appointments/:appointmentId/consultation` | doctor (own **completed** appointment, verified email) | `{ outcome: 'resolved' \| 'referred' \| 'follow_up_needed', notes }` | Closes the appointment's consultation. `201` returns `{ consultation, appointment }`; `404` if the appointment doesn't exist **or isn't the caller's** (no existence leak); `409` if the appointment isn't `completed` or its consultation was already closed; `400` on an unknown outcome or empty/over-20k notes. |
+| `POST /consultations` | doctor (own completed appointment, verified email) | `{ appointmentId, outcome?, notes? }` | The same write with the appointment in the body — Phase 3's address for it. `201` returns the consultation. `outcome` is optional here so a record can exist before sign-off; the close route above requires it. |
+| `GET /consultations/:consultationId` | doctor (treating) or patient (own visit) | — | Anyone else gets `403`; unknown id `404`. `notes` comes back decrypted. |
+| `POST /consultations/:consultationId/referrals` | doctor (treating, verified email) | `{ targets: [{ targetDoctorId?, targetSpecialtyId?, snapshotNotes }] }` | Issue #66 — atomic all-or-none multi-referral. Equivalent to `POST /referrals/from-consultation/:consultationId` below; both live on the referrals service, so a specialty-only target is routed at creation exactly as that row describes (issue #6). |
+
+Once-only is a database guarantee, not an app-level check:
+`Consultation.appointmentId` is `UNIQUE`, so two concurrent closes can't both
+commit — the loser gets `409`. There is no amendment/edit path in v1 (an
+explicit open question, not an assumption).
+
+`notes` is clinical free text and is stored **encrypted** (AES-256-GCM
+envelope, `v1:<iv>:<tag>:<data>` — ARCHITECTURE.md §4.3, issue #46); it is
+returned in plaintext to the caller who just wrote it and to a permitted
+reader. This requires `FIELD_ENCRYPTION_KEY_V1` (32 bytes, base64) and
+optionally `FIELD_ENCRYPTION_ACTIVE_VERSION` (default `v1`) to be set; a
+missing key is a `500` on the write, not a silent plaintext write. Encrypted
+columns cannot be searched or indexed.
+
+Every write also records an `AuditEvent` (`consultation.closed`) in the same
+transaction, so the event exists iff the consultation was written.
+
 
 ## Referrals (`/referrals`) — `backend/src/modules/referrals`
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
-| `POST /referrals` | doctor | `{ sourceConsultationId, targetDoctorId, targetSpecialtyId?, snapshotNotes }` | Issue #5. Requires: the caller's own **completed** appointment's consultation, a target doctor who is verified (and verified in `targetSpecialtyId` when given), no self-referral, no duplicate target for that consultation. `targetDoctorId` is **required** — the specialty-only routing ADR (issue #6) isn't done, so an unassignable referral can't be created. Writes `snapshotNotes` as a copy. A repeat doctor/specialty anywhere in the lineage **flags** the referral (`loopFlaggedAt`) for the admin queue instead of failing; chains over `REFERRAL_MAX_HOPS` (default 4) and self-referrals are `422`. |
-| `POST /referrals/from-consultation/:consultationId` | doctor | `{ targets: [...] }` | Issue #66 — same atomic batch as the consultations route; the decision to allow multi-referral with independent lifecycles (and no bundle table) is `docs/adr/0006-multiple-referrals-per-consultation.md`. Duplicate doctor *or* specialty inside the batch, or against an existing referral from that consultation, fails the whole batch. |
+| `POST /referrals` | doctor | `{ sourceConsultationId, targetDoctorId?, targetSpecialtyId?, snapshotNotes }` | Issues #5 and #6 (routing — `docs/adr/0008-referral-routing-without-target-doctor.md`). Requires: the caller's own **completed** appointment's consultation, at least one of `targetDoctorId` / `targetSpecialtyId` (`400` otherwise), no self-referral, no duplicate target for that consultation. A named doctor must be verified (and verified in `targetSpecialtyId` when given). **A specialty-only target is routed at creation to the least-loaded eligible doctor** — verified, holds the specialty, not the referring doctor, active account; fewest `pending`+`accepted` referrals, ties broken by doctor id — and the response carries the resolved `targetDoctorId`. When nobody is eligible: `422` with `code: "REFERRAL_NO_ELIGIBLE_TARGET"` and **no referral row is written**. Writes `snapshotNotes` as a copy. A repeat doctor/specialty anywhere in the lineage **flags** the referral (`loopFlaggedAt`) for the admin queue instead of failing; chains over `REFERRAL_MAX_HOPS` (default 4) and self-referrals are `422`. |
+| `POST /referrals/from-consultation/:consultationId` | doctor | `{ targets: [...] }` | Issue #66 — same atomic batch as the consultations route; the decision to allow multi-referral with independent lifecycles (and no bundle table) is `docs/adr/0006-multiple-referrals-per-consultation.md`. Duplicate doctor *or* specialty inside the batch, or against an existing referral from that consultation, fails the whole batch. Each specialty-only target is routed independently (issue #6), a batch never routes one onto a doctor it names explicitly, and a target with no eligible candidate left fails the whole batch. |
 | `POST /referrals/:referralId/accept` | patient (the referred patient) | `{ availabilitySlotId }` | Issue #7. Conditional `pending → accepted` (exactly one concurrent accept wins → `409`), then books a real appointment against the **target doctor** through the same slot-claim path as `POST /appointments` — the patient picks the slot; no re-intake, the snapshot travels on the referral. `409` if the slot isn't the target doctor's. Writes two audit rows in the one append-only trail: `referral.accepted` (a `Referral`-typed row) and `appointment.booked` for the appointment it booked (`origin: 'referral'`), both inside the accept's own transaction. |
 | `POST /referrals/:referralId/decline` | patient (the referred patient) | — | Pending-only, terminal (`409` otherwise). Writes a `referral.declined` audit row. |
 | `GET /referrals/mine` | patient | — | `{ referrals, groupedByConsultation }` — grouped for the "one visit, several referrals" view (#66). |
@@ -221,7 +263,8 @@ design, not the final one.
 
 ## Orders (`/orders`) — `backend/src/modules/orders`
 
-Verified doctors can create a consultation with `POST /orders/consultations` (`appointmentId`, optional `outcome` and `notes`). Issue a prescription with `POST /orders/consultations/:consultationId/prescriptions` (`facilityProfileId`, and `items`), or a lab order with `POST /orders/consultations/:consultationId/lab-orders` (`facilityProfileId`, `testType`, optional `urgency` and `notes`). Either route takes **exactly one** of a positive integer `amountStroops` (manual price) or a `catalogItemCode` (facility price list, issue #127) — the resolved amount and the code are snapshotted on the payment intent. Issuance creates its payment intent in the same transaction. Corrections create superseding immutable orders: a created intent moves to the correction; an escrowed intent remains linked to the original and is handled by the existing admin refund action.
+Verified doctors can create a consultation with `POST /orders/consultations` (`appointmentId`, optional `outcome` and `notes`) — the same write as `POST /consultations` plus the verified-doctor gate, so all of its one-per-appointment/encryption/audit rules apply. Issue a prescription with `POST /orders/consultations/:consultationId/prescriptions` (`facilityProfileId`, and `items`), or a lab order with `POST /orders/consultations/:consultationId/lab-orders` (`facilityProfileId`, `testType`, optional `urgency` and `notes`). Either route takes **exactly one** of a positive integer `amountStroops` (manual price) or a `catalogItemCode` (facility price list, issue #127) — the resolved amount and the code are snapshotted on the payment intent. Issuance creates its payment intent in the same transaction. Corrections create superseding immutable orders: a created intent moves to the correction; an escrowed intent remains linked to the original and is handled by the existing admin refund action.
+
 ## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
 
 Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
@@ -244,7 +287,8 @@ started appear at the front of a new scan, not mid-way through the old one.
 Recorded today: `appointment.booked` (both the direct booking and the
 referral-origin booking the accept produces — the `origin` metadata tells
 them apart), `doctor.verification_status_changed`,
-`payment_intent.{funded,released,refunded}`, `referral.accepted`,
+`payment_intent.{funded,released,refunded}`, `consultation.closed`,
+`prescription.issued`, `lab_order.issued`, `referral.accepted`,
 `referral.declined`, `referral.reassign`, `referral.cancel` — see
 ARCHITECTURE.md §4.10. There is no write or delete
 endpoint, and the table rejects UPDATE/DELETE in the database.
@@ -252,6 +296,30 @@ endpoint, and the table rejects UPDATE/DELETE in the database.
 Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
 return `409` when the intent changed state concurrently between the check
 and the write (previously the second write silently overwrote the first).
+
+### Payment history and facility ledger (Phase 5.5, issue #90)
+
+| Method & path | Auth | Query | Notes |
+|---|---|---|---|
+| `GET /payments/mine` | patient | `status`, `from`, `to`, `limit`, `cursor` | Lists only the caller's payment intents, newest first. |
+| `GET /payments/facility/ledger` | facility | `status`, `from`, `to`, `limit`, `cursor` | Lists only the caller facility's intents and includes SQL-aggregated lifecycle totals. |
+
+`limit` defaults to 50 and is capped at 100. `from` and `to` are inclusive
+ISO-8601 dates or date-times; `status` is one of `created`, `escrowed`,
+`released`, `refunded`, or `failed`. The opaque `nextCursor` can be passed
+as `cursor`; ordering is stable by `(createdAt DESC, id DESC)`. Facility
+totals apply the date filters but intentionally remain split across all
+three summary statuses even when the row list has a `status` filter.
+
+Rows include `orderType`, `orderId`, lifecycle status, amount, and the
+contract/escrow/transaction references needed for an explorer link. Stroop
+amounts and escrow ids are decimal strings. The current schema supports
+native XLM only, so `asset` is `{ "type": "native", "code": "XLM" }`.
+`refundAfter` is currently `null`: this custodial v1 contract path does not
+set an on-chain refund deadline, and the schema has no such field. No
+clinical order details are exposed. The facility totals object contains
+`escrowed` (pending in escrow), `released`, and `refunded` sums, each as a
+BigInt-safe decimal string.
 ## Patients (`/patients`) — `backend/src/modules/patients`
 
 ### Data export — right of access (Phase 8, issue #40)

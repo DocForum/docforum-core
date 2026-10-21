@@ -46,8 +46,14 @@ what depends on what, and what's deliberately not yet scoped (and why).
   (see `AGENTS.md`'s testing rules). These are the correctness-critical
   paths in this codebase.
 - If your change starts, completes, or blocks a roadmap-tracked item,
-  update `ROADMAP.md` in the same PR. A PR that finishes an issue but
-  doesn't update the roadmap is incomplete.
+  tick or update that item's line in `ROADMAP.md` and add a changelog
+  entry as a new file in `changelog.d/`, in the same PR. Don't append to
+  the end of `ROADMAP.md`; that is what made every PR conflict. See
+  `changelog.d/README.md`.
+  A PR that finishes an issue but doesn't update the roadmap is
+  incomplete.
+- Keep doc edits to your own lines: add rows and lines, don't rewrite
+  other people's paragraphs. See `AGENTS.md` → "Shared docs".
 - Run `npm run typecheck && npm run test:all && npm run build` locally —
   this is exactly what CI checks.
 
