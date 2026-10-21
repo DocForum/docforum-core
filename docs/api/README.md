@@ -158,6 +158,13 @@ against `tokenVersion` on every `POST /auth/refresh`.
 | `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'|'cancelled'|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
 | `PATCH /appointments/:appointmentId/cancel` | patient (own appointment) | — | Patient-side cancellation, `scheduled` only. Same slot-release + cascade behaviour as above. |
 
+## Intake (`/intake`) — `backend/src/modules/intake`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /intake` | patient | `{ symptoms: [{ symptom, duration, severity }], freeTextNotes? }` | Creates structured intake for the caller only. Severity is `mild`, `moderate` or `severe`. |
+| `GET /intake/mine` | patient | — | Returns only the caller's intake history and records each read in the PHI access log. |
+
 ## Consultations (`/consultations`) — `backend/src/modules/consultations`
 
 | Method & path | Auth | Body | Notes |

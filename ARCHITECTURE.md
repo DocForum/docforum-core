@@ -95,9 +95,9 @@ bounded by one page of rows plus one chunk regardless of history length.
 
 Canonical source of truth: `backend/prisma/schema.prisma`. This section is the human-readable mirror — if they drift, the schema file wins and this doc should be corrected in the same PR.
 
-**Phase 1 models are real** (User, PatientProfile, DoctorProfile, Specialty, DoctorSpecialty, FacilityProfile, FacilityCapability, AvailabilitySlot, Appointment) — migrated via `backend/prisma/migrations/20260914110638_init/`. **Phase 3 added the real `Referral` and the `Consultation`↔appointment link** — migrated via `backend/prisma/migrations/20261016214929_referral_phase3/`; §4.3 and §4.4 describe what actually shipped, not a sketch. The audit trail (`AuditEvent`, §4.10) is the Phase 8 one (issue #43, `20261017212335_add_audit_event`) — the referral admin actions live in it rather than in a second table. Everything else below (§4.5 onward) is still the Phase 0 structural placeholder.
+**Phase 1 models are real** (User, PatientProfile, DoctorProfile, Specialty, DoctorSpecialty, FacilityProfile, FacilityCapability, AvailabilitySlot, Appointment) — migrated via `backend/prisma/migrations/20260914110638_init/`. **Phase 2 adds the real `IntakeForm`** (issue #1), migrated via `backend/prisma/migrations/20261021090000_intake_forms/`. **Phase 3 added the real `Referral` and the `Consultation`↔appointment link** — migrated via `backend/prisma/migrations/20261016214929_referral_phase3/`; §4.3 and §4.4 describe what actually shipped, not a sketch. The audit trail (`AuditEvent`, §4.10) is the Phase 8 one (issue #43, `20261017212335_add_audit_event`) — the referral admin actions live in it rather than in a second table. Everything else below (§4.5 onward) is still the Phase 0 structural placeholder.
 
-Three intentional deviations from the original sketches, all flagged in the schema file itself: `Appointment.intakeId` is deferred (nullable-by-omission, not yet a column) since `IntakeForm` doesn't exist until Phase 2; `PatientProfile.guardianUserId` is a plain string with no FK relation, since the minor/dependent consent model (§8.2.5 in PRD.md) is still an open question, not resolved here; and `Referral.snapshotIntakeId` likewise has no column yet (there is no `IntakeForm` to snapshot) — the intake half of the snapshot rule cannot be violated while there is no intake data at all, and the column must be added (as a copy) when issue #1 lands.
+Three intentional deviations from the original sketches, all flagged in the schema file itself: `Appointment.intakeId` is deferred (nullable-by-omission, not yet a column) because booking-before-intake enforcement belongs to issue #2; `PatientProfile.guardianUserId` is a plain string with no FK relation, since the minor/dependent consent model (§8.2.5 in PRD.md) is still an open question; and `Referral.snapshotIntakeId` still has no column — issue #1 creates patient-owned intake records, while a future referral change must copy the selected intake snapshot rather than point at a mutable record.
 
 ### 4.1 User / Role model
 ```
@@ -159,8 +159,9 @@ Appointment
   # cleared (Referral.appointments holds the full list).
 
 IntakeForm
-  id, patient_profile_id, symptoms (structured: array of {symptom, duration, severity}), free_text_notes
-  created_at
+  id, patient_profile_id (FK -> PatientProfile), symptoms (JSON, structured array of
+    {symptom, duration, severity}), free_text_notes, created_at
+  # Read/write through the intake module; patient history is self-only.
 ```
 
 ### 4.3 Consultation
