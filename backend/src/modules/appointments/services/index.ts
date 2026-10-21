@@ -1,6 +1,7 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import type { AppointmentStatus, Prisma } from '@prisma/client';
+import { transitionAppointmentStatus } from '../state-machine';
 import * as appointmentsRepo from '../repositories';
 import * as availabilityService from '../../availability/services';
 import * as doctorsService from '../../doctors/services';
@@ -224,7 +225,7 @@ export async function updateStatusByDoctor(userId: string, appointmentId: string
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
   if (!appointment) throw new HttpError(404, 'Appointment not found.');
   await doctorsService.assertOwnsDoctorProfile(userId, appointment.doctorProfileId);
-  if (appointment.status !== 'scheduled') {
+  if (transitionAppointmentStatus(appointment.status, newStatus) === null) {
     throw new HttpError(409, 'Only a scheduled appointment can change status.');
   }
 
