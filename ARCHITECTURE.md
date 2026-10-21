@@ -289,7 +289,24 @@ Prescription
 
 PrescriptionItem
   id, prescription_id (FK), drug_name, dosage, frequency, duration
+  # Controlled vocabulary reference (issue #69)
+  medication_id (nullable FK -> Medication)
+  # Snapshot of medication details at issuance time (append-only rule)
+  medication_name, medication_strength, medication_form, medication_route
 ```
+
+### 4.5.1 Medication catalog (issue #69)
+```
+Medication
+  id, generic_name, strength, form, route
+  external_code (nullable, unique — RxNorm or local formulary), external_system
+  created_at, updated_at
+```
+A controlled vocabulary for medications enables unambiguous dispensing (FR-10) and
+facility capability matching. `PrescriptionItem.medication_id` is optional —
+when omitted, `drug_name` is free text and the item is flagged for pharmacist
+review. The snapshot fields on `PrescriptionItem` ensure issued prescriptions
+are never affected by catalogue updates (append-only rule).
 
 ### 4.6 Lab orders (versioned, append-only)
 ```
@@ -299,10 +316,51 @@ LabOrder
   test_type, urgency (enum: routine|urgent), notes [ENCRYPTED]
   supersedes_lab_order_id (nullable, unique self-FK), created_at
 
+LabOrderTestCode
+  id, lab_order_id (FK), lab_test_id (FK)
+  # Snapshot of test code/name at issuance time (append-only rule)
+  test_code, test_name
+  created_at
+
+LabTest
+  id, code (unique — LOINC or local formulary), name
+  specimen_type, category
+  # Panel support (issue #70)
+  panel_of (self-referential — a panel contains component tests)
+  created_at, updated_at
+
 LabResult
-  id, lab_order_id (FK, unique), fulfilling_facility_id (FK), result_file_url, summary
+  id, lab_order_id (FK, unique), fulfilling_facility_id (FK)
+  result_file_url, summary
+  abnormality_flag (enum: normal|abnormal|critical — issue #72)
+  created_at
+
+LabResultAcknowledgement
+  id, lab_result_id (FK, unique), doctor_id (FK -> DoctorProfile)
+  status (enum: pending|acknowledged|escalated)
+  acknowledged_at, escalated_at
+  created_at, updated_at
+```
+`LabOrderTestCode` replaces the free-text `test_type` for structured orders,
+enabling exact capability matching (FR-13). Panels are modelled via the
+self-referential `panel_of` relation on `LabTest` — a facility that can run a
+panel can run its components. `LabResult.abnormality_flag` triggers an
+acknowledgement task for the ordering doctor; critical results unacknowledged
+after a threshold are escalated.
+
+### 4.6.1 Verifiable order tokens (issue #71, PRD §8.1.6)
+```
+OrderToken
+  id, order_type ('prescription' | 'lab_order'), order_id
+  token (unique, HMAC-SHA256 — opaque, no PHI encoded)
+  version (increments on supersede), expires_at
   created_at
 ```
+Each order version gets a signed token rendered as a QR code by the client.
+`POST /facilities/me/verify-order` verifies the token, checks facility
+eligibility (capability match), and returns minimal order summary + status.
+Superseded/expired/fulfilled orders return a clear non-valid status. Tokens are
+revoked by superseding the order (version increments, old token invalid).
 The facility and total are captured at issuance. The issuing clinician supplies
 `amount_stroops` in native XLM stroops because v1 has no facility catalog or
 pricing service. Corrections create a new immutable row. A `created` payment

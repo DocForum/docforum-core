@@ -19,6 +19,11 @@ import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
 import { registerRetentionHolds } from './retention-holds';
+import { medicationsRouter } from './modules/medications/routes';
+import { labTestsRouter } from './modules/lab-tests/routes';
+import { labOrdersRouter } from './modules/lab-orders/routes';
+import { prescriptionsRouter } from './modules/prescriptions/routes';
+import { orderTokensRouter } from './modules/order-tokens/routes';
 
 export function createApp() {
   const app = express();
@@ -75,6 +80,11 @@ export function createApp() {
   app.use('/patients', patientAuditRouter);
   app.use('/referrals', referralsRouter);
   app.use('/consultations', consultationsRouter);
+  app.use('/medications', medicationsRouter);
+  app.use('/lab-tests', labTestsRouter);
+  app.use('/lab-orders', labOrdersRouter);
+  app.use('/prescriptions', prescriptionsRouter);
+  app.use('/order-tokens', orderTokensRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.
