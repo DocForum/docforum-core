@@ -1,12 +1,20 @@
 # API docs
 
+This table is a narrative overview. The generated OpenAPI document is the
+source for the [interactive API reference](https://docforum.github.io/docforum-core/api/interactive)
+and is validated and copied into the docs site at build time. Error codes
+are collected in the [API error catalogue](https://docforum.github.io/docforum-core/api/errors).
+
 Endpoints are grouped by module below. Which phases are built is tracked
 in `ROADMAP.md`, not here. Keep this file in sync with
 `backend/src/modules/*/routes` (AGENTS.md doc-update rule): when you add or
 change an endpoint, add or edit its row in that module's table, and leave
 the rest of the file alone.
 
-Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
+Base URL: `http://localhost:4000` locally (`PORT` in `.env`). The OpenAPI
+generator is tracked by [issue #112](https://github.com/DocForum/docforum-core/issues/112);
+the docs-site integration depends on that generator and fails fast while the
+generated `docs/api/openapi.json` is absent or invalid.
 
 ## Auth (`/auth`) — `backend/src/modules/auth`
 

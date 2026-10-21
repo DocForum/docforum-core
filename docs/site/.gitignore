@@ -9,7 +9,13 @@ node_modules/
 /architecture/overview.md
 /architecture/essentials.md
 /architecture/adr/
-/api/
+!/api/
+/api/*
+!/api/interactive.md
+!/api/ApiReference.vue
+!/api/errors.md
+/api/reference.md
+/api/openapi.json
 /roadmap/
 /repos/web/readme.md
 /repos/web/architecture.md
