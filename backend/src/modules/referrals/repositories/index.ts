@@ -21,6 +21,21 @@ export function createReferral(db: DbClient, data: CreateReferralData) {
   return db.referral.create({ data });
 }
 
+/**
+ * Active load per target doctor (issue #6, ADR 0008): referrals still
+ * `pending` or `accepted`. Terminal rows are excluded on purpose — a
+ * completed/declined/expired/cancelled referral is no longer outstanding
+ * work, so it must stop steering where future referrals land. Doctors
+ * with no rows are simply absent from the result (load = 0).
+ */
+export function countActiveReferralsByTargetDoctor(db: DbClient, targetDoctorIds: string[]) {
+  return db.referral.groupBy({
+    by: ['targetDoctorId'],
+    where: { targetDoctorId: { in: targetDoctorIds }, status: { in: ['pending', 'accepted'] } },
+    _count: { _all: true },
+  });
+}
+
 export function findReferralById(db: DbClient, id: string) {
   return db.referral.findUnique({ where: { id } });
 }
