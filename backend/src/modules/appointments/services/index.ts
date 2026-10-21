@@ -70,6 +70,16 @@ export async function listMyAppointments(userId: string) {
   return appointmentsRepo.findAppointmentsForPatient(patientProfile.id);
 }
 
+/** Doctor's own scheduled appointments whose booked slot falls on the
+ * current server-local calendar day. */
+export async function listDoctorAppointmentsToday(userId: string) {
+  const doctor = await doctorsService.getMyDoctorProfile(userId);
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return appointmentsRepo.findAppointmentsForDoctorOnDay(doctor.id, start, end);
+}
+
 /** This module's contribution to the patient data export (issue #40).
  * Slot times and the doctor's name are fetched per page through the
  * availability and doctors services — never by joining their tables. */

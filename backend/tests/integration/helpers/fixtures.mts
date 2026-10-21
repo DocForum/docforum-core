@@ -211,7 +211,13 @@ export async function consultationRitual(
 export async function createReferral(
   app: App,
   doctor: { accessToken: string },
-  input: { sourceConsultationId: string; targetDoctorId: string; targetSpecialtyId?: string; snapshotNotes: string },
+  input: {
+    sourceConsultationId: string;
+    // Either a named doctor or a specialty (issue #6 routing, ADR 0008).
+    targetDoctorId?: string;
+    targetSpecialtyId?: string;
+    snapshotNotes: string;
+  },
 ) {
   return request(app).post('/referrals').set('Authorization', `Bearer ${doctor.accessToken}`).send(input);
 }

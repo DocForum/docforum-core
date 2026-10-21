@@ -100,3 +100,17 @@ export async function listDoctorSpecialtyIds(doctorProfileId: string) {
   const specialties = await doctorsRepo.findDoctorSpecialties(doctorProfileId);
   return specialties.map((link) => link.specialtyId);
 }
+
+/**
+ * Eligible recipients for a specialty-only referral (issue #6, ADR 0008):
+ * verified doctors holding the specialty, excluding the given ids (the
+ * referring doctor, plus anything the caller has already targeted in the
+ * same batch) and doctors whose account is deactivated. The referrals
+ * module decides *which* of these receives the referral — this module
+ * only owns the definition of eligibility, so the manual and routed
+ * paths cannot drift apart.
+ */
+export async function listEligibleReferralTargets(specialtyId: string, excludeDoctorProfileIds: string[] = []) {
+  const rows = await doctorsRepo.findEligibleDoctorsForSpecialty(specialtyId, excludeDoctorProfileIds);
+  return rows.map((row) => row.doctorProfileId);
+}
