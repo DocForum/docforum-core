@@ -1,6 +1,6 @@
 Phase 2 (issue #4): an appointment's consultation can be closed exactly
 once. `Consultation` is one-to-one with its `Appointment`
-(`Consultation.appointmentId` UNIQUE, `docs/adr/0008`), so "closed once" is
+(`Consultation.appointmentId` UNIQUE, `docs/adr/0009`), so "closed once" is
 a database constraint (`P2002` → `409`) rather than an app-level
 read-then-write check. All three writers — `POST /consultations`,
 `POST /appointments/:appointmentId/consultation`, and the orders flow's

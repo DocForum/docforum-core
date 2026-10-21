@@ -1,4 +1,4 @@
-# ADR 0008: Consultation is close-once, enforced by a unique appointment FK
+# ADR 0009: Consultation is close-once, enforced by a unique appointment FK
 
 Status: Accepted
 Date: 2026-10-20

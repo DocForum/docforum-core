@@ -475,7 +475,7 @@ model Appointment {
   // the one it produced.
   referralResultOf Referral?         @relation("ReferralResultingAppointment")
   // Phase 2 (issue #4): the appointment's consultation. 1:1 — the uniqueness
-  // is Consultation.appointmentId UNIQUE (docs/adr/0008), so this side is a
+  // is Consultation.appointmentId UNIQUE (docs/adr/0009), so this side is a
   // plain back-relation.
   consultation     Consultation?
 
@@ -531,7 +531,7 @@ model IntakeForm {
 model Consultation {
   id            String               @id @default(uuid())
   // unique = "a consultation is closed once per appointment", enforced by the
-  // database rather than by a read-then-write check (docs/adr/0008).
+  // database rather than by a read-then-write check (docs/adr/0009).
   appointmentId String               @unique
   // Nullable so a consultation can exist before sign-off (Phase 3's referral
   // slice); the close routes require it, so a closed record always has one.
@@ -565,9 +565,11 @@ model Referral {
   // loop detection its lineage.
   sourceConsultationId      String
   referringDoctorId         String
-  // v1 requires a concrete target doctor — the routing rule for "a
-  // specialty, no specific doctor" is an unresolved design gap
-  // (ARCHITECTURE.md §6.1.2, issue #6), not silently defaulted here.
+  // Always a concrete doctor: a "specialty, no specific doctor" referral
+  // is routed to one at creation (least-loaded eligible doctor — issue
+  // #6, docs/adr/0008). The column stays NOT NULL on purpose, so an
+  // unassigned referral cannot exist; when nobody is eligible the
+  // creation fails instead of writing a row.
   targetDoctorId            String
   // Optional denormalised label of the target specialty, used by the
   // loop guard and admin views. Not a substitute for issue #23's real

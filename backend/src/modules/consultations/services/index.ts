@@ -35,7 +35,7 @@ export interface ConsultationInput {
  * - The one-consultation-per-appointment guarantee is enforced at the DB
  *   level by `Consultation.appointmentId UNIQUE`, not by a check-then-write
  *   here. Two concurrent closes both reach the INSERT; exactly one commits,
- *   the loser gets P2002 and a 409 (docs/adr/0008).
+ *   the loser gets P2002 and a 409 (docs/adr/0009).
  * - "Doctor-only, own-appointment-only" is enforced by reading the
  *   Appointment through appointmentsService (the only legal cross-module
  *   seam per AGENTS.md hard rule 4): that service returns null for an
