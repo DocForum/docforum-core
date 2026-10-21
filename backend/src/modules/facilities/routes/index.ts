@@ -67,9 +67,10 @@ facilitiesRouter.delete(
 // ── Accept invite ──────────────────────────────────────────────────────
 
 // POST /facilities/invites/accept — accept an invite (new user or existing user)
-// No facilityId in path — token contains facility info, or we look it up
+// Deliberately NOT behind `authenticate`: a brand-new staff member has no
+// account yet, so they cannot present an access token. The invite token is
+// the credential here.
 facilitiesRouter.post(
   '/invites/accept',
-  authenticate,
   acceptInvite,
 );

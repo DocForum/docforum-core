@@ -171,3 +171,16 @@ against `tokenVersion` on every `POST /auth/refresh`.
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
 | `POST /referrals` | doctor | `{ sourceConsultationId, targetDoctorId, targetSpecialtyId?, snapshotNotes }` | Issue #5. Requires: the caller's own **completed** appointment
+
+## Facilities (`/facilities`) — `backend/src/modules/facilities`
+
+Phase 5, issue #75 — fixed roles (`owner`/`staff`), no RBAC matrix. Every route except `accept` needs `authenticate` plus facility membership; the `:facilityId` routes additionally require `owner` (staff get `403`).
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `GET /facilities/:facilityId/members` | facility owner | — | Lists members with `{ id, email, role }`. |
+| `DELETE /facilities/:facilityId/members/:userId` | facility owner | — | `204`. Refuses with `400` for the last owner and `404` if the user isn't in *this* facility (a membership never crosses facilities — `FacilityMember.userId` is unique). |
+| `POST /facilities/:facilityId/invites` | facility owner | `{ email, role? }` | `201 { token, tokenHash }` — the raw token is returned exactly once; only its SHA-256 hash is stored. `role` may only be `staff` (ownership transfer is out of scope). Re-inviting replaces the outstanding token. |
+| `GET /facilities/:facilityId/invites` | facility owner | — | Pending (unconsumed) invites. |
+| `DELETE /facilities/:facilityId/invites/:tokenHash` | facility owner | — | `204` — marks the invite consumed. |
+| `POST /facilities/invites/accept` | none | `{ token, password }` | Redeems the token: `200 { user, isNew, facilityMember }`. **No access token required** — a new staff member has no account yet. Single-use via a conditional update, so two concurrent accepts can't both win; `400 INVALID_INVITE_TOKEN` (unknown/used) or `400 INVITE_TOKEN_EXPIRED`. Creates the account with the `facility` role (no profile row — the membership *is* the `FacilityMember` row). No session is issued; the caller logs in separately. |

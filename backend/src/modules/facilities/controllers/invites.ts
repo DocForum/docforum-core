@@ -1,10 +1,7 @@
 import type { Request, Response } from 'express';
-import { authenticate, requireRole } from '../../../middleware/auth';
-import { requireFacility, requireFacilityOwner } from '../../../middleware/facility-guard';
-import { FacilityService, InviteService } from '../services';
 import { HttpError } from '../../../http-error';
+import { InviteService } from '../services';
 
-const facilityService = new FacilityService();
 const inviteService = new InviteService();
 
 export async function createInvite(req: Request, res: Response) {
@@ -12,7 +9,7 @@ export async function createInvite(req: Request, res: Response) {
   const { email, role } = req.body;
 
   try {
-    const { token, tokenHash } = await inviteService.createInvite(facilityId, email, role as ('owner' | 'staff'));
+    const { token, tokenHash } = await inviteService.createInvite({ facilityId, email, role });
     res.status(201).json({ token, tokenHash });
   } catch (err: any) {
     if (err instanceof HttpError) {
@@ -30,7 +27,7 @@ export async function listInvites(req: Request, res: Response) {
 
 export async function revokeInvite(req: Request, res: Response) {
   const facilityId = (req as any).facility!.id;
-  const { tokenHash } = req.params;
+  const tokenHash = String(req.params.tokenHash);
 
   try {
     await inviteService.revokeInvite(facilityId, tokenHash);
@@ -44,10 +41,10 @@ export async function revokeInvite(req: Request, res: Response) {
 }
 
 export async function acceptInvite(req: Request, res: Response) {
-  const { token, password, fullName } = req.body;
+  const { token, password } = req.body;
 
   try {
-    const result = await inviteService.acceptInvite(token, password, fullName);
+    const result = await inviteService.acceptInvite(token, password);
     res.status(200).json(result);
   } catch (err: any) {
     if (err instanceof HttpError) {

@@ -143,6 +143,10 @@ model User {
   patientProfile  PatientProfile?
   doctorProfile   DoctorProfile?
   facilityProfile FacilityProfile?
+  // Phase 5 (issue #75): a user's facility membership lives here, not on
+  // FacilityProfile. Unique on userId, so this is 1:0..1 — a user belongs to
+  // at most one facility, enforced by the DB unique constraint.
+  facilityMember FacilityMember?
   refreshSessions RefreshSession[]
 
   emailVerificationTokens EmailVerificationToken[]
@@ -401,7 +405,12 @@ model DoctorSpecialty {
 
 model FacilityProfile {
   id        String       @id @default(uuid())
-  userId    String
+  // Kept @unique (the pre-#75 1:1 owner link): it is the facility's original
+  // owner account, and every existing login resolves its profile this way.
+  // Additional staff accounts are FacilityMember rows, keyed by their own
+  // userId — dropping this constraint is not needed for #75 and would loosen
+  // a guardrail for no benefit.
+  userId    String       @unique
   name      String
   type      FacilityType
   createdAt DateTime     @default(now())
@@ -414,6 +423,44 @@ model FacilityProfile {
   labResults     LabResult[]
   paymentIntents PaymentIntent[]
   walletLink     WalletLink?
+  members        FacilityMember[]
+  invites        FacilityInvite[]
+}
+
+// Phase 5 (issue #75): one row per staff account with access to a facility,
+// so a pharmacy with several pharmacists no longer shares one login and every
+// fulfillment action can be attributed to a person (PRD §7 auditability).
+// Exactly two fixed roles — no configurable permissions matrix.
+// `userId` is unique: a user belongs to at most one facility (DB-level).
+model FacilityMember {
+  id         String       @id @default(uuid())
+  userId     String       @unique
+  facilityId String
+  role       FacilityRole @default(staff)
+  createdAt  DateTime     @default(now())
+
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  facility FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+
+  @@index([facilityId])
+}
+
+// Phase 5 (issue #75): staff invitations. Tokens are random, stored only as
+// a SHA-256 hash (tokenHash), single-use (consumedAt) and expire (expiresAt).
+model FacilityInvite {
+  id         String       @id @default(uuid())
+  facilityId String
+  email      String
+  role       FacilityRole @default(staff)
+  tokenHash  String       @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime     @default(now())
+
+  facility FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+
+  @@index([facilityId])
+  @@index([email])
 }
 
 model FacilityCapability {

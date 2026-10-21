@@ -20,7 +20,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
-`User` → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
+`User` → `PatientProfile | DoctorProfile | FacilityProfile` (the facility's original owner account) `| FacilityMember` (Phase 5, issue #75 — a user's facility membership: unique `user_id` = at most one facility, fixed `owner|staff` role, plus hashed/expiring/single-use `FacilityInvite` rows); `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` (`availability_slot_id` nullable — a cancelled appointment releases its slot; booking safety is `claimOpenSlot`, not that column) → `IntakeForm`, `Consultation`
 `Consultation` → (outcome=referred) → `Referral` (snapshot! required `target_doctor_id`, self-FK lineage `parent_referral_id`, no-show/loop/admin flags) → new `Appointment`

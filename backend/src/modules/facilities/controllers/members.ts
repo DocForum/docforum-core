@@ -1,8 +1,6 @@
 import type { Request, Response } from 'express';
-import { authenticate, requireRole } from '../../../middleware/auth';
-import { requireFacility, requireFacilityOwner } from '../../../middleware/facility-guard';
-import { FacilityService } from '../services';
 import { HttpError } from '../../../http-error';
+import { FacilityService } from '../services';
 
 const facilityService = new FacilityService();
 
@@ -14,7 +12,7 @@ export async function listMembers(req: Request, res: Response) {
 
 export async function removeMember(req: Request, res: Response) {
   const facilityId = (req as any).facility!.id;
-  const { userId } = req.params;
+  const userId = String(req.params.userId);
   const removerId = req.user!.id;
 
   try {

@@ -158,5 +158,11 @@ export const config = {
     ttlHours: Number(process.env.ADMIN_INVITE_TTL_HOURS ?? 72),
     acceptUrl: process.env.ADMIN_INVITE_ACCEPT_URL ?? 'http://localhost:5173/accept-admin-invite',
   },
+  // Facility staff invites (Phase 5, issue #75). Only the SHA-256 hash of an
+  // invite token is stored (see FacilityInvite in schema.prisma); this is how
+  // long the raw token stays redeemable. Defaults to the admin-invite 72h.
+  facilityInvites: {
+    ttlMinutes: Number(process.env.FACILITY_INVITE_TTL_MINUTES ?? 4320),
+  },
   payments: parsePaymentsConfig(process.env),
 } as const;

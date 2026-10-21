@@ -66,15 +66,23 @@ export class FacilityService {
       throw new HttpError(403, 'Only facility owners can remove members.');
     }
 
+    // Resolve the target within *this* facility first — deleting by userId
+    // alone would let an owner of one facility remove a member of another.
+    const target = await db.facilityMember.findFirst({
+      where: { facilityId, userId },
+    });
+    if (!target) {
+      throw new HttpError(404, 'Member not found in this facility.');
+    }
+
     // Check we're not removing the last owner
     const ownerCount = await db.facilityMember.count({
       where: { facilityId, role: 'owner' },
     });
-    if (ownerCount <= 1 && (await this.isOwner(facilityId, removerUserId))) {
+    if (ownerCount <= 1 && target.role === 'owner') {
       throw new HttpError(400, 'Cannot remove the last owner of a facility.');
     }
 
-    // userId is globally unique (@@unique([userId])), so delete by userId only
     await db.facilityMember.delete({ where: { userId } });
   }
 }

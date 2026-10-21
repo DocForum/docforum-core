@@ -1,11 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { HttpError } from '../http-error';
 import { prisma } from '../db/prisma-client';
-import type { Role } from '@prisma/client';
+import type { FacilityRole } from '@prisma/client';
 
 export interface FacilityContext {
   facilityId: string;
-  memberRole: Role | null;
+  memberRole: FacilityRole | null;
   isOwner: boolean;
   isMember: boolean;
 }
@@ -28,8 +28,11 @@ export async function requireFacility(
     throw new HttpError(401, 'Authentication required.');
   }
 
-  // Get facilityId from route params (e.g. /facilities/:facilityId/...)
-  const facilityId = (req as any).facilityId;
+  // Get facilityId from the route params (e.g. /facilities/:facilityId/...).
+  // `requireFacilityId` may have attached it already for non-REST paths; the
+  // param is the normal case, so fall back to it rather than 400 on every
+  // /facilities/:facilityId/* route.
+  const facilityId = (req as any).facilityId ?? req.params.facilityId;
   if (!facilityId) {
     throw new HttpError(400, 'Facility ID is required.');
   }
