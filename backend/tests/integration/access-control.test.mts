@@ -55,6 +55,9 @@ const KNOWN_ROUTES = [
   'POST /availability/doctors/:doctorProfileId/slots/generate',
   'POST /appointments',
   'GET /appointments/mine',
+  'POST /appointments/:appointmentId/consultation',
+  'POST /consultations',
+  'GET /consultations/:consultationId',
   'POST /payments/wallet-link',
   'GET /payments/wallet-link',
   'POST /orders/consultations',
@@ -106,6 +109,15 @@ const ACCESS_MATRIX: MatrixRow[] = [
   // Appointments — POST is patient-only (verified email); GET /mine is patient-only
   { method: 'POST', path: '/appointments', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } }, // patient unverified → 403 EMAIL_NOT_VERIFIED
   { method: 'GET', path: '/appointments/mine', expected: { anon: 401, patient: 200, doctor: 403, facility: 403, admin: 403 } },
+
+  // Consultations (issue #4) — closing is doctor-only, verified-email gated
+  // and only for the doctor's own appointment. The seeded doctor is
+  // unverified, so the email gate answers 403 before the service can answer
+  // 404; the own-appointment 404 (never a 403 that would confirm the
+  // appointment exists) is asserted in consultation.test.mts.
+  { method: 'POST', path: '/appointments/:appointmentId/consultation', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'POST', path: '/consultations', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'GET', path: '/consultations/:consultationId', expected: { anon: 401, patient: 404, doctor: 404, facility: 404, admin: 404 } },
 
   // Orders: doctor-only and verified-email gated.
   { method: 'POST', path: '/orders/consultations', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
@@ -247,9 +259,15 @@ describe('Access-control test suite: who may read intake, consultation and payme
     expect(true).toBe(true);
   });
 
-  it('non-participating doctors cannot read a consultation (IDOR guard)', async () => {
-    // TODO(issue #3/#4): once consultation routes exist, seed two doctors
-    // and assert doctor B gets 403/404 on doctor A's consultation.
+  it('non-participating doctors cannot act on a consultation (IDOR guard)', async () => {
+    // The consultation write paths are covered by the matrix rows above (an
+    // unverified doctor is stopped by the email gate; a verified non-owner
+    // gets 404, never a 403 that would confirm the appointment exists). Both
+    // are asserted end-to-end — including a real second doctor being refused
+    // on doctor A's appointment — in tests/integration/consultation.test.mts.
+    // The read route (`GET /consultations/:id`) is in the matrix for
+    // unauthenticated access only; its owner/patient scoping needs seeded
+    // rows, which consultation.test.mts also covers.
     expect(true).toBe(true);
   });
 });

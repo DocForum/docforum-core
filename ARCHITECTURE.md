@@ -54,7 +54,7 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `lab-orders` — lab order issuance and versioning.
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
-- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking (both the direct and the referral-origin path), doctor verification, payment fund/release/refund, the patient's referral accept/decline, and the referral admin actions (Phase 3, issue #68 — `referral.reassign` / `referral.cancel`, recorded as `entityType: 'Referral'` rows; there is no second, referral-specific audit table). **Phase 4 transitions (prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
+- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking (both the direct and the referral-origin path), consultation closing (Phase 2, issue #4), doctor verification, payment fund/release/refund, the patient's referral accept/decline, and the referral admin actions (Phase 3, issue #68 — `referral.reassign` / `referral.cancel`, recorded as `entityType: 'Referral'` rows; there is no second, referral-specific audit table). **Phase 4 transitions (fulfillment) must call `record()` in the same transaction when they're built** — prescriptions and lab orders already do. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
 
 ### 3.1 Patient data export registry (Phase 8, issue #40)
 
@@ -107,6 +107,10 @@ User
     Backfilled to created_at for pre-existing rows in the
     add_email_verification migration, so accounts from before this phase
     are treated as verified)
+  locale (string, default `en` — Phase 9 issue #133; selected from
+    Accept-Language at signup, unsupported tags fall back to `en`)
+  locale (string, default `en` — Phase 9 issue #133; supported language
+    selected from Accept-Language at signup, unsupported tags fall back to `en`)
   created_at, updated_at
 
 EmailVerificationToken (Phase 8 issue #34)
@@ -169,18 +173,23 @@ Consultation
   id, appointment_id (FK, unique — one consultation per appointment;
     a re-visit is a new appointment, not a second row)
   notes [ENCRYPTED — Phase 8 issue #46, see §2 field-level encryption row]
-  outcome (enum: resolved|referred|follow_up_needed)
+  outcome (enum: resolved|referred|follow_up_needed, nullable in the schema —
+    the close routes require it, so a closed record has one; see below)
   created_at, updated_at
   referrals: Referral[]   # children — the lineage loop detection walks
 ```
+**Implemented 2026-10-20 (Phase 2, issue #4):** `appointment_id UNIQUE` is what makes a consultation closable **once** — a second concurrent close loses at the INSERT, not at an app-level check (see docs/adr/0009). There is no amendment/edit path in v1. `notes` is encrypted on write via `encryptField()` (requires `FIELD_ENCRYPTION_KEY_V1`), so the first writer to a clinical free-text column honours the rule below rather than starting a plaintext precedent; reads decrypt in the consultations service.
+
+The row has exactly one writer — `consultationsService.createConsultation` — reachable from three addresses so that no path can bypass the uniqueness, encryption or audit rules: `POST /consultations` (appointment in the body; Phase 3's referral slice, `outcome` optional so a record can exist before sign-off), `POST /appointments/:id/consultation` (Phase 2's close route, `outcome` + `notes` required), and the orders flow's consultation step (which adds its own verified-doctor gate and then delegates). All of them require the appointment to be `completed` and to belong to the calling doctor, and all of them write the same `consultation.closed` audit event in the same transaction.
+
 **Encryption note:** `notes` is stored as an AES-256-GCM envelope (`v1:<iv>:<tag>:<data>`) via `backend/src/utils/field-encryption.ts`. Because it's encrypted, it **cannot be searched or indexed** — any future full-text search over consultation notes must decrypt in the application layer or use a separate searchable index, not a Postgres index on this column. Key rotation: `backend/scripts/rotate-field-keys.mjs` re-encrypts in batches.
 
-Real as of Phase 3 (issue #5's minimal slice): created by the treating
-doctor against their own **completed** appointment, and readable only by
-that doctor and the patient of the underlying appointment. What is still
-open is issue #4's fuller workflow — sign-off, addenda, a doctor editing
-notes after the fact — which is exactly why the referral snapshot (§4.4)
-exists rather than referrals reading this row live.
+Readable (`GET /consultations/:id`) only by the treating doctor and the
+patient of the underlying appointment; anyone else gets `403`, and the
+stored ciphertext never leaves the module. What is still open is issue
+#4's fuller workflow — sign-off, addenda, a doctor editing notes after the
+fact — which is exactly why the referral snapshot (§4.4) exists rather
+than referrals reading this row live.
 
 ### 4.4 Referral
 ```
@@ -214,9 +223,12 @@ has no column yet — see the §4 intro note.
 The other six fields are all Phase 3 issue work: `parentReferralId` +
 `loop_flagged_*` are loop detection (#65), `no_show_count` +
 `referring_doctor_notified_at` are the no-show cascade (#67),
-`cancelled_reason` is admin override (#68), and `target_doctor_id` being
-**required** is the explicit v1 re-scope of the routing gap (§6.1.2 — the
-ADR for specialty-only routing is still owed, issue #6).
+`cancelled_reason` is admin override (#68). `target_doctor_id` being
+**required** is now backed by a real routing rule rather than a scope
+cut (issue #6, `docs/adr/0008-referral-routing-without-target-doctor.md`):
+a specialty-only referral is resolved to the least-loaded eligible
+doctor *at creation*, so the resolved id is always what this column
+holds and nothing is ever created unassigned.
 
 Status transitions that exist today:
 `pending → accepted` (patient accept, conditional UPDATE — the same
@@ -338,6 +350,7 @@ that makes the trail append-only covers them too.
 
 Transitions recorded (action: from → to):
 - `appointment.booked`: `null → scheduled` (metadata: slot id, doctor profile id, origin). Written by the appointments module for **both** booking paths — a direct booking and a referral-origin booking (the accept path), which is what the `origin` metadata distinguishes; there is no way to create an appointment that leaves no trail.
+- `consultation.closed`: `null → outcome` (metadata: appointment id; never the notes — that's PHI). Written by the consultations module for every consultation write, whichever route addressed it (`POST /consultations`, `POST /appointments/:id/consultation`, or the orders flow).
 - `doctor.verification_status_changed`: previous → new verification status (read under `FOR UPDATE`; a no-op set records nothing)
 - `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
 - `referral.accepted`: `pending → accepted` (metadata: the appointment id the accept booked). Written by the referrals module in the same transaction as the accept, so the patient's decision and the appointment it produced are both recorded or neither is.
@@ -429,12 +442,12 @@ surfaces as `deleted_user`.
 3. On success, `Appointment` is created referencing the now-`booked` slot.
 
 ### 5.2 Referral (Phase 3 — issues #5/#7/#65–#68)
-1. Doctor records a `Consultation` against their own **completed** appointment, then creates one or more `Referral`s from it (`POST /referrals`, or the atomic batch `POST /referrals/from-consultation/:id` / `POST /consultations/:id/referrals`) — each target gets its own `snapshot_notes` copy. Multi-referral is a deliberate decision recorded in `docs/adr/0006-multiple-referrals-per-consultation.md`: independent lifecycles born in one transaction, grouped only for presentation. v1 requires a **concrete, verified** `target_doctor_id`; a "specialty, no doctor" referral is the still-open routing gap (§6.1.2), not something this path silently defaults.
+1. Doctor records a `Consultation` against their own **completed** appointment, then creates one or more `Referral`s from it (`POST /referrals`, or the atomic batch `POST /referrals/from-consultation/:id` / `POST /consultations/:id/referrals`) — each target gets its own `snapshot_notes` copy. Multi-referral is a deliberate decision recorded in `docs/adr/0006-multiple-referrals-per-consultation.md`: independent lifecycles born in one transaction, grouped only for presentation. A target is a **named verified doctor** *or* **a specialty**, and a specialty-only target is routed to a concrete doctor at creation (`docs/adr/0008`): least-loaded among eligible doctors — verified, holds the specialty, not the referring doctor, active account — where load counts that doctor's `pending` + `accepted` referrals; ties break on doctor id. Zero eligible doctors is a `422 REFERRAL_NO_ELIGIBLE_TARGET` and writes nothing, so an unassigned referral cannot exist.
 2. Creation is one transaction: gates (own consultation, completed appointment, no self-referral, target verified [+ in specialty], no duplicate target in this consultation), lineage lookup (`parent_referral_id` via consultation → appointment → referral), then the loop walk (PRD §8.1.2 / issue #65) — a repeat doctor/specialty in the chain **flags** the referral for the admin queue rather than blocking it; exceeding the hop limit (`REFERRAL_MAX_HOPS`, default 4) hard-rejects with 422.
 3. Patient must **accept** (PRD OQ-3): `POST /referrals/:id/accept` does a conditional `pending → accepted` UPDATE (exactly one concurrent accept wins) and books a real `Appointment` against the target doctor through the appointments service — same `claimOpenSlot` path as a direct booking, `origin: 'referral'`, patient picks the slot, and no re-intake happens because the snapshot travels on the referral. Decline is `pending → declined`, terminal.
 4. The appointment's own status transition then cascades back into the referral inside the same transaction (issue #67): `completed →` referral `completed`; `cancelled →` referral back to `pending` (slot released, re-bookable, same snapshot); `no_show →` count++ and back to `pending`, except at `NO_SHOW_EXPIRY_THRESHOLD` (2) where it becomes `expired` with `referring_doctor_notified_at` set. Every one of these writes is conditional on the referral still being `accepted` and still pointing at that appointment, so a hook firing twice is a no-op.
 5. Admin override (issue #68): `GET /referrals/admin/queue` (stuck/aged/loop-flagged, with a derived reason), reassign a **pending** referral to another verified doctor (target column only — snapshot untouched), cancel a `pending`/`accepted` referral with a reason (closing its live appointment through the appointments service). Reassign and cancel each write an `AuditEvent` (§4.10), readable at `GET /referrals/admin/:id/audit-events`.
-6. The "zero verified doctors in that specialty" dead end (PRD edge case 8.2.2) **cannot be constructed** in v1: a referral cannot exist without naming a verified target doctor (and being verified in the claimed specialty when one is claimed). The specialty-only case — where the patient would wait for *any* specialist — remains the §6.1.2 routing ADR (issue #6), not an implemented "waiting" state.
+6. The "zero verified doctors in that specialty" dead end (PRD edge case 8.2.2) is surfaced **at creation**: routing finds no eligible doctor, the call fails `422 REFERRAL_NO_ELIGIBLE_TARGET`, and the referring doctor is told before the patient is handed anything. What is still not built is the patient-facing "waiting for a specialist" state — that needs a target-less referral to exist, which ADR 0008 deliberately rejects. A routed referral whose doctor never publishes a slot still sits `pending` until issue #8's time-based expiry or an admin (#68) picks it up.
 
 ### 5.3 Order issuance and fulfillment
 1. Specialist issues `Prescription` and/or `LabOrder` from a `Consultation`.
@@ -447,7 +460,7 @@ surfaces as `deleted_user`.
 
 ### 6.1 What do we think would break?
 1. Naive slot booking without the DB-level conditional update in §5.1 — the most likely first bug filed against this repo. **Resolved 2026-09-14:** implemented exactly as designed in §5.1 — see `backend/src/modules/availability/repositories/index.ts` (`claimOpenSlot`) and `backend/src/modules/appointments/services/index.ts` (`bookSlot`, the transaction wrapping it). Integration-tested with real concurrency in `backend/tests/integration/booking.test.mts`.
-2. `Referral.target_doctor_id` left nullable with no fallback assignment logic — referrals to "a specialty" with no specific doctor need a real routing rule (round robin? load-based?) or they'll pile up unassigned. **Re-scoped for v1, 2026-10-17 (Phase 3):** rather than ship a nullable column with no assignment logic (the failure mode this item predicts), `target_doctor_id` is **required** — a referral cannot be created without a concrete, verified target doctor, so nothing can pile up unassigned. The routing ADR for specialty-only referrals is still owed (issue #6) and the gap stays open until it lands; note also that this makes PRD §8.2.2's "zero verified doctors in the specialty" state unreachable-by-construction rather than surfaced as a distinct "waiting for a specialist" state, which is a deliberate scope reduction to flag in review.
+2. `Referral.target_doctor_id` left nullable with no fallback assignment logic — referrals to "a specialty" with no specific doctor need a real routing rule (round robin? load-based?) or they'll pile up unassigned. **Resolved 2026-10-21 (Phase 3, issue #6 — `docs/adr/0008-referral-routing-without-target-doctor.md`):** the column stays **required** and the fallback logic now exists at creation — a specialty-only target is routed to the **least-loaded eligible doctor** (verified, holds the specialty, not the referring doctor, active account; fewest `pending`+`accepted` referrals, ties by doctor id) inside the creation transaction. Zero eligible doctors fails the call with `422 REFERRAL_NO_ELIGIBLE_TARGET` instead of writing an unowned row, so the pile-up this item predicts remains impossible. Still deliberately absent: a patient-facing "waiting for a specialist" state (it requires a nullable target), availability-aware routing (needs doctor-side availability/discovery), and a per-doctor "accepting referrals" switch — all deferred in the ADR with revisit triggers.
 3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final.
 4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
 5. **Discovered 2026-10-15 while building email verification (Phase 8, issue #34):** the email/SMS provider is still undecided (Phase 6, issue #17), so verification links can't actually be delivered in a hosted environment yet — `backend/src/modules/auth/services/email-dispatcher.ts` is a no-op seam until a provider is integrated. Until then `backend/scripts/mark-email-verified.mjs` is the documented out-of-band path for an operator with DB access. Not a reason to skip the guard: the guard is what makes the flow safe once delivery exists, and shipping it locked-off would just mean shipping it untested.

@@ -1,0 +1,7 @@
+{
+  "errors.EMAIL_NOT_VERIFIED": "Vérifiez votre adresse e-mail avant de continuer.",
+  "notifications.emailVerification.subject": "Vérifiez votre adresse e-mail DocForum",
+  "notifications.emailVerification.body": "Confirmez cette adresse e-mail pour réserver des rendez-vous et payer des commandes. Ouvrez ce lien à usage unique dans les {minutes, plural, one {# minute} other {# minutes}} : {link}",
+  "notifications.passwordReset.subject": "Réinitialisez votre mot de passe DocForum",
+  "notifications.passwordReset.body": "Une demande de réinitialisation du mot de passe a été faite pour ce compte. Ouvrez ce lien à usage unique dans les {minutes, plural, one {# minute} other {# minutes}} pour choisir un nouveau mot de passe : {link} Si vous n'êtes pas à l'origine de cette demande, ignorez ce message — votre mot de passe reste inchangé."
+}
