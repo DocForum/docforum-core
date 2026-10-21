@@ -16,6 +16,11 @@ export default defineConfig({
     env: {
       JWT_ACCESS_SECRET: 'test-access-secret',
       JWT_REFRESH_SECRET: 'test-refresh-secret',
+      // Clinical free-text fields are encrypted at write time (issue #46).
+      // A fixed 32-byte test key keeps ciphertext deterministic across runs
+      // without touching the real key, which only production/dev envs hold.
+      FIELD_ENCRYPTION_KEY_V1: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+      FIELD_ENCRYPTION_ACTIVE_VERSION: 'v1',
       // Port 5433, not 5432 — tests/integration/booking.test.mts spins up
       // its own throwaway Postgres cluster on this port so the suite is
       // self-contained (no pre-existing DB required). A distinct port

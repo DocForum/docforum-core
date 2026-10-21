@@ -74,3 +74,20 @@ The allowlist holds exactly one chain: `axios`, reached through
 `docforum-escrow` (the SDK must build on a patched `stellar-sdk`), not in this
 repo, and no version bump here resolves it. Remove those entries once the
 escrow SDK ships a patched release.
+
+## `scripts/fold-changelog.mjs`
+
+Maintainer script. Contributors add their `ROADMAP.md` changelog entry as a
+new file in `changelog.d/` (see `changelog.d/README.md`) instead of appending
+to the `## Changelog` section, so open PRs stop conflicting with each other.
+This script appends every fragment to the end of that section, dated by the
+day the fragment was merged (from git history), and deletes the fragment
+files:
+
+```
+node scripts/fold-changelog.mjs --dry-run   # preview
+node scripts/fold-changelog.mjs
+```
+
+Commit the result in its own PR. Run it from anywhere in the repo; it has no
+dependencies.

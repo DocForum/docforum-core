@@ -44,6 +44,21 @@ export function findAppointmentsForPatient(patientProfileId: string) {
   });
 }
 
+/** Today's scheduled appointments for one doctor's own calendar. The
+ * caller supplies the server-local day bounds; no patient-module data is
+ * joined here, preserving the module boundary. */
+export function findAppointmentsForDoctorOnDay(doctorProfileId: string, start: Date, end: Date) {
+  return prisma.appointment.findMany({
+    where: {
+      doctorProfileId,
+      status: 'scheduled',
+      availabilitySlot: { is: { startTime: { gte: start, lt: end } } },
+    },
+    include: { availabilitySlot: true },
+    orderBy: [{ availabilitySlot: { startTime: 'asc' } }, { id: 'asc' }],
+  });
+}
+
 /** Minimal appointment context for a doctor-owned consultation. */
 export function findAppointmentDoctorContext(id: string) {
   return prisma.appointment.findUnique({
