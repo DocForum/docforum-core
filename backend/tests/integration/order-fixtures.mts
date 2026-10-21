@@ -34,6 +34,6 @@ export function createPaymentIntentForFixture(prisma: PrismaClient, order: Await
     prescriptionId: order.kind === 'prescription' ? order.id : null,
     labOrderId: order.kind === 'lab_order' ? order.id : null,
     patientProfileId: order.patientProfileId, facilityId: order.facilityProfileId,
-    amountStroops: order.amountStroops, status,
+    amount: order.amountStroops, assetCode: 'XLM', status,
   } });
 }

@@ -1,6 +1,7 @@
 # ADR 0005: Non-custodial payments v2 — patients fund escrows from their own Stellar wallet
 
-Status: Proposed
+Status: Accepted (2026-10-19; implementation started — steps 5 and the
+prepare half of 6 have landed, see Implementation notes)
 Date: 2026-10-08
 
 Builds on ADR 0004 (custodial v1), which stays in place as a fallback.
@@ -103,7 +104,8 @@ v2 pays in **USDC** through its Stellar Asset Contract, so prices stay
 stable for medical bills. Native XLM stays supported for testnet
 development. `PaymentIntent` gains a token contract id and stores the
 amount in that token's smallest unit. The current `amountStroops` field
-is renamed, with a migration.
+is renamed, with a migration. *(Implemented by issue #79 — see
+Implementation notes below.)*
 
 ### Rule change in `docforum-web`
 
@@ -187,6 +189,34 @@ Done this way, every network-facing Stellar call still originates in
   be drained by repeated prepare-and-submit calls.
 - **Release triggering doesn't change.** Admin-triggered release remains
   the interim, as in ADR 0004, until Phase 5 exists.
+
+## Implementation notes (2026-10-19)
+
+- **Step 5 — assets (issue #79):** `PaymentIntent` now stores
+  `assetCode` + `tokenContractId` and the amount in that asset's smallest
+  unit (`amountStroops` renamed to `amount` by a lossless column rename).
+  `PAYMENT_ASSETS` is the per-environment allowlist (testnet defaults:
+  native XLM SAC + testnet USDC SAC); intents in any other asset are
+  rejected. Issued assets require an authorised payee trustline before
+  funding (`PAYEE_TRUSTLINE_MISSING`), checked against Horizon; native XLM
+  needs none. The server never scales amounts, so it never assumes an
+  asset's decimals.
+- **Step 6, first half — prepare (issue #80):**
+  `POST /payments/intents/:id/prepare` is patient-only, verifies the
+  intent belongs to the caller (`404` otherwise), requires a verified
+  `PatientWalletLink` (`409 WALLET_NOT_LINKED`), builds + simulates the
+  patient-as-payer `create_escrow` call, and moves the intent
+  `created → awaiting_signature` with the prepared hash/XDR/expiry ledger
+  stored via a conditional update. Re-prepare while the transaction is
+  live returns the same transaction; expiry (`awaiting_signature →
+  created`) is a normal case handled by a sweep job. `refund_after` is set
+  to the order expiry + grace; orders have no expiry field yet, so the
+  intent's `createdAt` is the documented anchor.
+- **Still open:** `@docforum/escrow-sdk` 0.3.0 / docforum-escrow #58 (the
+  real prepare/submit calls), submit + fee-bump + hash check (step 6's
+  second half), SEP-10 wallet linking (step 4), and the web flow (steps
+  7-8). Against SDK 0.2.0 the prepare endpoint returns `503
+  ESCROW_SDK_PREPARE_UNSUPPORTED` rather than faking a transaction.
 
 ## Implementation outline (to become issues once Accepted)
 
