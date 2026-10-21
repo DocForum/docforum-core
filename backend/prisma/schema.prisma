@@ -557,9 +557,11 @@ model Referral {
   // loop detection its lineage.
   sourceConsultationId String
   referringDoctorId String
-  // v1 requires a concrete target doctor — the routing rule for "a
-  // specialty, no specific doctor" is an unresolved design gap
-  // (ARCHITECTURE.md §6.1.2, issue #6), not silently defaulted here.
+  // Always a concrete doctor: a "specialty, no specific doctor" referral
+  // is routed to one at creation (least-loaded eligible doctor — issue
+  // #6, docs/adr/0008). The column stays NOT NULL on purpose, so an
+  // unassigned referral cannot exist; when nobody is eligible the
+  // creation fails instead of writing a row.
   targetDoctorId    String
   // Optional denormalised label of the target specialty, used by the
   // loop guard and admin views. Not a substitute for issue #23's real
