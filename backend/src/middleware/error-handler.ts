@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
 import { HttpError, ErrorCode } from '../http-error.js';
+import { localizedErrorMessage, resolveLocale } from '../i18n';
 
 // docforum-web's api-client.ts assumes an error envelope of
 // `{ message: string }` (documented as unconfirmed there) — this is the
@@ -15,11 +16,13 @@ export interface ErrorEnvelope {
   details?: unknown;
 }
 
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   if (err instanceof HttpError) {
+    const locale = resolveLocale(req.user?.locale, req.headers['accept-language']);
+    const message = localizedErrorMessage(locale, err.code, err.message);
     const body: ErrorEnvelope = {
       code: err.code,
-      message: err.message,
+      message,
     };
     if (err.details !== undefined) {
       body.details = err.details;

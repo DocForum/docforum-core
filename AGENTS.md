@@ -27,10 +27,28 @@ Every PR/commit that does any of the following **must** update the relevant doc 
 | Adds/changes a data model or table | `ARCHITECTURE.md` §4 + `ARCHITECTURE_ESSENTIALS.md` data model map if it affects the summary |
 | Adds/removes a module or changes a module boundary | `ARCHITECTURE.md` §3 + `ARCHITECTURE_ESSENTIALS.md` |
 | Changes tech stack / adds a dependency that's architecturally significant (new infra, new provider) | `ARCHITECTURE.md` §2, and add an ADR in `docs/adr/` if it reverses or overrides a prior stack decision |
-| Completes, starts, or blocks a roadmap item | **`ROADMAP.md` — always.** Move the item, update its status, add a one-line note if you discovered new scope. This is required for every PR that touches roadmap-tracked work, no exceptions. |
+| Completes, starts, or blocks a roadmap item | **`ROADMAP.md` — always.** Tick or update *your own item's* line (checkbox, status, a one-line note if you discovered new scope), and add your changelog entry as a new file in `changelog.d/` — not at the end of `ROADMAP.md`. See "Shared docs" below. This is required for every PR that touches roadmap-tracked work, no exceptions. |
 | Resolves or discovers a "hard question" / edge case / overengineering flag in PRD.md §8 or ARCHITECTURE.md §6 | Update that section — mark resolved with a short note, or add the newly discovered item. Do not silently drop these. |
 
 **If you're not sure whether a change is "significant enough" to need a doc update: update the doc.** A stale doc is worse than a slightly over-documented one in this repo, because other agents/contributors treat these files as ground truth before reading code.
+
+## Shared docs: keep your diff to your own lines
+
+Many PRs are open at the same time and most of them touch the same docs.
+Edits to shared lines are what put PRs into merge conflict with each other.
+
+- Add your own line or table row. Don't rewrite, reorder or re-wrap
+  paragraphs you don't need to change.
+- Changelog entries go in a new file under `changelog.d/`, never at the end
+  of `ROADMAP.md` (see `changelog.d/README.md`). Leave the status summary at
+  the top of `ROADMAP.md` and each phase's `**Status:**` line to maintainers.
+- Don't put running totals in docs ("57 tests", "Last updated: …"). CI and
+  git history already record them, and every PR would have to change them.
+- Commit docs as plain text and change only the lines you mean to. Never
+  commit a file as base64, or regenerate a whole doc to make a small change.
+- In `docs/api/README.md`, add rows for your endpoints to that module's
+  table. The intro deliberately doesn't say which phases are built;
+  `ROADMAP.md` does.
 
 ## Working style
 - Small, independent, reviewable units of work. This repo is explicitly structured (see ROADMAP.md issue breakdown) so contributors can pick up one piece without being blocked by another — respect that when scoping your own changes too.
