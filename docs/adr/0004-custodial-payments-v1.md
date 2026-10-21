@@ -68,15 +68,21 @@ not modeled or assumed by this ADR either.
   are answered. If DocForum ever needs genuine non-custodial patient
   wallets, that's a v2 architectural change, not an extension of this one.
 
-## Known gap
+## Order linkage (resolved by issue #85)
 
-`PaymentIntent.orderType`/`orderId` are opaque, unvalidated fields (see
-`schema.prisma` comment) — `Prescription`/`LabOrder`/`FulfillmentRecord`
-are still Phase 0 placeholders (Phase 4/5 aren't built). This phase is
-deliberately buildable independently of those; once they're real, add
-proper validation (does `orderId` actually exist, is it actually
-assigned to `facilityId`) as a follow-up, not assumed done by this ADR.
+`PaymentIntent` has nullable `prescriptionId` and `labOrderId` foreign keys;
+a PostgreSQL check constraint requires exactly one. Each order snapshots its
+patient, issuing doctor, selected pharmacy/lab, and total amount. V1 has no
+facility catalog or price service, so the issuing clinician supplies the total
+in native XLM stroops at issuance. This is an explicit manual pricing source,
+not a currency conversion or estimate.
 
+Issuing a correction creates a new order row. An unpaid (`created`) intent is
+moved to the new row in the same transaction. An escrowed intent remains with
+the original row and uses the existing admin-triggered refund action; this
+preserves the current custodial v1 refund policy. The migration removes only
+orphaned preview intents in `created` state and aborts if any funded or
+terminal intent has no matching order.
 ## Consequences
 
 - The platform payer identity needs real funding to do anything (testnet
@@ -93,3 +99,19 @@ assigned to `facilityId`) as a follow-up, not assumed done by this ADR.
   the roadmap already flagged: "don't let it drift into a manual/admin-
   triggered release" is the target once Phase 4/5 exist; v1's admin-only
   gate is the honest interim, not the destination.
+
+
+## Event monitoring and releaser-key alerts (issue #86)
+
+The backend polls Soroban RPC getEvents independently for each configured contract deployment, persisting each page and its cursor together. Events are deduplicated by contract and RPC event id, then matched against the local PaymentIntent state. Unmatched release/refund events raise high-severity structured logs, can be forwarded to ESCROW_EVENT_ALERT_WEBHOOK_URL, and are visible through the admin endpoint. If the RPC retention window has advanced beyond a saved cursor, the poller records an explicit catch-up error and does not silently skip the gap. This detects unexpected terminal contract events; it does not itself protect the releaser key.
+## Signing provider seam (issue #87)
+
+Payment operations use the `PlatformSigner` interface (`publicKey`, async transaction signing, and optional Soroban auth-entry signing) rather than constructing keypairs in the payments service. The env adapter preserves the current `PLATFORM_PAYER_SECRET` / `PLATFORM_RELEASER_SECRET` behavior. A reference HTTP adapter supports a signer service with role-scoped `GET /signers/{role}/public-key`, `POST /signers/{role}/sign-transaction`, and `POST /signers/{role}/sign-auth-entry` endpoints. Requests carry the network passphrase; the remote public key must match the configured expected address. Errors are sanitized before leaving the adapter.
+
+The HTTP adapter is a seam, not a managed KMS deployment. It requires HTTPS, a bearer token, and operator-provided signer service; production deployment choice and custody policy remain with issue #25. The issue #25 custody ADR should choose an adapter configuration here without changing the payment services interface. The implementation follows the signer surface proposed by `docforum-escrow` issue #60. The current published SDK remains compatible through its signer-shaped Keypair boundary; when SDK #60 is released, the local bridge can be removed without changing payment services. Signing is completed before the database transition transaction begins.
+
+## Network and contract safeguards (issue #88)
+
+Payments network settings are parsed at process startup from ESCROW_NETWORK_PASSPHRASE and ESCROW_RPC_URL. Mainnet is refused unless ALLOW_MAINNET=true is explicitly set after the security review. When an active ESCROW_CONTRACT_ID is configured outside tests, ESCROW_HEALTHCHECK_ID is required and the backend calls getStatus before opening its HTTP listener; a failed check prevents startup. Tests skip this network call.
+
+ESCROW_LEGACY_CONTRACT_IDS is a comma-separated registry retained for existing intents. Funding records the active contract id on the intent; release and refund use only that recorded id and reject intents with an absent or unregistered id. ESCROW_ASSET_ALLOWLIST is a comma-separated token registry; when set, funding rejects a configured escrow token outside the list. ESCROW_TOKEN_ID remains the active funding token.

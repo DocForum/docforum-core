@@ -23,4 +23,3 @@ CREATE INDEX "AdminInvite_email_idx" ON "AdminInvite"("email");
 
 -- AddForeignKey
 ALTER TABLE "AdminInvite" ADD CONSTRAINT "AdminInvite_invitedByUserId_fkey" FOREIGN KEY ("invitedByUserId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-

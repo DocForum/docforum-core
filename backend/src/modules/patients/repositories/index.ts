@@ -162,3 +162,7 @@ export function deleteUnservableExportChunks(): Promise<number> {
       AND (c."attempt" <> e."attempt" OR e."status" IN ('failed', 'expired'))
   `;
 }
+
+export function findPatientProfileById(id: string) {
+  return prisma.patientProfile.findUnique({ where: { id } });
+}
