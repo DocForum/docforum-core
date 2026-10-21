@@ -18,7 +18,9 @@ GitHub Pages UI preview has a real backend to call, nothing more.
 
 - Web service: Node, free plan, root dir `backend/`, auto-deploys on push
   to `main`, build: `npm install && npx prisma generate && npm run build`,
-  start: `npx prisma migrate deploy && npm start`.
+  start: `npx prisma migrate deploy && npm start`, health check path:
+  `/health/ready`. Render must use readiness, not the liveness endpoint, so
+  it does not send traffic to a process whose database migrations are pending.
 - Database: Render Postgres, free plan, same region (`oregon`) for
   internal networking.
 - `TRUST_PROXY=1` (Phase 8, issue #35): Render terminates TLS in front of

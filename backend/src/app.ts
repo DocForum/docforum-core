@@ -17,6 +17,7 @@ import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
 import { consultationsRouter } from './modules/consultations/routes';
+import { getReadiness } from './health/readiness';
 
 export function createApp() {
   const app = express();
@@ -39,6 +40,12 @@ export function createApp() {
   app.use(express.json());
   app.use(cookieParser());
 
+  app.get('/health/live', (_req, res) => res.status(200).json({ status: 'live' }));
+  app.get('/health/ready', async (_req, res) => {
+    const readiness = await getReadiness();
+    res.status(readiness.status === 'ready' ? 200 : 503).json(readiness);
+  });
+  // Keep the original liveness path for existing monitors and clients.
   app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 
   app.use('/auth', authRouter);
