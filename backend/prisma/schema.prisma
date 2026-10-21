@@ -113,6 +113,10 @@ model User {
   // DoctorProfile.verificationStatus, which is the separate, manual
   // admin verification of a doctor's credentials — do not conflate.
   emailVerifiedAt       DateTime?
+  // Phase 9, issue #133: server-generated text preference. Values are
+  // normalized to a supported language tag at signup; unsupported tags
+  // fall back to English.
+  locale                String    @default("en")
   // Phase 8 (issue #39): null = active. Deactivating never deletes anything
   // — no clinical or payment record is keyed to this flag, and none of the
   // deactivation paths remove rows. Login, refresh and access tokens are all

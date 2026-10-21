@@ -107,6 +107,10 @@ User
     Backfilled to created_at for pre-existing rows in the
     add_email_verification migration, so accounts from before this phase
     are treated as verified)
+  locale (string, default `en` — Phase 9 issue #133; selected from
+    Accept-Language at signup, unsupported tags fall back to `en`)
+  locale (string, default `en` — Phase 9 issue #133; supported language
+    selected from Accept-Language at signup, unsupported tags fall back to `en`)
   created_at, updated_at
 
 EmailVerificationToken (Phase 8 issue #34)

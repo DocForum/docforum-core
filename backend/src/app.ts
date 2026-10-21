@@ -4,7 +4,7 @@ import cookieParser from 'cookie-parser';
 import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
 import { adminAuthRouter, authRouter } from './modules/auth/routes';
-import { doctorsRouter } from './modules/doctors/routes';
+import { doctorsRouter, specialtiesRouter } from './modules/doctors/routes';
 import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
 import { appointmentConsultationsRouter, consultationsRouter } from './modules/consultations/routes';
@@ -46,6 +46,7 @@ export function createApp() {
   // (Phase 8 #38) — other modules' admin routes can hang off the same mount.
   app.use('/admin', adminAuthRouter);
   app.use('/doctors', doctorsRouter);
+  app.use('/specialties', specialtiesRouter);
   app.use('/availability', availabilityRouter);
   app.use('/appointments', appointmentsRouter);
   // Closing a consultation is addressable from the appointment it belongs to
