@@ -1,18 +1,18 @@
 # API docs
 
-Phase 1 endpoints are real and tested (see `backend/tests/`). Everything
-else is still unimplemented — see `ROADMAP.md` for phase order. Keep this
-file in sync with `backend/src/modules/*/routes` (AGENTS.md doc-update
-rule).
+Endpoints are grouped by module below. Which phases are built is tracked
+in `ROADMAP.md`, not here. Keep this file in sync with
+`backend/src/modules/*/routes` (AGENTS.md doc-update rule): when you add or
+change an endpoint, add or edit its row in that module's table, and leave
+the rest of the file alone.
 
-Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI
-spec yet — TBD, tracked informally, not blocking Phase 1.
+Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
 
 ## Auth (`/auth`) — `backend/src/modules/auth`
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
-| `POST /auth/signup` | none | `{ role: 'patient'\|'doctor', email, password, fullName }` | **`role` is restricted to `patient`/`doctor` server-side, not just in docforum-web's UI** — facility accounts are admin-invited only (PRD OQ-2). Returns `{ user, accessToken }`; sets an httpOnly refresh cookie. |
+| `POST /auth/signup` | none | `{ role: 'patient'|'doctor', email, password, fullName }` | **`role` is restricted to `patient`/`doctor` server-side, not just in docforum-web's UI** — facility accounts are admin-invited only (PRD OQ-2). Returns `{ user, accessToken }`; sets an httpOnly refresh cookie. |
 | `POST /auth/login` | none | `{ email, password }` | Same response shape as signup. **Throttled** (Phase 8, issue #35) — see below. |
 | `POST /auth/refresh` | refresh cookie + `X-CSRF-Token` | — | Reads the httpOnly cookie (not the body). Returns a fresh `{ user, accessToken, csrfToken }` and rotates the cookie **and** the CSRF token. `403` if the CSRF token is missing/wrong or the `Origin` isn't allowlisted. |
 | `POST /auth/logout` | `X-CSRF-Token` | — | Clears the refresh cookie. `204 No Content`; `403` without the CSRF header or from a disallowed `Origin`. |
@@ -28,8 +28,15 @@ can log in, refresh, and browse; they get
 depend on a trustworthy contact address:
 
 - `POST /appointments` (booking)
+- `POST /consultations`, `POST /consultations/:id/referrals`
+- `POST /referrals`, `POST /referrals/from-consultation/:id`,
+  `POST /referrals/:id/{accept,decline}`
 - `POST /payments/wallet-link`, `POST /payments/intents`,
   `POST /payments/intents/:id/{fund,release,refund}`
+
+(`GET`-style routes — lists, availability, the admin referral queue —
+are deliberately *not* gated on verification: browsing needs no contact
+address.)
 
 That guard reads the database rather than trusting a claim in the access
 token, so verifying in one tab unblocks the caller immediately instead of
@@ -89,31 +96,21 @@ need one re-login.
 ### Login throttling (Phase 8, issue #35)
 
 `POST /auth/login` is rate-limited **per normalised email and per client
-IP**, with state in Postgres (so it survives restarts and doesn't assume a
+IP**, with state in Postgres (so it survives restarts and doesn't assume
 single instance). Bucket size is capped by the first limit reached:
 
 | Phase | Response |
 |---|---|
 | Below `LOGIN_THROTTLE_BACKOFF_AFTER` failures (default 3) in the window | normal `401 { message: 'Invalid email or password.' }` |
-| At/after it | `429` with a `Retry-After: <seconds>` header, growing exponentially (`LOGIN_THROTTLE_BACKOFF_BASE_SECONDS` × 2ⁿ, capped at `LOGIN_THROTTLE_BACKOFF_MAX_SECONDS`) |
+| At/after it | `429` with a `Retry-After: <seconds>``'header, growing exponentially (`LOGIN_THROTTLE_BACKOFF_BASE_SECONDS` × 2ʐ, capped at `LOGIN_THROTTLE_BACKOFF_MAX_SECONDS`) |
 | At `LOGIN_THROTTLE_LOCK_AFTER` failures (default 10) | `429` locked for `LOGIN_THROTTLE_LOCK_SECONDS` (default 15 min). The lock is set once per window and is not extended by further attempts |
 | Window (`LOGIN_THROTTLE_WINDOW_SECONDS`, default 15 min) | New window restarts the count at 1 and clears the lock |
 
-A successful login clears the **per-account** counter. The per-IP bucket is
-left alone, so one valid login can't reset a shared-IP budget.
+A successful login clears the ** per-account** counter. The per-IP bucket is left alone, so one valid login can't reset a shared-IP budget.
 
-Clients should honour `Retry-After` and must **not** treat a `429` as
-"account locked permanently". The response is identical for a real and a
-non-existent address, and for a locked and a backing-off bucket — it
-deliberately reveals nothing about whether the account exists (an absent
-account also pays bcrypt's comparison cost, so timing doesn't leak either).
+Clients should honour `Retry-After` and must **not** treat a $429$ as "account locked permanently". The response is identical for a real and a non-existent address, and for a locked and a backing-off bucket — it deliberately reveals nothing about whether the account exists (an absent account also pays bcrypt's comparison cost, so timing doesn't leak either).
 
-`POST /auth/login-attempts/clear` (admin-only) clears a lock a legitimate
-user is stuck behind: body `{ email?, ip? }` (at least one), returns
-`{ cleared }`. Clear **both** when a lock was taken out via the account's IP,
-or the IP bucket will keep refusing them. It's logged to the server console
-— it isn't wired into `AuditEvent` yet (issue #43 covered booking, doctor
-verification and payments), so that's the interim record.
+`POST /auth/login-attempts/clear` (admin-only) clears a lock a legitimate user is stuck behind: body `{ email?, ip? }` (at least one), returns `{ cleared }`. Clear **both** when a lock was taken out via the account's IP, or the IP bucket will keep refusing them. It's logged to the server console — the `AuditEvent` table (ARCHITECTURE.md §4.10) records booking, doctor verification, payments and the referral admin actions, but not the login-throttle clear, so that's still the interim record.
 
 Under the hood this uses Express's `trust proxy` setting via the
 `TRUST_PROXY` env var: `1` behind Render's single proxy hop, `false` (the
@@ -124,18 +121,26 @@ buckets whose last failure is older than
 
 Access tokens: `Authorization: Bearer <token>`, 15-minute TTL, no
 revocation list yet (see `ARCHITECTURE_ESSENTIALS.md` known gaps —
-JWT refresh rotation without a revocation list). Refresh tokens: httpOnly
+RWT refresh rotation without a revocation list). Refresh tokens: httpOnly
 cookie, 30-day TTL, `SameSite=None; Secure` in production and
-`Lax`/insecure locally — the attributes live in `config.cookie`
-(`backend/src/config/index.ts`) so the refresh and CSRF cookies can never
+`Lax``/insecure locally — the attributes live in `config.cookie`
+`backend/src/config/index.ts`) so the refresh and CSRF cookies can never
 drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
+
+Every token carries a `tv` claim (the user's `tokenVersion` at issue time).
+Bumping `User.tokenVersion` — which password reset does — invalidates every
+outstanding refresh token for that user at the next refresh. This is the
+interim kill switch for issue #33; the fuller revocation list (per-session
+revocation, #18) is still open, so a bumped-away **access** token keeps
+working until its 15-minute TTL elapses. Refresh tokens are checked
+against `tokenVersion` on every `POST /auth/refresh`.
 
 ## Doctors (`/doctors`) — `backend/src/modules/doctors`
 
 | Method & path | Auth | Notes |
 |---|---|---|
 | `GET /doctors/me` | doctor | Returns the caller's own `DoctorProfile`. |
-| `PATCH /doctors/:doctorProfileId/verification` | admin | Body `{ status: 'pending'\|'verified'\|'rejected' }`. Manual, admin-gated per PRD FR-3 — there is no automated verification pipeline. |
+| `PATCH /doctors/:doctorProfileId/verification` | admin | Body `{ status: 'pending'|'verified'|'rejected' }`. Manual, admin-gated per PRD FR-3 — there is no automated verification pipeline. |
 
 ## Availability (`/availability`) — `backend/src/modules/availability`
 
@@ -148,99 +153,21 @@ drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
-| `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md` §5.1 and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. |
+| `POST /appointments` | patient | `{ availabilitySlotId }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md §5.1` and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. Load-tested under contention (Phase 9, issue #86) — see `backend/tests/load/README.md`. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. |
+| `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'|'cancelled'|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
+| `PATCH /appointments/:appointmentId/cancel` | patient (own appointment) | — | Patient-side cancellation, `scheduled` only. Same slot-release + cascade behaviour as above. |
 
-## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
+## Consultations (`/consultations`) — `backend/src/modules/consultations`
 
-Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
-well-formed inbound `X-Request-Id` (8–128 chars of `[A-Za-z0-9._:-]`) is
-kept, anything else is replaced with a UUID. Audit events store it, so an
-event can be traced to the request (and logs) that caused it.
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /consultations` | doctor (own appointment) | `{ appointmentId, outcome?, notes? }` | Issue #4's minimal slice. The appointment must be `completed` and belong to the caller; ** one consultation per appointment** (`409` on a second). `outcome` is `resolved\|referred\lfollow_up_needed`. |
+| `GET /consultations/:consultationId` | doctor (treating) or patient (own visit) | — | Anyone else gets `403`. |
+| `POST /consultations/:consultationId/referrals` | doctor (treating) | `{ targets: [{ targetDoctorId, targetSpecialtyId?, snapshotNotes }] }` | Issue #66 — atomic all-or-none multi-referral. Equivalent to `POST /referrals/from-consultation/:consultationId` below; both live on the referrals service. |
 
-| Method & path | Auth | Notes |
-|---|---|---|
-| `GET /admin/audit-events` | admin | Newest first. Query: `entityType`, `entityId` (requires `entityType`), `actorUserId`, `from` / `to` (ISO-8601 date or date-time, inclusive), `limit` (1–200, default 50), `cursor`. Unknown parameters are `400`. Returns `{ items, nextCursor }`; pass `nextCursor` back as `cursor` for the next page (`null` = last page). |
+## Referrals (`/referrals`) — `backend/src/modules/referrals`
 
-Item shape: `{ id, actorUserId, actorRole, entityType, entityId, action,
-fromState, toState, requestId, metadata, createdAt }`. `metadata` is a small
-flat map of ids/codes (never personal data). Ordering is
-`(createdAt DESC, id DESC)` and the cursor is a keyset position on that
-pair, so paging never skips or repeats an event; events written after a scan
-started appear at the front of a new scan, not mid-way through the old one.
-`400 INVALID_CURSOR` for a malformed cursor; `400` if `from` is after `to`.
-
-Recorded today: `appointment.booked`, `doctor.verification_status_changed`,
-`payment_intent.{funded,released,refunded}` — see ARCHITECTURE.md §4.10.
-There is no write or delete endpoint, and the table rejects UPDATE/DELETE
-in the database.
-
-Payment actions (`POST /payments/intents/:id/{fund,release,refund}`) now
-return `409` when the intent changed state concurrently between the check
-and the write (previously the second write silently overwrote the first).
-## Patients (`/patients`) — `backend/src/modules/patients`
-
-### Data export — right of access (Phase 8, issue #40)
-
-| Method & path | Auth | Notes |
-|---|---|---|
-| `POST /patients/me/export` | patient | Starts an export of the **caller's own** data. `202` with the export status object and a `Location: /patients/me/export/:id` header. If one is already `pending`/`processing`, returns that one instead of queuing a second. No body is read — there is no way to name another patient. |
-| `GET /patients/me/export/:id` | patient (owner) | Status object (below). `404` for an id that isn't the caller's — the same response as one that doesn't exist. |
-| `GET /patients/me/export/:id/download` | patient (owner) | Streams the bundle as `application/json` (`Content-Disposition: attachment`, `Cache-Control: no-store`). `409 EXPORT_NOT_READY` while pending/processing/failed; `410 EXPORT_EXPIRED` at or after `expiresAt`, even before the cleanup job has run. |
-
-Doctors and admins get `403` on all three — there is no on-behalf-of export.
-
-Status object:
-
-```json
-{
-  "id": "uuid",
-  "status": "pending | processing | ready | failed | expired",
-  "schemaVersion": 1,
-  "createdAt": "…", "startedAt": "…", "generatedAt": "…", "expiresAt": "…",
-  "sizeBytes": 12345,
-  "failure": null,
-  "downloadUrl": "/patients/me/export/<id>/download"
-}
-```
-
-`downloadUrl` and `sizeBytes` are non-null only while `ready`. A failed
-export reports `failure: { code: 'SECTION_FAILED', section: '<name>' }` (or
-`GENERATION_FAILED` / `GENERATION_TIMEOUT`, with `section: null`) — request a
-new export to retry. Generation is asynchronous; poll the status object.
-
-Bundle (`schemaVersion` 1):
-
-```json
-{
-  "format": "docforum.patient-export",
-  "schemaVersion": 1,
-  "exportId": "uuid",
-  "generatedAt": "ISO-8601",
-  "sections": {
-    "account":      { "version": 1, "items": [{ "id", "email", "phone", "role", "emailVerifiedAt", "createdAt", "updatedAt" }] },
-    "appointments": { "version": 1, "items": [{ "id", "status", "origin", "slot": { "startTime", "endTime" }, "doctor": { "id", "fullName" }, "createdAt", "updatedAt" }] },
-    "payments":     { "version": 1, "items": [{ "id", "orderType", "orderId", "status", "amountStroops", "facility": { "id", "name" }, "escrowId", "stellarTxHash", "sorobanContractId", "createdAt", "updatedAt" }] },
-    "profile":      { "version": 1, "items": [{ "id", "fullName", "dateOfBirth", "createdAt", "updatedAt" }] }
-  }
-}
-```
-
-Sections are sorted by name; new modules add sections (ARCHITECTURE.md §3.1)
-without changing the envelope. `amountStroops`/`escrowId` are strings
-(bigint). No password hash, tokens, throttle state or platform secrets are
-ever included.
-
-Exports stay downloadable for `PATIENT_EXPORT_TTL_HOURS` (default 24), then
-the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZE`,
-`PATIENT_EXPORT_CHUNK_BYTES`, `PATIENT_EXPORT_WORKER_INTERVAL_SECONDS`,
-`PATIENT_EXPORT_CLEANUP_INTERVAL_SECONDS`, `PATIENT_EXPORT_STALE_AFTER_SECONDS`,
-`PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
-`backend/src/jobs/README.md`.
-
-## Not yet implemented
-
-Everything else in `ARCHITECTURE.md` §3's module list (`facilities`,
-`consultations`, `referrals`, `prescriptions`, `lab-orders`,
-`pharmacy-orders`, `payments`, `notifications`) has no routes yet — Phase
-2 onward, see `ROADMAP.md`.
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /referrals` | doctor | `{ sourceConsultationId, targetDoctorId, targetSpecialtyId?, snapshotNotes }` | Issue #5. Requires: the caller's own **completed** appointment

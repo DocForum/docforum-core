@@ -1,30 +1,27 @@
 import { createApp } from './app';
 import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
+import { pruneOldAccessLogs } from './modules/audit/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
+import { startEscrowEventPoller } from './jobs/escrow-events';
+import { validatePlatformSigners } from './modules/payments/services/platform-signers';
+import { verifyPaymentsNetwork } from './modules/payments/services';
+
 
 const app = createApp();
 
-// Fail fast on a missing/invalid SEP-10 web-auth configuration (issue
-// #77): a typo'd signing secret should stop boot, not surface as a 500
-// on the first challenge request. Reports env var NAMES only — never a
-// secret value. Placed here (not at config import) so test suites, which
-// only build the app, aren't forced to boot with payments configured.
-async function start(): Promise<void> {
-  await validateSep10Config();
-  // Issue #78: a malformed WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF must
-  // stop boot too — naming the env var, never a value.
-  validateWalletLinkConfig();
+async function startServer() {
+  await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork()]);
   app.listen(config.port, () => {
     // eslint-disable-next-line no-console
     console.log(`docforum-core backend listening on :${config.port}`);
   });
 }
 
-start().catch((err) => {
+void startServer().catch((error: unknown) => {
   // eslint-disable-next-line no-console
-  console.error(err instanceof Error ? err.message : err);
-  process.exit(1);
+  console.error('[startup] backend startup failed:', error);
+  process.exitCode = 1;
 });
 
 // Login-throttle cleanup (Phase 8, issue #35). A plain interval, per
@@ -44,8 +41,25 @@ const pruneTimer = setInterval(() => {
       // eslint-disable-next-line no-console
       console.error('[jobs] login-throttle prune failed:', err);
     });
+
+  // Access-log retention (Phase 8, issue #45): drop rows older than
+  // config.accessLog.retentionDays. Same interval as the throttle prune —
+  // hourly is far more often than a 365-day window needs, but a second
+  // timer for one cheap DELETE is not worth the complexity.
+  void pruneOldAccessLogs()
+    .then((removed) => {
+      if (removed > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[jobs] pruned ${removed} expired access-log row(s)`);
+      }
+    })
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[jobs] access-log prune failed:', err);
+    });
 }, config.loginThrottle.pruneIntervalSeconds * 1000);
 pruneTimer.unref();
 
 // Patient data export worker + expiry cleanup (Phase 8, issue #40).
 startPatientExportJobs();
+startEscrowEventPoller();

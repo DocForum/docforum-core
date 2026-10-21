@@ -20,31 +20,34 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
-`User` → `PatientProfile | DoctorProfile | FacilityProfile`
+`User` → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
-`AvailabilitySlot` (doctor's calendar) → `Appointment` → `IntakeForm`, `Consultation`
-`Consultation` → (outcome=referred) → `Referral` (snapshot!) → new `Appointment`
-`Consultation` → `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
+`AvailabilitySlot` (doctor's calendar) → `Appointment` (`availability_slot_id` nullable — a cancelled appointment releases its slot; booking safety is `claimOpenSlot`, not that column) → `IntakeForm`, `Consultation`
+`Consultation` → (outcome=referred) → `Referral` (snapshot! required `target_doctor_id`, self-FK lineage `parent_referral_id`, no-show/loop/admin flags) → new `Appointment`
+`Appointment` → `Consultation` → immutable `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references an order but doesn't mutate it.
-`User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking + payment mutations, never login/browsing).
+`User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking, consultation/referral mutations and payment mutations, never login/browsing).
+`User` → `AccessLog` (Phase 8, issue #45 — PHI read-access log: who viewed which clinical record, when; fire-and-forget writes, fail-open).
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
-`FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile`/`FacilityProfile` → `PaymentIntent` (opaque `orderType`/`orderId` — see docs/adr/0004)
+`FacilityProfile` → `WalletLink` (payout address) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85)
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
 - **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule.
 - `WalletLink` is scoped to the **facility** (the on-chain payee), not the patient.
-- `PaymentIntent.orderType`/`orderId` are opaque, unvalidated — `Prescription`/`LabOrder` aren't real records yet (Phase 4). Don't build on top of these assuming they're FK-validated.
+- Each issued order stores its selected facility and clinician-entered total in XLM stroops; a database check requires exactly one PaymentIntent order FK.
 - `release`/`refund` are admin-triggered HTTP actions in v1 (`POST /payments/intents/:id/{release,refund}`) — there's no `FulfillmentRecord.status == fulfilled` to trigger off of yet. Don't treat this as the final design.
 - **SEP-10 wallet-ownership proof** (issue #77): `GET /payments/sep10/challenge` + `POST /payments/sep10/verify` (see docs/api/README.md) with a dedicated `SEP10_SIGNING_SECRET` (never the payer/releaser keys). The `Sep10Challenge` nonce ledger is single-use via one conditional UPDATE — no app-level check-then-write. This is generic infrastructure for ADR 0005's wallet linking; it issues no session, DocForum's own JWT still authenticates the caller.
 - **Verified wallet links** (issue #78): `POST /payments/wallet-link` accepts ONLY a signed SEP-10 challenge — never a raw address; the address is derived from the verified challenge, and link creation + nonce consumption commit in ONE transaction. Patient responses carry ADR 0005's on-chain privacy notice verbatim. Funding refuses `unverified_legacy` facility links after `WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF` (`409 WALLET_LINK_UNVERIFIED`, enforced in the funding service) and snapshots `PaymentIntent.fundedWalletAddress` so re-linking never rewrites an escrow's payee.
 - The actual Stellar contract calls go through `@docforum/escrow-sdk` (`backend/src/modules/payments/services/escrow-sdk-loader.ts` — dynamic `import()`, the SDK is ESM-only and this backend is CommonJS). Never reimplement contract-calling logic in this repo.
 
 ## Known unresolved design gaps (do not silently "fix" without flagging in PR description)
-- No routing rule yet for a referral with no specific target doctor (which specialist gets it?).
-- No expiry/TTL job for held slots or pending referrals — currently just an enum value with no worker.
+- No routing rule yet for a referral with no specific target doctor (which specialist gets it?). **v1 re-scope (2026-10-17): `target_doctor_id` is required, so unassigned referrals can't exist — but that makes PRD §8.2.2's "waiting for a specialist" state unreachable rather than implemented. ADR still owed (issue #6).**
+- No time-based expiry/TTL job for held slots or pending referrals — the referral *no-show* cascade (#67) now reaches `expired`, but nothing expires a referral (or a held slot) purely by age. Issue #8 / #19.
+- `AuditEvent` exists (§4.10 of ARCHITECTURE.md) and records booking (both booking paths), doctor verification, payment fund/release/refund, the patient's referral accept/decline and the referral admin actions — auth (the admin login-throttle clear), the referral's creation + cascade transitions, and the remaining Phase 4 order transitions are still unaudited. PRD §7 is not satisfied yet.
+- `Referral.snapshotIntakeId` has no column — `IntakeForm` doesn't exist yet (issue #1); the notes half of the snapshot rule is real and enforced.
 - Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables.
-- `AuditEvent` foundation exists (Phase 8, issue #43 — ARCHITECTURE.md §4.10): append-only (DB triggers), written by `auditService.record(tx, …)` **inside the same transaction** as the change. Wired for booking, doctor verification and payment fund/release/refund only — **Phase 3/4 transitions must call it when they're built.** Never put PHI in `metadata`.
+- `AuditEvent` foundation exists (Phase 8, issue #43 — ARCHITECTURE.md §4.10): append-only (DB triggers), written by `auditService.record(tx, …)` **inside the same transaction** as the change. Wired for booking (direct and referral-origin), doctor verification, payment fund/release/refund, referral accept/decline and referral admin actions (`entity_type: 'Referral'`) — **Phase 4 transitions must call it when they're built.** There is one audit table: referral actions go into it, not into a second one. Never put PHI in `metadata`.
 - No email/SMS provider integrated yet (Phase 6, issue #17) — email verification (issue #34) therefore can't deliver its link on a hosted deployment; `backend/scripts/mark-email-verified.mjs` is the interim operator path.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 
@@ -61,3 +64,9 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - Data model source of truth: `backend/prisma/schema.prisma`
 - Frontend: `frontend/src/{pages,components,features,hooks,services,store,types}`
 - Roadmap / status: `ROADMAP.md` — **must be updated on every contribution that changes scope or completes work**.
+
+
+## Escrow event monitoring (issue #86)
+- EscrowEventCursor stores one pagination cursor per contract deployment; configure each historical deployment as ESCROW_CONTRACTS=CONTRACT_ID@START_LEDGER,...
+- EscrowChainEvent stores deduplicated Soroban events. The admin endpoint is GET /admin/payments/escrow-events.
+- Unmatched release/refund events are high-severity alerts; RPC retention loss is surfaced as catchupError and must be reconciled explicitly.

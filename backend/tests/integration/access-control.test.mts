@@ -57,7 +57,9 @@ const KNOWN_ROUTES = [
   'GET /appointments/mine',
   'POST /payments/wallet-link',
   'GET /payments/wallet-link',
-  'POST /payments/intents',
+  'POST /orders/consultations',
+  'POST /orders/consultations/:consultationId/prescriptions',
+  'POST /orders/consultations/:consultationId/lab-orders',
   'GET /payments/intents/:id',
   'POST /payments/intents/:id/fund',
   'POST /payments/intents/:id/release',
@@ -105,10 +107,14 @@ const ACCESS_MATRIX: MatrixRow[] = [
   { method: 'POST', path: '/appointments', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } }, // patient unverified → 403 EMAIL_NOT_VERIFIED
   { method: 'GET', path: '/appointments/mine', expected: { anon: 401, patient: 200, doctor: 403, facility: 403, admin: 403 } },
 
+  // Orders: doctor-only and verified-email gated.
+  { method: 'POST', path: '/orders/consultations', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'POST', path: '/orders/consultations/:consultationId/prescriptions', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'POST', path: '/orders/consultations/:consultationId/lab-orders', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+
   // Payments — admin-triggered in v1; wallet-link is facility-only
   { method: 'POST', path: '/payments/wallet-link', expected: { anon: 401, patient: 403, doctor: 403, facility: 400, admin: 403 } },
   { method: 'GET', path: '/payments/wallet-link', expected: { anon: 401, patient: 403, doctor: 403, facility: 404, admin: 403 } },
-  { method: 'POST', path: '/payments/intents', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 400 } },
   { method: 'GET', path: '/payments/intents/:id', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
   { method: 'POST', path: '/payments/intents/:id/fund', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
   { method: 'POST', path: '/payments/intents/:id/release', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
