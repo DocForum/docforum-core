@@ -132,6 +132,25 @@ describe('payment history and facility ledger APIs', () => {
     expect(otherPatient.body.items[0].amountStroops).toBe('900');
   });
 
+  it('includes the entire final day when filtering by a date-only to value', async () => {
+    const payment = await createIntent({
+      patientProfileId: patientB.id,
+      facilityId: facilityB.id,
+      status: 'created',
+      amountStroops: 40n,
+      createdAt: new Date('2020-01-02T23:59:59.500Z'),
+    });
+
+    const response = await request(app)
+      .get('/payments/mine?from=2020-01-02&to=2020-01-02')
+      .set('Authorization', `Bearer ${patientB.token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.items).toHaveLength(1);
+    expect(response.body.items[0].id).toBe(payment.id);
+    await prisma.paymentIntent.delete({ where: { id: payment.id } });
+  });
+
   it('returns facility-owned rows and exact SQL totals across statuses', async () => {
     const response = await request(app)
       .get('/payments/facility/ledger?status=escrowed')

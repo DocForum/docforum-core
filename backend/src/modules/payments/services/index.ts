@@ -20,7 +20,6 @@ import { getMyPatientProfile, paginate, type PatientExportSection } from '../../
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
 import type { Prisma } from '@prisma/client';
-import type { PaymentIntentStatus } from '@prisma/client';
 import { transitionPaymentIntentStatus } from './state-machine';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
 
