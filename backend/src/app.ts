@@ -26,6 +26,7 @@ import { adminFlagsRouter, meFlagsRouter } from './modules/flags/routes';
 import { registerRetentionHolds } from './retention-holds';
 import { getReadiness } from './health/readiness';
 import { runWithRlsContext } from './db/prisma-client';
+import { intakeRouter } from './modules/intake/routes';
 
 export function createApp() {
   const app = express();
@@ -75,6 +76,7 @@ export function createApp() {
   // (POST /appointments/:appointmentId/consultation) as well as from
   // /consultations below — same service, one write path.
   app.use('/appointments', appointmentConsultationsRouter);
+  app.use('/intake', intakeRouter);
   app.use('/orders', ordersRouter);
   app.use('/pharmacy-orders', pharmacyOrdersRouter);
   app.use('/lab-orders', labOrdersRouter);
