@@ -100,6 +100,18 @@ terminal intent has no matching order.
   triggered release" is the target once Phase 4/5 exist; v1's admin-only
   gate is the honest interim, not the destination.
 
+## Update — 2026-10-19 (issues #79 and #80)
+
+`PaymentIntent` is no longer native-XLM-only: issue #79 added an
+allowlisted `assetCode` + `tokenContractId` per intent and renamed
+`amountStroops` to the token-agnostic `amount` (a plain column rename, so
+existing values are preserved). The custodial funding path described here
+is unchanged — the platform payer still funds the escrow — but the token it
+pulls from is now the intent's asset, defaulting to the legacy
+`ESCROW_TOKEN_ID` for pre-#79 rows. ADR 0005's non-custodial path is being
+added alongside this one (issue #80 added prepare; submit is still pending),
+and release/refund remain admin-triggered exactly as described above.
+
 
 ## Event monitoring and releaser-key alerts (issue #86)
 
