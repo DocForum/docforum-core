@@ -1,3 +1,7 @@
+// Token signing/verification. Every token carries `tv` (the user's
+// refresh-token version at issue time) so bumping `User.tokenVersion`
+// invalidates all outstanding tokens without a per-request DB read — the
+// check happens where the token is actually exchanged (refresh).
 import jwt from 'jsonwebtoken';
 import { config } from '../../../config';
 import type { Role } from '@prisma/client';
@@ -5,6 +9,8 @@ import type { Role } from '@prisma/client';
 export interface AccessTokenPayload {
   sub: string; // user id
   role: Role;
+  /** Signup preference used to localize request errors without another DB read. */
+  locale?: string;
   /** Issued-at, set by `jsonwebtoken` itself. Read by the auth middleware to
    * compare against `User.sessionsInvalidatedAt` (Phase 8, issue #39) —
    * tokens minted before a deactivation must stop working immediately. */
@@ -13,6 +19,8 @@ export interface AccessTokenPayload {
    * the access token stays stateless so protected requests don't need a
    * session lookup. */
   sid?: string;
+  /** User.tokenVersion at issue time. Compared at refresh time (Phase 8 #33). */
+  tv?: number;
 }
 
 /**
