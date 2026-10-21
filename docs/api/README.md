@@ -226,6 +226,31 @@ transaction, so the event exists iff the consultation was written.
 | `POST /referrals/admin/:referralId/cancel` | admin | `{ reason }` | Pending or accepted (`409` on terminal). Cancelling an accepted referral also cancels its live appointment through the appointments service. Writes an `AuditEvent` (`referral.cancel`) in the one append-only audit trail, as a `Referral`-typed row. `cancelled` is distinct from `expired`/`declined` so the three exits stay tellable apart. |
 | `GET /referrals/admin/:referralId/audit-events` | admin | — | The referral's audit rows, read from the same `AuditEvent` table `GET /admin/audit-events` serves (`entityType: 'Referral'`, `entityId: <referralId>`): actor, role, action, from/to state, metadata (the admin's `reason` lives in `metadata.reason`), timestamp. |
 
+## Facilities (`/facilities`) — `backend/src/modules/facilities`
+
+Issue #127: each facility publishes its own price list so an order can be
+priced from what the facility actually charges instead of an amount typed by
+the doctor. Prices are **versioned by `effectiveFrom` and append-only** — a
+new price supersedes the old one for future pricing, and history (including
+the version an existing intent was priced from) is never rewritten. Amounts
+are integer strings of the asset's smallest unit (stroops for native XLM) and
+are carried as `BigInt` end to end. A facility with no published price is
+"price on request", never a zero charge.
+
+| Method & path | Auth | Body / query | Notes |
+|---|---|---|---|
+| `GET /facilities/eligible` | none | query: `type` (`lab`\|`pharmacy`, required), `catalogItemCode?`, `asset?` (default `native`), `at?` (ISO-8601) | Facilities of that type, each with the price in force at `at` (default now) for `catalogItemCode`. Shape: `{ facilities: [{ facilityId, name, type, priceOnRequest, price: { amountStroops, effectiveFrom } \| null }] }`. `price: null` + `priceOnRequest: true` is the documented "price on request" state. Public: patients compare prices before signing in. |
+| `GET /facilities/:facilityId/prices` | none | query: `catalogItemCode?`, `asset?` | The facility's full price history, newest first: `{ prices: [{ id, facilityId, catalogItemCode, asset, amountStroops, effectiveFrom, createdAt }] }`. Public. |
+| `GET /facilities/me/prices` | facility | query: `catalogItemCode?`, `asset?` | Same shape, scoped to the caller's own facility profile (resolved from the access token, so there is no client-supplied id to forge). |
+| `POST /facilities/me/prices` | facility (verified email) | `{ catalogItemCode, amount, asset?, effectiveFrom? }` | Publishes a new version. `amount` is a positive integer string of smallest units (decimals/exponents rejected); `asset` defaults to `native`; `effectiveFrom` defaults to now and may be in the future to schedule a price. `201` with the created version. `409` if that item/asset already has a version with the exact same `effectiveFrom`; `403` for a facility that isn't the caller's. Writes a `FacilityPrice` audit event (`facility_price.created`) in the same transaction. |
+
+Orders: `POST /orders/consultations/:consultationId/{prescriptions,lab-orders}`
+accept **either** a manual `amountStroops` **or** a `catalogItemCode` priced
+from this list — exactly one, never both. With `catalogItemCode`, the intent
+snapshots the amount in force at issuance plus the code, so publishing a new
+price later cannot re-price an existing intent; a missing price fails the
+issuance with `422 { code: 'PRICE_ON_REQUEST' }` and writes no order.
+
 ## Payments (`/payments`) — `backend/src/modules/payments`
 
 Phase 5.5 (custodial v1 — `docs/adr/0004-custodial-payments-v1.md`):
@@ -238,7 +263,7 @@ design, not the final one.
 
 ## Orders (`/orders`) — `backend/src/modules/orders`
 
-Verified doctors can create a consultation with `POST /orders/consultations` (`appointmentId`, optional `outcome` and `notes`) — the same write as `POST /consultations` plus the verified-doctor gate, so all of its one-per-appointment/encryption/audit rules apply. Issue a prescription with `POST /orders/consultations/:consultationId/prescriptions` (`facilityProfileId`, positive integer `amountStroops`, and `items`), or a lab order with `POST /orders/consultations/:consultationId/lab-orders` (`facilityProfileId`, `amountStroops`, `testType`, optional `urgency` and `notes`). Issuance creates its payment intent in the same transaction. Corrections create superseding immutable orders: a created intent moves to the correction; an escrowed intent remains linked to the original and is handled by the existing admin refund action.
+Verified doctors can create a consultation with `POST /orders/consultations` (`appointmentId`, optional `outcome` and `notes`) — the same write as `POST /consultations` plus the verified-doctor gate, so all of its one-per-appointment/encryption/audit rules apply. Issue a prescription with `POST /orders/consultations/:consultationId/prescriptions` (`facilityProfileId`, and `items`), or a lab order with `POST /orders/consultations/:consultationId/lab-orders` (`facilityProfileId`, `testType`, optional `urgency` and `notes`). Either route takes **exactly one** of a positive integer `amountStroops` (manual price) or a `catalogItemCode` (facility price list, issue #127) — the resolved amount and the code are snapshotted on the payment intent. Issuance creates its payment intent in the same transaction. Corrections create superseding immutable orders: a created intent moves to the correction; an escrowed intent remains linked to the original and is handled by the existing admin refund action.
 
 ## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
 
@@ -355,12 +380,46 @@ the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZ
 `PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
 `backend/src/jobs/README.md`.
 
+### Account deletion (Phase 8, issue #41)
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `DELETE /patients/me` | patient | `{ password }` | **Deletes the caller's account** (Phase 8, issue #41 — `docs/adr/0010`). `204 No Content`. Irreversible. |
+
+What deletion does: the login identity and profile are **anonymised in
+place** — email becomes `deleted+<userId>@deleted.invalid` (so the original
+address is free to sign up again, as a new empty account), phone/DOB are
+cleared, the name becomes `Deleted patient`, the password becomes unusable,
+verification tokens and the address's login-throttle bucket are deleted.
+**Appointments and payment records are kept unchanged** (clinical and
+financial records; see the ADR's retention table), still linked to the
+anonymised profile.
+
+Errors: `400` without a `password`; `403 PASSWORD_CONFIRMATION_FAILED` for a
+wrong one; `403` for non-patient roles. Wrong confirmations count against the
+account's login throttle (issue #35), so repeated guesses get `429` with
+`Retry-After`. Not gated on email verification — an unverified account can
+delete itself.
+
+Idempotent: a repeat request from the same (still unexpired) access token
+returns `204` and changes nothing; concurrent requests anonymise once.
+
+After deletion: login and `/auth/refresh` return `401`. The access token is a
+stateless JWT and stays syntactically valid until its 15-minute TTL ends (no
+revocation list yet, issue #18), but every patient route returns `404` for
+it and booking/payment routes return `403 EMAIL_NOT_VERIFIED`. Clients should
+discard their tokens on `204`.
+
+A scheduled purge later hard-deletes deleted accounts that have **no**
+retained records, `ACCOUNT_PURGE_GRACE_HOURS` (default 24) after deletion.
+
 ## Not yet implemented
 
-`patients`, `facilities`, `prescriptions`, `lab-orders`,
-`pharmacy-orders` and `notifications` have no routes yet — Phase 2
-(intake), 4 (orders), 5 (facilities) and 6 (notifications), see
-`ROADMAP.md`.
+`patients`, `prescriptions`, `pharmacy-orders` and `notifications` have no
+routes yet — Phase 2 (intake), 4 (orders), 5 (facilities) and 6
+(notifications), see `ROADMAP.md`. Facility price lists themselves shipped
+with issue #127 (`/facilities`, above); the remaining facility-admin surface
+is still pending.
 
 ## Escrow chain events (/admin/payments/escrow-events)
 

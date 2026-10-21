@@ -18,6 +18,7 @@ import { getPlatformSigners } from './platform-signers';
 import { resolveEscrowPayee } from './payout-privacy';
 import { getMyPatientProfile, paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
+import { parseStroopsAmount } from '../../../utils/stroops';
 import * as auditService from '../../audit/services';
 import type { Prisma } from '@prisma/client';
 import { transitionPaymentIntentStatus } from './state-machine';
@@ -87,12 +88,20 @@ export function getWalletLink(facilityId: string) {
 
 /** Called by the orders module inside the order-issuance transaction. A
  * created intent moves to a corrected order; any funded/terminal intent
- * stays attached to the immutable original order. */
+ * stays attached to the immutable original order.
+ *
+ * `catalogItemCode` is snapshotted alongside the amount: the amount is the
+ * facility price in force when the doctor selected the facility, so a later
+ * price-list change cannot re-price an existing intent (issue #127). */
 export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, input: {
   kind: 'prescription' | 'lab_order'; orderId: string; patientProfileId: string; doctorProfileId: string;
   facilityProfileId: string; amountStroops: bigint; supersedesId: string | null;
+  catalogItemCode?: string | null;
 }) {
-  if (input.amountStroops <= 0n) throw new HttpError(400, 'amountStroops must be positive.');
+  // Same guard the facility price list uses: positive integer stroops that
+  // fit the asset's precision and the contract's i128 amount.
+  const amountStroops = parseStroopsAmount(input.amountStroops, 'amountStroops');
+  const catalogItemCode = input.catalogItemCode ?? null;
   const facility = await tx.facilityProfile.findUnique({ where: { id: input.facilityProfileId }, select: { type: true } });
   const expectedType = input.kind === 'prescription' ? 'pharmacy' : 'lab';
   if (!facility || facility.type !== expectedType) throw new HttpError(400, `The selected facility must be a ${expectedType} facility.`);
@@ -107,13 +116,13 @@ export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, i
     if (previous?.status === 'created') {
       const moved = await tx.paymentIntent.updateMany({
         where: { id: previous.id, status: 'created' },
-        data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops: input.amountStroops },
+        data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops, catalogItemCode },
       });
       if (moved.count === 1) return tx.paymentIntent.findUniqueOrThrow({ where: { id: previous.id } });
     }
   }
   return tx.paymentIntent.create({
-    data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops: input.amountStroops },
+    data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops, catalogItemCode },
   });
 }
 
@@ -355,3 +364,8 @@ export const paymentsExportSection: PatientExportSection = {
     );
   },
 };
+/** Retention hold (issue #41, docs/adr/0010): payment records are kept, so
+ * a patient who has any is never purged after deletion. */
+export function hasPaymentIntentsForPatient(patientProfileId: string): Promise<boolean> {
+  return paymentsRepo.patientHasPaymentIntents(patientProfileId);
+}

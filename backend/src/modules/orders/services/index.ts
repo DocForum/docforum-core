@@ -3,6 +3,7 @@ import { HttpError } from '../../../http-error';
 import * as appointmentsService from '../../appointments/services';
 import * as consultationsService from '../../consultations/services';
 import * as paymentsService from '../../payments/services';
+import * as facilitiesService from '../../facilities/services';
 import * as auditService from '../../audit/services';
 import { encryptField, decryptField } from '../../../utils/field-encryption';
 import * as ordersRepo from '../repositories';
@@ -46,40 +47,51 @@ async function consultationContext(actor: auditService.AuditActor, id: string) {
       windowStart,
     );
 
-    if (success) {
-      await record(tx, actor, {
-        entityType: 'Order',
-        entityId: orderId,
-        action: 'order.receipt_confirmed',
-        fromState: 'fulfilled',
-        toState: 'confirmed',
-        metadata: { confirmationSource: 'patient' },
-      });
+/**
+ * Resolves what to charge for an order, inside the issuance transaction.
+ *
+ * - `catalogItemCode` present → the facilities price in force *now* is the
+ *   amount (and the price version is what the intent snapshots). No price
+ *   published → 422 `PRICE_ON_REQUEST`, never a zero/guessed charge.
+ * - otherwise the caller's explicit `amountStroops` is used (legacy flow).
+ *
+ * Validation guarantees exactly one of the two is present.
+ */
+async function resolveOrderAmount(tx: Prisma.TransactionClient, input: {
+  facilityProfileId: string; amountStroops?: bigint; catalogItemCode?: string;
+}): Promise<{ amountStroops: bigint; catalogItemCode: string | null }> {
+  if (input.catalogItemCode) {
+    const price = await facilitiesService.requireCurrentPrice(tx, {
+      facilityProfileId: input.facilityProfileId,
+      catalogItemCode: input.catalogItemCode,
+    });
+    return { amountStroops: price.amount, catalogItemCode: input.catalogItemCode };
+  }
+  if (input.amountStroops === undefined) {
+    throw new HttpError(400, 'Either amountStroops or catalogItemCode is required.');
+  }
+  requirePositiveAmount(input.amountStroops);
+  return { amountStroops: input.amountStroops, catalogItemCode: null };
+}
 
-      const updated = await repo.findOrderForPatient(tx, orderId, patientProfile.id);
-      if (!updated) throw new HttpError(500, 'Failed to fetch updated order.');
-      return updated;
-    }
+async function createOrderPayment(tx: Prisma.TransactionClient, input: {
+  kind: 'prescription' | 'lab_order'; orderId: string; patientProfileId: string; doctorProfileId: string;
+  facilityProfileId: string; amountStroops: bigint; supersedesId: string | null; catalogItemCode: string | null;
+}) {
+  return paymentsService.createIntentForIssuedOrder(tx, input);
+}
 
-    // Conditional update failed — diagnose reason
-    const existing = await repo.findOrderForPatient(tx, orderId, patientProfile.id);
-    if (!existing) {
-      const orderExists = await tx.order.findUnique({ where: { id: orderId } });
-      if (!orderExists) {
-        throw new HttpError(404, 'Order not found.');
-      }
-      throw new HttpError(403, 'You do not have permission to confirm this order.');
-    }
-
-    if (existing.confirmed) {
-      // Idempotent success
-      return existing;
-    }
-    if (existing.disputed) {
-      throw new HttpError(409, 'Cannot confirm receipt of a disputed order.');
-    }
-    if (existing.status !== 'fulfilled') {
-      throw new HttpError(400, 'Order must be fulfilled before receipt can be confirmed.');
+export async function issuePrescription(actor: auditService.AuditActor, input: {
+  consultationId: string; facilityProfileId: string; amountStroops?: bigint; catalogItemCode?: string;
+  supersedesPrescriptionId?: string;
+  items: Array<{ drugName: string; dosage: string; frequency: string; duration: string }>;
+}) {
+  const { consultation, appointment } = await consultationContext(actor, input.consultationId);
+  let predecessor = null;
+  if (input.supersedesPrescriptionId) {
+    predecessor = await ordersRepo.findPrescriptionForCorrection(input.supersedesPrescriptionId);
+    if (!predecessor || predecessor.consultationId !== consultation.id || predecessor.correctedBy) {
+      throw new HttpError(409, 'The prescription to correct does not exist, belongs to another consultation, or already has a correction.');
     }
     if (existing.fulfilledAt && existing.fulfilledAt < windowStart) {
       throw new HttpError(409, 'Confirmation window has elapsed.');
@@ -100,59 +112,73 @@ export async function disputeOrder(
   if (!orderId || typeof orderId !== 'string') {
     throw new HttpError(400, 'Order ID is required.');
   }
-  if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
-    throw new HttpError(400, 'Dispute reason is required.');
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const pricing = await resolveOrderAmount(tx, input);
+      const order = await ordersRepo.createPrescription(tx, {
+        consultationId: consultation.id, patientProfileId: appointment.patientProfileId,
+        prescribingDoctorId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
+        amountStroops: pricing.amountStroops, supersedesPrescriptionId: predecessor?.id ?? null, items: input.items,
+      });
+      const paymentIntent = await createOrderPayment(tx, {
+        kind: 'prescription', orderId: order.id, patientProfileId: appointment.patientProfileId,
+        doctorProfileId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
+        amountStroops: pricing.amountStroops, supersedesId: predecessor?.id ?? null,
+        catalogItemCode: pricing.catalogItemCode,
+      });
+      await auditService.record(tx, actor, {
+        entityType: 'Prescription', entityId: order.id, action: 'prescription.issued',
+        fromState: null, toState: order.status,
+        metadata: {
+          consultationId: consultation.id, paymentIntentId: paymentIntent.id,
+          amountStroops: pricing.amountStroops.toString(),
+          catalogItemCode: pricing.catalogItemCode,
+        },
+      });
+      return { ...order, paymentIntent };
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new HttpError(409, 'This order already has a correction or payment intent.');
+    throw error;
   }
 
-  const patientProfile = await prisma.patientProfile.findUnique({
-    where: { userId: patientUserId },
-  });
-  if (!patientProfile) {
-    throw new HttpError(403, 'Patient profile required.');
+export async function issueLabOrder(actor: auditService.AuditActor, input: {
+  consultationId: string; facilityProfileId: string; amountStroops?: bigint; catalogItemCode?: string; testType: string;
+  urgency: 'routine' | 'urgent'; notes?: string; supersedesLabOrderId?: string;
+}) {
+  const { consultation, appointment } = await consultationContext(actor, input.consultationId);
+  let predecessor = null;
+  if (input.supersedesLabOrderId) {
+    predecessor = await ordersRepo.findLabOrderForCorrection(input.supersedesLabOrderId);
+    if (!predecessor || predecessor.consultationId !== consultation.id || predecessor.correctedBy) {
+      throw new HttpError(409, 'The lab order to correct does not exist, belongs to another consultation, or already has a correction.');
+    }
   }
-
-  const windowStart = new Date(
-    Date.now() - config.orders.confirmationWindowHours * 60 * 60 * 1000,
-  );
-
-  const result = await prisma.$transaction(async (tx) => {
-    const existingBefore = await repo.findOrderForPatient(tx, orderId, patientProfile.id);
-    if (!existingBefore) {
-      const orderExists = await tx.order.findUnique({ where: { id: orderId } });
-      if (!orderExists) {
-        throw new HttpError(404, 'Order not found.');
-      }
-      throw new HttpError(403, 'You do not have permission to dispute this order.');
-    }
-
-    if (existingBefore.confirmed) {
-      throw new HttpError(409, 'Cannot dispute an order that has already been confirmed.');
-    }
-    if (existingBefore.disputed) {
-      throw new HttpError(409, 'Order is already disputed.');
-    }
-    if (existingBefore.status !== 'fulfilled') {
-      throw new HttpError(400, 'Order must be fulfilled before it can be disputed.');
-    }
-    if (existingBefore.fulfilledAt && existingBefore.fulfilledAt < windowStart) {
-      throw new HttpError(409, 'Confirmation window has elapsed; order can no longer be disputed.');
-    }
-
-    const success = await repo.disputeOrderConditional(
-      tx,
-      orderId,
-      patientProfile.id,
-      windowStart,
-    );
-
-    if (!success) {
-      throw new HttpError(409, 'Unable to dispute order.');
-    }
-
-    await repo.createOrderDispute(tx, {
-      orderId,
-      patientProfileId: patientProfile.id,
-      reason: reason.trim(),
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const pricing = await resolveOrderAmount(tx, input);
+      const order = await ordersRepo.createLabOrder(tx, {
+        consultationId: consultation.id, patientProfileId: appointment.patientProfileId,
+        orderingDoctorId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
+        amountStroops: pricing.amountStroops, testType: input.testType, urgency: input.urgency,
+        notes: encryptField(input.notes) ?? null, supersedesLabOrderId: predecessor?.id ?? null,
+      });
+      const paymentIntent = await createOrderPayment(tx, {
+        kind: 'lab_order', orderId: order.id, patientProfileId: appointment.patientProfileId,
+        doctorProfileId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
+        amountStroops: pricing.amountStroops, supersedesId: predecessor?.id ?? null,
+        catalogItemCode: pricing.catalogItemCode,
+      });
+      await auditService.record(tx, actor, {
+        entityType: 'LabOrder', entityId: order.id, action: 'lab_order.issued',
+        fromState: null, toState: order.status,
+        metadata: {
+          consultationId: consultation.id, paymentIntentId: paymentIntent.id,
+          amountStroops: pricing.amountStroops.toString(),
+          catalogItemCode: pricing.catalogItemCode,
+        },
+      });
+      return { ...order, notes: decryptField(order.notes), paymentIntent };
     });
 
     await record(tx, actor, {
@@ -191,4 +217,41 @@ export async function getOrderById(orderId: string) {
     throw new HttpError(404, 'Order not found.');
   }
   return formatOrderResponse(order);
+}
+export const prescriptionsExportSection: PatientExportSection = {
+  name: 'prescriptions', version: 1,
+  pages(subject, pageSize) {
+    return paginate(pageSize,
+      (cursor, take) => ordersRepo.findPrescriptionExportPage(subject.patientProfileId, cursor, take),
+      (rows) => rows.map((row) => ({
+        id: row.id, consultationId: row.consultationId, prescribingDoctorId: row.prescribingDoctorId,
+        facilityProfileId: row.facilityProfileId, amountStroops: row.amountStroops.toString(),
+        supersedesPrescriptionId: row.supersedesPrescriptionId, createdAt: row.createdAt,
+        items: row.items.map(({ drugName, dosage, frequency, duration }) => ({ drugName, dosage, frequency, duration })),
+      })),
+    );
+  },
+};
+
+export const labOrdersExportSection: PatientExportSection = {
+  name: 'lab_orders', version: 1,
+  pages(subject, pageSize) {
+    return paginate(pageSize,
+      (cursor, take) => ordersRepo.findLabOrderExportPage(subject.patientProfileId, cursor, take),
+      (rows) => rows.map((row) => ({
+        id: row.id, consultationId: row.consultationId, orderingDoctorId: row.orderingDoctorId,
+        facilityProfileId: row.facilityProfileId, amountStroops: row.amountStroops.toString(),
+        testType: row.testType, urgency: row.urgency, notes: decryptField(row.notes),
+        supersedesLabOrderId: row.supersedesLabOrderId, createdAt: row.createdAt,
+        result: row.result ? { resultFileUrl: row.result.resultFileUrl, summary: row.result.summary, createdAt: row.result.createdAt } : null,
+      })),
+    );
+  },
+};
+
+/** Retention hold (issue #41, docs/adr/0010): prescriptions and lab orders
+ * are append-only clinical orders, so a patient who has any is never purged
+ * after deletion. */
+export function hasOrdersForPatient(patientProfileId: string): Promise<boolean> {
+  return ordersRepo.patientHasOrders(patientProfileId);
 }

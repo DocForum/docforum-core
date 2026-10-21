@@ -86,3 +86,11 @@ export async function createOrderDispute(
     },
   });
 }
+
+export async function patientHasOrders(patientProfileId: string): Promise<boolean> {
+  const [prescription, labOrder] = await Promise.all([
+    prisma.prescription.findFirst({ where: { patientProfileId }, select: { id: true } }),
+    prisma.labOrder.findFirst({ where: { patientProfileId }, select: { id: true } }),
+  ]);
+  return prescription !== null || labOrder !== null;
+}
