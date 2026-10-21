@@ -301,7 +301,7 @@ describe('AuditEvent foundation', () => {
         actorUserId: admin.id,
         actorRole: 'admin',
         requestId: `pay-fund-${runId}`,
-        metadata: { orderType: 'lab_order', orderId: intent.labOrderId, amountStroops: '5000', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
+        metadata: { orderType: 'lab_order', orderId: intent.labOrderId, amount: '5000', assetCode: 'XLM', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
       });
       expect((events[0]!.metadata as Record<string, unknown>).escrowId).toMatch(/^\d+$/);
       const serialized = JSON.stringify(events);
