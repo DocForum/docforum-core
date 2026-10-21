@@ -1,13 +1,20 @@
 import { z } from 'zod';
 
-export const referralTargetSchema = z.object({
-  // v1 requires a concrete target doctor — the routing rule for "a
-  // specialty, no specific doctor" is an unresolved design gap
-  // (ARCHITECTURE.md §6.1.2, issue #6), not silently defaulted here.
-  targetDoctorId: z.string().min(1),
-  targetSpecialtyId: z.string().min(1).optional(),
-  snapshotNotes: z.string().trim().min(1),
-});
+// A target is either a named doctor or a specialty (issue #6, ADR 0008).
+// Specialty-only targets are routed to a concrete doctor at creation —
+// the resolved doctor is always what gets stored, so nothing here creates
+// an unassigned referral. Both absent is a validation error rather than a
+// silent default; naming a doctor is never overridden by routing.
+export const referralTargetSchema = z
+  .object({
+    targetDoctorId: z.string().min(1).optional(),
+    targetSpecialtyId: z.string().min(1).optional(),
+    snapshotNotes: z.string().trim().min(1),
+  })
+  .refine((target) => !!target.targetDoctorId || !!target.targetSpecialtyId, {
+    message: 'A referral target needs a targetDoctorId or a targetSpecialtyId.',
+    path: ['targetDoctorId'],
+  });
 
 export const createReferralSchema = referralTargetSchema.extend({
   sourceConsultationId: z.string().min(1),
