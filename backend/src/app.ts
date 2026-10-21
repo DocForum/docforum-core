@@ -18,12 +18,15 @@ import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/aud
 import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
+import { registerRetentionHolds } from './retention-holds';
 
 export function createApp() {
   const app = express();
 
   // Phase 8, issue #40: idempotent, so building the app twice is harmless.
   registerPatientExportSections();
+  // Phase 8, issue #41: idempotent, so building the app twice is harmless.
+  registerRetentionHolds();
 
   // Phase 8, issue #35: login throttling keys on the client IP, so the
   // proxy chain has to be resolved deliberately rather than guessed. See

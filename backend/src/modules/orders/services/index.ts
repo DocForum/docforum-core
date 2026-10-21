@@ -194,3 +194,10 @@ export const labOrdersExportSection: PatientExportSection = {
     );
   },
 };
+
+/** Retention hold (issue #41, docs/adr/0010): prescriptions and lab orders
+ * are append-only clinical orders, so a patient who has any is never purged
+ * after deletion. */
+export function hasOrdersForPatient(patientProfileId: string): Promise<boolean> {
+  return ordersRepo.patientHasOrders(patientProfileId);
+}
