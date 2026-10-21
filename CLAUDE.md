@@ -10,6 +10,8 @@ Don't load `ARCHITECTURE.md` in full for a small, single-module task — `ARCHIT
 ## Mandatory: update ROADMAP.md every contribution
 Same rule as in AGENTS.md, stated again because it's the single most commonly skipped step: **any change that starts, completes, or blocks a roadmap-tracked item must update `ROADMAP.md` in the same turn/commit.** If you're generating a PR description, the roadmap update belongs in the same diff, not a follow-up.
 
+How to update it without conflicting with every other open PR: tick or edit only your own item's line, and write the changelog entry as a new file in `changelog.d/` (see `changelog.d/README.md`). Never append to the `## Changelog` section, and don't edit the top-of-file status summary or a phase's `**Status:**` line. Don't rewrite, reflow or re-wrap existing paragraphs in any shared doc; add your own lines (AGENTS.md → "Shared docs").
+
 ## Skill usage in this repo
 - Creating/editing `.docx`/`.pdf`/`.pptx`/`.xlsx` deliverables (e.g., a stakeholder-facing PRD export): use the relevant skill under `/mnt/skills/public/`. Default docs (`PRD.md`, `ARCHITECTURE.md`, etc.) stay Markdown in-repo — don't convert them to Word/PDF unless explicitly asked.
 - When scaffolding or editing backend/frontend files, prefer `str_replace`/`view` on real files in the repo over regenerating whole files, once the repo has real content beyond scaffolding.
