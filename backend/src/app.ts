@@ -19,6 +19,7 @@ import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
 import { registerRetentionHolds } from './retention-holds';
+import { notificationsRouter } from './modules/notifications/routes';
 
 export function createApp() {
   const app = express();
@@ -63,6 +64,7 @@ export function createApp() {
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
   app.use('/facilities', facilitiesRouter);
+  app.use('/notifications', notificationsRouter);
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);

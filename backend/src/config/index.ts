@@ -280,4 +280,15 @@ export const config = {
     // Header carrying the request id; accepted from the client or generated.
     requestIdHeader: 'x-request-id',
   },
+  notifications: {
+    emailProvider: process.env.EMAIL_PROVIDER ?? 'console',
+    smsProvider: process.env.SMS_PROVIDER ?? 'console',
+    emailFrom: process.env.EMAIL_FROM ?? 'DocForum <no-reply@localhost>',
+    smsFrom: process.env.SMS_FROM ?? '',
+    resendApiKey: process.env.RESEND_API_KEY,
+    twilioAccountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
+    twilioAuthToken: process.env.TWILIO_AUTH_TOKEN ?? '',
+    webhookSecret: process.env.NOTIFICATION_WEBHOOK_SECRET,
+    smsDailyCap: Number(process.env.SMS_DAILY_CAP ?? 3),
+  },
 } as const;

@@ -337,9 +337,24 @@ FulfillmentRecord
 Design note: kept separate from `Prescription`/`LabOrder` so a facility's operational status doesn't need write access to the clinical order record itself — it only writes to its own fulfillment row. Reduces blast radius of a compromised/misbehaving facility account.
 
 ### 4.8 Notifications
+The notification model now persists channel, delivery status, recipient,
+provider message ID, and delivery timestamps. `SmsConsent` persists E.164
+number consent and source. Templates accept only a login URL and never render
+clinical detail; Resend and Twilio are behind provider interfaces, with console
+delivery for local development and tests. See ADR 0007.
 ```
 Notification
-  id, user_id, type, payload (jsonb), read_at (nullable), created_at
+  id, user_id, channel (email | sms), type, status, recipient
+  subject (nullable), text_body, html_body (nullable), provider_message_id
+  sent_at, delivered_at, failed_at, created_at, updated_at
+
+SmsConsent
+  id, phone (unique E.164), status (opted_in | opted_out), source
+  created_at, updated_at
+
+Templates are versioned and accept only a login URL; clinical detail is never
+rendered into a notification. Resend and Twilio are selected behind provider
+interfaces; console delivery is used locally and in tests. See ADR 0007.
 ```
 
 ### 4.9 Auth hardening state (Phase 8)
@@ -579,4 +594,8 @@ T5, enforced as a curated config policy.
   decision: no secrets manager, no backups, disposable data, 30-day
   free-tier DB expiry.
 - Video/voice provider — undecided, PRD OQ-1 must resolve first.
+- Notification providers — Resend for email and Twilio for SMS behind provider-agnostic interfaces; local/test delivery uses the console adapter. See ADR 0007.
 - Multi-region / i18n — not designed for, not blocked either.
+### Notification providers
+
+Resend handles email and Twilio handles SMS behind provider-agnostic interfaces. Local and test delivery uses the console adapter. See `docs/adr/0007-notification-providers.md`.

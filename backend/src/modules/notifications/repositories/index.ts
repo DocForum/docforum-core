@@ -1,10 +1,16 @@
-// notifications repositories — placeholder. Data access only. Not to be
-// imported by other modules directly — go through services/ instead.
-//
-// No persistence yet on purpose: the `Notification` model in schema.prisma
-// is still the Phase 0 placeholder (no userId column, ARCHITECTURE.md §4.8),
-// and the in-app notification feed is Phase 6 — which is blocked on the
-// trigger points in Phases 3/4 (ROADMAP.md). Outbound *delivery* (including
-// the password reset link, #33) does not need that model, so it goes
-// through services/ without a DB row rather than inventing one here.
-export {};
+// notifications repositories — placeholder. Data access only. Not to be imported
+// by other modules directly — go through services/ instead.
+import { prisma } from '../../../db/prisma-client';
+
+export function createNotification(data: any) { return prisma.notification.create({ data }); }
+export function updateNotification(id: string, data: any) { return prisma.notification.update({ where: { id }, data }); }
+export function countSmsForUserSince(userId: string, since: Date) {
+  return prisma.notification.count({ where: { userId, channel: 'sms', createdAt: { gte: since }, status: { in: ['queued', 'sent', 'delivered'] } } });
+}
+export function updateByProviderMessageId(providerMessageId: string, data: any) {
+  return prisma.notification.updateMany({ where: { providerMessageId }, data });
+}
+export function upsertSmsConsent(phone: string, status: 'opted_in' | 'opted_out', source: string) {
+  return prisma.smsConsent.upsert({ where: { phone }, create: { phone, status, source }, update: { status, source } });
+}
+export function findSmsConsent(phone: string) { return prisma.smsConsent.findUnique({ where: { phone } }); }

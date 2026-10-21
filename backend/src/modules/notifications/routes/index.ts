@@ -1,3 +1,5 @@
-// notifications routes — placeholder. See PRD.md / ARCHITECTURE.md §3 for this module's scope.
-// TODO(Phase: see ROADMAP.md): define routes for notifications.
-export {};
+import { Router } from 'express';
+import * as controller from '../controllers';
+
+export const notificationsRouter = Router();
+notificationsRouter.post('/webhooks/:channel', controller.webhook);
