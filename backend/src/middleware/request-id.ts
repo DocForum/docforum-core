@@ -11,7 +11,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import type { AuditActor } from '../modules/audit/services';
-import type { Logger } from 'pino-logger';
+import type { Logger } from 'pino';
 import { requestLogger } from '../logger';
 
 declare global {

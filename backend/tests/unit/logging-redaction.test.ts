@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { Writable } from 'node:stream';
 import pino from 'pino';
 import type { Logger } from 'pino';
 import { REDACT_PATHS, bigIntSerialiser, loggerOptions, requestLogger } from '../../src/logger';
@@ -7,11 +8,17 @@ import { REDACT_PATHS, bigIntSerialiser, loggerOptions, requestLogger } from '..
 // to an in-memory stream so assertions can inspect the emitted JSON. This
 // is the same config the running server uses, so the test asserts the
 // actual redaction behaviour, not a copy.
+//
+// The destination must be a real Writable: `pino.destination({ write })`
+// treats its argument as SonicBoom options, falls back to fd 1, and the
+// lines go to the process stdout while `chunks` stays empty — which made
+// every negative assertion pass vacuously and every positive one fail.
 function captureLog(fn: (log: Logger) => void): string {
   const chunks: string[] = [];
-  const stream = pino.destination({
-    write(chunk: string) {
-      chunks.push(chunk);
+  const stream = new Writable({
+    write(chunk: Buffer | string, _encoding, callback) {
+      chunks.push(chunk.toString());
+      callback();
     },
   });
   const log = pino(

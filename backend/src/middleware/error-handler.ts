@@ -7,7 +7,7 @@ import { logger as rootLogger } from '../logger';
 import { localizedErrorMessage, resolveLocale } from '../i18n';
 
 // docforum-web's api-client.ts assumes an error envelope of
-// `{ code: string } (documented as unconfirmed there) — this is the
+// `{ message: string }` (documented as unconfirmed there) — this is the
 // implementation that assumption is checked against. Keep them in sync.
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   const requestLogger: Logger =

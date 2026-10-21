@@ -30,7 +30,7 @@ export function createApp() {
   app.set('trust proxy', config.trustProxy);
 
   // Explicit allowlist per environment (Phase 8, issue #37) — see
-  // config.corsOrigins. `credentials : true` is required for the refresh
+  // config.corsOrigins. `credentials: true` is required for the refresh
   // cookie and is exactly why the allowlist can't be a wildcard.
   // Phase 8, issue #43: first, so every response (errors included) carries
   // an X-Request-Id and audit events can be tied back to it. Phase 9,
@@ -41,7 +41,7 @@ export function createApp() {
   app.use(express.json());
   app.use(cookieParser());
 
-  app.get('health', (_req, res) => res.status(200).json({ status: 'ok' }));
+  app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 
   app.use('/auth', authRouter);
   // Admin surface. Currently only the auth module's session administration
@@ -58,7 +58,7 @@ export function createApp() {
   app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
-  // Phase 8, issue #39 — admin account lifecycle (invites, deactivate
+  // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);
   app.use('/admin', auditRouter);
