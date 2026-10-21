@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import EmbeddedPostgres from 'embedded-postgres';
 import { Keypair } from '@stellar/stellar-sdk';
+import { createOrderFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5440;
@@ -69,11 +70,18 @@ describe('prepare endpoint (issue #80)', () => {
 
   const actor = (userId: string) => ({ userId, role: 'patient' as const, requestId: `prepare-${runId}` });
 
-  async function createIntent(facility = facilityId) {
+  async function createIntent(facility = facilityId, profileId = patientProfileId) {
+    const order = await createOrderFixture(prisma, {
+      patientProfileId: profileId,
+      facilityProfileId: facility,
+      kind: 'prescription',
+      amountStroops: 500_000n,
+      tag: `prepare-${runId}-${Math.random().toString(36).slice(2)}`,
+    });
     return paymentsService.createPaymentIntent({
       orderType: 'prescription',
-      orderId: `prepare-${runId}-${Math.random()}`,
-      patientProfileId,
+      orderId: order.id,
+      patientProfileId: profileId,
       facilityId: facility,
       assetCode: 'XLM',
       amount: 500_000n,
@@ -246,16 +254,20 @@ describe('prepare endpoint (issue #80)', () => {
 
   it('returns 409 WALLET_NOT_LINKED when the patient has no verified wallet', async () => {
     // Put an intent on the other patient, who has a profile but no wallet link.
-    const intent = await prisma.paymentIntent.create({
-      data: {
-        orderType: 'lab_order',
-        orderId: `no-wallet-${runId}`,
-        patientProfileId: otherPatientProfileId,
-        facilityId,
-        assetCode: 'XLM',
-        tokenContractId: NATIVE_SAC,
-        amount: 100n,
-      },
+    const order = await createOrderFixture(prisma, {
+      patientProfileId: otherPatientProfileId,
+      facilityProfileId: facilityId,
+      kind: 'lab_order',
+      amountStroops: 100n,
+      tag: `no-wallet-${runId}`,
+    });
+    const intent = await paymentsService.createPaymentIntent({
+      orderType: 'lab_order',
+      orderId: order.id,
+      patientProfileId: otherPatientProfileId,
+      facilityId,
+      assetCode: 'XLM',
+      amount: 100n,
     });
 
     const error = await captureError(paymentsService.preparePaymentIntent(actor(otherPatientUserId), intent.id));

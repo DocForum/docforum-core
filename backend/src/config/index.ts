@@ -245,6 +245,23 @@ export const config = {
   },
   payments: {
     ...parsePaymentsConfig(process.env),
+    // Issue #79: per-environment asset allowlist (USDC + native XLM by
+    // default on testnet). The legacy `escrowTokenId`/`assetAllowlist`
+    // fields above remain for the pre-#79 native-XLM path.
+    assets: parsePaymentAssets(process.env.PAYMENT_ASSETS),
+    // Horizon is read only for payee trustline checks — never for contract
+    // calls, which go through the SDK.
+    horizonUrl: process.env.HORIZON_URL ?? 'https://horizon-testnet.stellar.org',
+    // Issue #80: how long a prepared, unsigned create_escrow transaction is
+    // considered live before the expiry job returns the intent to `created`.
+    prepareTtlSeconds: Number(process.env.PAYMENT_PREPARE_TTL_SECONDS ?? 5 * 60),
+    // ADR 0005: refund_after = order expiry + grace. Orders are still
+    // placeholders without an expiry field (Phase 4), so the intent's own
+    // createdAt is the order-expiry anchor today.
+    orderExpiryHours: Number(process.env.PAYMENT_ORDER_EXPIRY_HOURS ?? 72),
+    refundGraceHours: Number(process.env.PAYMENT_REFUND_GRACE_HOURS ?? 24),
+    // Expiry sweep cadence (src/jobs/payment-intents.ts).
+    prepareExpirySweepIntervalSeconds: Number(process.env.PAYMENT_PREPARE_EXPIRY_SWEEP_INTERVAL_SECONDS ?? 60),
     payoutPrivacyMode,
     payoutPrivacyPoolAddress: process.env.PAYOUT_PRIVACY_POOL_ADDRESS,
   },

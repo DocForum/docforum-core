@@ -181,7 +181,7 @@ describe('patient data export', () => {
     const bobPrescription = await createOrderFixture(prisma, { patientProfileId: bob.profileId, facilityProfileId: facilityId, kind: 'prescription', amountStroops: 9n, tag: `bob-rx-${runId}` });
     await prisma.paymentIntent.create({ data: {
       prescriptionId: bobPrescription.id, patientProfileId: bob.profileId, facilityId,
-      amountStroops: 9n, stellarTxHash: 'b'.repeat(64),
+      amount: 9n, assetCode: 'XLM', stellarTxHash: 'b'.repeat(64),
     } });
   }, 180_000);
 

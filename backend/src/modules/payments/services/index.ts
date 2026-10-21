@@ -12,10 +12,11 @@
 // issue #80 adds prepare(), which builds the patient-signed transaction.
 // Release/refund are unchanged.
 import { HttpError } from '../../../http-error';
-import { config } from '../../../config';
+import { config, type PaymentAsset } from '../../../config';
 import type { PaymentIntent, PaymentIntentStatus } from '@prisma/client';
 import * as paymentsRepo from '../repositories';
 import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
+import { hasTrustline } from './trustline';
 import { getPlatformSigners } from './platform-signers';
 import { resolveEscrowPayee } from './payout-privacy';
 import { getMyPatientProfile, paginate, type PatientExportSection } from '../../patients/services';
@@ -65,19 +66,17 @@ interface PrepareCapableClient {
 }
 
 async function requirePaymentsConfig() {
-  const { activeContractId, escrowTokenId } = config.payments;
-  const missing = Object.entries({ activeContractId, escrowTokenId })
-    .filter(([, value]) => !value)
-    .map(([key]) => key);
-  if (missing.length > 0) {
-    throw new HttpError(500, `Payments is not configured — missing env var(s): ${missing.join(', ')}.`);
+  // The per-asset token contract comes from the intent (issue #79), so the
+  // legacy ESCROW_TOKEN_ID is no longer required for every payment path.
+  const { activeContractId } = config.payments;
+  if (!activeContractId) {
+    throw new HttpError(500, 'Payments is not configured — missing env var(s): activeContractId.');
   }
   const { payer, releaser } = await getPlatformSigners();
   return {
     platformPayer: payer,
     platformReleaser: releaser,
-    escrowContractId: activeContractId!,
-    escrowTokenId: escrowTokenId!,
+    escrowContractId: activeContractId,
   };
 }
 async function escrowClient(contractId: string) {
@@ -128,6 +127,94 @@ export function getWalletLink(facilityId: string) {
   return paymentsRepo.findWalletLinkByFacilityId(facilityId);
 }
 
+export function getPatientWalletLink(patientProfileId: string) {
+  return paymentsRepo.findPatientWalletLinkByPatientProfileId(patientProfileId);
+}
+
+/** The per-environment allowlist (issue #79). An intent may only be created
+ * in one of these assets. */
+export function listPaymentAssets(): PaymentAsset[] {
+  return config.payments.assets;
+}
+
+function resolveAsset(code: string): PaymentAsset {
+  const asset = config.payments.assets.find((candidate) => candidate.code === code);
+  if (!asset) {
+    throw new HttpError(
+      400,
+      `Unsupported payment asset '${code}'. Allowed: ${config.payments.assets.map((a) => a.code).join(', ')}.`,
+      'UNSUPPORTED_PAYMENT_ASSET',
+    );
+  }
+  return asset;
+}
+
+/**
+ * Resolves the asset recorded on an intent. Rows created before issue #79
+ * have no `tokenContractId` and were native XLM funded against
+ * `ESCROW_TOKEN_ID` — the documented legacy fallback. The allowlist only
+ * supplies `decimals`/`issuer` for the response; the stored contract id
+ * wins so an intent keeps paying the asset it was denominated in even if
+ * the allowlist entry is later rotated.
+ */
+function resolveAssetForIntent(intent: PaymentIntent): PaymentAsset {
+  const configured = config.payments.assets.find((asset) => asset.code === intent.assetCode);
+  const tokenContractId =
+    intent.tokenContractId ??
+    (intent.assetCode === 'XLM' ? config.payments.escrowTokenId : undefined) ??
+    configured?.tokenContractId;
+  if (!tokenContractId) {
+    throw new HttpError(
+      409,
+      `PaymentIntent uses asset '${intent.assetCode}', whose token contract is not configured.`,
+      'PAYMENT_ASSET_NOT_CONFIGURED',
+    );
+  }
+  return {
+    code: intent.assetCode,
+    tokenContractId,
+    decimals: configured?.decimals ?? 0,
+    ...(configured?.issuer ? { issuer: configured.issuer } : {}),
+  };
+}
+
+/** Checks the payee can hold the asset before any on-chain call. Native XLM
+ * passes unconditionally; an issued asset needs an authorised trustline. */
+async function requirePayeeTrustline(payee: string, asset: PaymentAsset): Promise<void> {
+  if (!asset.issuer) return;
+  if (!(await hasTrustline(payee, asset))) {
+    throw new HttpError(
+      409,
+      `The facility's linked wallet has no trustline for ${asset.code}. Ask the facility to link a wallet that can hold ${asset.code}.`,
+      'PAYEE_TRUSTLINE_MISSING',
+    );
+  }
+}
+
+export interface CreatePaymentIntentInput {
+  orderType: 'prescription' | 'lab_order';
+  orderId: string;
+  patientProfileId: string;
+  facilityId: string;
+  assetCode: string;
+  /** Smallest unit of `assetCode`. */
+  amount: bigint;
+}
+
+export function createPaymentIntent(input: CreatePaymentIntentInput) {
+  if (input.amount <= 0n) throw new HttpError(400, 'amount must be positive.');
+  const asset = resolveAsset(input.assetCode);
+  return paymentsRepo.createPaymentIntent({
+    orderType: input.orderType,
+    orderId: input.orderId,
+    patientProfileId: input.patientProfileId,
+    facilityId: input.facilityId,
+    assetCode: asset.code,
+    tokenContractId: asset.tokenContractId,
+    amount: input.amount,
+  });
+}
+
 /** Called by the orders module inside the order-issuance transaction. A
  * created intent moves to a corrected order; any funded/terminal intent
  * stays attached to the immutable original order.
@@ -141,8 +228,11 @@ export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, i
   catalogItemCode?: string | null;
 }) {
   // Same guard the facility price list uses: positive integer stroops that
-  // fit the asset's precision and the contract's i128 amount.
+  // fit the asset's precision and the contract's i128 amount. Orders are
+  // still priced in native XLM; issue #79 made the intent's asset explicit
+  // so this write path has to name it rather than imply it.
   const amountStroops = parseStroopsAmount(input.amountStroops, 'amountStroops');
+  const asset = resolveAsset('XLM');
   const catalogItemCode = input.catalogItemCode ?? null;
   const facility = await tx.facilityProfile.findUnique({ where: { id: input.facilityProfileId }, select: { type: true } });
   const expectedType = input.kind === 'prescription' ? 'pharmacy' : 'lab';
@@ -158,13 +248,29 @@ export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, i
     if (previous?.status === 'created') {
       const moved = await tx.paymentIntent.updateMany({
         where: { id: previous.id, status: 'created' },
-        data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops, catalogItemCode },
+        data: {
+          ...orderPointer,
+          patientProfileId: input.patientProfileId,
+          facilityId: input.facilityProfileId,
+          amount: amountStroops,
+          assetCode: asset.code,
+          tokenContractId: asset.tokenContractId,
+          catalogItemCode,
+        },
       });
       if (moved.count === 1) return tx.paymentIntent.findUniqueOrThrow({ where: { id: previous.id } });
     }
   }
   return tx.paymentIntent.create({
-    data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops, catalogItemCode },
+    data: {
+      ...orderPointer,
+      patientProfileId: input.patientProfileId,
+      facilityId: input.facilityProfileId,
+      amount: amountStroops,
+      assetCode: asset.code,
+      tokenContractId: asset.tokenContractId,
+      catalogItemCode,
+    },
   });
 }
 
@@ -207,18 +313,23 @@ function paymentPage(filters: PaymentHistoryFilters, owner: { patientProfileId: 
   });
 }
 
+function serializeAsset(code: string) {
+  return { type: code === 'XLM' ? 'native' : 'issued', code };
+}
+
 function serializePayment(payment: PaymentIntent) {
   return {
     id: payment.id,
     orderType: payment.prescriptionId ? 'prescription' : 'lab_order',
     orderId: payment.prescriptionId ?? payment.labOrderId,
     status: payment.status,
-    amountStroops: payment.amountStroops.toString(),
-    asset: { type: 'native', code: 'XLM' },
+    amount: payment.amount.toString(),
+    assetCode: payment.assetCode,
+    asset: serializeAsset(payment.assetCode),
     escrowId: payment.escrowId?.toString() ?? null,
     stellarTxHash: payment.stellarTxHash,
     sorobanContractId: payment.sorobanContractId,
-    refundAfter: null,
+    refundAfter: payment.refundAfter,
     createdAt: payment.createdAt,
     updatedAt: payment.updatedAt,
   };
@@ -245,17 +356,39 @@ export async function listFacilityPaymentLedger(userId: string, filters: Payment
     listPayments(filters, { facilityId }),
     paymentsRepo.aggregateFacilityPayments(facilityId, filters.from, filters.to),
   ]);
-  const totals = new Map(aggregates.map((row) => [row.status, row._sum.amountStroops ?? 0n]));
+  // Totals are per asset: summing XLM and USDC smallest units would be
+  // meaningless, so each allowlisted asset gets its own row.
+  const totalsByAsset = new Map<string, Map<string, bigint>>();
+  for (const row of aggregates) {
+    const byStatus = totalsByAsset.get(row.assetCode) ?? new Map<string, bigint>();
+    byStatus.set(row.status, (byStatus.get(row.status) ?? 0n) + (row._sum.amount ?? 0n));
+    totalsByAsset.set(row.assetCode, byStatus);
+  }
   return {
     ...page,
-    totals: [
-      {
-        asset: { type: 'native', code: 'XLM' },
-        escrowed: (totals.get('escrowed') ?? 0n).toString(),
-        released: (totals.get('released') ?? 0n).toString(),
-        refunded: (totals.get('refunded') ?? 0n).toString(),
-      },
-    ],
+    totals: [...totalsByAsset.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([code, byStatus]) => ({
+        asset: serializeAsset(code),
+        escrowed: (byStatus.get('escrowed') ?? 0n).toString(),
+        released: (byStatus.get('released') ?? 0n).toString(),
+        refunded: (byStatus.get('refunded') ?? 0n).toString(),
+      })),
+  };
+}
+
+/** Public, non-identifying references only: the escrow is on a public
+ * ledger anyway. No patient data, no secrets. */
+function intentAuditMetadata(intent: PaymentIntent) {
+  return {
+    orderType: intent.prescriptionId ? 'prescription' : 'lab_order',
+    orderId: intent.prescriptionId ?? intent.labOrderId!,
+    amount: intent.amount.toString(),
+    assetCode: intent.assetCode,
+    escrowId: intent.escrowId?.toString() ?? null,
+    stellarTxHash: intent.stellarTxHash,
+    sorobanContractId: intent.sorobanContractId,
+    preparedTxHash: intent.preparedTxHash,
   };
 }
 
@@ -284,16 +417,7 @@ async function commitTransition(
       action,
       fromState: intent.status,
       toState: to,
-      // Public, non-identifying references only: the escrow is on a public
-      // ledger anyway. No patient data, no secrets.
-      metadata: {
-        orderType: updated.prescriptionId ? 'prescription' : 'lab_order',
-        orderId: updated.prescriptionId ?? updated.labOrderId!,
-        amountStroops: updated.amountStroops.toString(),
-        escrowId: updated.escrowId?.toString() ?? null,
-        stellarTxHash: updated.stellarTxHash,
-        sorobanContractId: updated.sorobanContractId,
-      },
+      metadata: intentAuditMetadata(updated),
     });
     return updated;
   });
@@ -309,23 +433,26 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   const walletLink = await paymentsRepo.findWalletLinkByFacilityId(intent.facilityId);
   if (!walletLink) throw new HttpError(409, 'The facility for this payment has no linked wallet.');
 
-  const { platformPayer, platformReleaser, escrowContractId, escrowTokenId } = await requirePaymentsConfig();
-  if (config.payments.assetAllowlist.length > 0 && !config.payments.assetAllowlist.includes(escrowTokenId)) {
-    throw new HttpError(500, 'Configured escrow token is not in the payments asset allowlist.');
-  }
+  const { platformPayer, platformReleaser, escrowContractId } = await requirePaymentsConfig();
   const payee = resolveEscrowPayee({
     facilityAddress: walletLink.stellarPublicKey,
     mode: config.payments.payoutPrivacyMode,
     poolAddress: config.payments.payoutPrivacyPoolAddress,
     production: process.env.NODE_ENV === 'production',
   });
+
+  const asset = resolveAssetForIntent(intent);
+  // The trustline belongs to the address that actually receives the payout,
+  // which in pooled mode is the pool rather than the facility wallet.
+  await requirePayeeTrustline(payee, asset);
+
   const client = await escrowClient(escrowContractId);
 
   const { escrowId, txHash } = await client.createEscrow({
     payer: platformPayer as unknown as EscrowSdkKeypair,
     payee,
-    token: escrowTokenId,
-    amount: intent.amountStroops,
+    token: asset.tokenContractId,
+    amount: intent.amount,
     // The PaymentIntent's own id is the opaque condition_ref — the
     // contract never interprets it (docforum-escrow ADR 0001); it's
     // just how we can trace an on-chain escrow back to this record.

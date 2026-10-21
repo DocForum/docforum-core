@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import EmbeddedPostgres from 'embedded-postgres';
 import { Keypair } from '@stellar/stellar-sdk';
+import { createOrderFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5439;
@@ -62,6 +63,29 @@ describe('payment assets (issue #79)', () => {
   const sdkCalls: Array<{ token: string; amount: bigint }> = [];
   const trustlineCalls: Array<{ account: string; code: string }> = [];
   let trustlineResult = true;
+
+  async function createIntent(input: {
+    kind: 'prescription' | 'lab_order';
+    assetCode: string;
+    amount: bigint;
+    facilityId?: string;
+  }) {
+    const order = await createOrderFixture(prisma, {
+      patientProfileId,
+      facilityProfileId: input.facilityId ?? facilityId,
+      kind: input.kind,
+      amountStroops: input.amount,
+      tag: `assets-${runId}-${Math.random().toString(36).slice(2)}`,
+    });
+    return paymentsService.createPaymentIntent({
+      orderType: input.kind,
+      orderId: order.id,
+      patientProfileId,
+      facilityId: input.facilityId ?? facilityId,
+      assetCode: input.assetCode,
+      amount: input.amount,
+    });
+  }
 
   beforeAll(async () => {
     await pg.initialise();
@@ -125,14 +149,7 @@ describe('payment assets (issue #79)', () => {
   });
 
   it('stores the asset and its token contract on the intent', async () => {
-    const intent = await paymentsService.createPaymentIntent({
-      orderType: 'prescription',
-      orderId: `usdc-${runId}`,
-      patientProfileId,
-      facilityId,
-      assetCode: 'USDC',
-      amount: 25_000_000n,
-    });
+    const intent = await createIntent({ kind: 'prescription', assetCode: 'USDC', amount: 25_000_000n });
 
     expect(intent.assetCode).toBe('USDC');
     expect(intent.tokenContractId).toBe(USDC_SAC);
@@ -159,14 +176,7 @@ describe('payment assets (issue #79)', () => {
     trustlineCalls.length = 0;
     sdkCalls.length = 0;
 
-    const intent = await paymentsService.createPaymentIntent({
-      orderType: 'lab_order',
-      orderId: `usdc-fund-${runId}`,
-      patientProfileId,
-      facilityId,
-      assetCode: 'USDC',
-      amount: 12_500_000n,
-    });
+    const intent = await createIntent({ kind: 'lab_order', assetCode: 'USDC', amount: 12_500_000n });
     const funded = await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
 
     expect(funded.status).toBe('escrowed');
@@ -178,14 +188,7 @@ describe('payment assets (issue #79)', () => {
     trustlineResult = false;
     sdkCalls.length = 0;
 
-    const intent = await paymentsService.createPaymentIntent({
-      orderType: 'lab_order',
-      orderId: `no-trustline-${runId}`,
-      patientProfileId,
-      facilityId,
-      assetCode: 'USDC',
-      amount: 100n,
-    });
+    const intent = await createIntent({ kind: 'lab_order', assetCode: 'USDC', amount: 100n });
 
     const error = await captureError(() => paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id));
     expect(error.status).toBe(409);
@@ -198,14 +201,7 @@ describe('payment assets (issue #79)', () => {
     trustlineCalls.length = 0;
     sdkCalls.length = 0;
 
-    const intent = await paymentsService.createPaymentIntent({
-      orderType: 'prescription',
-      orderId: `xlm-${runId}`,
-      patientProfileId,
-      facilityId,
-      assetCode: 'XLM',
-      amount: 500_000n,
-    });
+    const intent = await createIntent({ kind: 'prescription', assetCode: 'XLM', amount: 500_000n });
     const funded = await paymentsService.fundPaymentIntent(TEST_ACTOR, intent.id);
 
     expect(funded.status).toBe('escrowed');
@@ -216,16 +212,10 @@ describe('payment assets (issue #79)', () => {
   it('resolves the legacy null token contract to ESCROW_TOKEN_ID', async () => {
     sdkCalls.length = 0;
     // A row created before issue #79: no tokenContractId, native XLM only.
-    const legacy = await prisma.paymentIntent.create({
-      data: {
-        orderType: 'prescription',
-        orderId: `legacy-${runId}`,
-        patientProfileId,
-        facilityId,
-        assetCode: 'XLM',
-        tokenContractId: null,
-        amount: 1_000_000n,
-      },
+    const created = await createIntent({ kind: 'prescription', assetCode: 'XLM', amount: 1_000_000n });
+    const legacy = await prisma.paymentIntent.update({
+      where: { id: created.id },
+      data: { tokenContractId: null },
     });
 
     const funded = await paymentsService.fundPaymentIntent(TEST_ACTOR, legacy.id);

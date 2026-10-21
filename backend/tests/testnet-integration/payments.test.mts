@@ -171,9 +171,10 @@ describe('payments module against live testnet', () => {
   }, 60_000);
 
   it('rejects a USDC escrow when the payee has no trustline, before any on-chain call', async () => {
+    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: 100_000n, tag: `usdc-no-trustline-${runId}` });
     const intent = await paymentsService.createPaymentIntent({
       orderType: 'lab_order',
-      orderId: 'test-order-usdc-no-trustline',
+      orderId: order.id,
       patientProfileId,
       facilityId,
       assetCode: 'USDC',
@@ -185,9 +186,10 @@ describe('payments module against live testnet', () => {
   }, 30_000);
 
   it.skipIf(!USDC_FUNDING_ENABLED)('funds and releases a USDC escrow end-to-end on testnet', async () => {
+    const order = await createOrderFixture(prisma, { patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: 500_000n, tag: `usdc-release-${runId}` });
     const intent = await paymentsService.createPaymentIntent({
       orderType: 'lab_order',
-      orderId: 'test-order-usdc-release',
+      orderId: order.id,
       patientProfileId,
       facilityId,
       assetCode: 'USDC',

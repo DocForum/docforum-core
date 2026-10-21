@@ -298,6 +298,10 @@ model PatientProfile {
   // Phase 3: the referrals this patient is the subject of (the opposite
   // side of Referral.patientProfileId).
   referrals      Referral[]
+  // ADR 0005 step 1 (issue #80): the patient's verified Stellar payer
+  // address, when one has been linked. Optional because linking is a
+  // separate flow that nothing creates rows for yet.
+  walletLink     PatientWalletLink?
 
   // Phase 8 (issue #45): who viewed this patient's records.
   accessLogs AccessLog[]

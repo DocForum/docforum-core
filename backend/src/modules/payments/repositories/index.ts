@@ -29,6 +29,36 @@ export function findWalletLinkByFacilityId(facilityId: string) {
   return prisma.walletLink.findUnique({ where: { facilityId } });
 }
 
+/** The patient's payer wallet (ADR 0005). Rows are created by the SEP-10
+ * linking flow once it exists — not by this module's HTTP surface yet. */
+export function findPatientWalletLinkByPatientProfileId(patientProfileId: string) {
+  return prisma.patientWalletLink.findUnique({ where: { patientProfileId } });
+}
+
+export function createPaymentIntent(input: {
+  orderType: 'prescription' | 'lab_order';
+  orderId: string;
+  patientProfileId: string;
+  facilityId: string;
+  assetCode: string;
+  tokenContractId: string;
+  amount: bigint;
+}) {
+  const orderPointer = input.orderType === 'prescription'
+    ? { prescriptionId: input.orderId, labOrderId: null }
+    : { prescriptionId: null, labOrderId: input.orderId };
+  return prisma.paymentIntent.create({
+    data: {
+      ...orderPointer,
+      patientProfileId: input.patientProfileId,
+      facilityId: input.facilityId,
+      assetCode: input.assetCode,
+      tokenContractId: input.tokenContractId,
+      amount: input.amount,
+    },
+  });
+}
+
 export function findPaymentIntentById(id: string) {
   return prisma.paymentIntent.findUnique({ where: { id } });
 }
@@ -80,16 +110,17 @@ export function findPaymentHistoryPage(
   });
 }
 
-/** Aggregate each lifecycle bucket in PostgreSQL; amountStroops stays BigInt end to end. */
+/** Aggregate each lifecycle bucket, per asset, in PostgreSQL. The amount
+ * stays BigInt end to end; mixing assets in one total would be meaningless. */
 export function aggregateFacilityPayments(facilityId: string, from?: Date, to?: Date) {
   return prisma.paymentIntent.groupBy({
-    by: ['status'],
+    by: ['status', 'assetCode'],
     where: {
       facilityId,
       status: { in: ['escrowed', 'released', 'refunded'] },
       ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
     },
-    _sum: { amountStroops: true },
+    _sum: { amount: true },
   });
 }
 

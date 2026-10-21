@@ -101,13 +101,13 @@ describe('PaymentIntent BigInt round-trip (Prisma 7 driver adapter)', () => {
     // Goes through the module's own service, so this exercises the real write
     // path rather than a hand-built query.
     const order = await createOrderFixture(prisma, {
-      patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops, tag: orderId,
+      patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: amount, tag: orderId,
     });
     const created = await prisma.$transaction((tx) => paymentsService.createIntentForIssuedOrder(tx, {
       kind: 'lab_order', orderId: order.id, patientProfileId, doctorProfileId: order.doctorProfileId,
-      facilityProfileId: facilityId, amountStroops, supersedesId: null,
+      facilityProfileId: facilityId, amountStroops: amount, supersedesId: null,
     }));
-    expect(created.amountStroops).toBe(amountStroops);
+    expect(created.amount).toBe(amount);
 
     // Re-read from the database, bypassing the in-memory object the create
     // returned — this is the assertion that actually proves the adapter
