@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
+import { availabilitySlotFactory } from '../factories/index.js';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5433;
@@ -110,17 +111,14 @@ describe('booking concurrency', () => {
     expect(doctorMe.status).toBe(200);
     const doctorProfileId = doctorMe.body.id as string;
 
-    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const generate = await request(app)
-      .post(`/availability/doctors/${doctorProfileId}/slots/generate`)
-      .set('Authorization', `Bearer ${doctorAccessToken}`)
-      .send({ date: tomorrow, startHour: 9, endHour: 10, slotLengthMinutes: 30 });
-    expect(generate.status).toBe(201);
-    expect(generate.body.created).toBeGreaterThan(0);
-
-    const slots = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
-    expect(slots.body.length).toBeGreaterThan(0);
-    slotId = slots.body[0].id;
+    const slotStart = new Date(Date.now() + 25 * 60 * 60 * 1_000);
+    const slot = await prisma.availabilitySlot.create({
+      data: availabilitySlotFactory(doctorProfileId, {
+        startTime: slotStart,
+        endTime: new Date(slotStart.getTime() + 30 * 60_000),
+      }),
+    });
+    slotId = slot.id;
 
     patientTokens = await Promise.all(Array.from({ length: CONCURRENT_PATIENTS }, (_, i) => signupPatient(app, i)));
   });
