@@ -306,3 +306,9 @@ export async function forceCancelAppointment(db: Prisma.TransactionClient, appoi
   }
   return appointmentsRepo.findAppointmentById(db, appointmentId);
 }
+
+/** Retention hold (issue #41, docs/adr/0010): appointments are clinical
+ * records, so a patient who has any is never purged after deletion. */
+export function hasAppointmentsForPatient(patientProfileId: string): Promise<boolean> {
+  return appointmentsRepo.patientHasAppointments(patientProfileId);
+}

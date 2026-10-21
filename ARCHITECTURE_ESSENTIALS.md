@@ -8,7 +8,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`. The refresh cookie is `SameSite=None` cross-site, so `/auth/refresh` + `/auth/logout` require an `X-CSRF-Token` header (a per-session token bound into the refresh JWT) and an allowlisted `Origin` — see `backend/src/middleware/csrf.ts`. CORS is an explicit per-environment allowlist (`CORS_ORIGINS`).
 - Frontend: React + TypeScript + Vite, React Query + Zustand.
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
-- Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue. Existing interval jobs: login-throttle prune (`src/server.ts`) and patient-export worker/cleanup (`src/jobs/patient-exports.ts`), both started only from `server.ts`.
+- Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue. Existing interval jobs: login-throttle prune (`src/server.ts`), patient-export worker/cleanup (`src/jobs/patient-exports.ts`) and deleted-account tombstone purge (`src/jobs/account-purge.ts`), all started only from `server.ts`.
 - New module holding patient data? Register a patient-export section (ARCHITECTURE.md §3.1) — right of access must stay complete.
 
 ## Hard rules (violating these = request changes on the PR)
@@ -30,6 +30,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `User` → `AccessLog` (Phase 8, issue #45 — PHI read-access log: who viewed which clinical record, when; fire-and-forget writes, fail-open).
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
+Account deletion (Phase 8, issue #41 — docs/adr/0010): anonymise in place (`User.deletedAt`, `PatientProfile.anonymizedAt`), never cascade. `PatientProfile.userId` is ON DELETE RESTRICT; new patient-linked clinical tables must be RESTRICT too **and** register a retention hold in `src/retention-holds.ts`.
 `FacilityProfile` → `WalletLink` (payout address) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85)
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
