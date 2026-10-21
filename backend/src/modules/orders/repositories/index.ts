@@ -3,13 +3,8 @@ import type { Prisma } from '@prisma/client';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
-export function createConsultation(db: DbClient, input: { appointmentId: string; outcome: 'resolved' | 'referred' | 'follow_up_needed' | null; notes: string | null }) {
-  return db.consultation.create({ data: input });
-}
-
-export function findConsultation(id: string, db: DbClient = prisma) {
-  return db.consultation.findUnique({ where: { id } });
-}
+// Consultation rows are owned by the consultations module; this module goes
+// through its services (see orders/services) rather than writing them here.
 
 export function findPrescriptionForCorrection(id: string, db: DbClient = prisma) {
   return db.prescription.findUnique({ where: { id }, include: { correctedBy: true } });
