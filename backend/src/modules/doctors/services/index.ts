@@ -10,6 +10,57 @@ export async function getMyDoctorProfile(userId: string) {
   return profile;
 }
 
+export function listSpecialties() {
+  return doctorsRepo.findSpecialties();
+}
+
+export async function listPublicDoctors(input: {
+  specialty?: string;
+  q?: string;
+  limit: number;
+  cursor?: string;
+}) {
+  const ranked = await doctorsRepo.searchVerifiedDoctorIds({
+    query: input.q ?? null,
+    specialtySlug: input.specialty ?? null,
+    cursor: input.cursor ?? null,
+    take: input.limit + 1,
+  });
+  const hasMore = ranked.length > input.limit;
+  const page = ranked.slice(0, input.limit);
+  const details = await doctorsRepo.findPublicDoctorDetails(page.map((doctor) => doctor.id));
+  const detailsById = new Map(details.map((doctor) => [doctor.id, doctor]));
+
+  return {
+    items: page.flatMap((rankedDoctor) => {
+      const doctor = detailsById.get(rankedDoctor.id);
+      if (!doctor) return [];
+      return [{
+        id: doctor.id,
+        fullName: doctor.fullName,
+        specialties: doctor.specialties.map((assignment) => assignment.specialty),
+      }];
+    }),
+    nextCursor: hasMore ? page.at(-1)?.id ?? null : null,
+  };
+}
+
+export async function setMySpecialties(userId: string, requestedIds: string[]) {
+  const specialtyIds = [...new Set(requestedIds)];
+  return prisma.$transaction(async (tx) => {
+    const profile = await doctorsRepo.findDoctorProfileByUserId(userId, tx);
+    if (!profile) throw new HttpError(404, 'No doctor profile for this account.');
+
+    const specialties = await doctorsRepo.findSpecialtiesByIds(specialtyIds, tx);
+    if (specialties.length !== specialtyIds.length) {
+      throw new HttpError(400, 'One or more specialty ids are unknown.');
+    }
+
+    await doctorsRepo.replaceDoctorSpecialties(tx, profile.id, specialtyIds);
+    return { specialties: specialties.sort((a, b) => a.name.localeCompare(b.name)) };
+  });
+}
+
 export async function getDoctorProfileById(doctorProfileId: string) {
   const profile = await doctorsRepo.findDoctorProfileById(doctorProfileId);
   if (!profile) throw new HttpError(404, 'Doctor profile not found.');

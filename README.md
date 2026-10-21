@@ -157,7 +157,9 @@ the `embedded-postgres` devDependency instead, see below) or your own.
 git clone https://github.com/DocForum/docforum-core.git
 cd docforum-core/backend
 npm install
-cp .env.example .env   # fill in DATABASE_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET
+cp .env.example .env   # fill in DATABASE_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET,
+                       # and FIELD_ENCRYPTION_KEY_V1 (base64, 32 bytes — closes
+                       # consultations encrypt their notes; see scripts/README.md)
 npx prisma migrate deploy   # applies backend/prisma/migrations/
 npm run dev                 # → http://localhost:4000, GET /health to check
 ```
@@ -192,8 +194,11 @@ with a hop limit, multi-referral bundles from one consultation, and an
 admin queue with audited reassign/cancel, and specialty-only referrals
 routed at creation to the least-loaded eligible doctor (issue #6,
 `docs/adr/0008-referral-routing-without-target-doctor.md`). Still open
-within Phase 3: a time-based expiry job (issue #8). Phase 2's remaining
-pieces (intake, doctor's today view, specialty discovery) come next.
+within Phase 3: a time-based expiry job (issue #8). Phase 2 is in
+progress alongside it: the `Consultation` record and its close-once
+guarantee (issue #4) are done, and the appointment lifecycle
+(completed/cancelled/no_show) exists as Phase 3's prerequisite; intake,
+the doctor's today view and specialty discovery are still ahead.
 
 Full phase breakdown: [`ROADMAP.md`](ROADMAP.md).
 

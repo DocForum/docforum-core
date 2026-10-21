@@ -4,6 +4,9 @@ import * as paymentsController from '../controllers';
 
 export const paymentsRouter = Router();
 
+paymentsRouter.get('/mine', authenticate, requireRole('patient'), paymentsController.listMyPayments);
+paymentsRouter.get('/facility/ledger', authenticate, requireRole('facility'), paymentsController.listFacilityLedger);
+
 // Facility manages its own payout wallet.
 paymentsRouter.post(
   '/wallet-link',

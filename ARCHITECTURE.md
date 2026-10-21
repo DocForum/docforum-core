@@ -54,7 +54,7 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `lab-orders` — lab order issuance and versioning.
 - `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
 - `notifications` — outbound notification dispatch, provider-agnostic.
-- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking (both the direct and the referral-origin path), doctor verification, payment fund/release/refund, the patient's referral accept/decline, and the referral admin actions (Phase 3, issue #68 — `referral.reassign` / `referral.cancel`, recorded as `entityType: 'Referral'` rows; there is no second, referral-specific audit table). **Phase 4 transitions (prescriptions, lab orders, fulfillment) must call `record()` in the same transaction when they're built** — that wiring is not done here. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
+- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking (both the direct and the referral-origin path), consultation closing (Phase 2, issue #4), doctor verification, payment fund/release/refund, the patient's referral accept/decline, and the referral admin actions (Phase 3, issue #68 — `referral.reassign` / `referral.cancel`, recorded as `entityType: 'Referral'` rows; there is no second, referral-specific audit table). **Phase 4 transitions (fulfillment) must call `record()` in the same transaction when they're built** — prescriptions and lab orders already do. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
 
 ### 3.1 Patient data export registry (Phase 8, issue #40)
 
@@ -107,6 +107,10 @@ User
     Backfilled to created_at for pre-existing rows in the
     add_email_verification migration, so accounts from before this phase
     are treated as verified)
+  locale (string, default `en` — Phase 9 issue #133; selected from
+    Accept-Language at signup, unsupported tags fall back to `en`)
+  locale (string, default `en` — Phase 9 issue #133; supported language
+    selected from Accept-Language at signup, unsupported tags fall back to `en`)
   created_at, updated_at
 
 EmailVerificationToken (Phase 8 issue #34)
@@ -169,18 +173,23 @@ Consultation
   id, appointment_id (FK, unique — one consultation per appointment;
     a re-visit is a new appointment, not a second row)
   notes [ENCRYPTED — Phase 8 issue #46, see §2 field-level encryption row]
-  outcome (enum: resolved|referred|follow_up_needed)
+  outcome (enum: resolved|referred|follow_up_needed, nullable in the schema —
+    the close routes require it, so a closed record has one; see below)
   created_at, updated_at
   referrals: Referral[]   # children — the lineage loop detection walks
 ```
+**Implemented 2026-10-20 (Phase 2, issue #4):** `appointment_id UNIQUE` is what makes a consultation closable **once** — a second concurrent close loses at the INSERT, not at an app-level check (see docs/adr/0009). There is no amendment/edit path in v1. `notes` is encrypted on write via `encryptField()` (requires `FIELD_ENCRYPTION_KEY_V1`), so the first writer to a clinical free-text column honours the rule below rather than starting a plaintext precedent; reads decrypt in the consultations service.
+
+The row has exactly one writer — `consultationsService.createConsultation` — reachable from three addresses so that no path can bypass the uniqueness, encryption or audit rules: `POST /consultations` (appointment in the body; Phase 3's referral slice, `outcome` optional so a record can exist before sign-off), `POST /appointments/:id/consultation` (Phase 2's close route, `outcome` + `notes` required), and the orders flow's consultation step (which adds its own verified-doctor gate and then delegates). All of them require the appointment to be `completed` and to belong to the calling doctor, and all of them write the same `consultation.closed` audit event in the same transaction.
+
 **Encryption note:** `notes` is stored as an AES-256-GCM envelope (`v1:<iv>:<tag>:<data>`) via `backend/src/utils/field-encryption.ts`. Because it's encrypted, it **cannot be searched or indexed** — any future full-text search over consultation notes must decrypt in the application layer or use a separate searchable index, not a Postgres index on this column. Key rotation: `backend/scripts/rotate-field-keys.mjs` re-encrypts in batches.
 
-Real as of Phase 3 (issue #5's minimal slice): created by the treating
-doctor against their own **completed** appointment, and readable only by
-that doctor and the patient of the underlying appointment. What is still
-open is issue #4's fuller workflow — sign-off, addenda, a doctor editing
-notes after the fact — which is exactly why the referral snapshot (§4.4)
-exists rather than referrals reading this row live.
+Readable (`GET /consultations/:id`) only by the treating doctor and the
+patient of the underlying appointment; anyone else gets `403`, and the
+stored ciphertext never leaves the module. What is still open is issue
+#4's fuller workflow — sign-off, addenda, a doctor editing notes after the
+fact — which is exactly why the referral snapshot (§4.4) exists rather
+than referrals reading this row live.
 
 ### 4.4 Referral
 ```
@@ -341,6 +350,7 @@ that makes the trail append-only covers them too.
 
 Transitions recorded (action: from → to):
 - `appointment.booked`: `null → scheduled` (metadata: slot id, doctor profile id, origin). Written by the appointments module for **both** booking paths — a direct booking and a referral-origin booking (the accept path), which is what the `origin` metadata distinguishes; there is no way to create an appointment that leaves no trail.
+- `consultation.closed`: `null → outcome` (metadata: appointment id; never the notes — that's PHI). Written by the consultations module for every consultation write, whichever route addressed it (`POST /consultations`, `POST /appointments/:id/consultation`, or the orders flow).
 - `doctor.verification_status_changed`: previous → new verification status (read under `FOR UPDATE`; a no-op set records nothing)
 - `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
 - `referral.accepted`: `pending → accepted` (metadata: the appointment id the accept booked). Written by the referrals module in the same transaction as the accept, so the patient's decision and the appointment it produced are both recorded or neither is.
