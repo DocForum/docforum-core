@@ -21,6 +21,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` (including `locale`, default `en`, Phase 9 #133) → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
+`User` (guardian) —< `Guardianship` >— `PatientProfile` (dependent, `userId` null) (Phase 8, issue #42 — docs/adr/0011; create-only, access ends at `AGE_OF_MAJORITY_YEARS`; authorise any act-for-a-patient path through `patientsService.resolveActingProfile`).
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` (`availability_slot_id` nullable — a cancelled appointment releases its slot; booking safety is `claimOpenSlot`, not that column) → `IntakeForm`, `Consultation`
 `Consultation` (`appointmentId` **UNIQUE** — closing a consultation is a create-once operation, `409` on a second attempt; one writer, `consultationsService.createConsultation`, reached from `POST /consultations`, `POST /appointments/:id/consultation` and the orders flow; see docs/adr/0009) → (outcome=referred) → `Referral` (snapshot! required `target_doctor_id` — routed at creation when only a specialty is named, ADR 0008; self-FK lineage `parent_referral_id`, no-show/loop/admin flags) → new `Appointment`
@@ -31,14 +32,14 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
 Account deletion (Phase 8, issue #41 — docs/adr/0010): anonymise in place (`User.deletedAt`, `PatientProfile.anonymizedAt`), never cascade. `PatientProfile.userId` is ON DELETE RESTRICT; new patient-linked clinical tables must be RESTRICT too **and** register a retention hold in `src/retention-holds.ts`.
-`FacilityProfile` → `WalletLink` (payout address) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85)
+`FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile` → `PatientWalletLink` (payer address, ADR 0005) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85), whose `amount` is in the smallest unit of a per-environment allowlisted `assetCode` (issue #79)
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
 - **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule.
 - `WalletLink` is scoped to the **facility** (the on-chain payee), not the patient.
 - Each issued order stores its selected facility and clinician-entered total in XLM stroops; a database check requires exactly one PaymentIntent order FK.
 - `release`/`refund` are admin-triggered HTTP actions in v1 (`POST /payments/intents/:id/{release,refund}`) — there's no `FulfillmentRecord.status == fulfilled` to trigger off of yet. Don't treat this as the final design.
-- The actual Stellar contract calls go through `@docforum/escrow-sdk` (`backend/src/modules/payments/services/escrow-sdk-loader.ts` — dynamic `import()`, the SDK is ESM-only and this backend is CommonJS). Never reimplement contract-calling logic in this repo.
+- The actual Stellar contract calls go through `@docforum/escrow-sdk` (`backend/src/modules/payments/services/escrow-sdk-loader.ts` — dynamic `import()`, the SDK is ESM-only and this backend is CommonJS). Never reimplement contract-calling logic in this repo. The SDK used today (0.2.0) has no prepare call, so prepare returns `503 ESCROW_SDK_PREPARE_UNSUPPORTED` until the 0.3.0 prepare/submit call (docforum-escrow #58) lands.
 
 ## Known unresolved design gaps (do not silently "fix" without flagging in PR description)
 - ~~No routing rule for a referral with no specific target doctor~~ **Resolved (issue #6, `docs/adr/0008-referral-routing-without-target-doctor.md`):** a specialty-only referral is routed **at creation** to the least-loaded eligible doctor (verified, holds the specialty, not the referring doctor, account not deactivated; fewest `pending`+`accepted` referrals, ties broken by doctor id). `target_doctor_id` stays NOT NULL — zero eligible doctors fails the creation with `422 REFERRAL_NO_ELIGIBLE_TARGET` and writes no row. PRD §8.2.2's "waiting for a specialist" state is still not built (deferred on purpose: it needs a nullable target, which this ADR rejects).
@@ -49,6 +50,8 @@ Account deletion (Phase 8, issue #41 — docs/adr/0010): anonymise in place (`Us
 - `AuditEvent` foundation exists (Phase 8, issue #43 — ARCHITECTURE.md §4.10): append-only (DB triggers), written by `auditService.record(tx, …)` **inside the same transaction** as the change. Wired for booking (direct and referral-origin), doctor verification, payment fund/release/refund, referral accept/decline and referral admin actions (`entity_type: 'Referral'`) — **Phase 4 transitions must call it when they're built.** There is one audit table: referral actions go into it, not into a second one. Never put PHI in `metadata`.
 - No email/SMS provider integrated yet (Phase 6, issue #17) — email verification (issue #34) therefore can't deliver its link on a hosted deployment; `backend/scripts/mark-email-verified.mjs` is the interim operator path.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
+- Non-custodial payments are only half-built: prepare exists (issue #80), submit/fee-bump does not, and the SEP-10 patient-wallet link flow that creates `PatientWalletLink` rows is not implemented. `PaymentIntent.refundAfter` uses the intent's `createdAt` as the order-expiry anchor because orders have no expiry field yet (Phase 4).
+- `@docforum/escrow-sdk` 0.2.0 has no prepare call, so `/payments/intents/:id/prepare` returns `503 ESCROW_SDK_PREPARE_UNSUPPORTED` against the real SDK until docforum-escrow publishes SDK 0.3.0 (docforum-core #32 / docforum-escrow #58). Integration tests exercise the endpoint with a mocked SDK.
 
 ## Overengineering guardrails (things NOT to build yet)
 - No custom video/WebRTC.

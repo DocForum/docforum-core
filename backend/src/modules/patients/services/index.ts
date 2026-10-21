@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../../db/prisma-client';
+import type { PatientProfile } from '@prisma/client';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import * as patientsRepo from '../repositories';
@@ -19,6 +20,9 @@ export {
 } from './export-registry';
 export type { ExportSubject, PatientExportSection } from './export-registry';
 export { EXPORT_FORMAT, EXPORT_SCHEMA_VERSION } from './export-bundle';
+import { isMinor } from './majority';
+
+export { isMinor, majorityDate } from './majority';
 
 export async function getMyPatientProfile(userId: string) {
   const profile = await patientsRepo.findPatientProfileByUserId(userId);
@@ -178,7 +182,10 @@ async function generateClaimedExport(
   try {
     // The owning user is needed by account-level sections (auth module).
     const owner = await patientsRepo.findPatientProfileOwner(record.patientProfileId);
-    if (!owner) throw new ExportSectionError('profile', new Error('profile missing'));
+    // A dependent profile (issue #42) has no login, so it can never be the
+    // subject of `POST /patients/me/export`; refuse rather than export it
+    // without an account section.
+    if (!owner?.userId) throw new ExportSectionError('profile', new Error('profile missing'));
     await writeExportBundle({
       exportId,
       generatedAt,
@@ -327,6 +334,7 @@ export async function deleteMyAccount(
     if (!(await authService.anonymizeAccount(tx, userId, { unusablePasswordHash, deletedAt }))) return false;
     await patientsRepo.anonymizeProfile(tx, profile.id, deletedAt);
     await patientsRepo.deleteExportsForPatient(tx, profile.id);
+    await patientsRepo.revokeGuardianshipsOfGuardian(tx, userId, deletedAt);
     return true;
   });
   return { alreadyDeleted: !anonymized };
@@ -407,7 +415,9 @@ export async function purgeDeletedPatientAccounts(now = new Date()): Promise<Pur
       try {
         await prisma.$transaction(async (tx) => {
           if (!(await patientsRepo.deleteAnonymizedProfile(tx, profile.id))) return;
-          await authService.purgeAnonymizedAccount(tx, profile.userId);
+          // Anonymised profiles always had a login (a dependent has none and
+          // can't delete itself), but the column is nullable since #42.
+          if (profile.userId) await authService.purgeAnonymizedAccount(tx, profile.userId);
         });
         result.purged += 1;
       } catch (err) {
@@ -424,4 +434,116 @@ export async function purgeDeletedPatientAccounts(now = new Date()): Promise<Pur
     if (page.length < 100) break;
   }
   return result;
+}
+
+// --- Guardians and dependents (Phase 8, issue #42, docs/adr/0011) --------
+
+export interface DependentView {
+  id: string;
+  fullName: string;
+  dateOfBirth: Date;
+  guardianSince: Date;
+}
+
+function isActive(guardianship: { revokedAt: Date | null; dependentProfile: PatientProfile }, now: Date): boolean {
+  const dob = guardianship.dependentProfile.dateOfBirth;
+  // A dependent always has a DOB (DB CHECK); treat a missing one as inactive
+  // rather than as "forever a minor".
+  return guardianship.revokedAt === null && dob !== null && isMinor(dob, config.patients.ageOfMajorityYears, now);
+}
+
+function toDependentView(guardianship: { createdAt: Date; dependentProfile: PatientProfile }): DependentView {
+  const profile = guardianship.dependentProfile;
+  return {
+    id: profile.id,
+    fullName: profile.fullName,
+    dateOfBirth: profile.dateOfBirth!,
+    guardianSince: guardianship.createdAt,
+  };
+}
+
+/**
+ * Creates a new dependent profile owned by the caller (create-only — there
+ * is no way to link an existing profile or account; see ADR 0011). The
+ * dependent must be under the age of majority, with a DOB not in the
+ * future.
+ */
+export async function createMyDependent(
+  guardianUserId: string,
+  input: { fullName: string; dateOfBirth: Date },
+  now = new Date(),
+): Promise<DependentView> {
+  // The guardian must be a patient with their own profile (the route also
+  // requires the patient role).
+  await getMyPatientProfile(guardianUserId);
+  if (input.dateOfBirth.getTime() > now.getTime()) {
+    throw new HttpError(400, 'dateOfBirth cannot be in the future.');
+  }
+  if (!isMinor(input.dateOfBirth, config.patients.ageOfMajorityYears, now)) {
+    throw new HttpError(
+      400,
+      `A dependent must be under ${config.patients.ageOfMajorityYears}. An adult needs their own account.`,
+      'DEPENDENT_NOT_A_MINOR',
+    );
+  }
+  const { profile, guardianship } = await patientsRepo.createDependentWithGuardianship({
+    guardianUserId,
+    fullName: input.fullName,
+    dateOfBirth: input.dateOfBirth,
+  });
+  return toDependentView({ createdAt: guardianship.createdAt, dependentProfile: profile });
+}
+
+/** The caller's dependents they can currently act for: not revoked and still
+ * under the age of majority. Never anyone else's. */
+export async function listMyDependents(guardianUserId: string, now = new Date()): Promise<DependentView[]> {
+  await getMyPatientProfile(guardianUserId); // 404 for a deleted account (issue #41), like every patient route
+  const guardianships = await patientsRepo.findUnrevokedGuardianshipsForGuardian(guardianUserId);
+  return guardianships.filter((g) => isActive(g, now)).map(toDependentView);
+}
+
+/**
+ * THE authorisation check for acting on a patient profile (booking, listing
+ * appointments — and every future dependent-scoped surface). Returns the
+ * profile the caller may act for:
+ *   - no `patientProfileId`, or the caller's own profile id -> own profile;
+ *   - an active dependent of the caller -> that dependent;
+ *   - a dependent whose guardianship ended (revoked / reached majority)
+ *     -> 403 GUARDIANSHIP_INACTIVE;
+ *   - anything else -> 404, the same as a profile that doesn't exist (no
+ *     enumeration of other patients or other guardians' dependents).
+ */
+export async function resolveActingProfile(
+  userId: string,
+  patientProfileId?: string,
+  now = new Date(),
+): Promise<PatientProfile> {
+  const own = await patientsRepo.findPatientProfileByUserId(userId);
+  // A deleted account (issue #41) acts for no one — not for itself and not
+  // for its former dependents — even while its access token is still valid.
+  if (own?.anonymizedAt) throw new HttpError(404, 'No patient profile for this account.');
+  if (!patientProfileId) {
+    if (!own) throw new HttpError(404, 'No patient profile for this account.');
+    return own;
+  }
+  if (own && own.id === patientProfileId) return own;
+
+  const guardianship = await patientsRepo.findGuardianship(userId, patientProfileId);
+  if (!guardianship) throw new HttpError(404, 'Patient profile not found.');
+  if (!isActive(guardianship, now)) {
+    throw new HttpError(
+      403,
+      'Your guardianship of this patient has ended, so you can no longer act for them.',
+      'GUARDIANSHIP_INACTIVE',
+    );
+  }
+  return guardianship.dependentProfile;
+}
+
+/** Retention hold (issues #41/#42, docs/adr/0010 + 0011): a deleted
+ * guardian's tombstone stays while Guardianship rows name it — they are the
+ * record of who had access to a minor's profile, and the FK is RESTRICT. */
+export async function hasGuardianshipsAsGuardian(patientProfileId: string): Promise<boolean> {
+  const profile = await patientsRepo.findPatientProfileById(patientProfileId);
+  return profile?.userId ? patientsRepo.guardianHasGuardianships(profile.userId) : false;
 }
