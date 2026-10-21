@@ -12,6 +12,7 @@ import {
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import { readCsrfHeader } from '../../../middleware/csrf';
+import { getParam } from '../../../request-params';
 
 const REFRESH_COOKIE = 'docforum_refresh';
 const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30d — matches config.jwt.refreshTtl
@@ -34,17 +35,28 @@ function setRefreshCookie(res: Response, token: string) {
   });
 }
 
+/** Coarse request context for the session record — what makes "that other
+ * device" recognizable in `GET /auth/sessions`. */
+function sessionContext(req: Request): authService.SessionContext {
+  return { ip: req.ip, userAgent: req.headers['user-agent'] };
+}
+
 function sessionResponse(res: Response, session: authService.AuthSession) {
   setRefreshCookie(res, session.refreshToken);
   // `csrfToken` is returned in the body, not as a readable cookie — see
   // middleware/csrf.ts for why a cross-site frontend can't use a cookie for
   // this. docforum-web keeps it in memory alongside the access token.
-  res.status(200).json({ user: session.user, accessToken: session.accessToken, csrfToken: session.csrfToken });
+  res.status(200).json({
+    user: session.user,
+    accessToken: session.accessToken,
+    csrfToken: session.csrfToken,
+    sessionId: session.sessionId,
+  });
 }
 
 export async function signup(req: Request, res: Response) {
   const input = signupSchema.parse(req.body);
-  const session = await authService.signup(input);
+  const session = await authService.signup(input, sessionContext(req));
   sessionResponse(res, session);
 }
 
@@ -54,7 +66,7 @@ export async function login(req: Request, res: Response) {
     // Express's `req.ip` honours the `trust proxy` setting (app.ts) — it is
     // the whole reason the throttle keys on the IP the client believes it
     // is, rather than Render's proxy address (see config.trustProxy).
-    const session = await authService.login({ ...input, ip: req.ip });
+    const session = await authService.login({ ...input, ip: req.ip }, sessionContext(req));
     sessionResponse(res, session);
   } catch (err) {
     // Phase 8, issue #35: a throttled attempt must tell the client how long
@@ -78,8 +90,20 @@ export async function clearLoginAttempts(req: Request, res: Response) {
   res.status(200).json({ cleared });
 }
 
+/**
+ * Admin invite redemption (Phase 8, issue #39). Lives in the auth module
+ * because it ends in a session, but the invite itself is the users module's
+ * business — see `authService.signupWithInvite`, which calls that module's
+ * service rather than touching its tables.
+ */
+export async function signupWithInvite(req: Request, res: Response) {
+  const input = signupWithInviteSchema.parse(req.body);
+  const session = await authService.signupWithInvite(input, sessionContext(req));
+  sessionResponse(res, session);
+}
+
 export async function refresh(req: Request, res: Response) {
-  const token = (req.cookies as Record<string, string> | undefined)?.[REFRESH_COOKIE];
+  const token = refreshCookieValue(req);
   if (!token) throw new HttpError(401, 'No refresh token provided.');
 
   const session = await authService.refresh(token, readCsrfHeader(req));

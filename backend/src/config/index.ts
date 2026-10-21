@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { parsePaymentsConfig } from './payments';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -101,6 +102,13 @@ export const config = {
     pruneIntervalSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_INTERVAL_SECONDS ?? 60 * 60),
     pruneAfterSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_AFTER_SECONDS ?? 24 * 60 * 60),
   },
+  // PHI read-access log (Phase 8, issue #45). How long AccessLog rows are
+  // kept before the prune job (src/server.ts) deletes them. Reads are far
+  // higher volume than AuditEvent writes, so this gets its own, shorter
+  // retention instead of AuditEvent's append-forever lifetime.
+  accessLog: {
+    retentionDays: Number(process.env.ACCESS_LOG_RETENTION_DAYS ?? 365),
+  },
   // Patient data export (Phase 8, issue #40). Env-configurable so a
   // deployment can tune retention and memory bounds without a code change.
   patientExport: {
@@ -124,11 +132,6 @@ export const config = {
     staleAfterSeconds: Number(process.env.PATIENT_EXPORT_STALE_AFTER_SECONDS ?? 15 * 60),
     maxAttempts: Number(process.env.PATIENT_EXPORT_MAX_ATTEMPTS ?? 3),
   },
-  // Order receipt confirmation and dispute window configuration
-  orders: {
-    confirmationWindowHours: Number(process.env.ORDER_CONFIRMATION_WINDOW_HOURS ?? 72),
-    expiryIntervalSeconds: Number(process.env.ORDER_EXPIRY_INTERVAL_SECONDS ?? 300),
-  },
   // Explicit, per-environment CORS allowlist (Phase 8, issue #37). A single
   // configured origin string was one typo away from "reflect whatever origin
   // asked"; an allowlist makes every permitted frontend a deliberate entry.
@@ -149,16 +152,11 @@ export const config = {
     sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
     path: '/',
   },
-  // Deliberately NOT required at startup via requireEnv() — unrelated
-  // parts of the app (auth, availability, etc.) shouldn't fail to boot
-  // just because payments isn't configured. The payments module itself
-  // (services/index.ts) validates these are present before doing
-  // anything that needs them, with a clear error naming which is
-  // missing. See docs/adr/0004-custodial-payments-v1.md.
-  payments: {
-    platformPayerSecret: process.env.PLATFORM_PAYER_SECRET,
-    platformReleaserSecret: process.env.PLATFORM_RELEASER_SECRET,
-    escrowContractId: process.env.ESCROW_CONTRACT_ID,
-    escrowTokenId: process.env.ESCROW_TOKEN_ID,
+  // Admin invites (Phase 8, issue #39). `acceptUrl` is where the invite link
+  // points — docforum-web owns the page that consumes `?token=`.
+  adminInvites: {
+    ttlHours: Number(process.env.ADMIN_INVITE_TTL_HOURS ?? 72),
+    acceptUrl: process.env.ADMIN_INVITE_ACCEPT_URL ?? 'http://localhost:5173/accept-admin-invite',
   },
+  payments: parsePaymentsConfig(process.env),
 } as const;

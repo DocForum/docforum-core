@@ -17,7 +17,6 @@ safe.
 | Login-throttle prune (issue #35) | `src/server.ts` | Deletes stale `LoginAttempt` buckets. |
 | Patient-export worker (issue #40) | `patient-exports.ts` | Generates pending exports one at a time; woken immediately by a new request, plus every `PATIENT_EXPORT_WORKER_INTERVAL_SECONDS`. Requeues claims older than `PATIENT_EXPORT_STALE_AFTER_SECONDS` (up to `PATIENT_EXPORT_MAX_ATTEMPTS`). |
 | Patient-export cleanup (issue #40) | `patient-exports.ts` | Every `PATIENT_EXPORT_CLEANUP_INTERVAL_SECONDS`: expires `ready` exports past `expiresAt` and deletes their chunks, plus any chunk that can never be served. |
-| Order expiry job | `order-expiry.ts` | Every `ORDER_EXPIRY_INTERVAL_SECONDS`: auto-confirms fulfilled orders whose confirmation window (`ORDER_CONFIRMATION_WINDOW_HOURS`) has elapsed without dispute, setting `confirmationSource: 'timeout'`. Never confirms disputed orders. |
 
 Job logs carry error *types* only, never messages — a driver error can echo
 the patient data it was handling.

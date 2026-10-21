@@ -1,9 +1,27 @@
 import { Router } from 'express';
 import { authenticate, requireRole } from '../../../middleware/auth';
-import * as controllers from '../controllers';
+import * as controller from '../controllers';
 
-export const ordersRouter = Router();
+const router = Router();
 
-ordersRouter.get('/:id', authenticate, controllers.getOrder);
-ordersRouter.post('/:id/confirm-receipt', authenticate, requireRole('patient'), controllers.confirmReceipt);
-ordersRouter.post('/:id/dispute', authenticate, requireRole('patient'), controllers.disputeOrder);
+router.post(
+  '/:id/confirm-receipt',
+  authenticate,
+  requireRole('patient'),
+  controller.confirmReceipt
+);
+
+router.post(
+  '/:id/dispute',
+  authenticate,
+  requireRole('patient'),
+  controller.disputeOrder
+);
+
+router.get(
+  '/:id',
+  authenticate,
+  controller.getOrder
+);
+
+export default router;

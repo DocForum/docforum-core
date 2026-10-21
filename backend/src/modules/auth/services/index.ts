@@ -15,6 +15,7 @@ import {
 } from '../repositories';
 import { hashPassword, verifyPassword } from './password';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from './tokens';
+import { assertSessionUsable, recordSessionUse, startSession, type SessionContext } from './sessions';
 import { generateVerificationToken, hashVerificationToken } from './verification-tokens';
 import { sendEmail } from './email-dispatcher';
 import {
@@ -26,6 +27,7 @@ import {
   resetLoginThrottle,
 } from './login-throttle';
 import { csrfTokensMatch, generateCsrfToken } from '../../../middleware/csrf';
+import { redeemAdminInvite } from '../../users/services';
 import type { Role } from '@prisma/client';
 import type { PatientExportSection } from '../../patients/services';
 
@@ -90,6 +92,9 @@ export interface AuthSession {
    * It deliberately is NOT a JS-readable cookie: docforum-web is a different
    * site from this API, so it couldn't read one. */
   csrfToken: string;
+  /** The refresh-session id this pair belongs to (Phase 8 #38) — lets the
+   * client mark its own entry in `GET /auth/sessions` as "this device". */
+  sessionId: string;
 }
 
 function toPublicUser(user: {
@@ -118,9 +123,12 @@ function issueTokensForSession(
   // A fresh CSRF token per session, and per rotation — bound into the
   // refresh token so verifying it needs no server-side state (issue #37).
   const csrfToken = generateCsrfToken();
+  // `sid` rides on the refresh token only: access tokens stay stateless so
+  // no protected request needs a session lookup (issue #38's "no write
+  // hot-spot" requirement).
   return {
     accessToken: signAccessToken(payload),
-    refreshToken: signRefreshToken({ ...payload, csrf: csrfToken }),
+    refreshToken: signRefreshToken({ ...payload, csrf: csrfToken, sid: sessionId }),
     csrfToken,
   };
 }
@@ -141,7 +149,7 @@ export interface SignupInput {
   fullName: string;
 }
 
-export async function signup(input: SignupInput): Promise<AuthSession> {
+export async function signup(input: SignupInput, context: SessionContext = {}): Promise<AuthSession> {
   // Facility accounts are admin-invited only (PRD OQ-2) — enforced here,
   // not just in docforum-web's UI. `Extract<Role, 'patient'|'doctor'>` on
   // the type already narrows this at compile time; this is the runtime
@@ -169,8 +177,42 @@ export async function signup(input: SignupInput): Promise<AuthSession> {
   // the link is redeemed.
   await issueEmailVerification(user);
 
-  const tokens = issueSession(user);
+  const tokens = await issueNewSession(user, context);
   return { user: toPublicUser(user), ...tokens };
+}
+
+/**
+ * Redeems an admin invite and signs the new admin in (Phase 8, issue #39).
+ *
+ * The invite itself belongs to the users module — this module only hashes
+ * the password and issues the session, calling that module's service rather
+ * than its repository (AGENTS.md hard rule 4).
+ */
+export interface SignupWithInviteInput {
+  token: string;
+  email: string;
+  password: string;
+}
+
+export async function signupWithInvite(input: SignupWithInviteInput, context: SessionContext = {}): Promise<AuthSession> {
+  const passwordHash = await hashPassword(input.password);
+  const user = await redeemAdminInvite({ token: input.token, email: input.email, passwordHash });
+
+  const tokens = await issueNewSession(user, context);
+  return {
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      // No verification email is sent on the invite path — the invite itself
+      // is the admin-vetted proof of address, so this stays null rather than
+      // claiming a verification that never happened.
+      emailVerifiedAt: null,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    },
+    ...tokens,
+  };
 }
 
 export interface LoginInput {
@@ -189,7 +231,7 @@ export interface LoginInput {
  * response body is identical. */
 const ABSENT_ACCOUNT_HASH = '$2b$12$z8J5gwFm9TiwC.YpeD6yguMkgakFPA8egT1KEKYiaeVkmb3CHRGXu';
 
-export async function login(input: LoginInput): Promise<AuthSession> {
+export async function login(input: LoginInput, context: SessionContext = {}): Promise<AuthSession> {
   const throttleKeys = {
     emailKey: emailThrottleKey(input.email),
     ipKey: normalizeClientIp(input.ip),
@@ -218,7 +260,14 @@ export async function login(input: LoginInput): Promise<AuthSession> {
 
   await resetLoginThrottle(throttleKeys.emailKey);
 
-  const tokens = issueSession(user);
+  // Checked *after* the password: a deactivated account must not be
+  // distinguishable from a non-existent one without knowing the password
+  // (Phase 8, issue #39).
+  if (user.deactivatedAt) {
+    throw new HttpError(403, 'This account has been deactivated. Contact an administrator.');
+  }
+
+  const tokens = await issueNewSession(user, context);
   return { user: toPublicUser(user), ...tokens };
 }
 

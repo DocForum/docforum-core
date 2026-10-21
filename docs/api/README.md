@@ -1,8 +1,10 @@
 # API docs
 
-Phase 1 endpoints are real and tested (see `backend/tests/`).
-Keep this file in sync with `backend/src/modules/*/routes` (AGENTS.md doc-update
-rule).
+Endpoints are grouped by module below. Which phases are built is tracked
+in `ROADMAP.md`, not here. Keep this file in sync with
+`backend/src/modules/*/routes` (AGENTS.md doc-update rule): when you add or
+change an endpoint, add or edit its row in that module's table, and leave
+the rest of the file alone.
 
 Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
 
@@ -26,8 +28,15 @@ can log in, refresh, and browse; they get
 depend on a trustworthy contact address:
 
 - `POST /appointments` (booking)
+- `POST /consultations`, `POST /consultations/:id/referrals`
+- `POST /referrals`, `POST /referrals/from-consultation/:id`,
+  `POST /referrals/:id/{accept,decline}`
 - `POST /payments/wallet-link`, `POST /payments/intents`,
   `POST /payments/intents/:id/{fund,release,refund}`
+
+(`GET`-style routes — lists, availability, the admin referral queue —
+are deliberately *not* gated on verification: browsing needs no contact
+address.)
 
 That guard reads the database rather than trusting a claim in the access
 token, so verifying in one tab unblocks the caller immediately instead of
@@ -149,15 +158,7 @@ against `tokenVersion` on every `POST /auth/refresh`.
 | `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'|'cancelled'|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
 | `PATCH /appointments/:appointmentId/cancel` | patient (own appointment) | — | Patient-side cancellation, `scheduled` only. Same slot-release + cascade behaviour as above. |
 
-## Pharmacy Orders (`/pharmacy-orders`) — `backend/src/modules/pharmacy-orders`
-
-| Method & path | Auth | Body | Notes |
-|---|---|---|---|
-| `POST /pharmacy-orders` | authenticated | `{ patientProfileId, prescribingDoctorId?, details? }` | Creates a pharmacy prescription order. |
-| `GET /pharmacy-orders/:id` | authenticated | — | Returns pharmacy order details and fulfillment proofs. |
-| `POST /pharmacy-orders/:id/fulfill` | facility | `{ referenceNumber, attachment?, notes? }` | Fulfills order with required reference number and optional storage attachment. Returns 409 if already fulfilled. |
-
-## Lab Orders (`/lab-orders`) — `backend/src/modules/lab-orders`
+## Consultations (`/consultations`) — `backend/src/modules/consultations`
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
@@ -165,8 +166,35 @@ against `tokenVersion` on every `POST /auth/refresh`.
 | `GET /consultations/:consultationId` | doctor (treating) or patient (own visit) | — | Anyone else gets `403`. |
 | `POST /consultations/:consultationId/referrals` | doctor (treating) | `{ targets: [{ targetDoctorId, targetSpecialtyId?, snapshotNotes }] }` | Issue #66 — atomic all-or-none multi-referral. Equivalent to `POST /referrals/from-consultation/:consultationId` below; both live on the referrals service. |
 
-## Common Orders (`/orders`) — `backend/src/modules/orders`
+## Referrals (`/referrals`) — `backend/src/modules/referrals`
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
 | `POST /referrals` | doctor | `{ sourceConsultationId, targetDoctorId, targetSpecialtyId?, snapshotNotes }` | Issue #5. Requires: the caller's own **completed** appointment
+
+## Pharmacy Orders (`/pharmacy-orders`) — `backend/src/modules/pharmacy-orders`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /pharmacy-orders/:id/fulfill` | facility | multipart/form-data: `referenceNumber` (required), `notes` (optional), `attachment` (optional file) | Marks the pharmacy order as `FULFILLED` (append-only proof). Requires reference number. |
+
+## Lab Orders (`/lab-orders`) — `backend/src/modules/lab-orders`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /lab-orders/:id/fulfill` | facility | multipart/form-data: `referenceNumber` (required), `notes` (optional), `attachment` (optional file) | Marks the lab order as `FULFILLED` (append-only proof). Requires reference number. |
+
+## Orders (`/orders`) — `backend/src/modules/orders`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /orders/:id/confirm-receipt` | patient (order owner) | — | Explicitly confirms order receipt. Mutually exclusive with dispute via conditional update (`409` if already confirmed/disputed). |
+| `POST /orders/:id/dispute` | patient (order owner) | `{ reason }` | Disputes the order. Mutually exclusive with confirm receipt (`409` if already confirmed/disputed). Required reason. |
+| `GET /orders/:id` | authenticated | — | Returns order details along with derived `confirmedSignal` boolean. |
+
+## Admin Orders (`/admin/orders`) — `backend/src/modules/orders`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `GET /admin/orders/disputes` | admin | — | Lists all order disputes. |
+| `POST /admin/orders/disputes/:id/resolve` | admin | `{ resolutionNotes, status }` | Appends a resolution record for the dispute (`status`: `RESOLVED` or `REJECTED`). |

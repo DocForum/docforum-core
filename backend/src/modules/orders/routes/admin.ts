@@ -1,8 +1,21 @@
 import { Router } from 'express';
 import { authenticate, requireRole } from '../../../middleware/auth';
-import * as adminControllers from '../controllers/admin';
+import * as adminController from '../controllers/admin';
 
-export const adminOrdersRouter = Router();
+const router = Router();
 
-adminOrdersRouter.get('/orders/disputes', authenticate, requireRole('admin'), adminControllers.listDisputes);
-adminOrdersRouter.post('/orders/disputes/:id/resolve', authenticate, requireRole('admin'), adminControllers.resolveDispute);
+router.get(
+  '/disputes',
+  authenticate,
+  requireRole('admin'),
+  adminController.listDisputes
+);
+
+router.post(
+  '/disputes/:id/resolve',
+  authenticate,
+  requireRole('admin'),
+  adminController.resolveDispute
+);
+
+export default router;

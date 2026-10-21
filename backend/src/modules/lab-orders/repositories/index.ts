@@ -1,6 +1,3 @@
-export {
-  findOrderById,
-  createOrder,
-  createFulfillmentProof,
-  markOrderFulfilled,
-} from '../../pharmacy-orders/repositories';
+// lab-orders repositories — placeholder. Data access only. Not to be imported
+// by other modules directly — go through services/ instead.
+export {};
