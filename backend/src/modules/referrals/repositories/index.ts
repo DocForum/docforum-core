@@ -203,3 +203,7 @@ export function listAdminQueue(filters: {
     orderBy: { createdAt: 'asc' },
   });
 }
+
+export async function patientHasReferrals(patientProfileId: string): Promise<boolean> {
+  return (await prisma.referral.findFirst({ where: { patientProfileId }, select: { id: true } })) !== null;
+}

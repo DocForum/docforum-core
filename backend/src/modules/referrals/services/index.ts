@@ -656,3 +656,10 @@ export async function listAuditEvents(referralId: string) {
   });
   return page.items;
 }
+
+/** Retention hold (issue #41, docs/adr/0010): a referral carries an
+ * immutable clinical snapshot, so a patient who has any is never purged
+ * after deletion. */
+export function hasReferralsForPatient(patientProfileId: string): Promise<boolean> {
+  return referralsRepo.patientHasReferrals(patientProfileId);
+}

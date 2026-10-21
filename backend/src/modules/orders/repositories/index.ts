@@ -43,3 +43,11 @@ export function findLabOrderExportPage(patientProfileId: string, cursor: string 
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), include: { result: true },
   });
 }
+
+export async function patientHasOrders(patientProfileId: string): Promise<boolean> {
+  const [prescription, labOrder] = await Promise.all([
+    prisma.prescription.findFirst({ where: { patientProfileId }, select: { id: true } }),
+    prisma.labOrder.findFirst({ where: { patientProfileId }, select: { id: true } }),
+  ]);
+  return prescription !== null || labOrder !== null;
+}
