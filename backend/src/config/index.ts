@@ -146,6 +146,12 @@ export const config = {
     graceHours: Number(process.env.ACCOUNT_PURGE_GRACE_HOURS ?? 24),
     intervalSeconds: Number(process.env.ACCOUNT_PURGE_INTERVAL_SECONDS ?? 6 * 60 * 60),
   },
+  // Guardians and dependents (Phase 8, issue #42, docs/adr/0011). Guardian
+  // access ends automatically when the dependent reaches this age (UTC
+  // calendar date, checked at request time).
+  patients: {
+    ageOfMajorityYears: Number(process.env.AGE_OF_MAJORITY_YEARS ?? 18),
+  },
   // Explicit, per-environment CORS allowlist (Phase 8, issue #37). A single
   // configured origin string was one typo away from "reflect whatever origin
   // asked"; an allowlist makes every permitted frontend a deliberate entry.
