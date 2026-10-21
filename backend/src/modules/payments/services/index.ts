@@ -12,14 +12,18 @@
 // issue #80 adds prepare(), which builds the patient-signed transaction.
 // Release/refund are unchanged.
 import { HttpError } from '../../../http-error';
-import { config, type PaymentAsset } from '../../../config';
+import { config } from '../../../config';
+import type { PaymentIntent, PaymentIntentStatus } from '@prisma/client';
 import * as paymentsRepo from '../repositories';
 import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
 import { getPlatformSigners } from './platform-signers';
-import { paginate, type PatientExportSection } from '../../patients/services';
+import { resolveEscrowPayee } from './payout-privacy';
+import { getMyPatientProfile, paginate, type PatientExportSection } from '../../patients/services';
 import { prisma } from '../../../db/prisma-client';
+import { parseStroopsAmount } from '../../../utils/stroops';
 import * as auditService from '../../audit/services';
 import type { Prisma } from '@prisma/client';
+import { transitionPaymentIntentStatus } from './state-machine';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
 
 // Test seams re-exported through the service surface (same convention as the
@@ -126,12 +130,20 @@ export function getWalletLink(facilityId: string) {
 
 /** Called by the orders module inside the order-issuance transaction. A
  * created intent moves to a corrected order; any funded/terminal intent
- * stays attached to the immutable original order. */
+ * stays attached to the immutable original order.
+ *
+ * `catalogItemCode` is snapshotted alongside the amount: the amount is the
+ * facility price in force when the doctor selected the facility, so a later
+ * price-list change cannot re-price an existing intent (issue #127). */
 export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, input: {
   kind: 'prescription' | 'lab_order'; orderId: string; patientProfileId: string; doctorProfileId: string;
   facilityProfileId: string; amountStroops: bigint; supersedesId: string | null;
+  catalogItemCode?: string | null;
 }) {
-  if (input.amountStroops <= 0n) throw new HttpError(400, 'amountStroops must be positive.');
+  // Same guard the facility price list uses: positive integer stroops that
+  // fit the asset's precision and the contract's i128 amount.
+  const amountStroops = parseStroopsAmount(input.amountStroops, 'amountStroops');
+  const catalogItemCode = input.catalogItemCode ?? null;
   const facility = await tx.facilityProfile.findUnique({ where: { id: input.facilityProfileId }, select: { type: true } });
   const expectedType = input.kind === 'prescription' ? 'pharmacy' : 'lab';
   if (!facility || facility.type !== expectedType) throw new HttpError(400, `The selected facility must be a ${expectedType} facility.`);
@@ -146,13 +158,13 @@ export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, i
     if (previous?.status === 'created') {
       const moved = await tx.paymentIntent.updateMany({
         where: { id: previous.id, status: 'created' },
-        data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops: input.amountStroops },
+        data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops, catalogItemCode },
       });
       if (moved.count === 1) return tx.paymentIntent.findUniqueOrThrow({ where: { id: previous.id } });
     }
   }
   return tx.paymentIntent.create({
-    data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops: input.amountStroops },
+    data: { ...orderPointer, patientProfileId: input.patientProfileId, facilityId: input.facilityProfileId, amountStroops, catalogItemCode },
   });
 }
 
@@ -162,17 +174,88 @@ export async function getPaymentIntent(id: string) {
   return intent;
 }
 
-/** Public, non-identifying references only: the escrow is on a public
- * ledger anyway. No patient data, no secrets. */
-function intentAuditMetadata(intent: PaymentIntent) {
+export interface PaymentHistoryFilters {
+  status?: PaymentIntentStatus;
+  from?: Date;
+  to?: Date;
+  cursor?: string;
+  limit: number;
+}
+
+function encodePaymentCursor(payment: { createdAt: Date; id: string }): string {
+  return Buffer.from(`${payment.createdAt.toISOString()}|${payment.id}`, 'utf8').toString('base64url');
+}
+
+function decodePaymentCursor(cursor: string): { createdAt: Date; id: string } {
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const separator = raw.indexOf('|');
+  const createdAt = new Date(raw.slice(0, separator));
+  const id = raw.slice(separator + 1);
+  if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
+    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+  }
+  return { createdAt, id };
+}
+
+function paymentPage(filters: PaymentHistoryFilters, owner: { patientProfileId: string } | { facilityId: string }) {
+  return paymentsRepo.findPaymentHistoryPage(owner, {
+    status: filters.status,
+    from: filters.from,
+    to: filters.to,
+    before: filters.cursor ? decodePaymentCursor(filters.cursor) : undefined,
+    take: filters.limit + 1,
+  });
+}
+
+function serializePayment(payment: PaymentIntent) {
   return {
-    orderType: intent.orderType,
-    amount: intent.amount.toString(),
-    assetCode: intent.assetCode,
-    escrowId: intent.escrowId?.toString() ?? null,
-    stellarTxHash: intent.stellarTxHash,
-    sorobanContractId: intent.sorobanContractId,
-    preparedTxHash: intent.preparedTxHash,
+    id: payment.id,
+    orderType: payment.prescriptionId ? 'prescription' : 'lab_order',
+    orderId: payment.prescriptionId ?? payment.labOrderId,
+    status: payment.status,
+    amountStroops: payment.amountStroops.toString(),
+    asset: { type: 'native', code: 'XLM' },
+    escrowId: payment.escrowId?.toString() ?? null,
+    stellarTxHash: payment.stellarTxHash,
+    sorobanContractId: payment.sorobanContractId,
+    refundAfter: null,
+    createdAt: payment.createdAt,
+    updatedAt: payment.updatedAt,
+  };
+}
+
+async function listPayments(filters: PaymentHistoryFilters, owner: { patientProfileId: string } | { facilityId: string }) {
+  const rows = await paymentPage(filters, owner);
+  const page = rows.slice(0, filters.limit);
+  const last = page[page.length - 1];
+  return {
+    items: page.map(serializePayment),
+    nextCursor: rows.length > filters.limit && last ? encodePaymentCursor(last) : null,
+  };
+}
+
+export async function listMyPayments(userId: string, filters: PaymentHistoryFilters) {
+  const profile = await getMyPatientProfile(userId);
+  return listPayments(filters, { patientProfileId: profile.id });
+}
+
+export async function listFacilityPaymentLedger(userId: string, filters: PaymentHistoryFilters) {
+  const facilityId = await getOwnFacilityProfileId(userId);
+  const [page, aggregates] = await Promise.all([
+    listPayments(filters, { facilityId }),
+    paymentsRepo.aggregateFacilityPayments(facilityId, filters.from, filters.to),
+  ]);
+  const totals = new Map(aggregates.map((row) => [row.status, row._sum.amountStroops ?? 0n]));
+  return {
+    ...page,
+    totals: [
+      {
+        asset: { type: 'native', code: 'XLM' },
+        escrowed: (totals.get('escrowed') ?? 0n).toString(),
+        released: (totals.get('released') ?? 0n).toString(),
+        refunded: (totals.get('refunded') ?? 0n).toString(),
+      },
+    ],
   };
 }
 
@@ -184,9 +267,12 @@ async function commitTransition(
   // client types may not match the expected exports.
   intent: any,
   action: string,
-  to: any,
+  to: PaymentIntentStatus,
   write: (tx: any) => Promise<any>,
 ): Promise<any> {
+  if (transitionPaymentIntentStatus(intent.status, to) !== to) {
+    throw new HttpError(409, `PaymentIntent cannot transition from '${intent.status}' to '${to}'.`);
+  }
   return prisma.$transaction(async (tx) => {
     const updated = await write(tx);
     if (!updated) {
@@ -216,7 +302,7 @@ async function commitTransition(
 /** Funds the escrow from the platform's own payer identity. The intent must be `created` and its facility must have a linked wallet (the on-chain payee). */
 export async function fundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
-  if (intent.status !== 'created') {
+  if (transitionPaymentIntentStatus(intent.status, 'escrowed') !== 'escrowed') {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
   }
 
@@ -227,13 +313,19 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   if (config.payments.assetAllowlist.length > 0 && !config.payments.assetAllowlist.includes(escrowTokenId)) {
     throw new HttpError(500, 'Configured escrow token is not in the payments asset allowlist.');
   }
+  const payee = resolveEscrowPayee({
+    facilityAddress: walletLink.stellarPublicKey,
+    mode: config.payments.payoutPrivacyMode,
+    poolAddress: config.payments.payoutPrivacyPoolAddress,
+    production: process.env.NODE_ENV === 'production',
+  });
   const client = await escrowClient(escrowContractId);
 
   const { escrowId, txHash } = await client.createEscrow({
     payer: platformPayer as unknown as EscrowSdkKeypair,
-    payee: walletLink.stellarPublicKey,
-    token: asset.tokenContractId,
-    amount: intent.amount,
+    payee,
+    token: escrowTokenId,
+    amount: intent.amountStroops,
     // The PaymentIntent's own id is the opaque condition_ref — the
     // contract never interprets it (docforum-escrow ADR 0001); it's
     // just how we can trace an on-chain escrow back to this record.
@@ -429,7 +521,7 @@ export async function preparePaymentIntent(
 /** Releases the escrow to the facility's linked wallet. v1: admin-triggered (see ADR 0004 "Consequences") — no automatic FulfillmentRecord trigger yet, since that model doesn't exist. */
 export async function releasePaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
-  if (intent.status !== 'escrowed' || intent.escrowId === null) {
+  if (transitionPaymentIntentStatus(intent.status, 'released') !== 'released' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
   }
 
@@ -446,7 +538,7 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
 /** Refunds the escrow back toward the platform payer. v1: admin-triggered, same reasoning as release. */
 export async function refundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
-  if (intent.status !== 'escrowed' || intent.escrowId === null) {
+  if (transitionPaymentIntentStatus(intent.status, 'refunded') !== 'refunded' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot refund.`);
   }
 
@@ -496,3 +588,8 @@ export const paymentsExportSection: PatientExportSection = {
     );
   },
 };
+/** Retention hold (issue #41, docs/adr/0010): payment records are kept, so
+ * a patient who has any is never purged after deletion. */
+export function hasPaymentIntentsForPatient(patientProfileId: string): Promise<boolean> {
+  return paymentsRepo.patientHasPaymentIntents(patientProfileId);
+}
