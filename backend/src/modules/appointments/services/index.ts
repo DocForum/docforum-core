@@ -25,14 +25,21 @@ import * as referralsService from '../../referrals/services';
  * See backend/tests/integration/booking.test.ts for the concurrency proof
  * this is built to satisfy.
  *
+ * Phase 8, issue #42 (docs/adr/0011): `patientProfileId` books for a
+ * dependent the caller is an active guardian of. Authorisation happens
+ * here, BEFORE the transaction — it only decides which profile the
+ * appointment is for. The transaction below is unchanged by it.
+ *
  * Phase 8, issue #43: the booking's AuditEvent is written as a third step
  * of the same transaction, after the Appointment row exists — so an event
  * exists if and only if the booking committed. A caller that loses the
- * race fails at step 1 and never reaches it.
+ * race fails at step 1 and never reaches it. For a guardian booking, the
+ * actor is the guardian and the event's metadata names the dependent's
+ * profile id.
  */
-export async function bookSlot(actor: auditService.AuditActor, availabilitySlotId: string) {
+export async function bookSlot(actor: auditService.AuditActor, availabilitySlotId: string, patientProfileId?: string) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  const patientProfile = await patientsService.resolveActingProfile(actor.userId, patientProfileId);
 
   return prisma.$transaction(async (tx) => {
     const claimed = await availabilityService.claimOpenSlot(tx, availabilitySlotId);
@@ -59,15 +66,20 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
       action: 'appointment.booked',
       fromState: null,
       toState: appointment.status,
-      metadata: { availabilitySlotId, doctorProfileId: slot.doctorProfileId, origin: appointment.origin },
+      metadata: {
+        availabilitySlotId,
+        doctorProfileId: slot.doctorProfileId,
+        patientProfileId: patientProfile.id,
+        origin: appointment.origin,
+      },
     });
 
     return appointment;
   });
 }
 
-export async function listMyAppointments(userId: string) {
-  const patientProfile = await patientsService.getMyPatientProfile(userId);
+export async function listMyAppointments(userId: string, patientProfileId?: string) {
+  const patientProfile = await patientsService.resolveActingProfile(userId, patientProfileId);
   return appointmentsRepo.findAppointmentsForPatient(patientProfile.id);
 }
 

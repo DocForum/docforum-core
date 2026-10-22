@@ -2,7 +2,7 @@
   "name": "docforum-core-backend",
   "version": "0.0.0",
   "private": true,
-  "description": "DocForum backend — modular monolith. See ARCHITECTURE.md.",
+  "description": "DocForum backend — modular monolith. See ARCHITECTURE0.md.",
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
-    "test:integration:payments-testnet": "DATABASE_URL_TEST=postgresql://docforum:docforum@localhost:5435/docforum_payments_test vitest run tests/testnet-integration",
+    "test:integration:payments-testnet": "DATABASE_URL_TEST==postgresql://docforum:docforum@localhost:5435/docforum_payments_test vitest run tests/testnet-integration",
     "test:all": "vitest run",
     "test:properties": "vitest run tests/unit/availability-slots.property.test.ts tests/unit/state-machines.property.test.ts",
     "audit:prod": "node scripts/audit-gate.mjs",

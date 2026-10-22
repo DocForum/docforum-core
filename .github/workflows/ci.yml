@@ -42,7 +42,7 @@ jobs:
       - name: Unit tests
         run: npm run test
 
-      - name: Integration tests (self-contained embedded Postgres — the double-booking-guarantee proof)
+      - name: Integration tests (self-contained embedded Postgres — double-booking guarantee + end-to-end care-thread)
         run: npm run test:integration
 
       - run: npm run build

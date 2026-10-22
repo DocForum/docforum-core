@@ -154,6 +154,8 @@ describe('referral cascade on appointment transitions', () => {
     expect(referral.status).toBe('expired');
     expect(referral.noShowCount).toBe(2);
     expect(referral.referringDoctorNotifiedAt).not.toBeNull();
+    expect(referral.expiredReason).toBe('no_show');
+    expect(referral.expiredAt).not.toBeNull();
     // The expiring no-show appointment stays linked as the reason.
     expect(referral.resultingAppointmentId).toBe(secondAppointmentId);
   });

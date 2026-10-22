@@ -142,7 +142,7 @@ describe('account deletion with clinical-record retention', () => {
       await prisma.user.update({ where: { id: p.userId }, data: { phone: '+2348000000000' } });
       await prisma.patientProfile.update({
         where: { id: p.profileId },
-        data: { dateOfBirth: new Date('1990-05-01'), guardianUserId: doctor.userId },
+        data: { dateOfBirth: new Date('1990-05-01') },
       });
     }
 
@@ -186,7 +186,8 @@ describe('account deletion with clinical-record retention', () => {
           labOrderId: labOrder.id,
           patientProfileId: p.profileId,
           facilityId,
-          amountStroops: 1000n,
+          amount: 1000n,
+          assetCode: 'XLM',
           status: 'escrowed',
           escrowId: 7n,
           stellarTxHash: 'f'.repeat(64),
@@ -261,7 +262,7 @@ describe('account deletion with clinical-record retention', () => {
     expect(await bcrypt.compare(PASSWORD, user.passwordHash)).toBe(false);
 
     const profile = await prisma.patientProfile.findUniqueOrThrow({ where: { id: alice.profileId } });
-    expect(profile).toMatchObject({ fullName: 'Deleted patient', dateOfBirth: null, guardianUserId: null });
+    expect(profile).toMatchObject({ fullName: 'Deleted patient', dateOfBirth: null });
     expect(profile.anonymizedAt?.getTime()).toBe(user.deletedAt!.getTime());
 
     // No personal field survives anywhere on the two rows.
