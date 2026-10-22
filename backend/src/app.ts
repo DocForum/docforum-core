@@ -11,6 +11,7 @@ import { appointmentConsultationsRouter, consultationsRouter } from './modules/c
 import { ordersRouter } from './modules/orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
+import { facilitiesRouter } from './modules/facilities/routes';
 import { adminRouter } from './modules/users/routes';
 import { registerPatientExportSections } from './export-sections';
 import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
@@ -36,7 +37,9 @@ export function createApp() {
   // config.corsOrigins. `credentials: true` is required for the refresh
   // cookie and is exactly why the allowlist can't be a wildcard.
   // Phase 8, issue #43: first, so every response (errors included) carries
-  // an X-Request-Id and audit events can be tied back to it.
+  // an X-Request-Id and audit events can be tied back to it. Phase 9,
+  // issue #46: the same middleware attaches a request-scoped child logger
+  // (`req.log`) so every log line in a request can be greped by that id.
   app.use(requestId);
   app.use(cors({ origin: config.corsOrigins, credentials: true }));
   app.use(express.json());
@@ -59,6 +62,7 @@ export function createApp() {
   app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
+  app.use('/facilities', facilitiesRouter);
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);

@@ -1,9 +1,9 @@
 import type { Request, Response } from 'express';
 import { once } from 'node:events';
 import * as patientsService from '../services';
+import { createDependentSchema, deleteAccountSchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
-import { deleteAccountSchema } from '../validation';
 import { LoginThrottledError } from '../../auth/services';
 
 // Phase 8, issue #40 — right of access. The subject is always `req.user`;
@@ -65,4 +65,18 @@ export async function deleteMe(req: Request, res: Response) {
     throw err;
   }
   res.status(204).send();
+}
+
+// Phase 8, issue #42 (docs/adr/0011). The guardian is always `req.user`.
+
+export async function createDependent(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const input = createDependentSchema.parse(req.body ?? {});
+  const dependent = await patientsService.createMyDependent(req.user.id, input);
+  res.status(201).json(dependent);
+}
+
+export async function listDependents(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  res.status(200).json(await patientsService.listMyDependents(req.user.id));
 }
