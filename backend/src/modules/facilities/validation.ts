@@ -24,3 +24,23 @@ export const eligibleFacilitiesQuerySchema = z.object({
 });
 
 export type CreatePriceVersionBody = z.infer<typeof createPriceVersionSchema>;
+
+/** Admin-only facility creation (issue #14, PRD OQ-2). The shape is checked
+ * here; the type↔capability consistency rule lives in the service so a
+ * direct service call cannot bypass it. */
+export const facilityCapabilitySchema = z.object({
+  capabilityType: z.enum(['lab_test', 'medication_dispense']),
+  // Free text on purpose (schema note on FacilityCapability) — no
+  // controlled vocabulary exists yet.
+  detail: z.string().trim().min(1).max(100).nullish(),
+}).strict();
+
+export const createFacilitySchema = z.object({
+  email: z.string().email(),
+  // Same floor as auth signup — an admin-set initial password may not be
+  // weaker than a self-chosen one.
+  password: z.string().min(8),
+  name: z.string().trim().min(1).max(200),
+  type: z.enum(['lab', 'pharmacy']),
+  capabilities: z.array(facilityCapabilitySchema).min(1).max(20),
+}).strict();
