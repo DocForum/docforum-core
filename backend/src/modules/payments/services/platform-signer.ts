@@ -5,10 +5,28 @@ export interface PlatformSignerOptions {
   [key: string]: unknown;
 }
 
+/** SEP-43 result shapes. @stellar/stellar-sdk's contract client reads
+ * `signedTxXdr` back from whatever signer it is given. */
+export interface SignedTransaction {
+  signedTxXdr: string;
+  signerAddress?: string;
+}
+
+export interface SignedAuthEntry {
+  signedAuthEntry: string;
+  signerAddress?: string;
+}
+
 export interface PlatformSigner {
   publicKey(): string;
-  signTransaction(xdr: string, options: PlatformSignerOptions): Promise<string>;
-  signAuthEntry?(authEntryXdr: string, options: PlatformSignerOptions): Promise<string>;
+  signTransaction(xdr: string, options: PlatformSignerOptions): Promise<SignedTransaction>;
+  signAuthEntry?(authEntryXdr: string, options: PlatformSignerOptions): Promise<SignedAuthEntry>;
+}
+
+/** What `contract.basicNodeSigner(keypair, networkPassphrase)` returns. */
+export interface EnvSignerDelegate {
+  signTransaction(xdr: string, options?: PlatformSignerOptions): Promise<SignedTransaction>;
+  signAuthEntry(authEntryXdr: string, options?: PlatformSignerOptions): Promise<SignedAuthEntry>;
 }
 
 export type PlatformSignerRole = 'payer' | 'releaser';
@@ -29,30 +47,58 @@ export class PlatformSignerError extends Error {
   }
 }
 
-/** Adapter for the existing SDK Keypair implementation. */
+/** Adapter for a local keypair, wrapped with stellar-sdk's `basicNodeSigner`.
+ * A bare Keypair has no `signTransaction`, so it can't be the delegate. */
 export class EnvPlatformSigner implements PlatformSigner {
-  constructor(private readonly signer: PlatformSigner) {}
+  constructor(private readonly accountId: string, private readonly signer: EnvSignerDelegate) {}
 
   publicKey(): string {
-    return this.signer.publicKey();
+    return this.accountId;
   }
 
-  async signTransaction(xdr: string, options: PlatformSignerOptions): Promise<string> {
+  async signTransaction(xdr: string, options: PlatformSignerOptions): Promise<SignedTransaction> {
+    let result: SignedTransaction;
     try {
-      return await this.signer.signTransaction(xdr, options);
+      result = await this.signer.signTransaction(xdr, options);
     } catch {
       throw new PlatformSignerError('Environment transaction signing failed.');
     }
+    if (typeof result?.signedTxXdr !== 'string' || result.signedTxXdr.length === 0) {
+      throw new PlatformSignerError('Environment signer returned an invalid signing response.');
+    }
+    return { signedTxXdr: result.signedTxXdr, signerAddress: this.accountId };
   }
 
-  async signAuthEntry(authEntryXdr: string, options: PlatformSignerOptions): Promise<string> {
-    if (!this.signer.signAuthEntry) throw new PlatformSignerError('Configured signer cannot sign Soroban authorization entries.');
+  async signAuthEntry(authEntryXdr: string, options: PlatformSignerOptions): Promise<SignedAuthEntry> {
+    let result: SignedAuthEntry;
     try {
-      return await this.signer.signAuthEntry(authEntryXdr, options);
+      result = await this.signer.signAuthEntry(authEntryXdr, options);
     } catch {
       throw new PlatformSignerError('Environment authorization signing failed.');
     }
+    if (typeof result?.signedAuthEntry !== 'string' || result.signedAuthEntry.length === 0) {
+      throw new PlatformSignerError('Environment signer returned an invalid authorization response.');
+    }
+    return { signedAuthEntry: result.signedAuthEntry, signerAddress: this.accountId };
   }
+}
+
+// stellar-sdk is ESM-only in practice on Node 20 (its CJS build requires an
+// ESM dependency), so it is loaded with a dynamic import, like the escrow SDK.
+type StellarSdkModule = typeof import('@stellar/stellar-sdk', { with: { 'resolution-mode': 'import' } });
+type StellarKeypair = InstanceType<StellarSdkModule['Keypair']>;
+let stellarSdkPromise: Promise<StellarSdkModule> | undefined;
+function loadStellarSdk(): Promise<StellarSdkModule> {
+  stellarSdkPromise ??= import('@stellar/stellar-sdk');
+  return stellarSdkPromise;
+}
+
+/** Builds an env-mode signer from a keypair. stellar-sdk's `basicNodeSigner`
+ * does the signing and returns the SEP-43 shapes. The keypair comes from the
+ * escrow SDK loader, so tests that fake the SDK also fake the keypair. */
+export async function createEnvPlatformSigner(keypair: StellarKeypair, networkPassphrase: string): Promise<EnvPlatformSigner> {
+  const { contract } = await loadStellarSdk();
+  return new EnvPlatformSigner(keypair.publicKey(), contract.basicNodeSigner(keypair, networkPassphrase));
 }
 
 /** HTTP reference adapter. The service must implement the documented JSON
@@ -81,12 +127,14 @@ export class RemotePlatformSigner implements PlatformSigner {
     }
   }
 
-  signTransaction(xdr: string, options: PlatformSignerOptions): Promise<string> {
-    return this.callSigned('sign-transaction', { xdr, options: { ...options, networkPassphrase: this.config.networkPassphrase } });
+  async signTransaction(xdr: string, options: PlatformSignerOptions): Promise<SignedTransaction> {
+    const signedTxXdr = await this.callSigned('sign-transaction', { xdr, options: { ...options, networkPassphrase: this.config.networkPassphrase } });
+    return { signedTxXdr, signerAddress: this.config.expectedPublicKey };
   }
 
-  signAuthEntry(authEntryXdr: string, options: PlatformSignerOptions): Promise<string> {
-    return this.callSigned('sign-auth-entry', { authEntryXdr, options: { ...options, networkPassphrase: this.config.networkPassphrase } });
+  async signAuthEntry(authEntryXdr: string, options: PlatformSignerOptions): Promise<SignedAuthEntry> {
+    const signedAuthEntry = await this.callSigned('sign-auth-entry', { authEntryXdr, options: { ...options, networkPassphrase: this.config.networkPassphrase } });
+    return { signedAuthEntry, signerAddress: this.config.expectedPublicKey };
   }
 
   private async callSigned(path: string, payload: Record<string, unknown>): Promise<string> {
