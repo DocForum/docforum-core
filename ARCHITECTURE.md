@@ -177,26 +177,8 @@ Specialty (controlled vocabulary, admin-managed)
 DoctorSpecialty (join table)
   id, doctor_profile_id, specialty_id
 
-FacilityProfile (user_id unique: the facility's original owner account; membership via FacilityMember)
+FacilityProfile (1:1 User)
   id, user_id, name, type (enum: lab|pharmacy), capabilities: FacilityCapability[]
-
-FacilityMember (new — Phase 5, issue #75)
-  user_id (unique, FK -> User), facility_id (FK -> FacilityProfile), role (enum: owner|staff), created_at
-  # A user can belong to at most one facility (unique constraint on user_id).
-  # Roles are fixed: owner | staff. No configurable permissions matrix.
-  # The add_facility_member_and_invite migration backfills one owner row per
-    pre-existing FacilityProfile, so existing logins keep their access.
-  # "Keep at least one owner" is enforced in the service layer only — see
-    §6.2.6 for why there is no DB-level constraint for it.
-
-FacilityInvite (new — Phase 5, issue #75)
-  id, facility_id (FK -> FacilityProfile), email, role (enum: staff — ownership
-  transfer is out of scope for #75), token_hash (unique, never plaintext),
-  expires_at, consumed_at (nullable), created_at
-  # Tokens are hashed (SHA-256), single-use — consumption is a conditional
-    UPDATE (consumed_at IS NULL) so two concurrent accepts can't both win —
-    and expire after FACILITY_INVITE_TTL_MINUTES (default 4320).
-  # Owners can create, list, and revoke invites.
 
 FacilityCapability
   id, facility_profile_id, capability_type (enum: lab_test|medication_dispense), detail (e.g. test category)
@@ -348,9 +330,8 @@ the original and is refunded through the existing admin refund action.
 ### 4.7 Fulfillment (facility-side)
 ```
 FulfillmentRecord
-  id, order_type (enum: prescription|lab_order), order_id (polymorphic ref)
-  actor_user_id (nullable, FK -> User — staff user who performed the action)
-  facility_id, status (enum: pending|in_progress|fulfilled|rejected)
+  id, prescription_id (FK, nullable, unique), lab_order_id (FK, nullable, unique)
+  facility_id (FK), status (enum: pending|in_progress|fulfilled|rejected)
   created_at, updated_at
   # Exactly one of the two order FKs is set — enforced by a PostgreSQL CHECK,
     not an application guard. One row per order, enforced by the unique on
@@ -360,7 +341,7 @@ FulfillmentRecord
   # Replaces the Phase 0 polymorphic (order_type, order_id) pair.
     Decision + reasoning: docs/adr/0012 (issue #13).
 ```
-Design note: kept separate from `Prescription`/`LabOrder` so a facility's operational status doesn't need write access to the clinical order record itself — it only writes to its own fulfillment row. Reduces blast radius of a compromised/misbehaving facility account. `actorUserId` (Phase 5, issue #75) is the column the fulfillment service sets when it records an action, enabling attribution of who fulfilled each order — nullable, and null on every row until a fulfillment action actually records one, because the facility-side fulfillment actions are later issues in this phase (#14/#15), not #75.
+Design note: kept separate from `Prescription`/`LabOrder` so a facility's operational status doesn't need write access to the clinical order record itself — it only writes to its own fulfillment row. Reduces blast radius of a compromised/misbehaving facility account.
 
 One table rather than a `PrescriptionFulfillment`/`LabOrderFulfillment` pair: the §5.3 step-5 transition ("`fulfilled` only via the facility-confirmed path") then exists in exactly one implementation instead of two that can drift, and the facility's assigned-orders queue is one indexed query (`WHERE facility_id = ? AND status IN (…)`) instead of a cross-table union. The lab-specific payload was never on this row anyway — it lives in `LabResult` (§4.6).
 
@@ -584,7 +565,6 @@ T5, enforced as a curated config policy.
 3. No schema support yet for a doctor working across multiple facilities/locations (PRD edge case 6) — `AvailabilitySlot` currently assumes one calendar per doctor.
 4. ~~No audit-log table~~ **Foundation resolved 2026-10-17 (issue #43):** `AuditEvent` (§4.10) + `audit.record()` in the same transaction as the change, append-only at the DB level, wired into booking (both booking paths), doctor verification, payment fund/release/refund, the patient's referral accept/decline and the referral admin actions (`referral.reassign`, `referral.cancel` — Phase 3, issue #68, written as `entity_type = 'Referral'` rows in the same table). **Still open:** the referral's creation and the cascade-driven `completed`/`expired` transitions (no actor to attribute them to yet), the remaining Phase 4 transitions (prescriptions, lab orders, fulfillment), the admin login-throttle clear (`/auth/login-attempts/clear`) still only logs to the console; the app connects as the database owner, which could disable the triggers — enforcing append-only against the owner needs a separate least-privilege DB role (deployment work, issue #22). PRD §7 auditability is therefore "a real mechanism exists" rather than "auditability is done"; remaining coverage stays an open gap.
 5. CSRF on the cookie-authenticated routes — the refresh cookie has to be `SameSite=None; Secure` (the Pages frontend is a different site — see `docs/adr/0003`), which means any site the patient visits can make their browser send it to `/auth/refresh` and `/auth/logout`. **Resolved 2026-10-15 (issue #37):** a per-session CSRF token is bound into the refresh token and required in the `X-CSRF-Token` header, the `Origin` header is validated against an explicit allowlist, and CORS is now a per-environment allowlist (`CORS_ORIGINS`) instead of one configured string. The double-submit cookie pattern — the usual answer — is *not* usable here: a cookie set by this API is a third-party cookie to `docforum.github.io`, so the frontend's JavaScript can never read it; the token travels in the login/refresh response body instead. A request with no `Origin` (curl, server-to-server) is allowed through the Origin check but still needs the token. See `backend/src/middleware/csrf.ts`, and `docs/api/README.md` for what the client must send. Consequence: refresh cookies issued before this change carry no `csrf` claim and are rejected, i.e. existing sessions need one re-login.
-6. **Added 2026-10-21 (Phase 5, issue #75):** "each facility keeps at least one owner" is enforced only in `facilities/services` (`removeMember` refuses when the owner count would reach zero) — there is no DB-level constraint or trigger for it, so a write that bypasses the services could still leave a facility ownerless. Smallest reasonable default for v1 (the services are the only writers of `FacilityMember`); revisit if a migration or maintenance path ever needs to delete memberships directly.
 
 ### 6.3 What's overengineered (architecture-level, for v1)?
 1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is. **Resolved 2026-10-22 (issue #13, `docs/adr/0012-fulfillment-record-typed-order-fks.md`):** the polymorphism was the premature part and it is gone. Splitting into two tables was weighed and rejected — it would give the §5.3 step-5 transition two implementations and the facility queue a cross-table union, i.e. *more* ceremony than the single typed-FK table, not less.

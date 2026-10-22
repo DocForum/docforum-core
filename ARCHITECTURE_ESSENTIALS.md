@@ -56,7 +56,7 @@ Account deletion (Phase 8, issue #41 — docs/adr/0010): anonymise in place (`Us
 ## Overengineering guardrails (things NOT to build yet)
 - No custom video/WebRTC.
 - No ML-based doctor-matching/recommendation.
-- No configurable RBAC matrix — 4 fixed roles for User/Doctor (patient|doctor|facility|admin), and 2 fixed roles for FacilityMember (owner|staff).
+- No configurable RBAC matrix — 4 fixed roles only.
 - No chat delivery receipts/typing indicators — plain message log.
 - No custom scheduling recurrence engine — fixed-length slot generation only.
 - No microservice split, no separate CI/repos per module.
