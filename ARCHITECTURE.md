@@ -52,8 +52,10 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `referrals` — referral creation, lifecycle, snapshot of context, loop flags, the appointment-status cascade, and the admin queue/override operations. This is the most cross-wired module: it creates appointments through `appointments`' service, and `appointments` calls back into `referrals`' service (`applyAppointmentOutcome`) from inside its status-transition transaction. That mutual service-to-service import is deliberate and runtime-safe under ESM live bindings (every cross-call happens in an async function, after both modules have loaded) — the alternative, either module reaching into the other's repository, is what hard rule 4 exists to prevent.
 - `prescriptions` — prescription issuance and versioning.
 - `lab-orders` — lab order issuance and versioning.
-- `pharmacy-orders` — fulfillment-side record for prescriptions at a specific pharmacy (kept distinct from `prescriptions` itself — see data model note in §4.7).
+- `pharmacy-orders` — facility fulfillment for pharmacy orders (reference number required, optional attachment via `StorageProvider`, audit event logged).
+- `orders` — patient order confirmation and dispute handling (`POST /orders/:id/confirm-receipt`, `POST /orders/:id/dispute`), derived `confirmedSignal` calculation, unconfirmed order expiry job, and admin dispute queue (`GET /admin/orders/disputes`, `POST /admin/orders/disputes/:id/resolve`).
 - `notifications` — outbound notification dispatch, provider-agnostic.
+- `payments` — `PaymentIntent`, the facility payee `WalletLink`, and the patient payer `PatientWalletLink` (§4.13). Relational metadata only; every Stellar call goes through `@docforum/escrow-sdk` via `services/escrow-sdk-loader.ts`. Assets are allowlisted per environment (issue #79), and the prepare half of ADR 0005 (issue #80) builds the unsigned patient transaction without moving funds.
 - `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking (both the direct and the referral-origin path), consultation closing (Phase 2, issue #4), doctor verification, payment fund/release/refund, the patient's referral accept/decline, and the referral admin actions (Phase 3, issue #68 — `referral.reassign` / `referral.cancel`, recorded as `entityType: 'Referral'` rows; there is no second, referral-specific audit table). **Phase 4 transitions (fulfillment) must call `record()` in the same transaction when they're built** — prescriptions and lab orders already do. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
 
 ### 3.1 Patient data export registry (Phase 8, issue #40)
@@ -72,9 +74,9 @@ export. The pieces:
 - Current sections: `account` (auth: email/phone/role, never the password
   hash), `profile` (patients), `appointments` (appointments, with slot times
   from `availability` and the doctor's name from `doctors`, both via their
-  services), `payments` (payments: amounts, status, on-chain tx hash /
-  escrow id / contract id; the platform's signing secrets never live in a
-  row and can't reach an export).
+  services), `payments` (version 2: amount in the asset's smallest unit,
+  asset code, status, on-chain tx hash / escrow id / contract id; the
+  platform's signing secrets never live in a row and can't reach an export).
 
 **Adding a module with patient data (referrals, prescriptions, lab orders,
 …):** export a `PatientExportSection` from that module's `services/` and add
@@ -114,7 +116,7 @@ Canonical source of truth: `backend/prisma/schema.prisma`. This section is the h
 
 **Phase 1 models are real** (User, PatientProfile, DoctorProfile, Specialty, DoctorSpecialty, FacilityProfile, FacilityCapability, AvailabilitySlot, Appointment) — migrated via `backend/prisma/migrations/20260914110638_init/`. **Phase 3 added the real `Referral` and the `Consultation`↔appointment link** — migrated via `backend/prisma/migrations/20261016214929_referral_phase3/`; §4.3 and §4.4 describe what actually shipped, not a sketch. The audit trail (`AuditEvent`, §4.10) is the Phase 8 one (issue #43, `20261017212335_add_audit_event`) — the referral admin actions live in it rather than in a second table. Everything else below (§4.5 onward) is still the Phase 0 structural placeholder.
 
-Three intentional deviations from the original sketches, all flagged in the schema file itself: `Appointment.intakeId` is deferred (nullable-by-omission, not yet a column) since `IntakeForm` doesn't exist until Phase 2; `PatientProfile.guardianUserId` is a plain string with no FK relation, since the minor/dependent consent model (§8.2.5 in PRD.md) is still an open question, not resolved here; and `Referral.snapshotIntakeId` likewise has no column yet (there is no `IntakeForm` to snapshot) — the intake half of the snapshot rule cannot be violated while there is no intake data at all, and the column must be added (as a copy) when issue #1 lands.
+Three intentional deviations from the original sketches, all flagged in the schema file itself: `Appointment.intakeId` is deferred (nullable-by-omission, not yet a column) since `IntakeForm` doesn't exist until Phase 2; `PatientProfile.guardianUserId` was a plain string with no FK relation while the minor/dependent consent model (PRD §8.2.5) was open — **replaced in Phase 8 (issue #42, `docs/adr/0011`)** by the `Guardianship` relation (§4.1); and `Referral.snapshotIntakeId` likewise has no column yet (there is no `IntakeForm` to snapshot) — the intake half of the snapshot rule cannot be violated while there is no intake data at all, and the column must be added (as a copy) when issue #1 lands.
 
 ### 4.1 User / Role model
 ```
@@ -142,12 +144,29 @@ EmailVerificationToken (Phase 8 issue #34)
     UPDATE (consumed_at IS NULL), same single-use shape as §5.1's booking
     guarantee, so two concurrent redemptions can't both win.
 
-PatientProfile (1:1 User)
-  id, user_id (FK -> User, ON DELETE RESTRICT since issue #41 — was CASCADE)
-  full_name, date_of_birth, guardian_user_id (nullable — see PRD edge case: minors)
+PatientProfile (1:1 User, or 0:1 for a dependent)
+  id, user_id (nullable since issue #42 — null = a guardian-owned dependent
+    with no login; still unique. FK -> User, ON DELETE RESTRICT since issue
+    #41 — was CASCADE), full_name, date_of_birth
   anonymized_at (nullable — issue #41; set with full_name -> 'Deleted patient',
-    date_of_birth/guardian_user_id -> null. The row stays so Appointment and
+    date_of_birth -> null. The row stays so Appointment and
     PaymentIntent keep their FK; both of those reference it ON DELETE RESTRICT.)
+  # CHECK (user_id IS NOT NULL OR date_of_birth IS NOT NULL): a dependent
+    always has a DOB, because guardian access ends at the age of majority.
+  # guardian_user_id (unenforced string) was dropped in issue #42; the
+    migration refuses to run if any row still had a value.
+
+Guardianship (Phase 8, issue #42 — docs/adr/0011)
+  id, guardian_user_id (FK -> User, RESTRICT), dependent_profile_id (FK -> PatientProfile, RESTRICT)
+  created_at, revoked_at (nullable)
+  # unique (guardian_user_id, dependent_profile_id) — no duplicate pairs.
+  # Created only together with a new dependent profile (POST
+    /patients/me/dependents); there is no way to link an existing profile.
+  # Active = revoked_at IS NULL AND the dependent is under
+    AGE_OF_MAJORITY_YEARS (UTC calendar date, checked at request time).
+    Never deleted — ending access sets revoked_at, or happens by age.
+  # All dependent-scoped access goes through
+    patients/services resolveActingProfile (booking, appointment listing).
 
 DoctorProfile (1:1 User)
   id, user_id, full_name, verification_status (enum: pending|verified|rejected)
@@ -312,11 +331,20 @@ the original and is refunded through the existing admin refund action.
 ### 4.7 Fulfillment (facility-side)
 ```
 FulfillmentRecord
-  id, order_type (enum: prescription|lab_order), order_id (polymorphic ref)
-  facility_id, status (enum: pending|in_progress|fulfilled|rejected)
+  id, prescription_id (FK, nullable, unique), lab_order_id (FK, nullable, unique)
+  facility_id (FK), status (enum: pending|in_progress|fulfilled|rejected)
   created_at, updated_at
+  # Exactly one of the two order FKs is set — enforced by a PostgreSQL CHECK,
+    not an application guard. One row per order, enforced by the unique on
+    each FK column (Postgres keeps NULLs, so each is at most one non-null).
+  # All three FKs are RESTRICT: deleting an order or a facility account cannot
+    erase the fulfillment trail (docs/adr/0010's retention rule).
+  # Replaces the Phase 0 polymorphic (order_type, order_id) pair.
+    Decision + reasoning: docs/adr/0012 (issue #13).
 ```
 Design note: kept separate from `Prescription`/`LabOrder` so a facility's operational status doesn't need write access to the clinical order record itself — it only writes to its own fulfillment row. Reduces blast radius of a compromised/misbehaving facility account.
+
+One table rather than a `PrescriptionFulfillment`/`LabOrderFulfillment` pair: the §5.3 step-5 transition ("`fulfilled` only via the facility-confirmed path") then exists in exactly one implementation instead of two that can drift, and the facility's assigned-orders queue is one indexed query (`WHERE facility_id = ? AND status IN (…)`) instead of a cross-table union. The lab-specific payload was never on this row anyway — it lives in `LabResult` (§4.6).
 
 ### 4.8 Notifications
 ```
@@ -385,7 +413,8 @@ Transitions recorded (action: from → to):
 - `appointment.booked`: `null → scheduled` (metadata: slot id, doctor profile id, origin). Written by the appointments module for **both** booking paths — a direct booking and a referral-origin booking (the accept path), which is what the `origin` metadata distinguishes; there is no way to create an appointment that leaves no trail.
 - `consultation.closed`: `null → outcome` (metadata: appointment id; never the notes — that's PHI). Written by the consultations module for every consultation write, whichever route addressed it (`POST /consultations`, `POST /appointments/:id/consultation`, or the orders flow).
 - `doctor.verification_status_changed`: previous → new verification status (read under `FOR UPDATE`; a no-op set records nothing)
-- `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
+- `payment_intent.funded` `created → escrowed`, `payment_intent.released` `escrowed → released`, `payment_intent.refunded` `escrowed → refunded` (metadata: order type, amount, asset code, escrow id, tx hash, contract id — public on-chain references only). The status write is now conditional on the observed state, so a racing second action gets `409` and records nothing.
+- `payment_intent.prepared` `created → awaiting_signature`, `payment_intent.prepare_expired` `awaiting_signature → created` (issue #80). Actor is the patient for prepare and the system for expiry; metadata adds the prepared transaction hash.
 - `referral.accepted`: `pending → accepted` (metadata: the appointment id the accept booked). Written by the referrals module in the same transaction as the accept, so the patient's decision and the appointment it produced are both recorded or neither is.
 - `referral.declined`: `pending → declined`.
 - `referral.reassign`: `null → null` — the referral is retargeted, not
@@ -467,6 +496,45 @@ to the caller's own profile (resolved from the authenticated user, never
 from the request) and strips all viewer PII to a role — a deleted viewer
 surfaces as `deleted_user`.
 
+### 4.13 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
+```
+PaymentIntent
+  id, prescription_id / lab_order_id (exactly one typed FK — issue #85)
+  status (enum: created|awaiting_signature|submitting|escrowed|released|refunded|failed)
+  patient_profile_id (FK, RESTRICT), facility_id (FK)
+  amount (bigint — smallest unit of asset_code; never scaled in this repo)
+  asset_code, token_contract_id (SAC address; token_contract_id is nullable
+    only for pre-#79 rows, which resolve ESCROW_TOKEN_ID as native XLM)
+  escrow_id, stellar_tx_hash, soroban_contract_id (nullable — set on fund)
+  prepared_tx_hash, prepared_xdr, prepared_expiry_ledger, prepared_expires_at,
+    refund_after (nullable — live only in awaiting_signature; cleared on expiry)
+  created_at, updated_at
+  # Every status write is a conditional UPDATE on the observed state, in the
+    same transaction as its AuditEvent (§4.10). Prepare is
+    created -> awaiting_signature; expiry is awaiting_signature -> created.
+    `submitting` is reserved for ADR 0005's submit half (not built). Orders
+    are priced in XLM today, so issuance writes asset_code='XLM'.
+
+PatientWalletLink
+  patient_profile_id (unique FK -> PatientProfile, cascade)
+  stellar_public_key, verified_at
+  # The PAYER wallet (ADR 0005). Rows are written by the SEP-10 flow, which
+    is not built yet; prepare requires one and returns 409
+    WALLET_NOT_LINKED otherwise.
+
+WalletLink
+  facility_id (unique FK -> FacilityProfile, cascade)
+  stellar_public_key
+  # The PAYEE/payout wallet, facility-managed (ADR 0004). Unchanged by #79.
+```
+Assets are an environment allowlist (`PAYMENT_ASSETS`; testnet defaults XLM +
+USDC SACs) rather than a fixed enum: an intent in any other asset is
+rejected at creation. Before funding (and preparing) an issued asset, the
+payee's Horizon account is checked for an authorised trustline
+(`PAYEE_TRUSTLINE_MISSING`); native XLM needs none. Only assets without
+clawback/transfer fees/rebasing belong on the list — escrow threat model
+T5, enforced as a curated config policy.
+
 ## 5. Key flows (sequence-level, not code)
 
 ### 5.1 Booking (concurrency-safe)
@@ -494,7 +562,7 @@ surfaces as `deleted_user`.
 ### 6.1 What do we think would break?
 1. Naive slot booking without the DB-level conditional update in §5.1 — the most likely first bug filed against this repo. **Resolved 2026-09-14:** implemented exactly as designed in §5.1 — see `backend/src/modules/availability/repositories/index.ts` (`claimOpenSlot`) and `backend/src/modules/appointments/services/index.ts` (`bookSlot`, the transaction wrapping it). Integration-tested with real concurrency in `backend/tests/integration/booking.test.mts`.
 2. `Referral.target_doctor_id` left nullable with no fallback assignment logic — referrals to "a specialty" with no specific doctor need a real routing rule (round robin? load-based?) or they'll pile up unassigned. **Resolved 2026-10-21 (Phase 3, issue #6 — `docs/adr/0008-referral-routing-without-target-doctor.md`):** the column stays **required** and the fallback logic now exists at creation — a specialty-only target is routed to the **least-loaded eligible doctor** (verified, holds the specialty, not the referring doctor, active account; fewest `pending`+`accepted` referrals, ties by doctor id) inside the creation transaction. Zero eligible doctors fails the call with `422 REFERRAL_NO_ELIGIBLE_TARGET` instead of writing an unowned row, so the pile-up this item predicts remains impossible. Still deliberately absent: a patient-facing "waiting for a specialist" state (it requires a nullable target), availability-aware routing (needs doctor-side availability/discovery), and a per-doctor "accepting referrals" switch — all deferred in the ADR with revisit triggers.
-3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final.
+3. Polymorphic `FulfillmentRecord.order_id` (§4.7) — polymorphic FKs are a known footgun for referential integrity in Postgres. Needs either two separate tables (`PrescriptionFulfillment`, `LabOrderFulfillment`) or a check-constraint + application-level guard. **Current schema sketch is a simplification that should be revisited before implementation**, not treated as final. **Resolved 2026-10-22 (Phase 5, issue #13 — `docs/adr/0012-fulfillment-record-typed-order-fks.md`):** neither option exactly as posed — `FulfillmentRecord` stays **one table**, but the `(order_type, order_id)` pair is gone. It is replaced by two real foreign keys (`prescription_id`, `lab_order_id`, each `UNIQUE`) with a PostgreSQL `CHECK` requiring exactly one, plus the `facility_id` FK the sketch left as a TODO. Referential integrity is now the database's job, and the CHECK only chooses between two already-validated columns — which is what an `order_type`+`order_id` guard could never do, since Postgres cannot make a bare `TEXT` conditionally reference one of two tables. Keeping one table (rather than splitting) is what keeps §5.3 step 5 a single transition implementation and the facility's assigned-orders queue a single indexed query; the discriminator mechanism is the one `PaymentIntent` already uses (issue #85). Deferred by that decision rather than invented around: re-routing an order to a different facility after a `rejected` fulfillment would need a partial unique index, so in v1 a `rejected` row is terminal for that order — a corrected order is a new `supersedes_*_id` row and gets its own fulfillment.
 4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
 5. **Discovered 2026-10-15 while building email verification (Phase 8, issue #34):** the email/SMS provider is still undecided (Phase 6, issue #17), so verification links can't actually be delivered in a hosted environment yet — `backend/src/modules/auth/services/email-dispatcher.ts` is a no-op seam until a provider is integrated. Until then `backend/scripts/mark-email-verified.mjs` is the documented out-of-band path for an operator with DB access. Not a reason to skip the guard: the guard is what makes the flow safe once delivery exists, and shipping it locked-off would just mean shipping it untested.
 
@@ -508,7 +576,7 @@ surfaces as `deleted_user`.
 5. CSRF on the cookie-authenticated routes — the refresh cookie has to be `SameSite=None; Secure` (the Pages frontend is a different site — see `docs/adr/0003`), which means any site the patient visits can make their browser send it to `/auth/refresh` and `/auth/logout`. **Resolved 2026-10-15 (issue #37):** a per-session CSRF token is bound into the refresh token and required in the `X-CSRF-Token` header, the `Origin` header is validated against an explicit allowlist, and CORS is now a per-environment allowlist (`CORS_ORIGINS`) instead of one configured string. The double-submit cookie pattern — the usual answer — is *not* usable here: a cookie set by this API is a third-party cookie to `docforum.github.io`, so the frontend's JavaScript can never read it; the token travels in the login/refresh response body instead. A request with no `Origin` (curl, server-to-server) is allowed through the Origin check but still needs the token. See `backend/src/middleware/csrf.ts`, and `docs/api/README.md` for what the client must send. Consequence: refresh cookies issued before this change carry no `csrf` claim and are rejected, i.e. existing sessions need one re-login.
 
 ### 6.3 What's overengineered (architecture-level, for v1)?
-1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is.
+1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is. **Resolved 2026-10-22 (issue #13, `docs/adr/0012-fulfillment-record-typed-order-fks.md`):** the polymorphism was the premature part and it is gone. Splitting into two tables was weighed and rejected — it would give the §5.3 step-5 transition two implementations and the facility queue a cross-table union, i.e. *more* ceremony than the single typed-FK table, not less.
 2. BullMQ/Redis job queue before there's a single job that needs it — fine to stub with a simple cron/interval check initially and introduce a real queue when reminder/expiry logic actually exists.
 3. Designing for horizontal service extraction (module boundary purity, §3) before there's a single reason to split — worth doing lightly (it's cheap discipline), but not worth extra ceremony (e.g., separate repos, separate CI, internal API versioning) yet.
 4. **Added 2026-10-17 (issue #40):** export bundles are stored as text chunks in Postgres (`PatientExportChunk`, §4.11), not in object storage as §2's file-storage row prescribes — no object-storage provider is integrated yet, and a filesystem store would break on Render's ephemeral disk and on any second instance. The chunks are read/written only by `patients/repositories`, are short-lived (`PATIENT_EXPORT_TTL_HOURS`, default 24) and are deleted by the cleanup job, so moving to S3 later swaps one storage seam rather than the design. Revisit when lab-result storage (Phase 5, issue #16) picks a provider.

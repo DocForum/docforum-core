@@ -1,0 +1,3 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+export function signFacilityRequest(secret: string, timestamp: string, body: string): string { return createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex"); }
+export function verifyFacilityRequest(secret: string, timestamp: string, body: string, signature: string, now = Date.now()): boolean { const age=Math.abs(now-Number(timestamp)); if(!Number.isFinite(age)||age>300000||!/^[0-9]+$/.test(timestamp)) return false; const expected=Buffer.from(signFacilityRequest(secret,timestamp,body)); const actual=Buffer.from(signature); return expected.length===actual.length&&timingSafeEqual(expected,actual); }
