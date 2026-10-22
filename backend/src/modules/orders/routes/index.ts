@@ -1,27 +1,51 @@
 import { Router } from 'express';
-import { authenticate, requireRole } from '../../../middleware/auth';
-import * as controller from '../controllers';
+import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
+import * as ordersController from '../controllers';
 
-const router = Router();
+export const ordersRouter = Router();
 
-router.post(
+ordersRouter.post(
+  '/consultations',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  ordersController.createConsultation,
+);
+
+ordersRouter.post(
+  '/consultations/:consultationId/prescriptions',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  ordersController.issuePrescription,
+);
+
+ordersRouter.post(
+  '/consultations/:consultationId/lab-orders',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  ordersController.issueLabOrder,
+);
+
+ordersRouter.post(
   '/:id/confirm-receipt',
   authenticate,
   requireRole('patient'),
-  controller.confirmReceipt
+  ordersController.confirmReceipt,
 );
 
-router.post(
+ordersRouter.post(
   '/:id/dispute',
   authenticate,
   requireRole('patient'),
-  controller.disputeOrder
+  ordersController.disputeOrder,
 );
 
-router.get(
+ordersRouter.get(
   '/:id',
   authenticate,
-  controller.getOrder
+  ordersController.getOrder,
 );
 
-export default router;
+export default ordersRouter;

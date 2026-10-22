@@ -20,14 +20,16 @@ export function computeConfirmedSignal(
   return false;
 }
 
+export const calculateConfirmedSignal = computeConfirmedSignal;
+
 export function formatOrderResponse<T extends {
   confirmed: boolean;
   status: string;
   disputed: boolean;
   fulfilledAt: Date | null;
-}>(order: T) {
+}>(order: T, windowHours?: number) {
   return {
     ...order,
-    confirmedSignal: computeConfirmedSignal(order),
+    confirmedSignal: computeConfirmedSignal(order, windowHours),
   };
 }

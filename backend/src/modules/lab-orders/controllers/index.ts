@@ -3,7 +3,7 @@ import { auditActor } from '../../../middleware/request-id';
 import * as services from '../services';
 
 export async function createLabOrder(req: Request, res: Response) {
-  const { patientProfileId, orderingDoctorId, details } = req.body;
+  const { patientProfileId, orderingDoctorId, details } = req.body || {};
   const order = await services.createLabOrder({
     patientProfileId,
     orderingDoctorId,
@@ -14,7 +14,7 @@ export async function createLabOrder(req: Request, res: Response) {
 
 export async function fulfillLabOrder(req: Request, res: Response) {
   const id = req.params.id as string;
-  const { referenceNumber, attachment, notes } = req.body;
+  const { referenceNumber, attachment, notes } = req.body || {};
   const actor = auditActor(req);
 
   const order = await services.fulfillLabOrder(
