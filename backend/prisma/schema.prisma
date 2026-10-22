@@ -95,6 +95,16 @@ enum OrderStatus {
   superseded
 }
 
+enum OrderType {
+  pharmacy
+  lab
+}
+
+enum DisputeStatus {
+  pending
+  resolved
+}
+
 enum FulfillmentStatus {
   pending
   in_progress
@@ -147,16 +157,16 @@ model User {
   // (password reset, Phase 8 #33) invalidates every outstanding refresh
   // token for the user, since none of them carry the new value — the
   // interim kill switch issue #33 asked for while #18 doesn't exist yet.
-  tokenVersion             Int       @default(0)
+  tokenVersion          Int       @default(0)
   // Phase 8 (issue #41, docs/adr/0010): set once, irreversibly, when the
   // account is deleted. The row is anonymised in place (email tombstoned,
   // phone cleared, password unusable) rather than deleted, because clinical
   // and payment records still reference its patient profile. Refresh is
   // refused once set. Distinct from admin deactivation (#39), which is
   // reversible.
-  deletedAt                DateTime?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  deletedAt             DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   patientProfile  PatientProfile?
   doctorProfile   DoctorProfile?
@@ -172,6 +182,7 @@ model User {
   accessLogs              AccessLog[]
   // Phase 8 (issue #42, docs/adr/0011): dependents this user is guardian of.
   guardianships           Guardianship[]
+  orderDisputeResolutions OrderDisputeResolution[]
 
   @@index([role])
 }
@@ -339,7 +350,7 @@ model PatientProfile {
   // (ADR 0010), and an accidental user delete must fail loudly rather than
   // take the clinical identity anchor with it. Optional since issue #42: a
   // dependent profile has no login.
-  user           User?           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user           User?              @relation(fields: [userId], references: [id], onDelete: Restrict)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
   prescriptions  Prescription[]
@@ -357,7 +368,9 @@ model PatientProfile {
   accessLogs AccessLog[]
 
   // Phase 8 (issue #42, docs/adr/0011): guardians of this (dependent) profile.
-  guardians  Guardianship[]
+  guardians     Guardianship[]
+  orders        Order[]
+  orderDisputes OrderDispute[]
 }
 
 // Phase 8 (issue #40): right-of-access export jobs. One row per request;
@@ -501,15 +514,17 @@ model FacilityProfile {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  capabilities   FacilityCapability[]
-  prescriptions  Prescription[]
-  labOrders      LabOrder[]
-  labResults     LabResult[]
-  paymentIntents PaymentIntent[]
-  fulfillments   FulfillmentRecord[]
-  walletLink     WalletLink?
-  prices         FacilityPrice[]
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  capabilities      FacilityCapability[]
+  prescriptions     Prescription[]
+  labOrders         LabOrder[]
+  labResults        LabResult[]
+  paymentIntents    PaymentIntent[]
+  fulfillments      FulfillmentRecord[]
+  walletLink        WalletLink?
+  prices            FacilityPrice[]
+  orders            Order[]
+  fulfillmentProofs FulfillmentProof[]
 }
 
 model FacilityCapability {
@@ -534,7 +549,7 @@ model FacilityCapability {
 /// medication code the facility publishes), matching FacilityCapability.detail
 /// — no controlled vocabulary has been decided yet.
 model FacilityPrice {
-  id              String   @id @default(uuid())
+  id              String          @id @default(uuid())
   facilityId      String
   facility        FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
   catalogItemCode String
@@ -544,7 +559,7 @@ model FacilityPrice {
   asset           String
   amount          BigInt
   effectiveFrom   DateTime
-  createdAt       DateTime @default(now())
+  createdAt       DateTime        @default(now())
 
   // Two versions of the same item/asset cannot share an effective instant.
   @@unique([facilityId, catalogItemCode, asset, effectiveFrom])
@@ -644,6 +659,91 @@ model AccessLog {
   @@index([entityType, entityId])
 }
 
+// =========================================================================
+// Orders, Fulfillment Proofs, Disputes & Resolutions
+// =========================================================================
+
+model Order {
+  id                  String      @id @default(uuid())
+  orderType           OrderType
+  patientProfileId    String
+  facilityProfileId   String?
+  prescribingDoctorId String?
+  details             String?
+  status              OrderStatus @default(issued)
+
+  fulfilledAt DateTime?
+
+  confirmed          Boolean   @default(false)
+  confirmationSource String? // 'patient' | 'timeout'
+  confirmedAt        DateTime?
+
+  disputed   Boolean   @default(false)
+  disputedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patientProfile  PatientProfile   @relation(fields: [patientProfileId], references: [id])
+  facilityProfile FacilityProfile? @relation(fields: [facilityProfileId], references: [id])
+
+  fulfillmentProofs FulfillmentProof[]
+  disputes          OrderDispute[]
+
+  @@index([patientProfileId, status])
+  @@index([facilityProfileId, status])
+  @@index([status, confirmed, disputed])
+}
+
+model FulfillmentProof {
+  id                String   @id @default(uuid())
+  orderId           String
+  facilityProfileId String
+  referenceNumber   String
+  attachmentUrl     String?
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  order           Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id])
+
+  @@index([orderId])
+  @@index([facilityProfileId])
+}
+
+model OrderDispute {
+  id               String        @id @default(uuid())
+  orderId          String
+  patientProfileId String
+  reason           String
+  status           DisputeStatus @default(pending)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  order          Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  patientProfile PatientProfile           @relation(fields: [patientProfileId], references: [id])
+  resolutions    OrderDisputeResolution[]
+
+  @@index([orderId])
+  @@index([patientProfileId])
+  @@index([status])
+}
+
+model OrderDisputeResolution {
+  id              String   @id @default(uuid())
+  disputeId       String
+  adminUserId     String
+  resolutionNotes String
+  outcome         String // e.g. 'upheld' | 'rejected' | 'refunded'
+  createdAt       DateTime @default(now())
+
+  dispute   OrderDispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  adminUser User         @relation(fields: [adminUserId], references: [id])
+
+  @@index([disputeId])
+  @@index([adminUserId])
+}
+
 // Below this line: Phase 0 structural placeholders, not yet implemented.
 // See ROADMAP.md for phase order.
 // =========================================================================
@@ -689,8 +789,8 @@ model Consultation {
 // rule 3): `snapshotNotes` is a copy taken at creation, never a live
 // reference — reassign/cancel/cascade never touch it.
 model Referral {
-  id                        String         @id @default(uuid())
-  status                    ReferralStatus @default(pending)
+  id                        String                @id @default(uuid())
+  status                    ReferralStatus        @default(pending)
   patientProfileId          String
   // The consultation this referral grew out of. Required: every referral
   // is created from a consultation (PRD FR-7), which is also what gives
@@ -716,7 +816,7 @@ model Referral {
   // when repeated no-shows expire the referral. Both live on the
   // referral (not a Notification row) because Phase 6's dispatch layer
   // doesn't exist yet — the flag is the seam it will read.
-  noShowCount               Int            @default(0)
+  noShowCount               Int                   @default(0)
   referringDoctorNotifiedAt DateTime?
   // Issue #65: set (with a reason naming the matching hop) when the
   // target doctor/specialty was already in the ancestor chain — the
@@ -731,12 +831,12 @@ model Referral {
   // pending/declined, or after a cancelled/no-showed appointment returns
   // it to pending). Kept pointing at the last no-show when expired —
   // that appointment is why it expired.
-  resultingAppointmentId    String?        @unique
+  resultingAppointmentId    String?               @unique
   // Issue #8: set together with status `expired` — when, and why.
   expiredAt                 DateTime?
   expiredReason             ReferralExpiryReason?
-  createdAt                 DateTime       @default(now())
-  updatedAt                 DateTime       @updatedAt
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
 
   sourceConsultation   Consultation   @relation(fields: [sourceConsultationId], references: [id])
   patientProfile       PatientProfile @relation(fields: [patientProfileId], references: [id])
@@ -817,12 +917,12 @@ model LabOrder {
   supersedesLabOrderId String?
   createdAt            DateTime    @default(now())
 
-  consultation    Consultation    @relation(fields: [consultationId], references: [id])
-  patientProfile  PatientProfile  @relation(fields: [patientProfileId], references: [id])
-  orderingDoctor  DoctorProfile   @relation(fields: [orderingDoctorId], references: [id])
-  facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id])
-  supersedes      LabOrder?       @relation("LabOrderCorrections", fields: [supersedesLabOrderId], references: [id])
-  correctedBy     LabOrder?       @relation("LabOrderCorrections")
+  consultation    Consultation       @relation(fields: [consultationId], references: [id])
+  patientProfile  PatientProfile     @relation(fields: [patientProfileId], references: [id])
+  orderingDoctor  DoctorProfile      @relation(fields: [orderingDoctorId], references: [id])
+  facilityProfile FacilityProfile    @relation(fields: [facilityProfileId], references: [id])
+  supersedes      LabOrder?          @relation("LabOrderCorrections", fields: [supersedesLabOrderId], references: [id])
+  correctedBy     LabOrder?          @relation("LabOrderCorrections")
   result          LabResult?
   paymentIntent   PaymentIntent?
   fulfillment     FulfillmentRecord?
@@ -922,7 +1022,7 @@ model PaymentIntent {
   // plain column rename, so existing rows keep their value. This module
   // never scales or converts amounts, so it never assumes an asset's
   // decimals (the allowlist carries them for clients only).
-  amount BigInt
+  amount          BigInt
   // The asset this intent is denominated in — `XLM` or `USDC` in the
   // default testnet allowlist. Assets are identified on-chain by the SAC
   // contract id, not by the code, so a new intent must name an allowlisted
@@ -939,15 +1039,15 @@ model PaymentIntent {
   // `preparedXdr` lets a retry return exactly the same transaction instead
   // of building a second one. Both are cleared when the preparation
   // expires back to `created`.
-  preparedTxHash    String?
-  preparedXdr       String?
+  preparedTxHash       String?
+  preparedXdr          String?
   preparedExpiryLedger Int?
-  preparedExpiresAt DateTime?
+  preparedExpiresAt    DateTime?
   // ADR 0005: escrow refund deadline = order expiry + grace. Orders don't
   // exist as real records yet (Phase 4), so the service uses the intent's
   // createdAt as the order-expiry anchor — see
   // config.payments.orderExpiryHours / refundGraceHours.
-  refundAfter DateTime?
+  refundAfter          DateTime?
 
   // Which facility price list entry priced this intent (issue #127). The
   // amount above is the snapshot; this code records *which* item it was for,
