@@ -9,6 +9,7 @@ import { verifyPaymentsNetwork } from './modules/payments/services';
 import { startAccountPurgeJob } from './jobs/account-purge';
 import { startPaymentIntentJobs } from './jobs/payment-intents';
 import { startReferralExpiryJob } from './jobs/referral-expiry';
+import { startOrderExpiryJob } from './jobs/order-expiry';
 
 const app = createApp();
 
@@ -74,3 +75,5 @@ startPaymentIntentJobs();
 // Referral expiry (Phase 3, issue #8): pending referrals nobody acted on
 // within REFERRAL_PENDING_TTL_DAYS become `expired`.
 startReferralExpiryJob();
+// Unconfirmed order expiry job (auto-confirm when window elapses with no dispute).
+startOrderExpiryJob();
