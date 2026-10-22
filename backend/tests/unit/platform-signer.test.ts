@@ -59,7 +59,7 @@ describe('PlatformSigner adapters', () => {
   it('signs a real transaction with a real keypair, as stellar-sdk will call it', async () => {
     const { Account, Keypair, Networks, Operation, TransactionBuilder } = await stellarSdk();
     const keypair = Keypair.random();
-    const signer = await createEnvPlatformSigner(keypair.secret(), Networks.TESTNET);
+    const signer = await createEnvPlatformSigner(keypair, Networks.TESTNET);
     expect(signer.publicKey()).toBe(keypair.publicKey());
 
     const unsigned = new TransactionBuilder(new Account(keypair.publicKey(), '1'), { fee: '100', networkPassphrase: Networks.TESTNET })
@@ -78,7 +78,7 @@ describe('PlatformSigner adapters', () => {
   it('signs a Soroban authorization entry with a real keypair', async () => {
     const { hash, Keypair, Networks } = await stellarSdk();
     const keypair = Keypair.random();
-    const signer = await createEnvPlatformSigner(keypair.secret(), Networks.TESTNET);
+    const signer = await createEnvPlatformSigner(keypair, Networks.TESTNET);
     const entry = Buffer.from('authorization-preimage').toString('base64');
     const { signedAuthEntry } = await signer.signAuthEntry(entry, { networkPassphrase: Networks.TESTNET });
     expect(keypair.verify(hash(Buffer.from(entry, 'base64')), Buffer.from(signedAuthEntry, 'base64'))).toBe(true);

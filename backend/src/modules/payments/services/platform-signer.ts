@@ -86,17 +86,18 @@ export class EnvPlatformSigner implements PlatformSigner {
 // stellar-sdk is ESM-only in practice on Node 20 (its CJS build requires an
 // ESM dependency), so it is loaded with a dynamic import, like the escrow SDK.
 type StellarSdkModule = typeof import('@stellar/stellar-sdk', { with: { 'resolution-mode': 'import' } });
+type StellarKeypair = InstanceType<StellarSdkModule['Keypair']>;
 let stellarSdkPromise: Promise<StellarSdkModule> | undefined;
 function loadStellarSdk(): Promise<StellarSdkModule> {
   stellarSdkPromise ??= import('@stellar/stellar-sdk');
   return stellarSdkPromise;
 }
 
-/** Builds an env-mode signer from a secret key. stellar-sdk's
- * `basicNodeSigner` does the signing and returns the SEP-43 shapes. */
-export async function createEnvPlatformSigner(secret: string, networkPassphrase: string): Promise<EnvPlatformSigner> {
-  const { Keypair, contract } = await loadStellarSdk();
-  const keypair = Keypair.fromSecret(secret);
+/** Builds an env-mode signer from a keypair. stellar-sdk's `basicNodeSigner`
+ * does the signing and returns the SEP-43 shapes. The keypair comes from the
+ * escrow SDK loader, so tests that fake the SDK also fake the keypair. */
+export async function createEnvPlatformSigner(keypair: StellarKeypair, networkPassphrase: string): Promise<EnvPlatformSigner> {
+  const { contract } = await loadStellarSdk();
   return new EnvPlatformSigner(keypair.publicKey(), contract.basicNodeSigner(keypair, networkPassphrase));
 }
 

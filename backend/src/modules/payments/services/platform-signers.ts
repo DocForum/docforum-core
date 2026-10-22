@@ -1,4 +1,5 @@
 import { config } from '../../../config';
+import { loadEscrowSdk } from './escrow-sdk-loader';
 import {
   createEnvPlatformSigner,
   PlatformSignerError,
@@ -43,6 +44,7 @@ async function createSigners(): Promise<PlatformSigners> {
   }
 
   if (platformSignerMode !== 'env') throw new PlatformSignerError('PLATFORM_SIGNER_MODE must be env or remote.');
+  const { Keypair } = await loadEscrowSdk();
   const payerSecret = config.payments.platformPayerSecret;
   const releaserSecret = config.payments.platformReleaserSecret;
   if (!payerSecret || !releaserSecret) {
@@ -50,8 +52,8 @@ async function createSigners(): Promise<PlatformSigners> {
   }
 
   try {
-    const payer = await createEnvPlatformSigner(payerSecret, networkPassphrase);
-    const releaser = await createEnvPlatformSigner(releaserSecret, networkPassphrase);
+    const payer = await createEnvPlatformSigner(Keypair.fromSecret(payerSecret), networkPassphrase);
+    const releaser = await createEnvPlatformSigner(Keypair.fromSecret(releaserSecret), networkPassphrase);
     for (const [role, signer] of [['payer', payer], ['releaser', releaser]] as const) {
       const expected = expectedPublicKey(role);
       if (expected && signer.publicKey() !== expected) {
