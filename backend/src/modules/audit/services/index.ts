@@ -32,7 +32,8 @@ export type AuditEntityType =
   | 'Consultation'
   | 'Prescription'
   | 'LabOrder'
-  | 'Referral';
+  | 'Referral'
+  | 'FacilityPrice';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;
@@ -297,4 +298,14 @@ export function getAccessLogStats() {
 export async function pruneOldAccessLogs(): Promise<number> {
   const cutoff = new Date(Date.now() - ACCESS_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
   return auditRepo.pruneAccessLogs(cutoff);
+}
+
+/** Retention hold (issue #41, docs/adr/0010): AccessLog.patientProfileId
+ * cascades, so purging a profile would erase the record of who viewed it.
+ * The purge waits until the access log's own retention prune has removed
+ * those rows (ACCESS_LOG_RETENTION_DAYS). */
+export function hasAccessLogsForPatient(patientProfileId: string): Promise<boolean> {
+  // Reuses the existing read rather than adding a repository export: this
+  // repository's surface is pinned (tests/integration/audit.test.mts).
+  return auditRepo.findAccessForPatient({ patientProfileId, take: 1 }).then((rows) => rows.length > 0);
 }
