@@ -78,6 +78,16 @@ enum ReferralStatus {
   cancelled
 }
 
+// Why a referral reached the terminal `expired` state. Kept separate from
+// `status` so `expired` stays one state (and stays distinct from `declined`
+// and `cancelled`) while audit/metrics/notifications can still tell the two
+// ways in apart: `ttl` = nobody accepted/declined it in time (issue #8),
+// `no_show` = the cascade gave up after repeated no-shows (issue #67).
+enum ReferralExpiryReason {
+  ttl
+  no_show
+}
+
 enum OrderStatus {
   issued
   fulfilled
@@ -684,6 +694,9 @@ model Referral {
   // it to pending). Kept pointing at the last no-show when expired —
   // that appointment is why it expired.
   resultingAppointmentId    String?        @unique
+  // Issue #8: set together with status `expired` — when, and why.
+  expiredAt                 DateTime?
+  expiredReason             ReferralExpiryReason?
   createdAt                 DateTime       @default(now())
   updatedAt                 DateTime       @updatedAt
 
@@ -703,6 +716,7 @@ model Referral {
   @@index([referringDoctorId])
   @@index([targetDoctorId])
   @@index([status])
+  @@index([status, updatedAt])
   @@index([loopFlaggedAt])
 }
 
