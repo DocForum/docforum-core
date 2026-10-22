@@ -17,6 +17,9 @@ export default defineConfig({
   schema: 'prisma/schema.prisma',
   migrations: {
     path: 'prisma/migrations',
+    // Prisma 7 stopped reading `prisma.seed` from package.json — the seed
+    // command lives here now (issue #74's dev seed of facility locations).
+    seed: 'npx tsx prisma/seed.ts',
   },
   datasource: {
     // Read from process.env rather than Prisma's `env()` helper on purpose.

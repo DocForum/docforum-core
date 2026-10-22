@@ -10,6 +10,8 @@ import { appointmentsRouter } from './modules/appointments/routes';
 import { appointmentConsultationsRouter, consultationsRouter } from './modules/consultations/routes';
 import { ordersRouter } from './modules/orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
+import { facilitiesRouter } from './modules/facilities/routes';
+import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
 import { patientsRouter } from './modules/patients/routes';
 import { facilitiesRouter } from './modules/facilities/routes';
 import { adminRouter } from './modules/users/routes';
@@ -61,6 +63,9 @@ export function createApp() {
   app.use('/appointments', appointmentConsultationsRouter);
   app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
+  // Phase 5 (issues #73/#74): /facilities and /pharmacy-orders mounts.
+  app.use('/facilities', facilitiesRouter);
+  app.use('/pharmacy-orders', pharmacyOrdersRouter);
   app.use('/patients', patientsRouter);
   app.use('/facilities', facilitiesRouter);
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
