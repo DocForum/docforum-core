@@ -128,7 +128,7 @@ The core value proposition: **collapse a multi-visit, multi-queue hospital journ
 ## 9. Open questions (block v1 decisions, need answers before/while building)
 
 - OQ-1: Is the doctor-patient "consultation" in-app (chat/video) or does the app only manage scheduling/records while the consult happens in person? This materially changes scope (see 8.3.1). **Assume in-person + async messaging for v1 unless overridden.**
-- OQ-2: Who can create Lab/Pharmacy facility accounts — self-serve signup or admin-invited only? **Assume admin-invited (curated partner list) for v1** to protect FR-13/8.1.6.
+- OQ-2: Who can create Lab/Pharmacy facility accounts — self-serve signup or admin-invited only? **Assume admin-invited (curated partner list) for v1** to protect FR-13/8.1.6. **Confirmed and implemented (Phase 5, issue #14):** admin-only `POST /facilities` is the only creation path, `POST /auth/signup` refuses the role, and capability matching in `/facilities/eligible` fails closed.
 - OQ-3: Does a referral require patient consent/acceptance before it books, or is it automatic? **Assume patient must confirm** (aligns with FR-9 `pending → accepted`).
 - OQ-4: Payment — is this free, insurance-billed, or paid per consultation? **Out of scope for v1**, but data model should not preclude adding a `payment_status` later.
 

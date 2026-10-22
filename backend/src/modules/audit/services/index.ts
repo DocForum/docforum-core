@@ -33,7 +33,9 @@ export type AuditEntityType =
   | 'Prescription'
   | 'LabOrder'
   | 'Referral'
-  | 'FacilityPrice';
+  | 'FacilityPrice'
+  // Issue #14: admin-only facility account creation (`facility.created`).
+  | 'FacilityProfile';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;
