@@ -8,6 +8,7 @@ import { validatePlatformSigners } from './modules/payments/services/platform-si
 import { verifyPaymentsNetwork } from './modules/payments/services';
 import { startAccountPurgeJob } from './jobs/account-purge';
 import { startPaymentIntentJobs } from './jobs/payment-intents';
+import { startReferralExpiryJob } from './jobs/referral-expiry';
 
 const app = createApp();
 
@@ -70,3 +71,6 @@ startAccountPurgeJob();
 // create_escrow transaction that outlives its window moves the intent back
 // to `created` so the patient can prepare again.
 startPaymentIntentJobs();
+// Referral expiry (Phase 3, issue #8): pending referrals nobody acted on
+// within REFERRAL_PENDING_TTL_DAYS become `expired`.
+startReferralExpiryJob();
