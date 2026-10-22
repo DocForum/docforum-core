@@ -22,7 +22,9 @@ import { config } from '../config';
 //     (docs/adr/0003, docs/adr/0006).
 const adapter = new PrismaPg({
   connectionString: config.databaseUrl,
-  connectionTimeoutMillis: 5_000,
+  connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS ?? 5_000),
+  max: Number(process.env.DB_POOL_MAX ?? 5),
+  statement_timeout: Number(process.env.DB_STATEMENT_TIMEOUT_MS ?? 10_000),
 });
 
 // Single shared client for the whole process — Prisma's own guidance for

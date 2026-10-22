@@ -34,6 +34,7 @@
     "intl-messageformat": "^10.7.18",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.1",
+    "pino": "^9.13.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
