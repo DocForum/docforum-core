@@ -14,13 +14,36 @@ export async function createConsultation(req: Request, res: Response) {
     appointmentId: input.appointmentId, outcome: input.outcome ?? null, notes: input.notes ?? null,
   })));
 }
+
 export async function issuePrescription(req: Request, res: Response) {
   const input = prescriptionSchema.parse(req.body);
   const order = await ordersService.issuePrescription(auditActor(req), { ...input, consultationId: getParam(req, 'consultationId') });
   res.status(201).json(serialize(order));
 }
+
 export async function issueLabOrder(req: Request, res: Response) {
   const input = labOrderSchema.parse(req.body);
   const order = await ordersService.issueLabOrder(auditActor(req), { ...input, consultationId: getParam(req, 'consultationId') });
   res.status(201).json(serialize(order));
+}
+
+export async function confirmReceipt(req: Request, res: Response) {
+  const id = req.params.id as string;
+  const actor = auditActor(req);
+  const order = await ordersService.confirmOrderReceipt(id, req.user!.id, actor);
+  res.status(200).json(serialize(order));
+}
+
+export async function disputeOrder(req: Request, res: Response) {
+  const id = req.params.id as string;
+  const { reason } = req.body || {};
+  const actor = auditActor(req);
+  const order = await ordersService.disputeOrder(id, req.user!.id, reason, actor);
+  res.status(200).json(serialize(order));
+}
+
+export async function getOrder(req: Request, res: Response) {
+  const id = req.params.id as string;
+  const order = await ordersService.getOrderById(id);
+  res.status(200).json(serialize(order));
 }
