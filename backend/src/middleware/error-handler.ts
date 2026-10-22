@@ -2,6 +2,8 @@ import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
 import { HttpError, ErrorCode } from '../http-error.js';
+import type { Logger } from 'pino';
+import { logger as rootLogger } from '../logger';
 import { localizedErrorMessage, resolveLocale } from '../i18n';
 
 // docforum-web's api-client.ts assumes an error envelope of
@@ -17,7 +19,17 @@ export interface ErrorEnvelope {
 }
 
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  const requestLogger: Logger =
+    (req as Request & { log?: Logger }).log ?? rootLogger;
+
   if (err instanceof HttpError) {
+    // `code` is only present when the thrower supplied one — the envelope
+    // for every existing error is unchanged (`{ message }`).
+    if (err.status >= 500) {
+      requestLogger.error({ err }, 'Request failed');
+    } else {
+      requestLogger.warn({ err }, 'Request rejected');
+    }
     const locale = resolveLocale(req.user?.locale, req.headers['accept-language']);
     const message = localizedErrorMessage(locale, err.code, err.message);
     const body: ErrorEnvelope = {
@@ -32,6 +44,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   }
 
   if (err instanceof ZodError) {
+    requestLogger.warn({ err }, 'Request validation failed');
     // All validation failures share a single code; field level details are
     // exposed via `details` so clients can highlight specific inputs.
     const body: ErrorEnvelope = {
@@ -48,6 +61,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   }
 
   if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+    requestLogger.warn({ err }, 'Unique constraint violation');
     // DB-level uniqueness guarantees are the backstop for booking and
     // slot assignment races. Surface them as a coded conflict.
     const body: ErrorEnvelope = {
@@ -58,9 +72,9 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return;
   }
 
-  // Unknown errors: log internally, leak nothing to the client.
-  // eslint-disable-next-line no-console
-  console.error(err);
+  // Log the full error (including stack) server-side only. The response
+  // body is the safe envelope and never leaks internal details.
+  requestLogger.error({ err }, 'Unhandled error');
   const body: ErrorEnvelope = {
     code: ErrorCode.INTERNAL,
     message: 'Internal server error.',

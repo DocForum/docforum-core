@@ -48,7 +48,8 @@ describe('payment history and facility ledger APIs', () => {
         patientProfileId: input.patientProfileId,
         facilityId: input.facilityId,
         status: input.status,
-        amountStroops: input.amountStroops,
+        amount: input.amountStroops,
+        assetCode: 'XLM',
         createdAt: input.createdAt,
         ...(input.status === 'escrowed' || input.status === 'released' || input.status === 'refunded'
           ? { escrowId: input.amountStroops + 1n, stellarTxHash: 'a'.repeat(64), sorobanContractId: 'C'.repeat(56) }
@@ -115,7 +116,7 @@ describe('payment history and facility ledger APIs', () => {
     expect(first.status).toBe(200);
     expect(first.body.items).toHaveLength(2);
     expect(first.body.nextCursor).toEqual(expect.any(String));
-    expect(first.body.items[0].amountStroops).toBe('30');
+    expect(first.body.items[0].amount).toBe('30');
     expect(first.body.items[0].refundAfter).toBeNull();
 
     const second = await request(app)
@@ -124,12 +125,12 @@ describe('payment history and facility ledger APIs', () => {
       .set('Authorization', `Bearer ${patientA.token}`);
     expect(second.status).toBe(200);
     expect(second.body.items).toHaveLength(1);
-    expect(second.body.items[0].amountStroops).toBe('9007199254740993');
+    expect(second.body.items[0].amount).toBe('9007199254740993');
     expect(second.body.nextCursor).toBeNull();
 
     const otherPatient = await request(app).get('/payments/mine').set('Authorization', `Bearer ${patientB.token}`);
     expect(otherPatient.body.items).toHaveLength(1);
-    expect(otherPatient.body.items[0].amountStroops).toBe('900');
+    expect(otherPatient.body.items[0].amount).toBe('900');
   });
 
   it('includes the entire final day when filtering by a date-only to value', async () => {
@@ -157,7 +158,7 @@ describe('payment history and facility ledger APIs', () => {
       .set('Authorization', `Bearer ${facilityA.token}`);
     expect(response.status).toBe(200);
     expect(response.body.items).toHaveLength(1);
-    expect(response.body.items[0].amountStroops).toBe('9007199254740993');
+    expect(response.body.items[0].amount).toBe('9007199254740993');
     expect(response.body.items[0].stellarTxHash).toBe('a'.repeat(64));
     expect(response.body.items[0].asset).toEqual({ type: 'native', code: 'XLM' });
     expect(response.body.totals).toEqual([
