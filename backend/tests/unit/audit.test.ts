@@ -17,7 +17,7 @@ import { requestId } from '../../src/middleware/request-id';
 
 describe('validateAuditMetadata', () => {
   it('accepts a small flat map of ids and codes', () => {
-    const metadata = { availabilitySlotId: 's1', doctorProfileId: 'd1', origin: 'direct_booking', amountStroops: '100', escrowId: null, retried: false, attempt: 2 };
+    const metadata = { availabilitySlotId: 's1', doctorProfileId: 'd1', origin: 'direct_booking', amount: '100', escrowId: null, retried: false, attempt: 2 };
     expect(validateAuditMetadata(metadata)).toEqual(metadata);
     expect(validateAuditMetadata(undefined)).toBeUndefined();
   });
