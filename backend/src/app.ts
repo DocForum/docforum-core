@@ -11,18 +11,22 @@ import { appointmentConsultationsRouter, consultationsRouter } from './modules/c
 import { ordersRouter } from './modules/orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
+import { facilitiesRouter } from './modules/facilities/routes';
 import { adminRouter } from './modules/users/routes';
 import { registerPatientExportSections } from './export-sections';
 import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
 import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
+import { registerRetentionHolds } from './retention-holds';
 
 export function createApp() {
   const app = express();
 
   // Phase 8, issue #40: idempotent, so building the app twice is harmless.
   registerPatientExportSections();
+  // Phase 8, issue #41: idempotent, so building the app twice is harmless.
+  registerRetentionHolds();
 
   // Phase 8, issue #35: login throttling keys on the client IP, so the
   // proxy chain has to be resolved deliberately rather than guessed. See
@@ -33,7 +37,9 @@ export function createApp() {
   // config.corsOrigins. `credentials: true` is required for the refresh
   // cookie and is exactly why the allowlist can't be a wildcard.
   // Phase 8, issue #43: first, so every response (errors included) carries
-  // an X-Request-Id and audit events can be tied back to it.
+  // an X-Request-Id and audit events can be tied back to it. Phase 9,
+  // issue #46: the same middleware attaches a request-scoped child logger
+  // (`req.log`) so every log line in a request can be greped by that id.
   app.use(requestId);
   app.use(cors({ origin: config.corsOrigins, credentials: true }));
   app.use(express.json());
@@ -56,6 +62,7 @@ export function createApp() {
   app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
+  app.use('/facilities', facilitiesRouter);
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);
