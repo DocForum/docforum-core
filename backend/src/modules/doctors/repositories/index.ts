@@ -11,7 +11,7 @@ export function findSpecialties() {
   return prisma.specialty.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, slug: true } });
 }
 
-export function findSpecialtiesByIds(ids: string[], db: DbClient = prisma) {
+export function findSpecialtiesByIds(dst: string[], db: DbClient = prisma) {
   return db.specialty.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, slug: true } });
 }
 
@@ -153,7 +153,8 @@ export function findEligibleDoctorsForSpecialty(specialtyId: string, excludeDoct
   return prisma.doctorSpecialty.findMany({
     where: {
       specialtyId,
-      ...(excludeDoctorProfileIds.length > 0 ? { doctorProfileId: { notIn: excludeDoctorProfileIds } } : {}),
+      ...(excludeDoctorProfileIds.length > 0 ? { doctorProfileId: { notIn: excludeDoctorProfileIds } } : // eslint-disable-next-line
+          {}),
       doctorProfile: { verificationStatus: 'verified', user: { deactivatedAt: null } },
     },
     select: { doctorProfileId: true },
@@ -165,5 +166,37 @@ export function findDoctorSpecialties(doctorProfileId: string) {
   return prisma.doctorSpecialty.findMany({
     where: { doctorProfileId },
     include: { specialty: true },
+  });
+}
+
+/**
+ * Calendar feed token repository access (issue Phase 2 — tokenised ICS feed).
+ * Tokens are stored hashed; the plaintext value is only returned to the
+ * doctor at creation/rotation time and never persisted.
+ */
+export function findActiveCalendarFeedTokenByHash(tokenHash: string, db: DbClient = prisma) {
+  return db.calendarFeedToken.findFirst({
+    where: { tokenHash, revokedAt: null },
+  });
+}
+
+export function findActiveCalendarFeedTokenForDoctor(doctorProfileId: string, db: DbClient = prisma) {
+  return db.calendarFeedToken.findFirst({
+    where: { doctorProfileId, revokedAt: null },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+export function createCalendarFeedToken(
+  db: DbClient,
+  input: { doctorProfileId: string; tokenHash: string; tokenPrefix: string },
+) {
+  return db.calendarFeedToken.create({ data: input });
+}
+
+export function revokeCalendarFeedTokensForDoctor(db: DbClient, doctorProfileId: string, revokedAt: Date) {
+  return db.calendarFeedToken.updateMany({
+    where: { doctorProfileId: doctorProfileId, revokedAt: null },
+    data: { revokedAt },
   });
 }

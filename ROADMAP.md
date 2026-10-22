@@ -5,7 +5,7 @@ Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
 (Referrals) is **in progress**: #5, #7 and #65–#68 implemented and
 tested on branch `feat/referral-phase3-cascade-multi-loop-admin`, #6 and
 #8 open. Phase 2 is partially unblocked by that work (#3/#4 minimal
-slices). Phases 2-6 and 8-9 otherwise scoped into GitHub issues
+slices), and the tokenised ICS calendar feed is done. Phases 2-6 and 8-9 otherwise scoped into GitHub issues
 (#1-#22, #21 closed); Phase 7 is superseded by `docforum-web`'s own
 roadmap. See each phase section below for status and issue links.
 
@@ -44,13 +44,16 @@ roadmap. See each phase section below for status and issue links.
 - [x] Doc reconciliation: PRD §8.1.1 and ARCHITECTURE §6.1.1 marked resolved in place.
 
 ## Phase 2 — Intake, appointments, consultations
-**Status: In progress — #3, #4 and #23 done; intake (#1/#2) not started. Scoped into issues #1–#4 and #23.**
+**Status: In progress — #3, #4, #23 and the tokenised ICS calendar feed done; intake (#1/#2) not started. Scoped into issues #1–#4, #23 and the calendar-feed issue.**
+
+**Changelog:** Tokenised ICS calendar feed for doctors' schedules added — per-doctor rotatable/revocable feed token, `GET /calendar/:token.ics`, PHI-free events, `STATUS:CANCELLED` for cancellations, `ETag`/`Last-Modified` support, UTC times with `TZID` handling.
 - [ ] `IntakeForm` model + structured symptom entry (not free-text-only, per PRD FR-5). Tracked as [issue #1](https://github.com/DocForum/docforum-core/issues/1) (Medium, 150 pts).
 - [ ] Booking flow requires intake before confirmation. Tracked as [issue #2](https://github.com/DocForum/docforum-core/issues/2) (Medium, 150 pts) — depends on #1.
 - [x] `Appointment` lifecycle (`scheduled → completed/cancelled/no_show`) + doctor's today view. Tracked as [issue #3](https://github.com/DocForum/docforum-core/issues/3) (Medium, 150 pts) — lifecycle transitions were already implemented; this change adds `GET /appointments/doctor/today`, limited to the caller's doctor profile and scheduled appointments for the server-local day. Admin-on-behalf transitions remain out of scope.
 - [x] `Consultation` record + outcome (`resolved | referred | follow_up_needed`). Tracked as [issue #4](https://github.com/DocForum/docforum-core/issues/4) (High, 200 pts) — **Done.** One writer (`consultationsService.createConsultation`) reached from three addresses — `POST /consultations` (Phase 3's slice), `POST /appointments/:id/consultation` (this issue's close route) and the orders flow's consultation step — all doctor-only, own- and `completed`-appointment-only, all requiring a verified email. `Consultation.appointmentId` `UNIQUE` is what makes "closed once" a DB constraint rather than app logic (`P2002` → `409`); notes are stored encrypted (issue #46) and decrypted on read; every write carries one `consultation.closed` audit event in the same transaction. The column/unique index/FK already exist from `20261020000000_order_payment_intents`, so this PR adds no migration. No amendment/edit path in v1 — that stays an open question for when amendment work lands (docs/adr/0009). Integration test: `backend/tests/integration/consultation.test.mts` (scheduled → `409`, closed once, second close `409` via either address, one row, decrypted read for doctor + patient, other-doctor read `403` / close `404`, patient close `403`). **Verification note:** the checked-in integration suites cannot run in this sandbox (embedded Postgres `initdb` is refused); they run in CI on the merge.
 - [x] Doctor discovery: `GET /specialties`, `PUT /doctors/me/specialties`, and public verified-only `GET /doctors` with specialty, typo-tolerant name/specialty search, and keyset pagination. Tracked as [issue #23](https://github.com/DocForum/docforum-core/issues/23) and extended by [issue #128](https://github.com/DocForum/docforum-core/issues/128). `docforum-web` issue #1 can fetch slot details separately by doctor id.
 - [ ] Patient-facing view: my intake history. Not yet split into its own issue — small enough to fold into whichever of the above lands last, or split out later if it grows.
+- [x] Tokenised ICS calendar feed for doctors' schedules: per-doctor secret feed token (rotatable and revocable, rotation immediately invalidates the old URL) and `GET /calendar/:token.ics`. Events carry only the time, `DocForum appointment` and a deep link — no patient name, intake or reason; cancellations are emitted as `STATUS:CANCELLED`; `ETag`/`Last-Modified` keep polling cheap; times are UTC with correct `TZID` handling. Token management lives in `doctors` (issue's "Files likely involved"), the feed in `appointments`. Subscription docs in `docs/api/README.md`; no schema fields invented beyond the token columns, which are recorded in `ARCHITECTURE.md` §4. Tests assert no PHI appears in the generated feed.
 
 ## Phase 3 — Referrals
 **Status: In progress — issues #5, #7 and #65–#68 are implemented and tested (unit + 5 self-contained integration suites); #6 (routing ADR) and #8 (time-based expiry job) remain open. Original scope was #5–#8; #65–#68 were opened later against the same phase for loop detection, multi-referral, cascade and admin overrides.**
@@ -536,3 +539,4 @@ roadmap. See each phase section below for status and issue links.
   payouts as the default in production and local environments, with the
   configuration controlled by `PAYOUT_PRIVACY_MODE` and
   `PAYOUT_PRIVACY_POOL_ADDRESS`.
+- 2026-10-22 — Phase 2: tokenised ICS calendar feed for doctors' schedules. A per-doctor secret feed token (rotatable and revocable; rotation invalidates the old URL immediately) backs `GET /calendar/:token.ics`, which emits `DocForum appointment` events with the time and a deep link only — no patient name, intake or reason — plus `STATUS:CANCELLED` for cancellations, `ETag`/`Last-Modified` for cheap polling, and UTC times with correct `TZID` handling. Token management is in `doctors`, the feed in `appointments`; tests assert the generated feed contains no PHI. `docs/api/README.md` documents subscribing; `ARCHITECTURE.md` §4 records the token columns.
