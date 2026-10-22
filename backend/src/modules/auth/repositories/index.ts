@@ -96,27 +96,6 @@ export function createSelfServeUser(input: CreateSelfServeUserInput) {
   });
 }
 
-/** Creates a facility staff account (Phase 5, issue #75): a User with the
- * `facility` role and no profile row. A facility staff user's link to their
- * facility is a FacilityMember row, not a FacilityProfile — so the
- * patient/doctor-profile write `createSelfServeUser` does would be wrong here.
- *
- * Not a self-serve path: PRD OQ-2 keeps facility accounts admin/owner-invited
- * only, so this is reachable solely by accepting a facility owner's invite. */
-export function createFacilityStaffUser(input: { email: string; passwordHash: string }) {
-  return prisma.user.create({
-    data: {
-      email: input.email,
-      passwordHash: input.passwordHash,
-      role: 'facility',
-      // Verified at creation: the credential that created this account is an
-      // invite sent to this very address, so the address is known-good and
-      // the account can log in immediately.
-      emailVerifiedAt: new Date(),
-    },
-  });
-}
-
 // --- Email verification (Phase 8, issue #34) -----------------------------
 // Only hashes are stored; see services/verification-tokens.ts.
 

@@ -6,7 +6,6 @@ import { HttpError } from '../../../http-error';
 import {
   anonymizeUser,
   consumeVerificationToken,
-  createFacilityStaffUser,
   createSelfServeUser,
   deleteAnonymizedUser,
   deleteLoginAttemptBucket,
@@ -44,7 +43,6 @@ import type { Prisma, Role } from '@prisma/client';
 // reaching into services/tokens.ts directly.
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
-export { findUserByEmail } from '../repositories';
 
 // Password reset (Phase 8 #33) lives in its own file; re-exported here so
 // controllers keep calling a single service surface.
@@ -56,6 +54,11 @@ export {
   type ConfirmPasswordResetInput,
   type RequestPasswordResetInput,
 } from './password-reset';
+
+// Hashing is auth's business (issue #14): the admin-only facility-creation
+// path in the facilities module hashes the initial password through this
+// service surface rather than depending on bcrypt directly.
+export { hashPassword, verifyPassword } from './password';
 
 export {
   assertSessionUsable,
@@ -193,18 +196,6 @@ export async function signup(input: SignupInput, context: SessionContext = {}): 
 
   const tokens = await issueNewSession(user, context);
   return { user: toPublicUser(user), ...tokens };
-}
-
-/** Creates a facility staff account (Phase 5, issue #75) by hashing the
- * password and delegating to the repository above. Other modules must call
- * this rather than writing `User` rows themselves (AGENTS.md hard rule 4):
- * the facilities module needs it when an invite is accepted by someone who
- * doesn't have an account yet.
- *
- * No session is issued here — invite acceptance is not a login. */
-export async function createFacilityStaffAccount(input: { email: string; password: string }) {
-  const passwordHash = await hashPassword(input.password);
-  return createFacilityStaffUser({ email: input.email, passwordHash });
 }
 
 /**

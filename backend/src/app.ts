@@ -75,7 +75,6 @@ export function createApp() {
   app.use('/patients', patientAuditRouter);
   app.use('/referrals', referralsRouter);
   app.use('/consultations', consultationsRouter);
-  app.use('/facilities', facilitiesRouter);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.
