@@ -167,6 +167,7 @@ model User {
   accessLogs              AccessLog[]
   // Phase 8 (issue #42, docs/adr/0011): dependents this user is guardian of.
   guardianships           Guardianship[]
+  sep10Challenges         Sep10Challenge[]
 
   @@index([role])
 }
@@ -471,7 +472,11 @@ model FacilityProfile {
   labResults     LabResult[]
   paymentIntents PaymentIntent[]
   fulfillments   FulfillmentRecord[]
-  walletLink     WalletLink?
+  // NOTE: no `walletLink` relation anymore — WalletLink is generalized to
+  // a polymorphic owner (patient | facility) as of issue #78, so it
+  // carries no FK relation to either profile (same shape as
+  // FulfillmentRecord's polymorphic order ref, §6.1.3). Ownership is
+  // validated in the payments service, not by the schema.
   prices         FacilityPrice[]
 }
 

@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import * as paymentsService from '../services';
-import { linkWalletSchema, paymentHistoryQuerySchema } from '../validation';
+import { walletLinkSchema, paymentHistoryQuerySchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
@@ -107,3 +107,5 @@ export async function listFacilityLedger(req: Request, res: Response) {
   const filters = paymentHistoryQuerySchema.parse(req.query);
   res.status(200).json(await paymentsService.listFacilityPaymentLedger(req.user.id, filters));
 }
+
+export { sep10Challenge, sep10Verify } from './sep10';

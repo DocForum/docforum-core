@@ -24,11 +24,13 @@ import { Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
 import type { Transaction } from '@stellar/stellar-sdk';
 import type { Sep10AccountInfo } from '../../src/modules/payments/services/sep10.js';
 import type { EscrowSdkForTests } from '../../src/modules/payments/services/index.js';
+import { createOrderFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5439;
+const PORT = 5463;
 const runId = Date.now();
 const PASSWORD = 'longenough123';
+const TEST_ACTOR = { userId: null, role: null, requestId: `wallet-link-${runId}` };
 
 // --- env BEFORE src/config loads (see login-throttle.test.mts pattern) ---
 // Guard enforced NOW: past cutoff => unverified_legacy funding refused.
@@ -79,7 +81,6 @@ describe('verified wallet links (issue #78)', () => {
     await pg.initialise();
     await pg.start();
     await pg.createDatabase('docforum_test');
-    await pg.createDatabase('docforum_migration_test');
 
     execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
       cwd: BACKEND_ROOT,
@@ -370,14 +371,22 @@ describe('verified wallet links (issue #78)', () => {
     // Link v1 (verified), fund an escrow to it.
     expect((await postLink(facility.token, { transaction: await signedChallengeFor(facility.token, addr1) })).status).toBe(200);
 
+    const order = await createOrderFixture(prisma, {
+      patientProfileId: patientProfile.id,
+      facilityProfileId: facility.facilityId,
+      kind: 'lab_order',
+      amountStroops: 500_000n,
+      tag: `relink-${runId}`,
+    });
     const intent = await services.createPaymentIntent({
       orderType: 'lab_order',
-      orderId: 'relink-order',
+      orderId: order.id,
       patientProfileId: patientProfile.id,
       facilityId: facility.facilityId,
-      amountStroops: 500_000n,
+      assetCode: 'XLM',
+      amount: 500_000n,
     });
-    const funded = await services.fundPaymentIntent(intent.id);
+    const funded = await services.fundPaymentIntent(TEST_ACTOR, intent.id);
     expect(funded.status).toBe('escrowed');
     expect(funded.fundedWalletAddress).toBe(addr1.publicKey());
     expect(escrowCalls.at(-1)!.payee).toBe(addr1.publicKey());
@@ -402,7 +411,7 @@ describe('verified wallet links (issue #78)', () => {
     // re-linking did not rewrite it — and release works regardless.
     const intentAfter = await services.getPaymentIntent(intent.id);
     expect(intentAfter.fundedWalletAddress).toBe(addr1.publicKey());
-    const released = await services.releasePaymentIntent(intent.id);
+    const released = await services.releasePaymentIntent(TEST_ACTOR, intent.id);
     expect(released.status).toBe('released');
     expect(releaseCalls).toBeGreaterThan(0);
   });
@@ -426,15 +435,23 @@ describe('verified wallet links (issue #78)', () => {
     expect(services.walletLinkFundingAllowed('unverified_legacy', Date.parse('2026-01-01T00:00:00Z'), Date.now())).toBe(false);
 
     const patientProfile = await prisma.patientProfile.findUniqueOrThrow({ where: { userId: patient.userId } });
+    const legacyOrder = await createOrderFixture(prisma, {
+      patientProfileId: patientProfile.id,
+      facilityProfileId: legacy.facilityId,
+      kind: 'lab_order',
+      amountStroops: 100_000n,
+      tag: `legacy-${runId}`,
+    });
     const legacyIntent = await services.createPaymentIntent({
       orderType: 'lab_order',
-      orderId: 'legacy-order',
+      orderId: legacyOrder.id,
       patientProfileId: patientProfile.id,
       facilityId: legacy.facilityId,
-      amountStroops: 100_000n,
+      assetCode: 'XLM',
+      amount: 100_000n,
     });
     const callsBefore = escrowCalls.length;
-    await expect(services.fundPaymentIntent(legacyIntent.id)).rejects.toMatchObject({
+    await expect(services.fundPaymentIntent(TEST_ACTOR, legacyIntent.id)).rejects.toMatchObject({
       status: 409,
       code: 'WALLET_LINK_UNVERIFIED',
     });
@@ -444,14 +461,22 @@ describe('verified wallet links (issue #78)', () => {
     // A SEP-10-verified link funds fine after the same cutoff.
     const wallet = Keypair.random();
     expect((await postLink(verified.token, { transaction: await signedChallengeFor(verified.token, wallet) })).status).toBe(200);
+    const verifiedOrder = await createOrderFixture(prisma, {
+      patientProfileId: patientProfile.id,
+      facilityProfileId: verified.facilityId,
+      kind: 'lab_order',
+      amountStroops: 100_000n,
+      tag: `verified-${runId}`,
+    });
     const verifiedIntent = await services.createPaymentIntent({
       orderType: 'lab_order',
-      orderId: 'verified-order',
+      orderId: verifiedOrder.id,
       patientProfileId: patientProfile.id,
       facilityId: verified.facilityId,
-      amountStroops: 100_000n,
+      assetCode: 'XLM',
+      amount: 100_000n,
     });
-    const funded = await services.fundPaymentIntent(verifiedIntent.id);
+    const funded = await services.fundPaymentIntent(TEST_ACTOR, verifiedIntent.id);
     expect(funded.status).toBe('escrowed');
     expect(funded.fundedWalletAddress).toBe(wallet.publicKey());
   });
@@ -474,97 +499,106 @@ describe('verified wallet links (issue #78)', () => {
     // Real migration test: bring up a scratch DB at the schema JUST
     // BEFORE this migration, insert an old-shape facility link, then
     // apply only the new migration and assert the backfill.
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-wallet-mig-'));
-    const tmpPrisma = path.join(tmpRoot, 'prisma');
+    const MIGRATIONS_DIR = path.join(BACKEND_ROOT, 'prisma', 'migrations');
     const NEW_MIGRATION = '20261016153822_add_verified_wallet_links';
+    const earlier = fs
+      .readdirSync(MIGRATIONS_DIR)
+      .filter((d) => d < NEW_MIGRATION && fs.existsSync(path.join(MIGRATIONS_DIR, d, 'migration.sql')))
+      .sort();
+
+    const migDbName = `docforum_migration_test_${runId}`;
+    await pg.createDatabase(migDbName);
+    const migUrl = `postgresql://docforum:docforum@localhost:${PORT}/${migDbName}`;
+
+    const script = earlier.map((dir) => fs.readFileSync(path.join(MIGRATIONS_DIR, dir, 'migration.sql'), 'utf8')).join('\n;\n');
+    execFileSync('npx', ['prisma', 'db', 'execute', '--stdin'], {
+      cwd: BACKEND_ROOT,
+      env: { ...process.env, DATABASE_URL: migUrl },
+      input: script,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Old-shape row: facility-only, typed-in address.
+    const { PrismaClient } = await import('@prisma/client');
+    const { PrismaPg } = await import('@prisma/adapter-pg');
+    const migPrisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: migUrl }) });
     try {
-      fs.cpSync(path.join(BACKEND_ROOT, 'prisma'), tmpPrisma, { recursive: true });
-      fs.rmSync(path.join(tmpPrisma, 'migrations', NEW_MIGRATION), { recursive: true, force: true });
+      const userId = `mig-user-${runId}`;
+      const profileId = `mig-facility-${runId}`;
+      const oldAddress = Keypair.random().publicKey();
+      await migPrisma.$executeRawUnsafe(
+        'INSERT INTO "User" ("id", "email", "passwordHash", "role", "updatedAt") VALUES ($1, $2, $3, $4::"Role", now())',
+        userId,
+        `mig-${runId}@example.com`,
+        'unused',
+        'facility',
+      );
+      await migPrisma.$executeRawUnsafe(
+        'INSERT INTO "FacilityProfile" ("id", "userId", "name", "type", "updatedAt") VALUES ($1, $2, $3, $4, now())',
+        profileId,
+        userId,
+        'Mig Facility',
+        'lab',
+      );
+      await migPrisma.$executeRawUnsafe(
+        'INSERT INTO "WalletLink" ("id", "facilityId", "stellarPublicKey", "createdAt", "updatedAt") VALUES ($1, $2, $3, now(), now())',
+        `mig-link-${runId}`,
+        profileId,
+        oldAddress,
+      );
 
-      const migUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_migration_test`;
-      const deploy = (schemaPath: string) =>
-        execFileSync('npx', ['prisma', 'migrate', 'deploy', '--schema', schemaPath], {
-          cwd: BACKEND_ROOT,
-          env: { ...process.env, DATABASE_URL: migUrl },
-          stdio: 'pipe',
-        });
+      // Apply ONLY the new migration.
+      execFileSync('npx', ['prisma', 'db', 'execute', '--file', path.join(MIGRATIONS_DIR, NEW_MIGRATION, 'migration.sql')], {
+        cwd: BACKEND_ROOT,
+        env: { ...process.env, DATABASE_URL: migUrl },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
 
-      deploy(path.join(tmpPrisma, 'schema.prisma'));
+      const rows = await migPrisma.walletLink.findMany({ where: { ownerId: profileId } });
+      expect(rows).toHaveLength(1);
+      const row = rows[0]!;
+      expect(row.stellarPublicKey).toBe(oldAddress); // address untouched
+      expect(row.ownerType).toBe('facility');
+      expect(row.verificationMethod).toBe('unverified_legacy'); // never SEP-10-checked
+      expect(row.verifiedAt).toBeNull();
+      expect(row.replacedAt).toBeNull();
+      expect(row.activeOwnerKey).toBe(`facility:${profileId}`); // still the active link
 
-      // Old-shape row: facility-only, typed-in address.
-      const { PrismaClient } = await import('@prisma/client');
-      const migPrisma = new PrismaClient({ datasourceUrl: migUrl });
-      try {
-        const user = await migPrisma.user.create({
-          data: { email: `mig-${runId}@example.com`, passwordHash: 'unused', role: 'facility' },
-        });
-        const profile = await migPrisma.facilityProfile.create({
-          data: { userId: user.id, name: 'Mig Facility', type: 'lab' },
-        });
-        const oldAddress = Keypair.random().publicKey();
-        await migPrisma.$executeRawUnsafe(
-          'INSERT INTO "WalletLink" ("id", "facilityId", "stellarPublicKey", "createdAt", "updatedAt") VALUES ($1, $2, $3, now(), now())',
-          `mig-link-${runId}`,
-          profile.id,
-          oldAddress,
-        );
-
-        // Apply ONLY the new migration.
-        fs.cpSync(
-          path.join(BACKEND_ROOT, 'prisma', 'migrations', NEW_MIGRATION),
-          path.join(tmpPrisma, 'migrations', NEW_MIGRATION),
-          { recursive: true },
-        );
-        deploy(path.join(tmpPrisma, 'schema.prisma'));
-
-        const rows = await migPrisma.walletLink.findMany({ where: { ownerId: profile.id } });
-        expect(rows).toHaveLength(1);
-        const row = rows[0]!;
-        expect(row.stellarPublicKey).toBe(oldAddress); // address untouched
-        expect(row.ownerType).toBe('facility');
-        expect(row.verificationMethod).toBe('unverified_legacy'); // never SEP-10-checked
-        expect(row.verifiedAt).toBeNull();
-        expect(row.replacedAt).toBeNull();
-        expect(row.activeOwnerKey).toBe(`facility:${profile.id}`); // still the active link
-
-        // And the backfilled link participates in the new world: it can
-        // be replaced, and it can only be replaced once.
-        await migPrisma.walletLink.create({
-          data: {
-            ownerType: 'facility',
-            ownerId: profile.id,
-            stellarPublicKey: Keypair.random().publicKey(),
-            verificationMethod: 'sep10',
-            verifiedAt: new Date(),
-            activeOwnerKey: `facility:${profile.id}`,
-          },
-        }).then(
-          () => {
-            throw new Error('second active link should have been rejected');
-          },
-          (err: { code?: string }) => expect(err.code).toBe('P2002'),
-        );
-        // Deactivate-then-insert is the legal path:
-        await migPrisma.walletLink.updateMany({
-          where: { ownerId: profile.id, replacedAt: null },
-          data: { replacedAt: new Date(), activeOwnerKey: null },
-        });
-        const promoted = await migPrisma.walletLink.create({
-          data: {
-            ownerType: 'facility',
-            ownerId: profile.id,
-            stellarPublicKey: Keypair.random().publicKey(),
-            verificationMethod: 'sep10',
-            verifiedAt: new Date(),
-            activeOwnerKey: `facility:${profile.id}`,
-          },
-        });
-        expect(promoted.verificationMethod).toBe('sep10');
-      } finally {
-        await migPrisma.$disconnect();
-      }
+      // And the backfilled link participates in the new world: it can
+      // be replaced, and it can only be replaced once.
+      await migPrisma.walletLink.create({
+        data: {
+          ownerType: 'facility',
+          ownerId: profileId,
+          stellarPublicKey: Keypair.random().publicKey(),
+          verificationMethod: 'sep10',
+          verifiedAt: new Date(),
+          activeOwnerKey: `facility:${profileId}`,
+        },
+      }).then(
+        () => {
+          throw new Error('second active link should have been rejected');
+        },
+        (err: { code?: string }) => expect(err.code).toBe('P2002'),
+      );
+      // Deactivate-then-insert is the legal path:
+      await migPrisma.walletLink.updateMany({
+        where: { ownerId: profileId, replacedAt: null },
+        data: { replacedAt: new Date(), activeOwnerKey: null },
+      });
+      const promoted = await migPrisma.walletLink.create({
+        data: {
+          ownerType: 'facility',
+          ownerId: profileId,
+          stellarPublicKey: Keypair.random().publicKey(),
+          verificationMethod: 'sep10',
+          verifiedAt: new Date(),
+          activeOwnerKey: `facility:${profileId}`,
+        },
+      });
+      expect(promoted.verificationMethod).toBe('sep10');
     } finally {
-      fs.rmSync(tmpRoot, { recursive: true, force: true });
+      await migPrisma.$disconnect();
     }
   }, 60_000);
 });
