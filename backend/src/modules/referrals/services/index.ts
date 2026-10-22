@@ -11,6 +11,7 @@
 // the smallest seam that keeps each module owning its own table
 // (ARCHITECTURE.md §3 / ARCHITECTURE_ESSENTIALS.md hard rule 4).
 import { prisma } from '../../../db/prisma-client';
+import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import type { Prisma, ReferralStatus } from '@prisma/client';
 import * as referralsRepo from '../repositories';
@@ -465,6 +466,8 @@ export async function applyAppointmentOutcome(
       status: 'expired',
       noShowCount,
       referringDoctorNotifiedAt: new Date(),
+      expiredAt: new Date(),
+      expiredReason: 'no_show',
       // resultingAppointmentId intentionally kept: the appointment that
       // produced the expiring no-show stays linked as the reason.
     });
@@ -475,6 +478,29 @@ export async function applyAppointmentOutcome(
       resultingAppointmentId: null,
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Time-based expiry (issue #8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Expires referrals that have sat `pending` for longer than
+ * `REFERRAL_PENDING_TTL_DAYS` (PRD §8.1.3 "orphaned" referrals). The clock is
+ * `updatedAt`, not `createdAt`: a referral the cascade returned to `pending`
+ * (cancelled/no-showed appointment, issue #67) or an admin reassigned
+ * (issue #68) gets a fresh window instead of being expired the moment it
+ * re-enters the queue. `accepted` referrals are never touched — they have an
+ * appointment; that lifecycle belongs to the cascade.
+ *
+ * The result is `expired` with `expiredReason = 'ttl'` — a different terminal
+ * state from `declined` (the patient said no) and `cancelled` (an admin
+ * closed it). Safe to run from several processes and to re-run.
+ */
+export async function expireStaleReferrals(now: Date = new Date()): Promise<{ expired: number }> {
+  const cutoff = new Date(now.getTime() - config.referrals.pendingTtlDays * 24 * 60 * 60 * 1000);
+  const result = await referralsRepo.expireStalePendingReferrals(prisma, cutoff, now);
+  return { expired: result.count };
 }
 
 // ---------------------------------------------------------------------------

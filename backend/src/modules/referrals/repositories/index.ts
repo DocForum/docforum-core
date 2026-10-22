@@ -1,6 +1,6 @@
 import { prisma } from '../../../db/prisma-client';
 import { Prisma } from '@prisma/client';
-import type { ReferralStatus } from '@prisma/client';
+import type { ReferralExpiryReason as ExpiryReason, ReferralStatus } from '@prisma/client';
 import type { ChainNode } from '../loop';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
@@ -58,6 +58,8 @@ export function updateReferralConditional(
     resultingAppointmentId?: string | null;
     noShowCount?: number;
     referringDoctorNotifiedAt?: Date;
+    expiredAt?: Date;
+    expiredReason?: ExpiryReason;
   },
 ) {
   return db.referral.updateMany({
@@ -67,6 +69,28 @@ export function updateReferralConditional(
       resultingAppointmentId: expected.resultingAppointmentId,
     },
     data,
+  });
+}
+
+/**
+ * Time-based expiry (issue #8): one conditional UPDATE moves every referral
+ * that is still `pending` and has not changed since `cutoff` to `expired`.
+ * Because the WHERE re-checks `status = 'pending'` in the same statement, a
+ * patient accepting/declining at the same moment either wins (the row no
+ * longer matches) or loses (the row is expired and their conditional update
+ * matches nothing) — never both. Re-running it is a no-op.
+ */
+export function expireStalePendingReferrals(db: DbClient, cutoff: Date, now: Date) {
+  return db.referral.updateMany({
+    where: { status: 'pending', updatedAt: { lt: cutoff } },
+    data: {
+      status: 'expired',
+      expiredAt: now,
+      expiredReason: 'ttl',
+      // Same seam as the no-show expiry: Phase 6 notifications read this to
+      // tell the referring doctor their referral lapsed.
+      referringDoctorNotifiedAt: now,
+    },
   });
 }
 
