@@ -78,6 +78,16 @@ enum ReferralStatus {
   cancelled
 }
 
+// Why a referral reached the terminal `expired` state. Kept separate from
+// `status` so `expired` stays one state (and stays distinct from `declined`
+// and `cancelled`) while audit/metrics/notifications can still tell the two
+// ways in apart: `ttl` = nobody accepted/declined it in time (issue #8),
+// `no_show` = the cascade gave up after repeated no-shows (issue #67).
+enum ReferralExpiryReason {
+  ttl
+  no_show
+}
+
 enum OrderStatus {
   issued
   fulfilled
@@ -460,6 +470,7 @@ model FacilityProfile {
   labOrders      LabOrder[]
   labResults     LabResult[]
   paymentIntents PaymentIntent[]
+  fulfillments   FulfillmentRecord[]
   walletLink     WalletLink?
   prices         FacilityPrice[]
 }
@@ -684,6 +695,9 @@ model Referral {
   // it to pending). Kept pointing at the last no-show when expired —
   // that appointment is why it expired.
   resultingAppointmentId    String?        @unique
+  // Issue #8: set together with status `expired` — when, and why.
+  expiredAt                 DateTime?
+  expiredReason             ReferralExpiryReason?
   createdAt                 DateTime       @default(now())
   updatedAt                 DateTime       @updatedAt
 
@@ -703,6 +717,7 @@ model Referral {
   @@index([referringDoctorId])
   @@index([targetDoctorId])
   @@index([status])
+  @@index([status, updatedAt])
   @@index([loopFlaggedAt])
 }
 
@@ -731,6 +746,7 @@ model Prescription {
   correctedBy       Prescription?      @relation("PrescriptionCorrections")
   items             PrescriptionItem[]
   paymentIntent     PaymentIntent?
+  fulfillment       FulfillmentRecord?
 
   @@unique([supersedesPrescriptionId])
   @@index([patientProfileId, createdAt])
@@ -772,6 +788,7 @@ model LabOrder {
   correctedBy     LabOrder?       @relation("LabOrderCorrections")
   result          LabResult?
   paymentIntent   PaymentIntent?
+  fulfillment     FulfillmentRecord?
 
   @@unique([supersedesLabOrderId])
   @@index([patientProfileId, createdAt])
@@ -790,17 +807,34 @@ model LabResult {
   fulfillingFacility FacilityProfile @relation(fields: [fulfillingFacilityId], references: [id])
 }
 
+/// Facility-side fulfillment state for one issued order. Kept separate from
+/// the order so a facility never needs write access to the clinical record
+/// (ARCHITECTURE.md §4.7, hard rule 5).
+///
+/// Issue #13 / docs/adr/0012: the Phase 0 sketch here was polymorphic
+/// (`orderType` + `orderId` TEXT). Both are replaced by real FKs — exactly one
+/// of them is set, required by a PostgreSQL CHECK, and the UNIQUE on each
+/// means an order can have at most one fulfillment row. Same discriminator
+/// mechanism `PaymentIntent` adopted in issue #85.
+///
+/// `facilityId` is copied from the order's own facility at creation (the
+/// creating service in Phase 5 issue #14 owns that rule) so the facility's
+/// queue is indexable on this table and ownership lives on the row the
+/// facility writes.
 model FulfillmentRecord {
-  id        String            @id @default(uuid())
-  orderType String // "prescription" | "lab_order" — see ARCHITECTURE.md §6.1.3 caveat on this polymorphic design
-  orderId   String
-  status    FulfillmentStatus @default(pending)
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  // TODO: facilityId
-  // NOTE: this polymorphic (orderType, orderId) pair is flagged in
-  // ARCHITECTURE.md §6.1.3 as a design smell to revisit — may be split
-  // into PrescriptionFulfillment / LabOrderFulfillment before implementation.
+  id             String            @id @default(uuid())
+  prescriptionId String?           @unique
+  labOrderId     String?           @unique
+  facilityId     String
+  status         FulfillmentStatus @default(pending)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  prescription Prescription?   @relation(fields: [prescriptionId], references: [id], onDelete: Restrict)
+  labOrder     LabOrder?       @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
+  facility     FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Restrict)
+
+  @@index([facilityId, status])
 }
 
 model Notification {
