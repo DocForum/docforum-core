@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: docforum-core-staging
+    env: node
+    rootDir: backend
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm run prisma:migrate && npm start
+    envVars:
+      - key: NODE_ENV
+        value: staging
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: STELLAR_NETWORK
+        value: testnet
+      - key: OTEL_EXPORTER_OTLP_ENDPOINT
+        sync: false
