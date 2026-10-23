@@ -178,6 +178,7 @@ model User {
   // Phase 8 (issue #42, docs/adr/0011): dependents this user is guardian of.
   guardianships           Guardianship[]
   orderDisputeResolutions OrderDisputeResolution[]
+  sep10Challenges         Sep10Challenge[]
 
   @@index([role])
 }
@@ -1062,6 +1063,40 @@ model PatientWalletLink {
   updatedAt        DateTime @updatedAt
 
   patientProfile PatientProfile @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+}
+
+// SEP-10 (Stellar Web Authentication) challenge issuance ledger —
+// one row per issued challenge, created by GET /payments/sep10/challenge
+// and redeemed exactly once by POST /payments/sep10/verify (issue #77,
+// ADR 0005 step 4: proving the caller controls a Stellar address before
+// it is ever trusted as payer or payee).
+//
+// The nonce is the random 64-byte value embedded in the challenge
+// transaction's `"<home domain> auth"` Manage Data operation. Storing it
+// (unique) is what makes a challenge single-use: verify consumes the row
+// with ONE conditional UPDATE (`consumedAt IS NULL AND expiresAt > now`),
+// so two concurrent replays can't both win — the same DB-level pattern
+// as booking's conditional slot update (ARCHITECTURE.md §5.1).
+//
+// Deliberately no other fields: no XDR, no signature, no PHI. The
+// challenge itself is re-derivable from the submitted XDR at verify
+// time; this table only proves "we issued this nonce to this user for
+// this account, it hasn't been used, and it hasn't expired."
+model Sep10Challenge {
+  id         String    @id @default(uuid())
+  userId     String
+  account    String // the G... (or M...) account the challenge was issued for
+  nonce      String    @unique // hex/utf8 nonce from the challenge's Manage Data op
+  expiresAt  DateTime // matches the challenge's timebounds maxTime (+ record TTL)
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Pruning and the "is this row still redeemable" check both scan by
+  // expiry — same reason LoginAttempt indexes its window. Lookups at
+  // verify time go through the unique `nonce` index.
+  @@index([expiresAt])
 }
 
 model WalletLink {
