@@ -35,7 +35,9 @@ export type AuditEntityType =
   | 'Referral'
   | 'FacilityPrice'
   // Issue #14: admin-only facility account creation (`facility.created`).
-  | 'FacilityProfile';
+  | 'FacilityProfile'
+  | 'Order'
+  | 'OrderDispute';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;
