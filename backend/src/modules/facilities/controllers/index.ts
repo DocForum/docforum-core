@@ -4,6 +4,7 @@ import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
 import * as facilitiesService from '../services';
 import {
+  createFacilitySchema,
   createPriceVersionSchema,
   eligibleFacilitiesQuerySchema,
   priceFiltersSchema,
@@ -81,4 +82,15 @@ export async function eligibleFacilities(req: Request, res: Response) {
   }
   const facilities = await facilitiesService.listEligibleFacilities({ ...query, at });
   res.status(200).json({ facilities: facilities.map(serializeEligible) });
+}
+
+/**
+ * POST /facilities — create a facility account (admin-only; the gate is on
+ * the route, mirroring doctor verification). The response echoes the created
+ * profile and its capabilities; the password is hashed and never returned.
+ */
+export async function createFacility(req: Request, res: Response) {
+  const body = createFacilitySchema.parse(req.body);
+  const facility = await facilitiesService.createFacilityAccount(auditActor(req), body);
+  res.status(201).json(facility);
 }

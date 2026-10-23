@@ -55,6 +55,11 @@ export {
   type RequestPasswordResetInput,
 } from './password-reset';
 
+// Hashing is auth's business (issue #14): the admin-only facility-creation
+// path in the facilities module hashes the initial password through this
+// service surface rather than depending on bcrypt directly.
+export { hashPassword, verifyPassword } from './password';
+
 export {
   assertSessionUsable,
   listSessions,

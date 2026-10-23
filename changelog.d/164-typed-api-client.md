@@ -1,0 +1,1 @@
+Publish @docforum/api-client as a versioned, generated TypeScript package derived from the OpenAPI spec. Removes hand-mirrored backend shapes in docforum-web, turns contract changes into compile errors, and publishes via GitHub Release tarball (same mechanism as @docforum/escrow-sdk). Generated types are never hand-edited; client has no Node-only dependencies.

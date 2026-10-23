@@ -5,15 +5,16 @@ import { pruneOldAccessLogs } from './modules/audit/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
 import { startEscrowEventPoller } from './jobs/escrow-events';
 import { validatePlatformSigners } from './modules/payments/services/platform-signers';
-import { verifyPaymentsNetwork } from './modules/payments/services';
+import { validateSep10Config, verifyPaymentsNetwork } from './modules/payments/services';
 import { startAccountPurgeJob } from './jobs/account-purge';
 import { startPaymentIntentJobs } from './jobs/payment-intents';
 import { startReferralExpiryJob } from './jobs/referral-expiry';
+import { startOrderExpiryJob } from './jobs/order-expiry';
 
 const app = createApp();
 
 async function startServer() {
-  await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork()]);
+  await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork(), validateSep10Config()]);
   app.listen(config.port, () => {
     // eslint-disable-next-line no-console
     console.log(`docforum-core backend listening on :${config.port}`);
@@ -74,3 +75,5 @@ startPaymentIntentJobs();
 // Referral expiry (Phase 3, issue #8): pending referrals nobody acted on
 // within REFERRAL_PENDING_TTL_DAYS become `expired`.
 startReferralExpiryJob();
+// Unconfirmed order expiry job (auto-confirm when window elapses with no dispute).
+startOrderExpiryJob();

@@ -4,6 +4,7 @@ import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import * as usersService from '../services';
 import { createAdminInviteSchema } from '../validation';
+import { getAdminOverview } from '../../../admin-overview-sections';
 
 /**
  * Creates a single-use, expiring admin invite.
@@ -42,4 +43,8 @@ export async function reactivate(req: Request, res: Response) {
   // eslint-disable-next-line no-console
   console.info(`[users] admin ${req.user?.id ?? 'unknown'} reactivated user ${userId}`);
   res.status(200).json(user);
+}
+
+export async function overview(_req: Request, res: Response) {
+  res.status(200).json(await getAdminOverview());
 }

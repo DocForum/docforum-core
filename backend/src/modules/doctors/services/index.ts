@@ -165,3 +165,12 @@ export async function listEligibleReferralTargets(specialtyId: string, excludeDo
   const rows = await doctorsRepo.findEligibleDoctorsForSpecialty(specialtyId, excludeDoctorProfileIds);
   return rows.map((row) => row.doctorProfileId);
 }
+
+/** Count and oldest-item age for the admin overview (issue #123). No PHI. */
+export async function doctorVerificationQueueCounts() {
+  const stats = await doctorsRepo.findPendingVerificationStats();
+  const oldestAgeSeconds = stats.oldestCreatedAt
+    ? Math.max(0, Math.floor((Date.now() - stats.oldestCreatedAt.getTime()) / 1000))
+    : null;
+  return { count: stats.count, oldestAgeSeconds };
+}

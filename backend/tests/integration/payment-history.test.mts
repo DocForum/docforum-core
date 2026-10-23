@@ -10,7 +10,7 @@ import EmbeddedPostgres from 'embedded-postgres';
 import { createOrderFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5442;
+const PORT = 5458;
 const runId = Date.now();
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-payment-history-pg-'));
 const pg = new EmbeddedPostgres({ databaseDir: dataDir, user: 'docforum', password: 'docforum', port: PORT, persistent: false });
