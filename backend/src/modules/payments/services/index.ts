@@ -65,6 +65,19 @@ interface PrepareCapableClient {
   prepareCreateEscrow?: (params: PrepareCreateEscrowParams) => Promise<PreparedCreateEscrow>;
 }
 
+// SEP-10 Stellar Web Authentication (issue #77). Re-exported through
+// this module's service surface (not imported file-by-file from outside)
+// per the AGENTS.md module-boundary rule — same pattern as the auth
+// module's token/throttle re-exports.
+export {
+  createSep10Challenge,
+  verifySep10Challenge,
+  resetSep10AccountFetcher,
+  setSep10AccountFetcher,
+  validateSep10Config,
+} from './sep10';
+export type { Sep10AccountFetcher, Sep10AccountInfo, Sep10ChallengeResponse, Sep10Signer, Sep10VerifyResult } from './sep10';
+
 async function requirePaymentsConfig() {
   // The per-asset token contract comes from the intent (issue #79), so the
   // legacy ESCROW_TOKEN_ID is no longer required for every payment path.
