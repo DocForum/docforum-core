@@ -21,6 +21,7 @@ import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/aud
 import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
+import { notificationsRouter } from './modules/notifications/routes';
 import { registerRetentionHolds } from './retention-holds';
 
 export function createApp() {
@@ -80,6 +81,7 @@ export function createApp() {
   app.use('/admin', adminAuditRouter);
   app.use('/patients', patientAuditRouter);
   app.use('/referrals', referralsRouter);
+  app.use('/notifications', notificationsRouter);
   app.use('/consultations', consultationsRouter);
 
   // Must be registered last — Express only routes errors here once every

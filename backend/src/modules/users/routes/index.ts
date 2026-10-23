@@ -14,6 +14,9 @@ adminRouter.use(authenticate, requireRole('admin'));
 // invite part.
 adminRouter.post('/invites', usersController.createInvite);
 
+// Operations overview: queue counts and oldest-item ages (issue #123).
+adminRouter.get('/overview', usersController.overview);
+
 // Soft deactivation: refuses only for the last active admin, and never
 // deletes clinical or payment records (nothing is keyed to this flag).
 adminRouter.patch('/users/:id/deactivate', usersController.deactivate);
