@@ -275,6 +275,10 @@ export const config = {
     ttlHours: Number(process.env.ADMIN_INVITE_TTL_HOURS ?? 72),
     acceptUrl: process.env.ADMIN_INVITE_ACCEPT_URL ?? 'http://localhost:5173/accept-admin-invite',
   },
+  orders: {
+    confirmationWindowHours: Number(process.env.ORDER_CONFIRMATION_WINDOW_HOURS ?? 72),
+    expiryIntervalSeconds: Number(process.env.ORDER_EXPIRY_INTERVAL_SECONDS ?? 300),
+  },
   payments: {
     ...parsePaymentsConfig(process.env),
     // Issue #79: per-environment asset allowlist (USDC + native XLM by
