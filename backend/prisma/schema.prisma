@@ -1102,7 +1102,6 @@ model Sep10Challenge {
   expiresAt  DateTime // matches the challenge's timebounds maxTime (+ record TTL)
   consumedAt DateTime?
   createdAt  DateTime  @default(now())
-
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // Pruning and the "is this row still redeemable" check both scan by

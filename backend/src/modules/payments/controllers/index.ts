@@ -108,4 +108,6 @@ export async function listFacilityLedger(req: Request, res: Response) {
   res.status(200).json(await paymentsService.listFacilityPaymentLedger(req.user.id, filters));
 }
 
+// SEP-10 Stellar Web Authentication (issue #77) — see ./sep10.ts.
 export { sep10Challenge, sep10Verify } from './sep10';
+

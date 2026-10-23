@@ -266,6 +266,11 @@ export function createSep10Challenge(input: { userId: string; account: string; n
   return prisma.sep10Challenge.create({ data: input });
 }
 
+
+export function findSep10ChallengeByNonce(nonce: string, db: Db = prisma) {
+  return db.sep10Challenge.findUnique({ where: { nonce } });
+}
+
 /** Atomically consumes a challenge — ONE conditional UPDATE, no
  * read-then-write. Only a row that is still unconsumed AND unexpired
  * moves to `consumedAt`; the returned `count` tells the caller whether
@@ -281,10 +286,6 @@ export function consumeSep10Challenge(nonce: string, consumedAt: Date, db: Db = 
   });
 }
 
-export function findSep10ChallengeByNonce(nonce: string, db: Db = prisma) {
-  return db.sep10Challenge.findUnique({ where: { nonce } });
-}
-
 /** Runs `fn` inside ONE interactive transaction with a generous timeout
  * (the wallet-link flow performs a Horizon lookup inside it). Single
  * place the service layer opens transactions, so the Prisma client
@@ -292,3 +293,4 @@ export function findSep10ChallengeByNonce(nonce: string, db: Db = prisma) {
 export function inTransaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
   return prisma.$transaction(fn, { timeout: 15_000 });
 }
+

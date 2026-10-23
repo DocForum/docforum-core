@@ -27,6 +27,7 @@ export const sep10VerifySchema = z.object({
   transaction: z.string().min(1),
 });
 
+
 export const createPaymentIntentSchema = z.object({
   orderType: z.enum(['prescription', 'lab_order']),
   // Opaque — see schema.prisma comment. Not validated against a real
