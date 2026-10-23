@@ -1,3 +1,11 @@
-// notifications routes — placeholder. See PRD.md / ARCHITECTURE.md §3 for this module's scope.
-// TODO(Phase: see ROADMAP.md): define routes for notifications.
-export {};
+import { Router } from 'express';
+import { authenticate } from '../../../middleware/auth';
+import * as notificationsController from '../controllers';
+
+export const notificationsRouter = Router();
+
+notificationsRouter.use(authenticate);
+notificationsRouter.get('/', notificationsController.list);
+notificationsRouter.get('/unread-count', notificationsController.unreadCount);
+notificationsRouter.post('/read-all', notificationsController.markAllRead);
+notificationsRouter.post('/:id/read', notificationsController.markRead);

@@ -408,6 +408,27 @@ the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZ
 `PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
 `backend/src/jobs/README.md`.
 
+## Notifications (`/notifications`) — `backend/src/modules/notifications`
+
+All endpoints require an access token. Notification queries and mutations are
+scoped to the authenticated user; another user's notification id returns `404`.
+
+| Method & path | Auth | Query/body | Notes |
+|---|---|---|---|
+| `GET /notifications` | any authenticated user | `unread=true|false`, `limit` (1–100, default 50), `cursor` | Newest first, keyset-paginated by `(createdAt, id)`. Returns `{ items, nextCursor }`; malformed cursors return `400 INVALID_CURSOR`. |
+| `GET /notifications/unread-count` | any authenticated user | — | Returns `{ count }`. |
+| `POST /notifications/:id/read` | any authenticated user | — | Marks the caller's notification read; repeating the request is idempotent. |
+| `POST /notifications/read-all` | any authenticated user | — | Marks all caller-owned unread notifications read; returns `{ updated }`. |
+
+Notification payloads are validated against the typed catalogue and contain
+opaque entity identifiers only, never clinical details. Registered email/SMS
+adapter failures do not fail the persisted in-app notification. Provider
+integration and callbacks remain pending the provider decision in issue #17.
+
+## Not yet implemented
+
+`facilities`, `prescriptions`, `lab-orders` and `pharmacy-orders` have no
+routes yet — see `ROADMAP.md`.
 ### Account deletion (Phase 8, issue #41)
 
 | Method & path | Auth | Body | Notes |

@@ -106,10 +106,13 @@ and issue links.
 - [ ] Doc reconciliation: PRD §8.1.6 (facility fulfillment integrity) — not marked resolved; this phase proves the payment *mechanism* works, not the fulfillment-integrity question, which still needs real `FulfillmentRecord`/facility-matching (Phase 5) to actually address.
 
 ## Phase 6 — Notifications
-**Status: Not started. Provider decision scoped into issue #17; trigger-point build-out blocked by Phases 3 & 4 and deliberately left unscoped until those land.**
-- [ ] `Notification` model + dispatch interface (provider-agnostic, per ARCHITECTURE.md §2) — part of the trigger-point work, still blocked.
+**Status: In progress. The owner-scoped in-app inbox and provider-agnostic dispatch interface are implemented; booking outbox delivery is tracked in #94. Email/SMS provider work remains blocked on issue #17's provider decision.**
+- [x] `Notification` model + dispatch interface (provider-agnostic, per ARCHITECTURE.md §2), plus authenticated in-app inbox API — issue #93.
 - [ ] Trigger points per PRD FR-15/FR-16 (booking confirmed, referral created/accepted/declined, order ready, results available, new booking, lab results returned) — still blocked by Phases 3/4.
+- [ ] Transactional outbox for domain events, starting with booking confirmed — [issue #94](https://github.com/DocForum/docforum-core/issues/94).
 - [ ] Pick and integrate a real provider (email/SMS) behind the interface — provider choice is currently undecided (ARCHITECTURE.md §8). Tracked as [issue #17](https://github.com/DocForum/docforum-core/issues/17) (Trivial, 100 pts) — a decision task, unblocked now.
+- [ ] Email adapter, templates, and signed bounce/complaint webhook — [issue #95](https://github.com/DocForum/docforum-core/issues/95); depends on #17 and #93.
+- [ ] SMS adapter, delivery callbacks, consent/opt-out, and send cap — [issue #96](https://github.com/DocForum/docforum-core/issues/96); depends on #17 and #93.
 
 ## Phase 7 — Frontend: core flows end-to-end
 **Status: Superseded.** This phase predates the 3-repo org split (see the org note at the top of this file) — all frontend work described below is actually tracked in `docforum-web`'s own `ROADMAP.md` (Phases W2–W5, issues opened there). Left in place as a historical record rather than deleted, but no issues are or will be opened against it here.
