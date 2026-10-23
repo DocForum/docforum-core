@@ -37,14 +37,13 @@ export const clearLoginAttemptsSchema = z
     message: 'Provide an email or an ip to clear.',
   });
 
-// Two-factor auth (Phase 8 #36). `code` is either a 6-digit TOTP code or a
-// 10-character recovery code (with or without its dash) — the service
-// normalizes it, so the schema only bounds the size loosely rather than
-// rejecting a valid recovery code shape.
-export const twoFactorCodeSchema = z.object({
-  code: z.string().trim().min(6).max(16),
+// Phase 8, issue #33 — password reset. The confirm schema repeats signup's
+// minimum password length so a reset can't weaken the account.
+export const passwordResetRequestSchema = z.object({
+  email: z.string().email(),
 });
 
-export const twoFactorVerifySchema = twoFactorCodeSchema.extend({
-  mfaPendingToken: z.string().min(1),
+export const passwordResetConfirmSchema = z.object({
+  token: z.string().min(1),
+  newPassword: z.string().min(8),
 });

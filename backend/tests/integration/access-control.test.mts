@@ -55,11 +55,21 @@ const KNOWN_ROUTES = [
   'POST /availability/doctors/:doctorProfileId/slots/generate',
   'POST /appointments',
   'GET /appointments/mine',
+  'POST /appointments/:appointmentId/consultation',
+  'POST /consultations',
+  'GET /consultations/:consultationId',
   'POST /payments/wallet-link',
   'GET /payments/wallet-link',
   'POST /orders/consultations',
   'POST /orders/consultations/:consultationId/prescriptions',
   'POST /orders/consultations/:consultationId/lab-orders',
+  'POST /pharmacy-orders/:id/fulfill',
+  'POST /lab-orders/:id/fulfill',
+  'POST /orders/:id/confirm-receipt',
+  'POST /orders/:id/dispute',
+  'GET /orders/:id',
+  'GET /admin/orders/disputes',
+  'POST /admin/orders/disputes/:id/resolve',
   'GET /payments/intents/:id',
   'POST /payments/intents/:id/fund',
   'POST /payments/intents/:id/release',
@@ -67,6 +77,8 @@ const KNOWN_ROUTES = [
   'POST /patients/me/export',
   'GET /patients/me/export/:exportId',
   'GET /patients/me/export/:exportId/download',
+  'POST /patients/me/dependents',
+  'GET /patients/me/dependents',
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -107,10 +119,32 @@ const ACCESS_MATRIX: MatrixRow[] = [
   { method: 'POST', path: '/appointments', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } }, // patient unverified → 403 EMAIL_NOT_VERIFIED
   { method: 'GET', path: '/appointments/mine', expected: { anon: 401, patient: 200, doctor: 403, facility: 403, admin: 403 } },
 
+  // Consultations (issue #4) — closing is doctor-only, verified-email gated
+  // and only for the doctor's own appointment. The seeded doctor is
+  // unverified, so the email gate answers 403 before the service can answer
+  // 404; the own-appointment 404 (never a 403 that would confirm the
+  // appointment exists) is asserted in consultation.test.mts.
+  { method: 'POST', path: '/appointments/:appointmentId/consultation', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'POST', path: '/consultations', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'GET', path: '/consultations/:consultationId', expected: { anon: 401, patient: 404, doctor: 404, facility: 404, admin: 404 } },
+
   // Orders: doctor-only and verified-email gated.
   { method: 'POST', path: '/orders/consultations', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
   { method: 'POST', path: '/orders/consultations/:consultationId/prescriptions', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
   { method: 'POST', path: '/orders/consultations/:consultationId/lab-orders', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+
+  // Pharmacy & Lab Orders fulfillment — facility-only
+  { method: 'POST', path: '/pharmacy-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 404, admin: 403 } },
+  { method: 'POST', path: '/lab-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 404, admin: 403 } },
+
+  // Patient Order Confirm & Dispute — patient-only
+  { method: 'POST', path: '/orders/:id/confirm-receipt', expected: { anon: 401, patient: 404, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'POST', path: '/orders/:id/dispute', expected: { anon: 401, patient: 404, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'GET', path: '/orders/:id', expected: { anon: 401, patient: 404, doctor: 404, facility: 404, admin: 404 } },
+
+  // Admin Order Disputes — admin-only
+  { method: 'GET', path: '/admin/orders/disputes', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 200 } },
+  { method: 'POST', path: '/admin/orders/disputes/:id/resolve', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
 
   // Payments — admin-triggered in v1; wallet-link is facility-only
   { method: 'POST', path: '/payments/wallet-link', expected: { anon: 401, patient: 403, doctor: 403, facility: 400, admin: 403 } },
@@ -125,6 +159,10 @@ const ACCESS_MATRIX: MatrixRow[] = [
   { method: 'POST', path: '/patients/me/export', expected: { anon: 401, patient: 202, doctor: 403, facility: 403, admin: 403 } },
   { method: 'GET', path: '/patients/me/export/:exportId', expected: { anon: 401, patient: 404, doctor: 403, facility: 403, admin: 403 } },
   { method: 'GET', path: '/patients/me/export/:exportId/download', expected: { anon: 401, patient: 404, doctor: 403, facility: 403, admin: 403 } },
+  // Dependents (issue #42) — patients only. Creating one needs a verified
+  // email (this suite's patient is unverified → 403 EMAIL_NOT_VERIFIED).
+  { method: 'POST', path: '/patients/me/dependents', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'GET', path: '/patients/me/dependents', expected: { anon: 401, patient: 200, doctor: 403, facility: 403, admin: 403 } },
 ];
 
 const ACTORS: Actor[] = ['anon', 'patient', 'doctor', 'facility', 'admin'];
@@ -247,9 +285,15 @@ describe('Access-control test suite: who may read intake, consultation and payme
     expect(true).toBe(true);
   });
 
-  it('non-participating doctors cannot read a consultation (IDOR guard)', async () => {
-    // TODO(issue #3/#4): once consultation routes exist, seed two doctors
-    // and assert doctor B gets 403/404 on doctor A's consultation.
+  it('non-participating doctors cannot act on a consultation (IDOR guard)', async () => {
+    // The consultation write paths are covered by the matrix rows above (an
+    // unverified doctor is stopped by the email gate; a verified non-owner
+    // gets 404, never a 403 that would confirm the appointment exists). Both
+    // are asserted end-to-end — including a real second doctor being refused
+    // on doctor A's appointment — in tests/integration/consultation.test.mts.
+    // The read route (`GET /consultations/:id`) is in the matrix for
+    // unauthenticated access only; its owner/patient scoping needs seeded
+    // rows, which consultation.test.mts also covers.
     expect(true).toBe(true);
   });
 });

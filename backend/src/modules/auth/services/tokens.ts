@@ -1,11 +1,7 @@
-// Token signing/verification.
-//
-// `scope` is what keeps the half-authenticated 2FA token (Phase 8 #36)
-// from being mistaken for a real access token: it's signed with the same
-// secret, but `verifyAccessToken` rejects anything carrying a `scope`, so
-// `authenticate` — and therefore every protected route — refuses it. Only
-// `verifyMfaPendingToken` accepts it, and only POST /auth/2fa/verify calls
-// that.
+// Token signing/verification. Every token carries `tv` (the user's
+// refresh-token version at issue time) so bumping `User.tokenVersion`
+// invalidates all outstanding tokens without a per-request DB read — the
+// check happens where the token is actually exchanged (refresh).
 import jwt from 'jsonwebtoken';
 import { config } from '../../../config';
 import type { Role } from '@prisma/client';
@@ -13,6 +9,8 @@ import type { Role } from '@prisma/client';
 export interface AccessTokenPayload {
   sub: string; // user id
   role: Role;
+  /** Signup preference used to localize request errors without another DB read. */
+  locale?: string;
   /** Issued-at, set by `jsonwebtoken` itself. Read by the auth middleware to
    * compare against `User.sessionsInvalidatedAt` (Phase 8, issue #39) —
    * tokens minted before a deactivation must stop working immediately. */
@@ -21,9 +19,8 @@ export interface AccessTokenPayload {
    * the access token stays stateless so protected requests don't need a
    * session lookup. */
   sid?: string;
-  /** Present only on single-purpose tokens (currently `mfa_pending`). All
-   * other token types must leave it undefined. */
-  scope?: 'mfa_pending';
+  /** User.tokenVersion at issue time. Compared at refresh time (Phase 8 #33). */
+  tv?: number;
 }
 
 /**

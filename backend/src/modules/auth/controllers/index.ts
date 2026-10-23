@@ -3,6 +3,8 @@ import * as authService from '../services';
 import {
   clearLoginAttemptsSchema,
   loginSchema,
+  passwordResetConfirmSchema,
+  passwordResetRequestSchema,
   signupSchema,
   signupWithInviteSchema,
   twoFactorCodeSchema,
@@ -13,6 +15,7 @@ import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import { readCsrfHeader } from '../../../middleware/csrf';
 import { getParam } from '../../../request-params';
+import { resolveLocale } from '../../../i18n';
 
 const REFRESH_COOKIE = 'docforum_refresh';
 const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30d — matches config.jwt.refreshTtl
@@ -56,7 +59,10 @@ function sessionResponse(res: Response, session: authService.AuthSession) {
 
 export async function signup(req: Request, res: Response) {
   const input = signupSchema.parse(req.body);
-  const session = await authService.signup(input, sessionContext(req));
+  const session = await authService.signup(
+    { ...input, locale: resolveLocale(undefined, req.headers['accept-language']) },
+    sessionContext(req),
+  );
   sessionResponse(res, session);
 }
 
@@ -153,6 +159,28 @@ export function logout(req: Request, res: Response) {
   }
   res.clearCookie(REFRESH_COOKIE, config.cookie);
   res.status(204).send();
+}
+
+// Both reset endpoints answer identically for known and unknown emails —
+// same status, same body, no branch on the result of the lookup. Rate
+// limiting is the one intentional exception (429), and it fires before any
+// account lookup, so it can't leak existence either.
+export async function requestPasswordReset(req: Request, res: Response) {
+  const { email } = passwordResetRequestSchema.parse(req.body);
+  await authService.requestPasswordReset({ email, ip: req.ip ?? 'unknown' });
+  res.status(202).json({
+    message: 'If an account exists for that email, a password reset link has been sent.',
+  });
+}
+
+export async function confirmPasswordReset(req: Request, res: Response) {
+  const input = passwordResetConfirmSchema.parse(req.body);
+  await authService.confirmPasswordReset(input);
+  // The reset already killed every refresh token for this user
+  // (tokenVersion bump) — clear the caller's cookie too so a browser that
+  // still holds the old one isn't left sending a dead token.
+  res.clearCookie(REFRESH_COOKIE, config.cookie);
+  res.status(200).json({ message: 'Password updated. Please sign in with your new password.' });
 }
 
 // --- Session management (Phase 8 #38) -----------------------------------
