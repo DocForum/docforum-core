@@ -1,16 +1,16 @@
 // Auth module's repository — the only place that touches the `User` /
-// `PatientProfile` / `DoctorProfile` tables for auth purposes. Other
-// modules must go through this module's services, never import this file
-// directly (AGENTS.md hard rule 4).
+// `PatientProfile` / `DoctorProfile` / `PasswordResetToken` tables for auth
+// purposes. Other modules must go through this module's services, never
+// import this file directly (AGENTS.md hard rule 4).
 import { prisma } from '../../../db/prisma-client';
-import type { Role } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 
 export function findUserByEmail(email: string) {
   return prisma.user.findUnique({ where: { email } });
 }
 
-export function findUserById(id: string) {
-  return prisma.user.findUnique({ where: { id } });
+export function findUserById(id: string, db: typeof prisma | Prisma.TransactionClient = prisma) {
+  return db.user.findUnique({ where: { id } });
 }
 
 // --- Refresh sessions (Phase 8 #38) -------------------------------------
@@ -65,6 +65,7 @@ export interface CreateSelfServeUserInput {
   passwordHash: string;
   role: Extract<Role, 'patient' | 'doctor'>;
   fullName: string;
+  locale?: string;
 }
 
 /** Creates the User row and its matching profile row in one transaction —
@@ -77,6 +78,7 @@ export function createSelfServeUser(input: CreateSelfServeUserInput) {
         phone: input.phone,
         passwordHash: input.passwordHash,
         role: input.role,
+        locale: input.locale ?? 'en',
       },
     });
 
@@ -229,4 +231,101 @@ export function clearLoginAttempts(buckets: { scope: string; key: string }[]) {
 /** Cleanup: drop buckets whose last failure is older than `before`. */
 export function pruneStaleLoginAttempts(before: Date) {
   return prisma.loginAttempt.deleteMany({ where: { lastFailedAt: { lt: before } } }).then((result) => result.count);
+}
+
+/**
+ * Stores a new single-use reset token for a user, superseding any of that
+ * user's outstanding ones in the same transaction — "requesting a second
+ * reset invalidates the first token" is a DB-level guarantee here, not an
+ * application-level hope.
+ */
+export function createPasswordResetToken(input: {
+  userId: string;
+  tokenHash: string;
+  expiresAt: Date;
+}) {
+  return prisma.$transaction(async (tx) => {
+    await tx.passwordResetToken.updateMany({
+      where: { userId: input.userId, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    return tx.passwordResetToken.create({
+      data: { userId: input.userId, tokenHash: input.tokenHash, expiresAt: input.expiresAt },
+    });
+  });
+}
+
+/** Lookup by token hash (unique index) — never by the raw token, which is
+ * never stored. */
+export function findPasswordResetTokenByHash(tokenHash: string) {
+  return prisma.passwordResetToken.findUnique({ where: { tokenHash } });
+}
+
+/**
+ * Consumes a reset token and applies the new password in one transaction:
+ * marks the token used, sets the new password hash, and increments
+ * `User.tokenVersion` so every previously issued refresh token for this
+ * user stops working (issue #33; the full revocation list is #18).
+ */
+export function consumePasswordResetToken(input: {
+  tokenId: string;
+  userId: string;
+  passwordHash: string;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.passwordResetToken.updateMany({
+      where: { id: input.tokenId, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    // Two concurrent confirms of the same token: only one claims the row.
+    if (claimed.count !== 1) return false;
+
+    await tx.user.update({
+      where: { id: input.userId },
+      data: { passwordHash: input.passwordHash, tokenVersion: { increment: 1 } },
+    });
+    return true;
+  });
+}
+
+// --- Account deletion (Phase 8, issue #41, docs/adr/0010) ----------------
+// Called inside the patients module's deletion transaction, so every write
+// here takes the caller's transaction client.
+
+type DbClient = typeof prisma | Prisma.TransactionClient;
+
+/** Anonymises the User row in place. Conditional on `deletedAt IS NULL`, so
+ * of two concurrent deletions exactly one does the work; returns whether
+ * this call did. */
+export async function anonymizeUser(
+  db: DbClient,
+  userId: string,
+  data: { tombstoneEmail: string; unusablePasswordHash: string; deletedAt: Date },
+): Promise<boolean> {
+  const result = await db.user.updateMany({
+    where: { id: userId, deletedAt: null },
+    data: {
+      email: data.tombstoneEmail,
+      phone: null,
+      passwordHash: data.unusablePasswordHash,
+      emailVerifiedAt: null,
+      deletedAt: data.deletedAt,
+    },
+  });
+  return result.count === 1;
+}
+
+export function deleteVerificationTokensForUser(db: DbClient, userId: string) {
+  return db.emailVerificationToken.deleteMany({ where: { userId } }).then((result) => result.count);
+}
+
+export function deleteLoginAttemptBucket(db: DbClient, scope: 'email' | 'ip', key: string) {
+  return db.loginAttempt.deleteMany({ where: { scope, key } }).then((result) => result.count);
+}
+
+/** Hard-deletes an already-anonymised User (tombstone purge). Conditional
+ * on `deletedAt` being set, so a live account can never be removed here. */
+export async function deleteAnonymizedUser(db: DbClient, userId: string): Promise<boolean> {
+  const result = await db.user.deleteMany({ where: { id: userId, deletedAt: { not: null } } });
+  return result.count === 1;
 }

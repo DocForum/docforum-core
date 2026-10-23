@@ -1,12 +1,14 @@
 import type { Request, Response } from 'express';
 import * as paymentsService from '../services';
-import { linkWalletSchema } from '../validation';
+import { linkWalletSchema, paymentHistoryQuerySchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
 
 // BigInt doesn't serialize via JSON.stringify by default — every response
-// here that carries one converts to a string explicitly.
+// here that carries one converts to a string explicitly. The prepared XDR
+// is deliberately not part of the general intent shape: it's returned by
+// the prepare call itself and can be large.
 function serializeIntent(intent: {
   id: string;
   prescriptionId: string | null;
@@ -14,16 +16,22 @@ function serializeIntent(intent: {
   status: string;
   patientProfileId: string;
   facilityId: string;
-  amountStroops: bigint;
+  amount: bigint;
+  assetCode: string;
+  tokenContractId: string | null;
   escrowId: bigint | null;
   stellarTxHash: string | null;
   sorobanContractId: string | null;
+  preparedTxHash: string | null;
+  preparedExpiryLedger: number | null;
+  preparedExpiresAt: Date | null;
+  refundAfter: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
   return {
     ...intent,
-    amountStroops: intent.amountStroops.toString(),
+    amount: intent.amount.toString(),
     escrowId: intent.escrowId?.toString() ?? null,
   };
 }
@@ -50,6 +58,19 @@ export async function getIntent(req: Request, res: Response) {
   res.status(200).json(serializeIntent(intent));
 }
 
+export async function prepareIntent(req: Request, res: Response) {
+  const id = getParam(req, 'id');
+  const prepared = await paymentsService.preparePaymentIntent(auditActor(req), id);
+  res.status(200).json({
+    ...serializeIntent(prepared.intent),
+    // ADR 0005 step 2: unsigned XDR + the ledger after which the
+    // transaction/auth entries are no longer valid.
+    xdr: prepared.xdr,
+    txHash: prepared.txHash,
+    expiryLedger: prepared.expiryLedger,
+  });
+}
+
 export async function fundIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const intent = await paymentsService.fundPaymentIntent(auditActor(req), id);
@@ -66,4 +87,16 @@ export async function refundIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const intent = await paymentsService.refundPaymentIntent(auditActor(req), id);
   res.status(200).json(serializeIntent(intent));
+}
+
+export async function listMyPayments(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const filters = paymentHistoryQuerySchema.parse(req.query);
+  res.status(200).json(await paymentsService.listMyPayments(req.user.id, filters));
+}
+
+export async function listFacilityLedger(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const filters = paymentHistoryQuerySchema.parse(req.query);
+  res.status(200).json(await paymentsService.listFacilityPaymentLedger(req.user.id, filters));
 }

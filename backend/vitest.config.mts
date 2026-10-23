@@ -12,10 +12,17 @@ export default defineConfig({
     // seed actors. Several such files run in parallel, so on a loaded CI
     // runner the 10s default cut the hook off mid-seed (issue #39 CI run:
     // access-control timed out at 101 tests skipped).
+    // The end-to-end care-thread test walks every phase in one file,
+    // so its hook also seeds the full actor set and needs headroom.
     hookTimeout: 30_000,
     env: {
       JWT_ACCESS_SECRET: 'test-access-secret',
       JWT_REFRESH_SECRET: 'test-refresh-secret',
+      // Clinical free-text fields are encrypted at write time (issue #46).
+      // A fixed 32-byte test key keeps ciphertext deterministic across runs
+      // without touching the real key, which only production/dev envs hold.
+      FIELD_ENCRYPTION_KEY_V1: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+      FIELD_ENCRYPTION_ACTIVE_VERSION: 'v1',
       // Port 5433, not 5432 — tests/integration/booking.test.mts spins up
       // its own throwaway Postgres cluster on this port so the suite is
       // self-contained (no pre-existing DB required). A distinct port

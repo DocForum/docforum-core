@@ -1,5 +1,7 @@
 import { prisma } from '../../../db/prisma-client';
-import type { PatientExportStatus } from '@prisma/client';
+import type { PatientExportStatus, Prisma } from '@prisma/client';
+
+type DbClient = typeof prisma | Prisma.TransactionClient;
 
 export function findPatientProfileByUserId(userId: string) {
   return prisma.patientProfile.findUnique({ where: { userId } });
@@ -99,6 +101,31 @@ export async function markExportReady(
   return result.count === 1;
 }
 
+// --- Account deletion (Phase 8, issue #41, docs/adr/0010) ----------------
+
+/** What a deleted patient's profile shows from now on (e.g. in a doctor's
+ * appointment list). */
+export const ANONYMIZED_PATIENT_NAME = 'Deleted patient';
+
+/** Anonymises the profile in place, conditional on it not already being
+ * anonymised. The row (and its id) stays: appointments and payments keep
+ * their foreign key to it. */
+export async function anonymizeProfile(db: DbClient, profileId: string, anonymizedAt: Date): Promise<boolean> {
+  const result = await db.patientProfile.updateMany({
+    where: { id: profileId, anonymizedAt: null },
+    data: { fullName: ANONYMIZED_PATIENT_NAME, dateOfBirth: null, anonymizedAt },
+  });
+  return result.count === 1;
+}
+
+/** Account deletion (issue #41, docs/adr/0010): exports are derived copies
+ * of the patient's data, not records of care, so they go at anonymisation.
+ * Chunks cascade. An export still being generated loses its row here, so its
+ * final conditional `ready` update matches nothing and it never publishes. */
+export function deleteExportsForPatient(db: DbClient, patientProfileId: string) {
+  return db.patientExport.deleteMany({ where: { patientProfileId } }).then((result) => result.count);
+}
+
 /** processing -> failed, only for the attempt that is still current. */
 export async function markExportFailed(
   exportId: string,
@@ -165,4 +192,77 @@ export function deleteUnservableExportChunks(): Promise<number> {
 
 export function findPatientProfileById(id: string) {
   return prisma.patientProfile.findUnique({ where: { id } });
+}
+/** One keyset page of anonymised profiles old enough to be purge
+ * candidates. */
+export function findAnonymizedProfilesPage(anonymizedBefore: Date, cursor: string | undefined, take: number) {
+  return prisma.patientProfile.findMany({
+    where: { anonymizedAt: { lte: anonymizedBefore } },
+    select: { id: true, userId: true },
+    orderBy: { id: 'asc' },
+    take,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  });
+}
+
+/** Hard-deletes an anonymised profile. Conditional on `anonymizedAt` being
+ * set, so a live profile can never be removed here; and every clinical or
+ * payment table references the profile with ON DELETE RESTRICT, so a row
+ * that still has records makes this throw instead of cascading. */
+export async function deleteAnonymizedProfile(db: DbClient, profileId: string): Promise<boolean> {
+  const result = await db.patientProfile.deleteMany({ where: { id: profileId, anonymizedAt: { not: null } } });
+  return result.count === 1;
+}
+
+// --- Guardians and dependents (Phase 8, issue #42, docs/adr/0011) --------
+
+/** Creates a login-less dependent profile and its guardianship together:
+ * a dependent with no guardian (or a guardianship with no dependent) is
+ * never observable. */
+export function createDependentWithGuardianship(input: {
+  guardianUserId: string;
+  fullName: string;
+  dateOfBirth: Date;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const profile = await tx.patientProfile.create({
+      data: { userId: null, fullName: input.fullName, dateOfBirth: input.dateOfBirth },
+    });
+    const guardianship = await tx.guardianship.create({
+      data: { guardianUserId: input.guardianUserId, dependentProfileId: profile.id },
+    });
+    return { profile, guardianship };
+  });
+}
+
+/** The guardian's non-revoked guardianships with their dependent profiles.
+ * Majority is applied by the service (it needs the configured age). */
+export function findUnrevokedGuardianshipsForGuardian(guardianUserId: string) {
+  return prisma.guardianship.findMany({
+    where: { guardianUserId, revokedAt: null },
+    include: { dependentProfile: true },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+/** The guardianship between this guardian and this profile, if any (revoked
+ * or not), with the dependent profile. */
+export function findGuardianship(guardianUserId: string, dependentProfileId: string) {
+  return prisma.guardianship.findUnique({
+    where: { guardianUserId_dependentProfileId: { guardianUserId, dependentProfileId } },
+    include: { dependentProfile: true },
+  });
+}
+
+/** Account deletion (issues #41/#42, docs/adr/0010 + 0011): a deleted
+ * guardian's access to their dependents ends with the account. Revoked, never
+ * deleted — the rows are the record of who had access and when. */
+export function revokeGuardianshipsOfGuardian(db: DbClient, guardianUserId: string, revokedAt: Date) {
+  return db.guardianship
+    .updateMany({ where: { guardianUserId, revokedAt: null }, data: { revokedAt } })
+    .then((result) => result.count);
+}
+
+export async function guardianHasGuardianships(guardianUserId: string): Promise<boolean> {
+  return (await prisma.guardianship.findFirst({ where: { guardianUserId }, select: { id: true } })) !== null;
 }

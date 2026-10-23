@@ -1,15 +1,21 @@
-// consultations services — the only exported surface other modules (and this
-// module's own controllers) may call.
+// Consultations services — one write path for the Consultation record.
 //
-// Issue #64: a consultation is a draft until sign-off, then immutable with
-// append-only addenda. Authorisation is deliberately narrow — the authoring
-// doctor is the only account that can read, edit, sign off or add addenda
-// until the appointment/patient link exists (Phase 2 #4). That's a flagged
-// limitation, not an assumption that others shouldn't see it (PRD §7).
-import { config } from '../../../config';
+// Phase 2, issue #4 ("close a consultation exactly once") and Phase 3's
+// minimal slice (issue #5's lineage host + issue #66's multi-referral
+// endpoint) both create this row, so they share `createConsultation` below
+// rather than each writing the table their own way. The routes that reach it
+// (`POST /consultations`, `POST /appointments/:id/consultation`, and the
+// orders module's consultation step) are three addresses for one operation,
+// not three implementations.
+import { Prisma, type ConsultationOutcome } from '@prisma/client';
+import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
-import * as doctorsService from '../../doctors/services';
+import { decryptField, encryptField } from '../../../utils/field-encryption';
 import * as appointmentsService from '../../appointments/services';
+import * as auditService from '../../audit/services';
+import * as doctorsService from '../../doctors/services';
+import * as patientsService from '../../patients/services';
+import * as consultationsRepo from '../repositories';
 import * as referralsService from '../../referrals/services';
 import type { ReferralTargetInput } from '../../referrals/services';
 import * as consultationsRepo from '../repositories';
@@ -70,116 +76,113 @@ async function requireOwnConsultation(userId: string, consultationId: string) {
   return consultation;
 }
 
-export async function createConsultation(
-  userId: string,
-  input: { appointmentId: string; notes?: string; outcome?: ConsultationOutcome },
-): Promise<ConsultationReadModel> {
-  // The appointment is what a consultation closes (one per appointment,
-  // unique). Resolved through the appointments module's service, which
-  // also proves the appointment belongs to this doctor — never by reading
-  // another module's table (AGENTS.md hard rule 4).
-  const appointment = await appointmentsService.getDoctorAppointmentContext(userId, input.appointmentId);
-  // One consultation per appointment, recorded once the visit is over — a
-  // re-visit is a new appointment, not a second note on the same one.
+export interface ConsultationInput {
+  appointmentId: string;
+  /** Required by the close routes (`closeConsultationSchema`); optional here
+   * only so the create route can open a record before sign-off (Phase 3's
+   * referral slice, matching `POST /consultations`). */
+  outcome?: ConsultationOutcome | null;
+  notes?: string | null;
+}
+
+/**
+ * Create (close) the consultation for the caller's own appointment, exactly
+ * once.
+ *
+ * - The one-consultation-per-appointment guarantee is enforced at the DB
+ *   level by `Consultation.appointmentId UNIQUE`, not by a check-then-write
+ *   here. Two concurrent closes both reach the INSERT; exactly one commits,
+ *   the loser gets P2002 and a 409 (docs/adr/0009).
+ * - "Doctor-only, own-appointment-only" is enforced by reading the
+ *   Appointment through appointmentsService (the only legal cross-module
+ *   seam per AGENTS.md hard rule 4): that service returns null for an
+ *   appointment that doesn't exist or isn't the caller's, and this service
+ *   answers 404 either way so it never reveals that someone else's
+ *   appointment exists.
+ * - A consultation is recorded against a `completed` appointment — the visit
+ *   that produced it has to have happened (Phase 3's referral precondition).
+ * - Single-use in v1: no amendments/edits. That is an explicit open
+ *   question (ROADMAP.md Phase 2), not an assumption we silently bake in.
+ * - `notes` is clinical free text and is stored as an AES-256-GCM envelope
+ *   (ARCHITECTURE.md §4.3 / §2 — Phase 8 issue #46), never plaintext, so
+ *   every writer goes through here. The ciphertext is unsearchable by
+ *   design; reads decrypt in the app layer.
+ */
+export async function createConsultation(actor: auditService.AuditActor, input: ConsultationInput) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+
+  const appointment = await appointmentsService.getAppointmentForDoctor(actor.userId, input.appointmentId);
+  if (!appointment) {
+    throw new HttpError(404, 'Appointment not found.');
+  }
   if (appointment.status !== 'completed') {
     throw new HttpError(409, 'A consultation is recorded against a completed appointment.');
   }
-  const consultation = await consultationsRepo.createConsultation({
-    appointmentId: appointment.id,
-    doctorProfileId: appointment.doctorProfileId,
-    notes: input.notes,
-    outcome: input.outcome,
-  });
-  return toReadModel({ ...consultation, addenda: [] });
-}
 
-export async function getConsultation(userId: string, consultationId: string): Promise<ConsultationReadModel> {
-  return toReadModel(await requireOwnConsultation(userId, consultationId));
-}
+  const notes = input.notes ?? null;
 
-/**
- * Edits a draft. A signed-off consultation is immutable at two levels: this
- * refuses with a 409, and the DB trigger rejects the UPDATE even if this is
- * bypassed.
- */
-export async function updateConsultation(
-  userId: string,
-  consultationId: string,
-  input: { notes?: string; outcome?: ConsultationOutcome },
-): Promise<ConsultationReadModel> {
-  const consultation = await requireOwnConsultation(userId, consultationId);
-  if (consultation.signedAt) {
-    throw new HttpError(
-      409,
-      'This consultation is signed off and can no longer be edited. Add an addendum instead.',
-    );
+  let consultation;
+  try {
+    consultation = await prisma.$transaction(async (tx) => {
+      const record = await consultationsRepo.createConsultation(tx, {
+        appointmentId: input.appointmentId,
+        outcome: input.outcome ?? null,
+        notes: notes === null ? null : (encryptField(notes) ?? null),
+      });
+
+      // Phase 8 audit trail (issue #43): the state change and its event commit
+      // together, so an event exists iff the consultation was actually closed.
+      await auditService.record(tx, actor, {
+        entityType: 'Consultation',
+        entityId: record.id,
+        action: 'consultation.closed',
+        fromState: null,
+        toState: record.outcome,
+        metadata: { appointmentId: record.appointmentId },
+      });
+
+      return record;
+    });
+  } catch (err) {
+    // The DB unique constraint is the actual guarantee; translate the race's
+    // loser into a 409 rather than a 500.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      throw new HttpError(409, 'A consultation for this appointment has already been closed.');
+    }
+    throw err;
   }
 
-  const result = await consultationsRepo.updateConsultationDraft(consultationId, input);
-  // Lost a race against auto sign-off / a concurrent sign-off between the
-  // read above and this write.
-  if (result.count !== 1) {
-    throw new HttpError(409, 'This consultation was signed off while you were editing it.');
-  }
-
-  return toReadModel(await requireOwnConsultation(userId, consultationId));
+  // The caller just wrote these notes, so hand them back in plaintext rather
+  // than leaking the stored ciphertext envelope.
+  return { consultation: { ...consultation, notes }, appointment };
 }
 
-export async function signOffConsultation(
-  userId: string,
-  consultationId: string,
-  at: Date = new Date(),
-): Promise<ConsultationReadModel> {
-  await requireOwnConsultation(userId, consultationId);
-
-  const result = await consultationsRepo.signOffConsultation(consultationId, at);
-  if (result.count !== 1) throw new HttpError(409, 'This consultation is already signed off.');
-
-  return toReadModel(await requireOwnConsultation(userId, consultationId));
+/** Service-to-service read for modules that hang records off a consultation
+ * (orders: prescriptions, lab orders). Returns the stored row as-is — callers
+ * outside this module never touch `Consultation` themselves (AGENTS.md hard
+ * rule 4). */
+export async function getConsultationRecord(consultationId: string) {
+  const consultation = await consultationsRepo.findConsultationById(prisma, consultationId);
+  if (!consultation) throw new HttpError(404, 'Consultation not found.');
+  return consultation;
 }
 
-/**
- * Post-sign-off corrections. Only the authoring doctor may add one, and only
- * to a signed-off consultation — before sign-off the note itself is still
- * editable, so an addendum would just be a confusing second draft.
- */
-export async function addAddendum(
-  userId: string,
-  consultationId: string,
-  body: string,
-): Promise<ConsultationReadModel> {
-  const consultation = await requireOwnConsultation(userId, consultationId);
+/** Visible to the treating doctor and the patient of the underlying
+ * appointment — nothing wider in v1. `notes` is decrypted for the reader;
+ * the stored ciphertext never leaves this module. */
+export async function getConsultation(userId: string, consultationId: string) {
+  const consultation = await consultationsRepo.findConsultationById(prisma, consultationId);
+  if (!consultation) throw new HttpError(404, 'Consultation not found.');
 
-  if (!consultation.signedAt) {
-    throw new HttpError(409, 'Addenda are only for signed-off consultations — edit the note directly while it is a draft.');
-  }
-
-  await consultationsRepo.createAddendum({
-    consultationId,
-    authorDoctorProfileId: consultation.doctorProfileId,
-    body,
-  });
-
-  return toReadModel(await requireOwnConsultation(userId, consultationId));
-}
-
-/**
- * Signs off every draft older than the configured window. Runs from the
- * interval job in src/jobs (kept as a plain interval per
- * ARCHITECTURE.md §6.3.2 — no queue until a real job needs one).
- *
- * Caveat, flagged: the window is measured from `createdAt`, not from the
- * appointment's completion time — `Appointment` has no completed-at stamp
- * yet (#4 owns the appointment lifecycle).
- */
-export async function autoSignOffDueConsultations(now: Date = new Date()): Promise<number> {
-  const cutoff = new Date(now.getTime() - config.consultations.autoSignoffHours * 60 * 60 * 1000);
-  const due = await consultationsRepo.findConsultationsDueForAutoSignOff(cutoff);
-
-  let signedOff = 0;
-  for (const consultation of due) {
-    const result = await consultationsRepo.signOffConsultation(consultation.id, now);
-    signedOff += result.count;
+  if (consultation.appointment) {
+    const doctor = await doctorsService.getMyDoctorProfile(userId).catch(() => null);
+    if (doctor && doctor.id === consultation.appointment.doctorProfileId) {
+      return { ...consultation, notes: decryptField(consultation.notes) };
+    }
+    const patient = await patientsService.getMyPatientProfile(userId).catch(() => null);
+    if (patient && patient.id === consultation.appointment.patientProfileId) {
+      return { ...consultation, notes: decryptField(consultation.notes) };
+    }
   }
   return signedOff;
 }
