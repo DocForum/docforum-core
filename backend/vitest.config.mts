@@ -14,7 +14,7 @@ export default defineConfig({
     // access-control timed out at 101 tests skipped).
     // The end-to-end care-thread test walks every phase in one file,
     // so its hook also seeds the full actor set and needs headroom.
-    hookTimeout: 30_000,
+    hookTimeout: 120_000,
     env: {
       JWT_ACCESS_SECRET: 'test-access-secret',
       JWT_REFRESH_SECRET: 'test-refresh-secret',
@@ -23,6 +23,9 @@ export default defineConfig({
       // without touching the real key, which only production/dev envs hold.
       FIELD_ENCRYPTION_KEY_V1: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
       FIELD_ENCRYPTION_ACTIVE_VERSION: 'v1',
+      SEP10_SIGNING_SECRET: 'SC3Z2YBPD7KGXC73CTBNDRGQOIUSAZUH445QIB2PPKWO7CXULRY75JGJ',
+      SEP10_HOME_DOMAIN: 'docforum.test',
+      SEP10_WEB_AUTH_DOMAIN: 'api.docforum.test',
       // Port 5433, not 5432 — tests/integration/booking.test.mts spins up
       // its own throwaway Postgres cluster on this port so the suite is
       // self-contained (no pre-existing DB required). A distinct port
