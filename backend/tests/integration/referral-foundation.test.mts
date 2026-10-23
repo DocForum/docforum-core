@@ -195,6 +195,30 @@ describe('referral foundation', () => {
     expect(res.status).toBe(409);
   });
 
+  it('refuses an accept whose slot was already booked, and leaves the referral pending', async () => {
+    const { consultationId } = await consultationRitual(app, patient, doctorA);
+    const created = await createReferral(app, doctorA, {
+      sourceConsultationId: consultationId,
+      targetDoctorId: doctorB.profileId,
+      snapshotNotes: 'Slot taken first.',
+    });
+    expect(created.status).toBe(201);
+    const referralId = created.body.id as string;
+
+    // Another booking took this slot first. Setup only: the accept below must
+    // go through claimOpenSlot and refuse it, not write an appointment itself.
+    const [slotId] = await generateSlots(app, doctorB, 1);
+    await prisma.availabilitySlot.update({ where: { id: slotId }, data: { status: 'booked' } });
+
+    const res = await acceptReferral(app, patient, referralId, slotId);
+    expect(res.status).toBe(409);
+
+    const referral = await prisma.referral.findUniqueOrThrow({ where: { id: referralId } });
+    expect(referral.status).toBe('pending');
+    expect(referral.resultingAppointmentId).toBeNull();
+    expect(await prisma.appointment.count({ where: { referralId } })).toBe(0);
+  });
+
   it('rejects accept by the wrong patient and double-accept', async () => {
     const { consultationId } = await consultationRitual(app, patient, doctorA);
     const created = await createReferral(app, doctorA, {

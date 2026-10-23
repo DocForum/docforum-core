@@ -1,3 +1,9 @@
-// notifications routes — placeholder. See PRD.md / ARCHITECTURE.md §3 for this module's scope.
-// TODO(Phase: see ROADMAP.md): define routes for notifications.
-export {};
+// notifications routes. Mounted at `/notifications` in app.ts.
+import { Router } from 'express';
+import { authenticate } from '../../../middleware/auth';
+import * as notificationsController from '../controllers';
+
+export const notificationsRouter = Router();
+
+// Server-Sent Events stream for the caller's own notifications (issue #97).
+notificationsRouter.get('/stream', authenticate, notificationsController.stream);
