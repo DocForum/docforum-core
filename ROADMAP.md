@@ -379,11 +379,24 @@ and issue links.
   sponsorship. Custodial v1 stays as a fallback. Status: Proposed, not
   yet Accepted. Added to the docs site.
 - 2026-10-09 — Opened issue #32: upgrade to escrow SDK 0.3.0 and the
-  current testnet contract.
-- 2026-10-15 — Started Phase 8's auth-hardening work, scoped as issues
-  #34 (email verification), #35 (login brute-force throttling), #37 (CSRF
-  for the cookie-authenticated endpoints + per-environment CORS allowlist)
-  and #39 (admin account lifecycle). All four are independent of Phases
+  current testnet contract.- 2026-10-16 — Implemented issue #77 (SEP-10 Stellar Web Authentication server, Phase 5.5 / ADR 0005 step 4): `GET
+  /payments/sep10/challenge` builds a server-signed challenge (SDK
+  helper — Manage Data nonce, 5-minute time bounds, home domain +
+  web_auth_domain) and records the issuance binding; `POST
+  /payments/sep10/verify` walks the full SEP-10 server verification
+  list (structure, time bounds, server signature, client signatures
+  with multisig weight thresholds loaded from Horizon, and the
+  spec's master-key rule for unfunded accounts), then consumes the
+  nonce with ONE conditional UPDATE so concurrent replays can't both
+  succeed — same DB-level pattern as booking. New `Sep10Challenge`
+  model (unique nonce, userId, account, expiry) with a migration; a
+  dedicated `SEP10_SIGNING_SECRET` (never the payer/releaser keys,
+  validated at startup, never logged). Horizon is behind an injectable
+  seam so the 15 unit + 18 integration tests run with zero network.
+  Docs updated: ARCHITECTURE §4.10, essentials data-model map,
+  docs/api/README.md (endpoints + errors + unfunded behaviour).
+- 2026-10-15 — Started Phase 8's auth-hardening work, scoped as issues #34 (email verification), #35 (login brute-force throttling), #37 (CSRF
+  for the cookie-authenticated endpoints + per-environment CORS allowlist) and #39 (admin account lifecycle). All four are independent of Phases
   3–7 and of each other. #34 merged as PR #137: `User.emailVerifiedAt` +
   a hashed/expiring/single-use `EmailVerificationToken` table (backfilled
   as verified for existing rows), `POST /auth/verify-email`,
