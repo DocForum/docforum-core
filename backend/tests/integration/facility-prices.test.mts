@@ -22,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5448; // unique per integration file
+const PORT = 5459; // unique per integration file
 const runId = Date.now();
 const MINUTE = 60_000;
 
@@ -87,6 +87,12 @@ describe('facility price lists and intent pricing (issue #127)', () => {
       data: { userId: ownerUser.id, name: 'Aaa Prices Lab', type: 'lab' },
     });
     facilityId = facility.id;
+    // Issue #14 made a matching FacilityCapability row a condition of being
+    // eligible at all (fail closed) — this file is about pricing, so the
+    // qualification data is seeded directly rather than re-tested here.
+    await prisma.facilityCapability.create({
+      data: { facilityProfileId: facilityId, capabilityType: 'lab_test', detail: null },
+    });
 
     const strangerUser = await prisma.user.create({
       data: { email: `prices-stranger-${runId}@example.com`, passwordHash: 'unused', role: 'facility' },

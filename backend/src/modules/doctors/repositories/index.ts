@@ -167,3 +167,16 @@ export function findDoctorSpecialties(doctorProfileId: string) {
     include: { specialty: true },
   });
 }
+
+/** Count and oldest submission time of doctors still awaiting verification. */
+export async function findPendingVerificationStats(db: DbClient = prisma) {
+  const [count, oldest] = await Promise.all([
+    db.doctorProfile.count({ where: { verificationStatus: 'pending' } }),
+    db.doctorProfile.findFirst({
+      where: { verificationStatus: 'pending' },
+      orderBy: { createdAt: 'asc' },
+      select: { createdAt: true },
+    }),
+  ]);
+  return { count, oldestCreatedAt: oldest?.createdAt ?? null };
+}

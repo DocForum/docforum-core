@@ -63,6 +63,13 @@ const KNOWN_ROUTES = [
   'POST /orders/consultations',
   'POST /orders/consultations/:consultationId/prescriptions',
   'POST /orders/consultations/:consultationId/lab-orders',
+  'POST /pharmacy-orders/:id/fulfill',
+  'POST /lab-orders/:id/fulfill',
+  'POST /orders/:id/confirm-receipt',
+  'POST /orders/:id/dispute',
+  'GET /orders/:id',
+  'GET /admin/orders/disputes',
+  'POST /admin/orders/disputes/:id/resolve',
   'GET /payments/intents/:id',
   'POST /payments/intents/:id/fund',
   'POST /payments/intents/:id/release',
@@ -125,6 +132,19 @@ const ACCESS_MATRIX: MatrixRow[] = [
   { method: 'POST', path: '/orders/consultations', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
   { method: 'POST', path: '/orders/consultations/:consultationId/prescriptions', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
   { method: 'POST', path: '/orders/consultations/:consultationId/lab-orders', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+
+  // Pharmacy & Lab Orders fulfillment — facility-only
+  { method: 'POST', path: '/pharmacy-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 404, admin: 403 } },
+  { method: 'POST', path: '/lab-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 404, admin: 403 } },
+
+  // Patient Order Confirm & Dispute — patient-only
+  { method: 'POST', path: '/orders/:id/confirm-receipt', expected: { anon: 401, patient: 404, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'POST', path: '/orders/:id/dispute', expected: { anon: 401, patient: 404, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'GET', path: '/orders/:id', expected: { anon: 401, patient: 404, doctor: 404, facility: 404, admin: 404 } },
+
+  // Admin Order Disputes — admin-only
+  { method: 'GET', path: '/admin/orders/disputes', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 200 } },
+  { method: 'POST', path: '/admin/orders/disputes/:id/resolve', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
 
   // Payments — admin-triggered in v1; wallet-link is facility-only
   { method: 'POST', path: '/payments/wallet-link', expected: { anon: 401, patient: 403, doctor: 403, facility: 400, admin: 403 } },

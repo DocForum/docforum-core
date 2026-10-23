@@ -9,6 +9,9 @@ import { availabilityRouter } from './modules/availability/routes';
 import { appointmentsRouter } from './modules/appointments/routes';
 import { appointmentConsultationsRouter, consultationsRouter } from './modules/consultations/routes';
 import { ordersRouter } from './modules/orders/routes';
+import { adminOrdersRouter } from './modules/orders/routes/admin';
+import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
+import { labOrdersRouter } from './modules/lab-orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
 import { patientsRouter } from './modules/patients/routes';
 import { facilitiesRouter } from './modules/facilities/routes';
@@ -18,6 +21,7 @@ import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/aud
 import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
+import { notificationsRouter } from './modules/notifications/routes';
 import { registerRetentionHolds } from './retention-holds';
 
 export function createApp() {
@@ -60,6 +64,9 @@ export function createApp() {
   // /consultations below — same service, one write path.
   app.use('/appointments', appointmentConsultationsRouter);
   app.use('/orders', ordersRouter);
+  app.use('/pharmacy-orders', pharmacyOrdersRouter);
+  app.use('/lab-orders', labOrdersRouter);
+  app.use('/admin', adminOrdersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
   app.use('/facilities', facilitiesRouter);
@@ -74,6 +81,7 @@ export function createApp() {
   app.use('/admin', adminAuditRouter);
   app.use('/patients', patientAuditRouter);
   app.use('/referrals', referralsRouter);
+  app.use('/notifications', notificationsRouter);
   app.use('/consultations', consultationsRouter);
 
   // Must be registered last — Express only routes errors here once every
