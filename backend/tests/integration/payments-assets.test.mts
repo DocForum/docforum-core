@@ -17,7 +17,7 @@ import { Keypair } from '@stellar/stellar-sdk';
 import { createOrderFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5439;
+const PORT = 5461;
 const runId = Date.now();
 
 const NATIVE_SAC = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';

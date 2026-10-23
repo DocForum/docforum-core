@@ -8,7 +8,7 @@ import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5452;
+const PORT = 5460;
 const runId = Date.now();
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-doctors-pg-'));
 const pg = new EmbeddedPostgres({ databaseDir: dataDir, user: 'docforum', password: 'docforum', port: PORT, persistent: false });
