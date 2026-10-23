@@ -22,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5448; // unique per integration file
+const PORT = 5459; // unique per integration file
 const runId = Date.now();
 const MINUTE = 60_000;
 

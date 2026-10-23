@@ -28,7 +28,7 @@ import type { Transaction } from '@stellar/stellar-sdk';
 import type { Sep10AccountInfo } from '../../src/modules/payments/services/sep10.js';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5438;
+const PORT = 5464;
 const runId = Date.now();
 const PASSWORD = 'longenough123';
 
