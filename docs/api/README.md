@@ -457,3 +457,6 @@ is still pending.
 ## Escrow chain events (/admin/payments/escrow-events)
 
 Admin-only read endpoint. Optional state filter accepts pending, matched, or unmatched; limit is 1–200 (default 50). It returns persisted Soroban events and per-contract cursors. Unmatched release/refund events produce a high-severity structured log, an optional JSON POST to ESCROW_EVENT_ALERT_WEBHOOK_URL, and an unmatched row visible here. A retention-window failure sets catchupError on the corresponding cursor; operators must reconcile the gap before changing the configured start ledger.
+## OpenAPI specification
+
+A machine-readable OpenAPI 3 specification is available at [`backend/openapi.json`](../../backend/openapi.json). The TypeScript types and client are generated from this spec via [`backend/scripts/gen-openapi.mjs`](../../backend/scripts/gen-openapi.mjs) into the `@docforum/api-client` package (`packages/api-client/`).

@@ -1,0 +1,377 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "DocForum API",
+    "description": "DocForum backend API - modular monolith",
+    "version": "1.0.0",
+    "contact": {
+      "name": "DocForum"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:4000",
+      "description": "Local development"
+    }
+  ],
+  "tags": [
+    {"name": "Health"},
+    {"name": "Auth"},
+    {"name": "Doctors"},
+    {"name": "Specialties"},
+    {"name": "Availability"},
+    {"name": "Appointments"},
+    {"name": "Consultations"},
+    {"name": "Referrals"},
+    {"name": "Orders"},
+    {"name": "Payments"},
+    {"name": "Patients"},
+    {"name": "Facilities"},
+    {"name": "Admin"},
+    {"name": "Audit"}
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {"type": "string", "enum": ["ok"]}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/signup": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Sign up",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["role", "email", "password", "fullName"],
+                "properties": {
+                  "role": {"type": "string", "enum": ["patient", "doctor"]},
+                  "email": {"type": "string", "format": "email"},
+                  "password": {"type": "string", "minLength": 8},
+                  "fullName": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Success"}
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Login",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                  "email": {"type": "string", "format": "email"},
+                  "password": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Success"}
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Refresh token",
+        "responses": {
+          "200": {"description": "Success"}
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Logout",
+        "responses": {
+          "204": {"description": "No Content"}
+        }
+      }
+    },
+    "/doctors": {
+      "get": {
+        "tags": ["Doctors"],
+        "summary": "List public doctors",
+        "parameters": [
+          {"name": "specialty", "in": "query", "schema": {"type": "string"}},
+          {"name": "q", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer"}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Success"}
+        }
+      }
+    },
+    "/specialties": {
+      "get": {
+        "tags": ["Specialties"],
+        "summary": "List specialties",
+        "responses": {
+          "200": {"description": "Success"}
+        }
+      }
+    },
+    "/availability/doctors/{doctorProfileId}/slots": {
+      "get": {
+        "tags": ["Availability"],
+        "summary": "List doctor slots",
+        "parameters": [
+          {"name": "doctorProfileId", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Success"}
+        }
+      }
+    },
+    "/appointments": {
+      "post": {
+        "tags": ["Appointments"],
+        "summary": "Book appointment",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["availabilitySlotId"],
+                "properties": {
+                  "availabilitySlotId": {"type": "string"},
+                  "patientProfileId": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {"description": "Created"}
+        }
+      }
+    },
+    "/appointments/mine": {
+      "get": {
+        "tags": ["Appointments"],
+        "summary": "My appointments",
+        "parameters": [
+          {"name": "patientProfileId", "in": "query", "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Success"}
+        }
+      }
+    },
+    "/appointments/doctor/today": {
+      "get": {
+        "tags": ["Appointments"],
+        "summary": "Doctor's today appointments",
+        "responses": {
+          "200": {"description": "Success"}
+        }
+      }
+    },
+    "/appointments/{appointmentId}/consultation": {
+      "post": {
+        "tags": ["Consultations"],
+        "summary": "Close consultation",
+        "parameters": [
+          {"name": "appointmentId", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["outcome", "notes"],
+                "properties": {
+                  "outcome": {"type": "string", "enum": ["resolved", "referred", "follow_up_needed"]},
+                  "notes": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {"description": "Created"}
+        }
+      }
+    },
+    "/consultations": {
+      "post": {
+        "tags": ["Consultations"],
+        "summary": "Create consultation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["appointmentId"],
+                "properties": {
+                  "appointmentId": {"type": "string"},
+                  "outcome": {"type": "string", "enum": ["resolved", "referred", "follow_up_needed"]},
+                  "notes": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {"description": "Created"}
+        }
+      }
+    },
+    "/referrals": {
+      "post": {
+        "tags": ["Referrals"],
+        "summary": "Create referral",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["sourceConsultationId", "snapshotNotes"],
+                "properties": {
+                  "sourceConsultationId": {"type": "string"},
+                  "targetDoctorId": {"type": "string"},
+                  "targetSpecialtyId": {"type": "string"},
+                  "snapshotNotes": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {"description": "Created"}
+        }
+      }
+    },
+    "/referrals/mine": {
+      "get": {
+        "tags": ["Referrals"],
+        "summary": "My referrals",
+        "responses": {
+          "200": {"description": "Success"}
+        }
+      }
+    },
+    "/orders/consultations": {
+      "post": {
+        "tags": ["Orders"],
+        "summary": "Create consultation for orders",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["appointmentId"],
+                "properties": {
+                  "appointmentId": {"type": "string"},
+                  "outcome": {"type": "string"},
+                  "notes": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {"description": "Created"}
+        }
+      }
+    },
+    "/payments/wallet-link": {
+      "post": {
+        "tags": ["Payments"],
+        "summary": "Link wallet",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["stellarPublicKey"],
+                "properties": {
+                  "stellarPublicKey": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {"description": "Created"}
+        }
+      }
+    },
+    "/patients/me/export": {
+      "post": {
+        "tags": ["Patients"],
+        "summary": "Request data export",
+        "responses": {
+          "202": {"description": "Accepted"}
+        }
+      }
+    },
+    "/facilities/eligible": {
+      "get": {
+        "tags": ["Facilities"],
+        "summary": "Get eligible facilities",
+        "parameters": [
+          {"name": "type", "in": "query", "required": true, "schema": {"type": "string", "enum": ["lab", "pharmacy"]}},
+          {"name": "catalogItemCode", "in": "query", "schema": {"type": "string"}},
+          {"name": "asset", "in": "query", "schema": {"type": "string"}},
+          {"name": "at", "in": "query", "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Success"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "docforum_refresh"
+      }
+    }
+  }
+}
