@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+
 import * as appointmentsService from '../services';
 import { bookSlotSchema, listMineQuerySchema, updateStatusSchema } from '../validation';
 import { HttpError } from '../../../http-error';
@@ -40,4 +41,16 @@ export async function cancelMine(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const appointment = await appointmentsService.cancelByPatient(req.user.id, getParam(req, 'appointmentId'));
   res.status(200).json(appointment);
+}
+
+export async function checkIn(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const appointment = await appointmentsService.checkInByPatient(req.user.id, getParam(req, 'appointmentId'));
+  res.status(200).json(appointment);
+}
+
+export async function getQueue(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const queue = await appointmentsService.getQueuePosition(req.user.id, getParam(req, 'appointmentId'));
+  res.status(200).json(queue);
 }
