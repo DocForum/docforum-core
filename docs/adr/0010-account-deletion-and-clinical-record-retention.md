@@ -71,7 +71,8 @@ a person.
 | `User.role`, `User.id`, `createdAt` | Retained | while the row exists | Not identifying on their own. The id is what clinical rows ultimately join to. |
 | `PatientProfile.fullName` | **Anonymised** to `Deleted patient` | — | What a doctor's appointment list shows from now on. |
 | `PatientProfile.dateOfBirth` | **Deleted** (null) | — | PII. |
-| `PatientProfile.guardianUserId` | **Deleted** (null) | — | Points at another person. Unenforced field; #42 replaces it. |
+| `PatientProfile.guardianUserId` | — | — | Column dropped by issue #42 (ADR 0011), replaced by `Guardianship`. |
+| `Guardianship` rows where the deleted user is the guardian (issue #42) | **Revoked** (`revokedAt` set), retained | while the tombstone exists | Access to a minor's profile ends with the account; the rows are the record of who had it. Retention hold `guardianships`. The dependents' own profiles and records are untouched. |
 | `PatientProfile.anonymizedAt` (new) | **Set** | permanent | Owned by the patients module. Every patient route resolves the caller's profile through `getMyPatientProfile`, which refuses an anonymised profile, so booking, listing and repeat deletion stop working immediately. |
 | `PatientProfile.id` | Retained | while any record references it | The link that keeps appointments/payments attached without any PII. |
 | `EmailVerificationToken` (all of the user's) | **Deleted** | — | Bookkeeping tied to the old address. |

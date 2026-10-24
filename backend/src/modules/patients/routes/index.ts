@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requireRole } from '../../../middleware/auth';
+import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
 import * as patientsController from '../controllers';
 
 export const patientsRouter = Router();
@@ -20,3 +20,15 @@ patientsRouter.get(
 // Deliberately not behind requireVerifiedEmail: an unverified account must
 // still be deletable.
 patientsRouter.delete('/me', authenticate, requireRole('patient'), patientsController.deleteMe);
+
+// Guardians and dependents (Phase 8, issue #42, docs/adr/0011). Patients
+// only; creating a dependent needs a verified address, the same bar as
+// booking for them.
+patientsRouter.post(
+  '/me/dependents',
+  authenticate,
+  requireRole('patient'),
+  requireVerifiedEmail,
+  patientsController.createDependent,
+);
+patientsRouter.get('/me/dependents', authenticate, requireRole('patient'), patientsController.listDependents);
