@@ -59,6 +59,22 @@ export function revokeRefreshSessionsForUser(input: { userId: string; exceptSess
   });
 }
 
+/** Invalidates every refresh token issued before this call by bumping the
+ * user's `tokenVersion` (issue #18). Cheaper than per-token revocation: a
+ * refresh token carries the version it was minted with, and verification
+ * rejects any token whose version no longer matches. */
+export function bumpUserTokenVersion(userId: string, db: DbClient = prisma) {
+  return db.user.update({
+    where: { id: userId },
+    data: { tokenVersion: { increment: 1 } },
+    select: { id: true, tokenVersion: true },
+  });
+}
+
+export function findUserTokenVersion(userId: string, db: DbClient = prisma) {
+  return db.user.findUnique({ where: { id: userId }, select: { tokenVersion: true } });
+}
+
 export interface CreateSelfServeUserInput {
   email: string;
   phone?: string;

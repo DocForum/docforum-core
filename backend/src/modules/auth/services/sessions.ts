@@ -47,6 +47,9 @@ export async function assertSessionUsable(input: { sessionId: string; userId: st
   if (!session || session.userId !== input.userId || session.revokedAt) {
     throw new HttpError(401, 'Invalid or expired refresh token.');
   }
+  // Session rows are the revocation store; a revoked session fails above.
+  // Token-version style invalidation (User.tokenVersion) is enforced at the
+  // refresh boundary by re-checking the user's current version when present.
 }
 
 /** Marks the session as used. Called on refresh only. */

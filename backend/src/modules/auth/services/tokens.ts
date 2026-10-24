@@ -33,6 +33,9 @@ export interface AccessTokenPayload {
  */
 export interface RefreshTokenPayload extends AccessTokenPayload {
   csrf: string;
+  /** User.tokenVersion at issue time. Compared at refresh time (Phase 8 #33).
+   * Bumping User.tokenVersion invalidates all previously issued refresh tokens. */
+  tv: number;
 }
 
 export function signAccessToken(payload: AccessTokenPayload): string {

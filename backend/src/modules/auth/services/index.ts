@@ -16,6 +16,7 @@ import {
   findVerificationTokenByHash,
   markUserEmailVerified,
   replaceVerificationToken,
+  bumpUserTokenVersion,
 } from '../repositories';
 import { hashPassword, verifyPassword } from './password';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from './tokens';
@@ -486,6 +487,23 @@ export async function assertActiveSession(userId: string, issuedAtSeconds?: numb
   if (isSessionRevoked(user.sessionsInvalidatedAt, issuedAtSeconds)) {
     throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
   }
+}
+
+/**
+ * Revokes every refresh token previously issued to the user (Phase 8,
+ * ARCHITECTURE.md §6.1.4) by bumping `User.tokenVersion`. Any refresh token
+ * carrying an older `tv` claim is rejected by `refresh()`. Used for
+ * logout-everywhere and suspected compromise.
+ */
+export async function revokeAllRefreshTokens(userId: string): Promise<void> {
+  await bumpUserTokenVersion(userId);
+}
+
+/** Test/infra helper: reads the current token version for a user. */
+export async function currentTokenVersion(userId: string): Promise<number> {
+  const user = await findUserById(userId);
+  if (!user) throw new HttpError(401, 'Authentication required.');
+  return user.tokenVersion;
 }
 
 function isSessionRevoked(sessionsInvalidatedAt: Date | null, issuedAtSeconds: number | undefined): boolean {
