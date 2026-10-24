@@ -1,0 +1,1 @@
+Phase 4 patient orders read path ([issue #11](https://github.com/DocForum/docforum-core/issues/11)). `GET /orders/mine` returns the authenticated patient's current prescription and lab-order versions; `?includeHistory=true` includes superseded versions.

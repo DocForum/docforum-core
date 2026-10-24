@@ -172,6 +172,20 @@ export async function issueLabOrder(actor: auditService.AuditActor, input: {
   }
 }
 
+/** Lists the signed-in patient's orders. By default each correction chain
+ * contributes only its latest row; includeHistory exposes every immutable
+ * version while retaining the same patient ownership filter. */
+export async function listMyOrders(userId: string, includeHistory = false) {
+  const patientProfile = await patientsService.getMyPatientProfile(userId);
+  const [prescriptions, labOrders] = await Promise.all([
+    ordersRepo.findPrescriptionsForPatient(patientProfile.id, includeHistory),
+    ordersRepo.findLabOrdersForPatient(patientProfile.id, includeHistory),
+  ]);
+  return {
+    prescriptions: prescriptions.map((row) => ({ ...row, amountStroops: row.amountStroops.toString() })),
+    labOrders: labOrders.map((row) => ({ ...row, amountStroops: row.amountStroops.toString(), notes: decryptField(row.notes) })),
+  };
+}
 export async function confirmOrderReceipt(
   orderId: string,
   patientUserId: string,

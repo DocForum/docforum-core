@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import * as ordersService from '../services';
+import { HttpError } from '../../../http-error';
 import { consultationSchema, labOrderSchema, prescriptionSchema } from '../validation';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';

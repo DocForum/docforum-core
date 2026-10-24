@@ -45,6 +45,19 @@ export function findLabOrderExportPage(patientProfileId: string, cursor: string 
   });
 }
 
+export function findPrescriptionsForPatient(patientProfileId: string, includeHistory: boolean) {
+  return prisma.prescription.findMany({
+    where: { patientProfileId, ...(includeHistory ? {} : { correctedBy: { is: null } }) },
+    include: { items: true },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+  });
+}
+
+export function findLabOrdersForPatient(patientProfileId: string, includeHistory: boolean) {
+  return prisma.labOrder.findMany({
+    where: { patientProfileId, ...(includeHistory ? {} : { correctedBy: { is: null } }) },
+    include: { result: true },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
 export async function patientHasOrders(patientProfileId: string): Promise<boolean> {
   const [prescription, labOrder] = await Promise.all([
     prisma.prescription.findFirst({ where: { patientProfileId }, select: { id: true } }),
