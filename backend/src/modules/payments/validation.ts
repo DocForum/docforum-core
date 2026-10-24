@@ -5,6 +5,8 @@ export const linkWalletSchema = z.object({
   // Stellar public keys are 56 chars, start with 'G'. Not a full
   // checksum validation (that's what create_escrow/the network itself
   // will reject) — just a sanity bound against obvious garbage input.
+  // (The SEP-10 challenge endpoint DOES checksum-validate via
+  // StrKey.isValidEd25519PublicKey — see services/sep10.ts.)
   stellarPublicKey: z
     .string()
     .regex(/^G[A-Z2-7]{55}$/, 'stellarPublicKey must be a valid Stellar public key (starts with G, 56 chars).'),
@@ -45,6 +47,21 @@ registerPath({
     400: { description: 'Validation error', ref: 'ErrorEnvelope' },
     401: { description: 'Unauthenticated', ref: 'ErrorEnvelope' },
   },
+});
+
+// SEP-10 (issue #77). Shape-only gate: the checksum-accurate strkey
+// validation (and the 400) happens in services/sep10.ts via
+// StrKey.isValidEd25519PublicKey, so the service layer is safe for
+// non-HTTP callers too.
+export const sep10ChallengeQuerySchema = z.object({
+  account: z
+    .string()
+    .regex(/^G[A-Z2-7]{55}$/, 'account must be a valid Stellar public key (starts with G, 56 chars).'),
+});
+
+export const sep10VerifySchema = z.object({
+  // base64 TransactionEnvelope XDR of the wallet-signed challenge.
+  transaction: z.string().min(1),
 });
 
 export const createPaymentIntentSchema = z.object({
