@@ -5,7 +5,7 @@ import { pruneOldAccessLogs } from './modules/audit/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
 import { startEscrowEventPoller } from './jobs/escrow-events';
 import { validatePlatformSigners } from './modules/payments/services/platform-signers';
-import { validateSep10Config, verifyPaymentsNetwork } from './modules/payments/services';
+import { validateSep10Config, validateWalletLinkConfig, verifyPaymentsNetwork } from './modules/payments/services';
 import { startAccountPurgeJob } from './jobs/account-purge';
 import { startPaymentIntentJobs } from './jobs/payment-intents';
 import { startReferralExpiryJob } from './jobs/referral-expiry';
@@ -15,6 +15,7 @@ const app = createApp();
 
 async function startServer() {
   await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork(), validateSep10Config()]);
+  validateWalletLinkConfig();
   app.listen(config.port, () => {
     // eslint-disable-next-line no-console
     console.log(`docforum-core backend listening on :${config.port}`);

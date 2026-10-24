@@ -177,8 +177,8 @@ model User {
   accessLogs              AccessLog[]
   // Phase 8 (issue #42, docs/adr/0011): dependents this user is guardian of.
   guardianships           Guardianship[]
-  orderDisputeResolutions OrderDisputeResolution[]
   sep10Challenges         Sep10Challenge[]
+  orderDisputeResolutions OrderDisputeResolution[]
 
   @@index([role])
 }
@@ -485,7 +485,11 @@ model FacilityProfile {
   labResults        LabResult[]
   paymentIntents    PaymentIntent[]
   fulfillments      FulfillmentRecord[]
-  walletLink        WalletLink?
+  // NOTE: no `walletLink` relation anymore — WalletLink is generalized to
+  // a polymorphic owner (patient | facility) as of issue #78, so it
+  // carries no FK relation to either profile (same shape as
+  // FulfillmentRecord's polymorphic order ref, §6.1.3). Ownership is
+  // validated in the payments service, not by the schema.
   prices            FacilityPrice[]
   orders            Order[]
   fulfillmentProofs FulfillmentProof[]
@@ -1032,6 +1036,14 @@ model PaymentIntent {
   // release/refund against the right on-chain escrow.
   escrowId          BigInt?
   stellarTxHash     String?
+  // Snapshot of the payee address this intent was actually funded to
+  // (issue #78). Set at funding time from the facility's then-ACTIVE
+  // wallet link and never changed afterwards — so re-linking a
+  // different address later cannot rewrite which wallet an already-
+  // funded escrow paid, and the escrow keeps referencing its link even
+  // after that link is replaced. Append-only-in-spirit: written exactly
+  // once, with the funding transition.
+  fundedWalletAddress String?
   // Which deployed contract this intent was funded against — this repo
   // has already had two testnet contract IDs (Phase E1 vs. E2), so this
   // isn't hypothetical.
@@ -1090,7 +1102,6 @@ model Sep10Challenge {
   expiresAt  DateTime // matches the challenge's timebounds maxTime (+ record TTL)
   consumedAt DateTime?
   createdAt  DateTime  @default(now())
-
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // Pruning and the "is this row still redeemable" check both scan by
@@ -1099,19 +1110,74 @@ model Sep10Challenge {
   @@index([expiresAt])
 }
 
-model WalletLink {
-  id         String          @id @default(uuid())
-  // Scoped to the facility being paid, not the patient — v1 is a
-  // custodial model (docforum-core funds escrows from its own platform
-  // Stellar identity; patients never hold or sign with a wallet here).
-  // See ADR 0004.
-  facilityId String          @unique
-  facility   FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+// Verified wallet links (issue #78, ADR 0005). Generalized from the
+// facility-only, typed-in-address shape: an owner is a PatientProfile or
+// a FacilityProfile (polymorphic ownerType+ownerId — deliberately no FK
+// relation, same shape as FulfillmentRecord's polymorphic order ref),
+// and every link carries HOW it was verified.
+//
+// A link row is immutable except for `replacedAt`/`activeOwnerKey`:
+// re-linking deactivates the old row and inserts a new one, so history
+// (including the address escrows were actually funded to — see
+// PaymentIntent.fundedWalletAddress) is preserved rather than mutated.
+//
+// `verificationMethod`:
+//   - `sep10` — created ONLY by the POST /payments/wallet-link
+//     verification flow (services/wallet-link.ts), inside the same
+//     transaction that consumes the SEP-10 nonce. No seed, script, admin
+//     route or internal service method may create a `sep10` row — the
+//     constructor for it is private to that flow.
+//   - `unverified_legacy` — backfilled by the add_verified_wallet_links
+//     migration for pre-existing facility rows (typed-in addresses).
+//     Usable for funding only until
+//     WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF passes.
+//
+// One ACTIVE link per owner, enforced at the DB level via
+// `activeOwnerKey`: it holds "<ownerType>:<ownerId>" while active and
+// NULL once replaced. A plain unique constraint on it gives exactly the
+// "at most one unreplaced row per owner" guarantee — Prisma's schema DSL
+// cannot express a partial unique index (`WHERE replacedAt IS NULL`),
+// and a raw-SQL index would be silently dropped by the next
+// `prisma migrate dev` as schema drift. Postgres treats NULLs as
+// distinct, so any number of replaced rows can coexist.
+enum WalletLinkOwnerType {
+  patient
+  facility
+}
 
-  stellarPublicKey String
+enum WalletLinkVerificationMethod {
+  sep10
+  unverified_legacy
+}
+
+model WalletLink {
+  id         String               @id @default(uuid())
+  ownerType  WalletLinkOwnerType
+  // PatientProfile.id or FacilityProfile.id. Polymorphic — no FK on
+  // purpose (see note above); existence + caller ownership are checked
+  // in services/wallet-link.ts before any write.
+  ownerId    String
+  // G… address. NEVER accepted from a client-supplied field: derived
+  // server-side from the account the SEP-10 challenge was issued for and
+  // successfully verified.
+  stellarPublicKey       String
+  verificationMethod     WalletLinkVerificationMethod
+  // Set iff verificationMethod = 'sep10' (time the challenge passed).
+  verifiedAt DateTime?
+  // Set when a newer link superseded this one. Only these two fields
+  // ever change on a row; stellarPublicKey/verificationMethod are
+  // write-once.
+  replacedAt DateTime?
+  // "<ownerType>:<ownerId>" while this is the owner's active link, NULL
+  // once replaced. The unique index on this column IS the one-active-
+  // link-per-owner DB guarantee.
+  activeOwnerKey String?  @unique
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Lookups by owner (active-link read path, deactivation sweep).
+  @@index([ownerType, ownerId])
 }
 
 // Soroban event ingestion (issue #86). Cursors are per contract deployment;
