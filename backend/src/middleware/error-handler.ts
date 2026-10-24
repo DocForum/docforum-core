@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
-import { HttpError } from '../http-error';
+import { HttpError, ErrorCode } from '../http-error.js';
 import type { Logger } from 'pino';
 import { logger as rootLogger } from '../logger';
 import { localizedErrorMessage, resolveLocale } from '../i18n';
@@ -9,6 +9,15 @@ import { localizedErrorMessage, resolveLocale } from '../i18n';
 // docforum-web's api-client.ts assumes an error envelope of
 // `{ message: string }` (documented as unconfirmed there) — this is the
 // implementation that assumption is checked against. Keep them in sync.
+//
+// The envelope is now always `{ code, message, details? }`. `message` is
+// kept for backwards compatibility; clients should branch on `code`.
+export interface ErrorEnvelope {
+  code: ErrorCode;
+  message: string;
+  details?: unknown;
+}
+
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   const requestLogger: Logger =
     (req as Request & { log?: Logger }).log ?? rootLogger;
@@ -23,24 +32,52 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     }
     const locale = resolveLocale(req.user?.locale, req.headers['accept-language']);
     const message = localizedErrorMessage(locale, err.code, err.message);
-    res.status(err.status).json(err.code ? { message, code: err.code } : { message });
+    const body: ErrorEnvelope = {
+      code: err.code,
+      message,
+    };
+    if (err.details !== undefined) {
+      body.details = err.details;
+    }
+    res.status(err.status).json(body);
     return;
   }
 
   if (err instanceof ZodError) {
     requestLogger.warn({ err }, 'Request validation failed');
-    res.status(400).json({ message: err.issues.map((issue) => issue.message).join('; ') });
+    // All validation failures share a single code; field level details are
+    // exposed via `details` so clients can highlight specific inputs.
+    const body: ErrorEnvelope = {
+      code: ErrorCode.VALIDATION_FAILED,
+      message: err.issues.map((issue) => issue.message).join('; '),
+      details: err.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+        code: issue.code,
+      })),
+    };
+    res.status(400).json(body);
     return;
   }
 
   if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
     requestLogger.warn({ err }, 'Unique constraint violation');
-    res.status(409).json({ message: 'A record with this value already exists.' });
+    // DB-level uniqueness guarantees are the backstop for booking and
+    // slot assignment races. Surface them as a coded conflict.
+    const body: ErrorEnvelope = {
+      code: ErrorCode.CONFLICT,
+      message: 'A record with this value already exists.',
+    };
+    res.status(409).json(body);
     return;
   }
 
   // Log the full error (including stack) server-side only. The response
   // body is the safe envelope and never leaks internal details.
   requestLogger.error({ err }, 'Unhandled error');
-  res.status(500).json({ message: 'Internal server error.' });
+  const body: ErrorEnvelope = {
+    code: ErrorCode.INTERNAL,
+    message: 'Internal server error.',
+  };
+  res.status(500).json(body);
 }
