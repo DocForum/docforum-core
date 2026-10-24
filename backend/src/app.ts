@@ -23,6 +23,7 @@ import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
 import { notificationsRouter } from './modules/notifications/routes';
 import { registerRetentionHolds } from './retention-holds';
+import { runWithRlsContext } from './db/prisma-client';
 
 export function createApp() {
   const app = express();
@@ -48,6 +49,9 @@ export function createApp() {
   app.use(cors({ origin: config.corsOrigins, credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
+  // Unauthenticated requests must see no patient-owned rows. `authenticate`
+  // replaces this context with the verified JWT identity for protected routes.
+  app.use((_req, _res, next) => runWithRlsContext({ userId: '', role: 'anonymous' }, next));
 
   app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 
