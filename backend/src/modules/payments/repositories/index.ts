@@ -2,7 +2,9 @@
 // data access only. Never store PHI here. Never call docforum-escrow
 // directly from here — go through services/.
 import { prisma } from '../../../db/prisma-client';
-import type { PaymentIntent, PaymentIntentStatus, Prisma } from '@prisma/client';
+import type { PaymentIntent, PaymentIntentStatus, Prisma, WalletLinkOwnerType } from '@prisma/client';
+
+type Db = Prisma.TransactionClient;
 
 /** Reads FacilityProfile directly — a Phase 1 core identity model, not
  * something the (still-placeholder) facilities module exclusively owns. */
@@ -17,22 +19,51 @@ export function findPatientProfileByUserId(userId: string) {
   return prisma.patientProfile.findUnique({ where: { userId } });
 }
 
-export function upsertWalletLink(facilityId: string, stellarPublicKey: string) {
-  return prisma.walletLink.upsert({
-    where: { facilityId },
-    create: { facilityId, stellarPublicKey },
-    update: { stellarPublicKey },
+// --- Wallet links (issue #78) --------------------------------------------
+// NOTE ON WRITES: `createWalletLink` is the only WalletLink insert in
+// the repo, and its sole caller is the SEP-10 verification flow in
+// services/wallet-link.ts (inside the transaction that consumes the
+// nonce). There is deliberately no upsert/raw-address write path and no
+// legacy-creation function — `unverified_legacy` rows can only come from
+// the migration backfill.
+
+export function createWalletLink(
+  data: {
+    ownerType: WalletLinkOwnerType;
+    ownerId: string;
+    stellarPublicKey: string;
+    verificationMethod: 'sep10';
+    verifiedAt: Date;
+    activeOwnerKey: string;
+  },
+  db: Db = prisma,
+) {
+  return db.walletLink.create({ data });
+}
+
+export function findActiveWalletLink(ownerType: WalletLinkOwnerType, ownerId: string, db: Db = prisma) {
+  return db.walletLink.findFirst({
+    where: { ownerType, ownerId, replacedAt: null },
+    orderBy: { createdAt: 'desc' },
   });
 }
 
-export function findWalletLinkByFacilityId(facilityId: string) {
-  return prisma.walletLink.findUnique({ where: { facilityId } });
-}
-
-/** The patient's payer wallet (ADR 0005). Rows are created by the SEP-10
- * linking flow once it exists — not by this module's HTTP surface yet. */
-export function findPatientWalletLinkByPatientProfileId(patientProfileId: string) {
-  return prisma.patientWalletLink.findUnique({ where: { patientProfileId } });
+/** Deactivates the owner's current link (if any) — conditional
+ * `updateMany`, so only an unreplaced row moves. Returns the number of
+ * rows deactivated (0 = owner had no active link; 1 = normal re-link).
+ * Paired with the unique `activeOwnerKey`, this is what makes "one
+ * active link per owner" hold under concurrency: the insert that follows
+ * can only succeed once the sentinel key is free. */
+export function deactivateActiveWalletLink(
+  ownerType: WalletLinkOwnerType,
+  ownerId: string,
+  now: Date,
+  db: Db = prisma,
+) {
+  return db.walletLink.updateMany({
+    where: { ownerType, ownerId, replacedAt: null },
+    data: { replacedAt: now, activeOwnerKey: null },
+  });
 }
 
 export function createPaymentIntent(input: {
@@ -142,7 +173,13 @@ export function findFacilityNamesByIds(ids: string[]) {
 export async function markEscrowed(
   tx: Prisma.TransactionClient,
   id: string,
-  input: { escrowId: bigint; stellarTxHash: string; sorobanContractId: string; tokenContractId?: string },
+  input: {
+    escrowId: bigint;
+    stellarTxHash: string;
+    sorobanContractId: string;
+    tokenContractId?: string;
+    fundedWalletAddress?: string;
+  },
 ) {
   const result = await tx.paymentIntent.updateMany({
     where: { id, status: 'created' },
@@ -229,8 +266,9 @@ export function createSep10Challenge(input: { userId: string; account: string; n
   return prisma.sep10Challenge.create({ data: input });
 }
 
-export function findSep10ChallengeByNonce(nonce: string) {
-  return prisma.sep10Challenge.findUnique({ where: { nonce } });
+
+export function findSep10ChallengeByNonce(nonce: string, db: Db = prisma) {
+  return db.sep10Challenge.findUnique({ where: { nonce } });
 }
 
 /** Atomically consumes a challenge — ONE conditional UPDATE, no
@@ -238,10 +276,21 @@ export function findSep10ChallengeByNonce(nonce: string) {
  * moves to `consumedAt`; the returned `count` tells the caller whether
  * THIS request won the race. Two concurrent replays of the same signed
  * challenge can never both see `count === 1`. Same DB-level pattern as
- * booking's conditional slot update (ARCHITECTURE.md §5.1). */
-export function consumeSep10Challenge(nonce: string, consumedAt: Date) {
-  return prisma.sep10Challenge.updateMany({
+ * booking's conditional slot update (ARCHITECTURE.md §5.1).
+ * Takes an optional transaction client so the wallet-link flow can
+ * consume the nonce and write the link in ONE transaction (issue #78). */
+export function consumeSep10Challenge(nonce: string, consumedAt: Date, db: Db = prisma) {
+  return db.sep10Challenge.updateMany({
     where: { nonce, consumedAt: null, expiresAt: { gt: consumedAt } },
     data: { consumedAt },
   });
 }
+
+/** Runs `fn` inside ONE interactive transaction with a generous timeout
+ * (the wallet-link flow performs a Horizon lookup inside it). Single
+ * place the service layer opens transactions, so the Prisma client
+ * stays a repository concern. */
+export function inTransaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+  return prisma.$transaction(fn, { timeout: 15_000 });
+}
+

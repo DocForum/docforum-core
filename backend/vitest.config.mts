@@ -18,14 +18,17 @@ export default defineConfig({
     env: {
       JWT_ACCESS_SECRET: 'test-access-secret',
       JWT_REFRESH_SECRET: 'test-refresh-secret',
+      // SEP-10 (issue #77) — a throwaway keypair used ONLY by the test
+      // suite; it holds no funds and exists to make the challenge/verify
+      // code paths deterministic offline. Not a real deployment secret.
+      SEP10_SIGNING_SECRET: 'SC3Z2YBPD7KGXC73CTBNDRGQOIUSAZUH445QIB2PPKWO7CXULRY75JGJ',
+      SEP10_HOME_DOMAIN: 'docforum.test',
+      SEP10_WEB_AUTH_DOMAIN: 'api.docforum.test',
       // Clinical free-text fields are encrypted at write time (issue #46).
       // A fixed 32-byte test key keeps ciphertext deterministic across runs
       // without touching the real key, which only production/dev envs hold.
       FIELD_ENCRYPTION_KEY_V1: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
       FIELD_ENCRYPTION_ACTIVE_VERSION: 'v1',
-      SEP10_SIGNING_SECRET: 'SC3Z2YBPD7KGXC73CTBNDRGQOIUSAZUH445QIB2PPKWO7CXULRY75JGJ',
-      SEP10_HOME_DOMAIN: 'docforum.test',
-      SEP10_WEB_AUTH_DOMAIN: 'api.docforum.test',
       // Port 5433, not 5432 — tests/integration/booking.test.mts spins up
       // its own throwaway Postgres cluster on this port so the suite is
       // self-contained (no pre-existing DB required). A distinct port

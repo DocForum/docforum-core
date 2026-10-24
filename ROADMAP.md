@@ -394,6 +394,24 @@ and issue links.
   seam so the 15 unit + 18 integration tests run with zero network.
   Docs updated: ARCHITECTURE §4.10, essentials data-model map,
   docs/api/README.md (endpoints + errors + unfunded behaviour).
+- 2026-10-16 — Implemented issue #78 (verified wallet links, stacked on
+  #77's branch): `WalletLink` generalized from facility-only/typed-in to
+  an owner (patient | facility) with `verificationMethod` /
+  `verifiedAt` / `replacedAt`, one active link per owner enforced by a
+  DB unique sentinel (Prisma can't express a partial index — noted in
+  the schema), and the migration backfills existing facility rows as
+  `unverified_legacy` (proven by a real migration test that inserts an
+  old-shape row first). `POST /payments/wallet-link` now takes only a
+  signed SEP-10 challenge (strict body — a raw address is a 400) and
+  creates the link inside the same transaction that consumes the nonce;
+  the only `sep10`-row writer is that flow. Patient link responses
+  carry ADR 0005's on-chain privacy notice verbatim (unit-tested
+  against the ADR file). Funding refuses unverified legacy links after
+  `WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF` (default 2027-01-01,
+  startup-validated, `409 WALLET_LINK_UNVERIFIED`) and snapshots
+  `PaymentIntent.fundedWalletAddress` so re-linking can't rewrite an
+  escrow's payee. 8 unit + 12 integration tests (fake Horizon + fake
+  escrow SDK — no network). ADR 0005 unchanged (no factual conflict).
 - 2026-10-15 — Started Phase 8's auth-hardening work, scoped as issues #34 (email verification), #35 (login brute-force throttling), #37 (CSRF
   for the cookie-authenticated endpoints + per-environment CORS allowlist) and #39 (admin account lifecycle). All four are independent of Phases
   3–7 and of each other. #34 merged as PR #137: `User.emailVerifiedAt` +

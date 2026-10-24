@@ -35,7 +35,14 @@ import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
 import { loadStellarSdk } from './stellar-sdk-loader';
+import type { Prisma } from '@prisma/client';
 import type { Keypair, Transaction } from '@stellar/stellar-sdk' with { 'resolution-mode': 'import' };
+
+/** An open interactive transaction (or nothing — the repository
+ * defaults apply). The wallet-link flow (issue #78) passes its
+ * transaction so challenge verification, nonce consumption and link
+ * creation commit or roll back together. */
+export type Sep10Db = Prisma.TransactionClient;
 
 // --- Configuration -------------------------------------------------------
 
@@ -287,8 +294,18 @@ export interface Sep10VerifyResult {
  *
  * This endpoint does NOT mint a DocForum session JWT: DocForum's own
  * auth (Bearer access token) already authenticates the caller — SEP-10's
- * job here is proving wallet control, not issuing a session. */
-export async function verifySep10Challenge(userId: string, challengeTx: string): Promise<Sep10VerifyResult> {
+ * job here is proving wallet control, not issuing a session.
+ *
+ * `db` (issue #78): when supplied, every ledger read AND the nonce
+ * consumption happen inside the caller's interactive transaction, so a
+ * caller that writes its own records (e.g. a wallet link) gets all-or-
+ * nothing: a rejected write rolls the nonce consumption back, and a
+ * consumed nonce without the caller's write cannot survive. */
+export async function verifySep10Challenge(
+  userId: string,
+  challengeTx: string,
+  db?: Sep10Db,
+): Promise<Sep10VerifyResult> {
   const cfg = await requireSep10Config();
   const { WebAuth } = await loadStellarSdk();
 
@@ -315,7 +332,7 @@ export async function verifySep10Challenge(userId: string, challengeTx: string):
   // Our own ledger: was this challenge issued by us, is it still good,
   // and is it THIS caller's, for THIS account? Checked before the Horizon
   // round trip so a mismatched submission can't make us fetch signers.
-  const record = await paymentsRepo.findSep10ChallengeByNonce(nonce);
+  const record = await paymentsRepo.findSep10ChallengeByNonce(nonce, db);
   if (!record) {
     throw new HttpError(401, 'Challenge was not issued by this server.', 'SEP10_CHALLENGE_UNKNOWN');
   }
@@ -375,7 +392,7 @@ export async function verifySep10Challenge(userId: string, challengeTx: string):
   // of the same signed challenge race here — exactly one conditional
   // UPDATE wins (`WHERE consumedAt IS NULL AND expiresAt > now`).
   const consumedAt = new Date();
-  const { count } = await paymentsRepo.consumeSep10Challenge(nonce, consumedAt);
+  const { count } = await paymentsRepo.consumeSep10Challenge(nonce, consumedAt, db);
   if (count !== 1) {
     throw new HttpError(401, 'This challenge has already been used.', 'SEP10_CHALLENGE_ALREADY_USED');
   }
