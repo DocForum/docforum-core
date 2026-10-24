@@ -52,6 +52,7 @@ enum AppointmentStatus {
   scheduled
   completed
   cancelled
+  late_cancelled
   no_show
 }
 
@@ -112,6 +113,13 @@ enum FulfillmentStatus {
   rejected
 }
 
+enum WaitlistStatus {
+  pending
+  on_hold
+  accepted
+  expired
+}
+
 enum Urgency {
   routine
   urgent
@@ -148,6 +156,8 @@ model User {
   // refresh-token revocation list (issue #18) — this is the narrow "revoke
   // everything for one account" case that deactivation needs.
   sessionsInvalidatedAt DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
   // Per-user refresh-token version. Embedded in every access/refresh token
   // as `tv` and compared against this column at refresh time. Bumping it
   // (password reset, Phase 8 #33) invalidates every outstanding refresh
@@ -433,6 +443,7 @@ model DoctorProfile {
   userId             String             @unique
   fullName           String
   verificationStatus VerificationStatus @default(pending)
+  timeZone           String // IANA time zone identifier, e.g. "Europe/London", "America/New_York"
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -442,6 +453,7 @@ model DoctorProfile {
   appointments       Appointment[]
   prescriptions      Prescription[]
   labOrders          LabOrder[]
+  waitlistEntries    WaitlistEntry[]
   // Referral sides a doctor can sit on: `referringReferrals` are ones
   // they created; `targetedReferrals` are ones aimed at them (whether
   // they ultimately see the patient or not).
@@ -456,7 +468,8 @@ model Specialty {
   name String @unique
   slug String @unique
 
-  doctors DoctorSpecialty[]
+  doctors         DoctorSpecialty[]
+  waitlistEntries WaitlistEntry[]
 }
 
 model DoctorSpecialty {
@@ -492,7 +505,8 @@ model FacilityProfile {
 }
 
 model FacilityCapability {
-  id                String         @id @default(uuid())
+  waitlistEntries   WaitlistEntry[]
+  id                String          @id @default(uuid())
   facilityProfileId String
   capabilityType    CapabilityType
   // e.g. a lab test category, or a medication class — free text on purpose,
@@ -532,13 +546,14 @@ model FacilityPrice {
 }
 
 model AvailabilitySlot {
-  id              String     @id @default(uuid())
+  id              String          @id @default(uuid())
+  waitlistEntries WaitlistEntry[]
   doctorProfileId String
-  status          SlotStatus @default(open)
+  status          SlotStatus      @default(open)
   startTime       DateTime
   endTime         DateTime
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
   appointment   Appointment?
@@ -936,6 +951,42 @@ model FulfillmentRecord {
   facility     FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Restrict)
 
   @@index([facilityId, status])
+}
+
+model WaitlistEntry {
+  id                  String   @id @default(uuid())
+  patientProfileId    String
+  doctorProfileId     String?
+  specialtyId         String?
+  status              String // pending | on_hold | accepted | expired
+  // Time window during which the patient is willing to accept a slot
+  earliestAcceptable  DateTime
+  latestAcceptable    DateTime
+  // Time-boxed hold: when a slot is offered, it's held for this duration
+  holdDurationMinutes Int
+  // Audit trail
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  patientProfile       PatientProfile      @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+  doctorProfile        DoctorProfile?      @relation(fields: [doctorProfileId], references: [id], onDelete: SetNull)
+  specialty            Specialty?          @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
+  facilityCapability   FacilityCapability? @relation(fields: [facilityCapabilityId], references: [id])
+  facilityCapabilityId String?
+  availabilitySlot     AvailabilitySlot?   @relation(fields: [availabilitySlotId], references: [id])
+  availabilitySlotId   String?
+
+  @@unique([patientProfileId, doctorProfileId, specialtyId])
+  @@index([status])
+  @@index([patientProfileId, status])
+}
+
+model WindowTime {
+  id    String   @id @default(uuid())
+  start DateTime
+  end   DateTime
+
+  @@unique([start, end])
 }
 
 model Notification {

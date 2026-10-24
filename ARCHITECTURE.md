@@ -171,6 +171,7 @@ Guardianship (Phase 8, issue #42 — docs/adr/0011)
 
 DoctorProfile (1:1 User)
   id, user_id, full_name, verification_status (enum: pending|verified|rejected)
+  time_zone (IANA identifier used when interpreting the doctor's availability)
   specialties: DoctorSpecialty[]
 
 Specialty (controlled vocabulary, admin-managed)
@@ -206,6 +207,19 @@ Appointment
   # this column. History rows keep their referral_id, so the lineage of a
   # referral that produced several appointments survives the link being
   # cleared (Referral.appointments holds the full list).
+
+WaitlistEntry
+  id, patient_profile_id (required), doctor_profile_id (nullable),
+  specialty_id (nullable), facility_capability_id (nullable),
+  availability_slot_id (nullable), status (pending|on_hold|accepted|expired),
+  earliest_acceptable, latest_acceptable, hold_duration_minutes,
+  created_at, updated_at
+  # A patient's waitlist request may target a doctor, specialty, or
+  # facility capability. A time-boxed offer may reference an availability
+  # slot; deleting its target profile/capability clears that optional link.
+
+WindowTime
+  id, start, end (unique pair)
 
 IntakeForm
   id, patient_profile_id, symptoms (structured: array of {symptom, duration, severity}), free_text_notes
