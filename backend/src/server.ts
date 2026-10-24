@@ -10,6 +10,7 @@ import { startAccountPurgeJob } from './jobs/account-purge';
 import { startPaymentIntentJobs } from './jobs/payment-intents';
 import { startReferralExpiryJob } from './jobs/referral-expiry';
 import { startOrderExpiryJob } from './jobs/order-expiry';
+import { expireUnfulfilledOrders } from './jobs/lab-order-expiry';
 
 const app = createApp();
 
@@ -78,3 +79,7 @@ startPaymentIntentJobs();
 startReferralExpiryJob();
 // Unconfirmed order expiry job (auto-confirm when window elapses with no dispute).
 startOrderExpiryJob();
+
+// Lab orders still unfulfilled past their expiresAt move to `expired`.
+const orderExpiryTimer = setInterval(() => { void expireUnfulfilledOrders().catch((err) => console.error("[jobs] order expiry failed:", err)); }, 60 * 60 * 1000);
+orderExpiryTimer.unref();
