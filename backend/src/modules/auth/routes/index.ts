@@ -40,6 +40,16 @@ authRouter.get('/sessions', authenticate, authController.listSessions);
 authRouter.delete('/sessions', authenticate, authController.revokeOtherSessions);
 authRouter.delete('/sessions/:id', authenticate, authController.revokeSession);
 
+// TOTP two-factor auth (Phase 8 #36). Setup/enable/status/disable all
+// require a full session; `/verify` is the second step of login and takes
+// the mfa_pending token in its *body*, not an Authorization header — it is
+// the only route that accepts one.
+authRouter.get('/2fa', authenticate, authController.getTwoFactorStatus);
+authRouter.post('/2fa/setup', authenticate, authController.setupTwoFactor);
+authRouter.post('/2fa/enable', authenticate, authController.enableTwoFactor);
+authRouter.post('/2fa/verify', authController.verifyTwoFactor);
+authRouter.post('/2fa/disable', authenticate, authController.disableTwoFactor);
+
 /** Admin routes for the auth module, mounted at `/admin` in app.ts. Session
  * administration acts on *another* user, so it doesn't belong under
  * `/auth`. */

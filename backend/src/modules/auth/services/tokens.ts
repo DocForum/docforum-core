@@ -43,8 +43,25 @@ export function signRefreshToken(payload: RefreshTokenPayload): string {
   return jwt.sign(payload, config.jwt.refreshSecret, { expiresIn: config.jwt.refreshTtl });
 }
 
+/** Issued in place of a session when the password step passes but the TOTP
+ * step hasn't happened yet. Short-lived and single-purpose on purpose. */
+export function signMfaPendingToken(payload: AccessTokenPayload): string {
+  return jwt.sign({ ...payload, scope: 'mfa_pending' }, config.jwt.accessSecret, {
+    expiresIn: config.twoFactor.mfaPendingTtl,
+  });
+}
+
 export function verifyAccessToken(token: string): AccessTokenPayload {
-  return jwt.verify(token, config.jwt.accessSecret) as AccessTokenPayload;
+  const payload = jwt.verify(token, config.jwt.accessSecret) as AccessTokenPayload;
+  // A scoped token is not an access token, whatever signature it carries.
+  if (payload.scope !== undefined) throw new Error('Token is not an access token.');
+  return payload;
+}
+
+export function verifyMfaPendingToken(token: string): AccessTokenPayload {
+  const payload = jwt.verify(token, config.jwt.accessSecret) as AccessTokenPayload;
+  if (payload.scope !== 'mfa_pending') throw new Error('Token is not an mfa_pending token.');
+  return payload;
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {
