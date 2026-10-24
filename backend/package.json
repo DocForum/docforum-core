@@ -25,6 +25,7 @@
     "@docforum/escrow-sdk": "https://github.com/DocForum/docforum-escrow/releases/download/sdk-v0.2.0/docforum-escrow-sdk-0.2.0.tgz",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
+    "@sendgrid/mail": "^8.1.6",
     "@stellar/stellar-sdk": "^16.0.1",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
