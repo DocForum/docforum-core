@@ -101,6 +101,64 @@ describe('referral foundation', () => {
     expect(res.body.loopFlaggedAt).toBeNull();
   });
 
+  it('creates the referral with a referred consultation and preserves its notes snapshot', async () => {
+    const slots = await generateSlots(app, doctorA, 2);
+    const appointment = await request(app)
+      .post('/appointments')
+      .set('Authorization', `Bearer ${patient.accessToken}`)
+      .send({ availabilitySlotId: slots[0] });
+    expect(appointment.status).toBe(201);
+    await request(app)
+      .patch(`/appointments/${appointment.body.id}/status`)
+      .set('Authorization', `Bearer ${doctorA.accessToken}`)
+      .send({ status: 'completed' });
+
+    const consultation = await request(app)
+      .post('/consultations')
+      .set('Authorization', `Bearer ${doctorA.accessToken}`)
+      .send({
+        appointmentId: appointment.body.id,
+        outcome: 'referred',
+        notes: 'Snapshot at referral time',
+        targetSpecialtyId: endocrinologyId,
+        targetDoctorId: doctorB.profileId,
+      });
+    expect(consultation.status).toBe(201);
+    expect(consultation.body.referrals).toHaveLength(1);
+    const referralId = consultation.body.referrals[0].id as string;
+
+    await prisma.consultation.update({
+      where: { id: consultation.body.id },
+      data: { notes: 'Later consultation annotation' },
+    });
+    const referral = await prisma.referral.findUniqueOrThrow({ where: { id: referralId } });
+    expect(referral.snapshotNotes).toBe('Snapshot at referral time');
+  });
+
+  it('creates a visible waiting_for_specialist referral when the specialty has no verified doctors', async () => {
+    const specialtyId = await makeSpecialty(prisma, `Unstaffed ${runId}`);
+    const slots = await generateSlots(app, doctorA, 2);
+    const appointment = await request(app)
+      .post('/appointments')
+      .set('Authorization', `Bearer ${patient.accessToken}`)
+      .send({ availabilitySlotId: slots[0] });
+    await request(app)
+      .patch(`/appointments/${appointment.body.id}/status`)
+      .set('Authorization', `Bearer ${doctorA.accessToken}`)
+      .send({ status: 'completed' });
+    const consultation = await request(app)
+      .post('/consultations')
+      .set('Authorization', `Bearer ${doctorA.accessToken}`)
+      .send({ appointmentId: appointment.body.id, outcome: 'referred', notes: 'Needs specialist', targetSpecialtyId: specialtyId });
+
+    expect(consultation.status).toBe(201);
+    expect(consultation.body.referrals[0]).toMatchObject({
+      status: 'waiting_for_specialist',
+      targetDoctorId: null,
+      targetSpecialtyId: specialtyId,
+    });
+  });
+
   it('rejects referral creation that violates the gates', async () => {
     const { consultationId } = await consultationRitual(app, patient, doctorA);
 
@@ -153,7 +211,7 @@ describe('referral foundation', () => {
     const consult = await request(app)
       .post('/consultations')
       .set('Authorization', `Bearer ${doctorA.accessToken}`)
-      .send({ appointmentId: appointment.body.id, outcome: 'referred' });
+      .send({ appointmentId: appointment.body.id, outcome: 'referred', targetSpecialtyId: endocrinologyId });
     expect(consult.status).toBe(409);
   });
 

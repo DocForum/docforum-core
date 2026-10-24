@@ -242,14 +242,14 @@ Referral
   id
   patient_profile_id (FK -> PatientProfile)
   source_consultation_id (FK -> Consultation, required)
-  referring_doctor_id, target_doctor_id (both FK -> DoctorProfile, required)
+  referring_doctor_id (FK -> DoctorProfile), target_doctor_id (nullable FK -> DoctorProfile)
   target_specialty_id (nullable FK -> Specialty — denormalised label, used
     by the loop guard and admin views; not issue #23's specialty management)
   snapshot_notes [ENCRYPTED — Phase 8 issue #46] (text copy of the referring consultation notes at time of referral — immutable)
   parent_referral_id (nullable self-FK — the referral whose appointment
     produced the consultation this referral came from; this is the chain
     loop detection walks)
-  status (enum: pending|accepted|declined|completed|expired|cancelled)
+  status (enum: waiting_for_specialist|pending|accepted|declined|completed|expired|cancelled)
   no_show_count (Int, default 0), referring_doctor_notified_at (nullable)
   loop_flagged_at (nullable), loop_flag_reason (nullable text)
   cancelled_reason (nullable text)
@@ -259,7 +259,7 @@ Referral
   indexes: patient_profile_id, referring_doctor_id, target_doctor_id,
     status, loop_flagged_at
 ```
-Design note: `snapshot_notes` deliberately duplicates `Consultation.notes`
+Design note: saving a consultation with outcome `referred` creates its referral in the same transaction. If no verified doctor practices the target specialty, it is created without a target doctor and with status `waiting_for_specialist`; if doctors exist, the request must name one (routing remains issue #6). `snapshot_notes` deliberately duplicates `Consultation.notes`
 rather than pointing live at it, so a later edit to the original
 consultation can never silently change what the specialist already acted
 on (PRD hard question 8.1.4). `snapshotIntakeId` from the original design

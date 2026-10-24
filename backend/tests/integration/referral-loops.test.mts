@@ -96,7 +96,7 @@ describe('referral loop detection', () => {
       const consult = await request(app)
         .post('/consultations')
         .set('Authorization', `Bearer ${from.accessToken}`)
-        .send({ appointmentId: viaConsultationAppointmentId, outcome: 'referred' });
+        .send({ appointmentId: viaConsultationAppointmentId, outcome: 'resolved' });
       expect(consult.status).toBe(201);
       consultationId = consult.body.id as string;
     } else {

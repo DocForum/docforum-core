@@ -13,7 +13,7 @@
 export interface ChainNode {
   id: string;
   referringDoctorId: string;
-  targetDoctorId: string;
+  targetDoctorId: string | null;
   targetSpecialtyId: string | null;
   /** Non-null means the chain continues further back. */
   parentReferralId: string | null;
@@ -68,7 +68,7 @@ export function evaluateReferralLoop(
   }
 
   for (const ancestor of ancestors) {
-    if (ancestor.targetDoctorId === candidate.targetDoctorId) {
+    if (ancestor.targetDoctorId && ancestor.targetDoctorId === candidate.targetDoctorId) {
       return {
         flagged: true,
         reason: `Target doctor already appears in referral chain (referral ${ancestor.id}).`,

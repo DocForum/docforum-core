@@ -1,0 +1,1 @@
+Issue #5: a consultation saved with outcome `referred` now creates its referral in the same transaction, with consultation notes copied as an immutable snapshot. Referrals with no verified doctor in the target specialty are visible to patients in `waiting_for_specialist`. Intake snapshot data remains deferred until the placeholder `IntakeForm` gains fields.

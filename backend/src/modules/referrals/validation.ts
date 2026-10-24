@@ -42,7 +42,7 @@ export const adminCancelSchema = z.object({
 });
 
 export const adminQueueQuerySchema = z.object({
-  status: z.enum(['pending', 'accepted', 'declined', 'completed', 'expired', 'cancelled']).optional(),
+  status: z.enum(['pending', 'waiting_for_specialist', 'accepted', 'declined', 'completed', 'expired', 'cancelled']).optional(),
   olderThan: z.string().regex(/^\d+[hd]$/).optional(),
   loopFlagged: z
     .enum(['true', 'false'])
