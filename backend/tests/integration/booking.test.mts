@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 import { availabilitySlotFactory } from '../factories/index.js';
+import { runWithRlsContext, withRlsBypass } from '../../src/db/prisma-client.js';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5433;
@@ -151,5 +152,41 @@ describe('booking concurrency', () => {
 
     const slot = await prisma.availabilitySlot.findUniqueOrThrow({ where: { id: slotId } });
     expect(slot.status).toBe('booked');
+  });
+
+  it('filters unscoped patient Appointment reads in PostgreSQL', async () => {
+    const [{ id: appointmentId, ownerId }] = await prisma.$queryRaw<Array<{ id: string; ownerId: string }>>`
+      SELECT a.id, p."userId" AS "ownerId"
+      FROM "Appointment" a JOIN "PatientProfile" p ON p.id = a."patientProfileId"
+      WHERE a."availabilitySlotId" = ${slotId}
+    `;
+    const [{ id: otherUserId }] = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "User" WHERE role = 'patient' AND id <> ${ownerId} LIMIT 1
+    `;
+
+    const denied = await runWithRlsContext({ userId: otherUserId, role: 'patient' }, () =>
+      prisma.appointment.findUnique({ where: { id: appointmentId } }),
+    );
+    const allowed = await runWithRlsContext({ userId: ownerId, role: 'patient' }, () =>
+      prisma.appointment.findUnique({ where: { id: appointmentId } }),
+    );
+
+    expect(denied).toBeNull();
+    expect(allowed?.id).toBe(appointmentId);
+
+    const samples = 5;
+    const baselineStart = performance.now();
+    for (let i = 0; i < samples; i++) {
+      await withRlsBypass((tx) => tx.$queryRaw`SELECT id FROM "Appointment" WHERE id = ${appointmentId}`);
+    }
+    const baselineMs = (performance.now() - baselineStart) / samples;
+    const rlsStart = performance.now();
+    for (let i = 0; i < samples; i++) {
+      await runWithRlsContext({ userId: ownerId, role: 'patient' }, () =>
+        prisma.appointment.findUnique({ where: { id: appointmentId } }),
+      );
+    }
+    const rlsMs = (performance.now() - rlsStart) / samples;
+    console.info(`RLS booking-row read: baseline=${baselineMs.toFixed(2)}ms, scoped=${rlsMs.toFixed(2)}ms, delta=${(rlsMs - baselineMs).toFixed(2)}ms/query`);
   });
 });
