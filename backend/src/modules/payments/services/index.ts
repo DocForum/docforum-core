@@ -27,9 +27,38 @@ import type { Prisma } from '@prisma/client';
 import { transitionPaymentIntentStatus } from './state-machine';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
 
+import { assertWalletLinkFundingAllowed } from './wallet-link';
+
+// SEP-10 Stellar Web Authentication (issue #77). Re-exported through
+// this module's service surface (not imported file-by-file from outside)
+// per the AGENTS.md module-boundary rule — same pattern as the auth
+// module's token/throttle re-exports.
+export {
+  createSep10Challenge,
+  verifySep10Challenge,
+  resetSep10AccountFetcher,
+  setSep10AccountFetcher,
+  validateSep10Config,
+} from './sep10';
+export type { Sep10AccountFetcher, Sep10AccountInfo, Sep10ChallengeResponse, Sep10Signer, Sep10VerifyResult } from './sep10';
+
+// Verified wallet links (issue #78) — SEP-10-only link creation,
+// owner-scoped reads, the funding-cutoff guard, and the ADR 0005
+// privacy notice constant, all through this module's service surface.
+export {
+  PATIENT_WALLET_LINK_PRIVACY_NOTICE,
+  assertWalletLinkFundingAllowed,
+  getOwnWalletLink,
+  linkWalletViaSep10,
+  validateWalletLinkConfig,
+  walletLinkFundingAllowed,
+} from './wallet-link';
+export type { WalletLinkOwner } from './wallet-link';
+
 // Test seams re-exported through the service surface (same convention as the
 // auth module's setEmailSender) — see escrow-sdk-loader.ts and trustline.ts.
-export { setEscrowSdkForTests } from './escrow-sdk-loader';
+export { setEscrowSdkForTests, resetEscrowSdkOverride, setEscrowSdkOverride } from './escrow-sdk-loader';
+export type { EscrowSdkForTests } from './escrow-sdk-loader';
 export { listEscrowEvents } from './escrow-events';
 export type { EscrowSdkModule } from './escrow-sdk-loader';
 export { setTrustlineCheckerForTests } from './trustline';
@@ -64,19 +93,6 @@ export interface PreparedCreateEscrow {
 interface PrepareCapableClient {
   prepareCreateEscrow?: (params: PrepareCreateEscrowParams) => Promise<PreparedCreateEscrow>;
 }
-
-// SEP-10 Stellar Web Authentication (issue #77). Re-exported through
-// this module's service surface (not imported file-by-file from outside)
-// per the AGENTS.md module-boundary rule — same pattern as the auth
-// module's token/throttle re-exports.
-export {
-  createSep10Challenge,
-  verifySep10Challenge,
-  resetSep10AccountFetcher,
-  setSep10AccountFetcher,
-  validateSep10Config,
-} from './sep10';
-export type { Sep10AccountFetcher, Sep10AccountInfo, Sep10ChallengeResponse, Sep10Signer, Sep10VerifyResult } from './sep10';
 
 async function requirePaymentsConfig() {
   // The per-asset token contract comes from the intent (issue #79), so the
@@ -132,16 +148,25 @@ export async function getOwnPatientProfileId(userId: string): Promise<string> {
   return profile.id;
 }
 
-export function linkWallet(facilityId: string, stellarPublicKey: string) {
-  return paymentsRepo.upsertWalletLink(facilityId, stellarPublicKey);
+export async function linkWallet(facilityId: string, stellarPublicKey: string) {
+  const now = new Date();
+  await paymentsRepo.deactivateActiveWalletLink('facility', facilityId, now);
+  return paymentsRepo.createWalletLink({
+    ownerType: 'facility',
+    ownerId: facilityId,
+    stellarPublicKey,
+    verificationMethod: 'sep10',
+    verifiedAt: now,
+    activeOwnerKey: `facility:${facilityId}`,
+  });
 }
 
 export function getWalletLink(facilityId: string) {
-  return paymentsRepo.findWalletLinkByFacilityId(facilityId);
+  return paymentsRepo.findActiveWalletLink('facility', facilityId);
 }
 
 export function getPatientWalletLink(patientProfileId: string) {
-  return paymentsRepo.findPatientWalletLinkByPatientProfileId(patientProfileId);
+  return paymentsRepo.findActiveWalletLink('patient', patientProfileId);
 }
 
 /** The per-environment allowlist (issue #79). An intent may only be created
@@ -443,8 +468,11 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
   }
 
-  const walletLink = await paymentsRepo.findWalletLinkByFacilityId(intent.facilityId);
+  // The facility's ACTIVE link (issue #78: one per owner; replaced rows
+  // are history and must never be picked up here).
+  const walletLink = await paymentsRepo.findActiveWalletLink('facility', intent.facilityId);
   if (!walletLink) throw new HttpError(409, 'The facility for this payment has no linked wallet.');
+  assertWalletLinkFundingAllowed(walletLink);
 
   const { platformPayer, platformReleaser, escrowContractId } = await requirePaymentsConfig();
   const payee = resolveEscrowPayee({
@@ -480,6 +508,7 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
       sorobanContractId: escrowContractId,
       // Legacy rows start with a null token id; record what was actually used.
       tokenContractId: asset.tokenContractId,
+      fundedWalletAddress: walletLink.stellarPublicKey,
     }),
   );
 }
