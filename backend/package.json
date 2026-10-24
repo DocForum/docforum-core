@@ -2,7 +2,7 @@
   "name": "docforum-core-backend",
   "version": "0.0.0",
   "private": true,
-  "description": "DocForum backend — modular monolith. See ARCHITECTURE.md.",
+  "description": "DocForum backend — modular monolith. See ARCHITECTURE0.md.",
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
-    "test:integration:payments-testnet": "DATABASE_URL_TEST=postgresql://docforum:docforum@localhost:5435/docforum_payments_test vitest run tests/testnet-integration",
+    "test:integration:payments-testnet": "DATABASE_URL_TEST==postgresql://docforum:docforum@localhost:5435/docforum_payments_test vitest run tests/testnet-integration",
     "test:all": "vitest run",
     "test:properties": "vitest run tests/unit/availability-slots.property.test.ts tests/unit/state-machines.property.test.ts",
     "audit:prod": "node scripts/audit-gate.mjs",
@@ -26,6 +26,7 @@
     "@docforum/escrow-sdk": "https://github.com/DocForum/docforum-escrow/releases/download/sdk-v0.2.0/docforum-escrow-sdk-0.2.0.tgz",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
+    "@sendgrid/mail": "^8.1.6",
     "@stellar/stellar-sdk": "^16.0.1",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
