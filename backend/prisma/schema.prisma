@@ -1253,3 +1253,48 @@ model AuditEvent {
   @@index([actorUserId, createdAt])
   @@index([createdAt, id])
 }
+
+// --- Idempotency (Phase 8, issue #48) ---------------------------------------
+// One row per in-flight or completed `Idempotency-Key` request, so a client
+// retrying after a mobile timeout gets the first response back instead of
+// creating a second booking or a second payment.
+//
+// Scoped to (userId, key) — the unique constraint below is the whole
+// concurrency mechanism. There is no in-memory lock anywhere: whoever wins
+// the INSERT owns the attempt, everyone else reads the row. Two instances of
+// this API therefore behave identically to one.
+//
+// `responseStatus`/`responseBody`/`responseHeaders` are NULL while the
+// attempt is still running. That gap is what a concurrent duplicate sees, and
+// what it waits on. It is NOT audit history: a 5xx deletes the row outright
+// so the client can retry with the same key, and an attempt abandoned by a
+// crashed process is taken over once it is older than the in-progress
+// timeout. Rows are removed once `expiresAt` passes (24h by default).
+//
+// Deliberately NOT an `AuditEvent` and not a patient-data record: the cached
+// body is a copy of a response the requesting user already received, kept
+// only as long as a retry could still arrive, and it is never exported or
+// listed. See ARCHITECTURE.md §4.12.
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  // Scope: a key is only ever compared against the same user's other keys,
+  // so one user can never replay (or read) another user's stored response.
+  userId       String
+  key          String
+  method       String
+  // Route pattern, not the URL: '/payments/intents/:id/fund'. Stored so a
+  // row is self-describing when debugging, and folded into requestHash so a
+  // key reused on a different route is refused rather than replayed.
+  route        String
+  // SHA-256 of the canonical request. Same key + same body -> replay;
+  // same key + different body -> 422.
+  requestHash  String
+  responseStatus  Int?
+  responseBody    Json?
+  responseHeaders Json?
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@unique([userId, key])
+  @@index([expiresAt])
+}
