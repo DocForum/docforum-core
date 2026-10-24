@@ -14,8 +14,12 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 1. **Modular monolith first, not microservices.** One deployable backend, internally organized into bounded modules (auth, doctors, appointments, referrals, consultations, orders, facilities, notifications). Split into services only when a concrete scaling or team-ownership problem demands it — not preemptively (see PRD §8.3).
 2. **Orders are append-only.** Prescriptions and lab orders are never mutated after issuance. Corrections create a new versioned record referencing the original. This is a hard architectural constraint, not a style preference (clinical/legal safety).
 3. **The referral carries state, not a pointer to state.** A referral snapshots the intake + consultation notes it's built on, so later edits elsewhere can't silently rewrite what a specialist already saw.
-4. **Boring tech, correct concurrency.** Availability booking is a correctness problem before it's a scaling problem — solve double-booking with real DB constraints/transactions, not application-level checks.
-5. **Build vs. buy for anything not core IP.** Video/chat infra, SMS/email delivery, file storage — use managed providers behind an internal interface so they're swappable.
+4. **Clinical records are immutable once finalized.** Prescriptions and lab
+   orders are append-only from issuance (§1.2); a consultation note is editable
+   as a draft but immutable from sign-off, with corrections as addenda (§4.3,
+   issue #64). Enforced at the DB level, not just in application code.
+5. **Boring tech, correct concurrency.** Availability booking is a correctness problem before it's a scaling problem — solve double-booking with real DB constraints/transactions, not application-level checks.
+6. **Build vs. buy for anything not core IP.** Video/chat infra, SMS/email delivery, file storage — use managed providers behind an internal interface so they're swappable.
 
 ## 2. Tech stack
 

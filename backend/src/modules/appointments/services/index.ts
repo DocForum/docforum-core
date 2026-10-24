@@ -150,7 +150,12 @@ export async function getDoctorAppointmentContext(userId: string, appointmentId:
   if (!appointment) throw new HttpError(404, 'Appointment not found.');
   if (appointment.doctorProfile.userId !== userId) throw new HttpError(403, 'You can only issue orders for your own appointments.');
   if (appointment.doctorProfile.verificationStatus !== 'verified') throw new HttpError(403, 'A verified doctor profile is required to issue orders.');
-  return { id: appointment.id, patientProfileId: appointment.patientProfileId, doctorProfileId: appointment.doctorProfileId };
+  return {
+    id: appointment.id,
+    patientProfileId: appointment.patientProfileId,
+    doctorProfileId: appointment.doctorProfileId,
+    status: appointment.status,
+  };
 }
 
 /**
