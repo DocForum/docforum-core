@@ -7,7 +7,7 @@ tested on branch `feat/referral-phase3-cascade-multi-loop-admin`, #6 and
 #8 open. Phase 2 is partially unblocked by that work (#3/#4 minimal
 slices). Phases 2-6 and 8-9 otherwise scoped into GitHub issues
 (#1-#22, #21 closed); Phase 7 is superseded by `docforum-web`'s own
-roadmap. Phase 9's end-to-end care-thread integration test is in progress
+roadmap. Phase 6's appointment notifications (booking confirmations, new-booking alerts, reminders) are in progress. Phase 9's end-to-end care-thread integration test is in progress
 (scaffold + phase-gated steps). See each phase section below for status
 and issue links.
 
@@ -106,10 +106,11 @@ and issue links.
 - [ ] Doc reconciliation: PRD §8.1.6 (facility fulfillment integrity) — not marked resolved; this phase proves the payment *mechanism* works, not the fulfillment-integrity question, which still needs real `FulfillmentRecord`/facility-matching (Phase 5) to actually address.
 
 ## Phase 6 — Notifications
-**Status: In progress — provider decision made (see `docs/adr/0013-notification-provider.md`, issue #17). Trigger-point build-out still blocked by Phases 3 & 4 and deliberately left unscoped until those land.**
-- [ ] `Notification` model + dispatch interface (provider-agnostic, per ARCHITECTURE.md §2) — part of the trigger-point work, still blocked.
-- [ ] Trigger points per PRD FR-15/FR-16 (booking confirmed, referral created/accepted/declined, order ready, results available, new booking, lab results returned) — still blocked by Phases 3/4.
-- [x] Pick and integrate a real provider (email/SMS) behind the interface — **decided:** email via Postmark (SMS deferred, no provider chosen); the adapter stays behind the provider-agnostic dispatch interface and no provider calls live in business logic. Tracked as [issue #17](https://github.com/DocForum/docforum-core/issues/17) (Trivial, 100 pts) — decision recorded in `docs/adr/0013-notification-provider.md`; integration itself is still to be built.
+**Status: In progress. Appointment notifications (booking confirmations, new-booking alerts, and 24h/2h reminders) are implemented; the remaining trigger points (referral created/accepted/declined, order ready, results available, lab results returned) are still blocked by Phases 3/4. Provider decision scoped into issue #17.**
+- [x] `Notification` model + dispatch interface (provider-agnostic, per ARCHITECTURE.md §2) — **done** for the appointment triggers: notifications are emitted through the transactional outbox when a booking commits, with a provider-agnostic dispatcher behind the interface.
+- [ ] Trigger points per PRD FR-15/FR-16 (booking confirmed, referral created/accepted/declined, order ready, results available, new booking, lab results returned) — **partially done**: booking-confirmed (patient) and new-booking (doctor) are emitted through the outbox on booking commit; cancellation and reschedule notifications go to the other party; a reminder job sends 24h and 2h reminders, idempotent per appointment and reminder type, suppressed for cancelled/rescheduled appointments at send time, with reminder copy using the recipient's time zone when known. Remaining triggers (referral, order, results) are still blocked by Phases 3/4.
+- [x] Respect each user's notification preferences once they exist (no-op default) — **done**: the dispatch path consults preferences and defaults to a no-op when none are set.
+- [ ] Pick and integrate a real provider (email/SMS) behind the interface — provider choice is currently undecided (ARCHITECTURE.md §8). Tracked as [issue #17](https://github.com/DocForum/docforum-core/issues/17) (Trivial, 100 pts) — a decision task, unblocked now.
 
 ## Phase 7 — Frontend: core flows end-to-end
 **Status: Superseded.** This phase predates the 3-repo org split (see the org note at the top of this file) — all frontend work described below is actually tracked in `docforum-web`'s own `ROADMAP.md` (Phases W2–W5, issues opened there). Left in place as a historical record rather than deleted, but no issues are or will be opened against it here.
@@ -571,3 +572,5 @@ and issue links.
   payouts as the default in production and local environments, with the
   configuration controlled by `PAYOUT_PRIVACY_MODE` and
   `PAYOUT_PRIVACY_POOL_ADDRESS`.
+- 2026-10-20 — Phase 6 appointment notifications: booking-confirmed (patient) and new-booking (doctor) notifications are emitted through the transactional outbox when a booking commits; cancellation and reschedule notifications go to the other party; a reminder job sends 24h and 2h reminders, idempotent per appointment and reminder type (running twice in the same window does not double-send), suppressed for cancelled or rescheduled appointments by checking state at send time, with reminder copy using the recipient's time zone when known. Notification preferences are respected with a no-op default. Tests cover idempotency and cancelled-appointment suppression. FR-15/FR-16 partially marked in PRD; ARCHITECTURE.md §4 and `docs/api/README.md` updated for the `Notification` model and outbox.
+```
