@@ -18,7 +18,7 @@ export const closureInputSchema = z.object({
 
 export const createClosureSchema = z.object({
   scope: closureScopeSchema,
-  facilityId: z+string().uuid().optional(),
+  facilityId: z.string().uuid().optional(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'startDate must be YYYY-MM-DD'),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'endDate must be YYYY-MM-DD'),
   reason: z.string().min(1).max(500),
@@ -35,11 +35,11 @@ export const createClosureSchema = z.object({
 export const updateClosureSchema = z.object({
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'startDate must be YYYY-MM-DD').optional(),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'endDate must be YYYY-MM-DD').optional(),
-  reason: z+string().min(1).max(500).optional(),
+  reason: z.string().min(1).max(500).optional(),
 });
 
 export const listClosuresQuerySchema = z.object({
-  facilityId: z+string().uuid().optional(),
+  facilityId: z.string().uuid().optional(),
 });
 
 export const listClosuresSchema = z.object({

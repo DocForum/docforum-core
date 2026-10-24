@@ -34,12 +34,16 @@ export async function generateSlots(input: GenerateSlotsInput) {
   // closures both apply.
   const doctor = await prisma.doctorProfile.findUnique({
     where: { id: doctorProfileId },
-    select: { facilityId: true },
+    select: { id: true },
   });
   if (!doctor) throw new HttpError(404, 'Doctor profile not found.');
+  const facilityId: string | null = null;
 
-  const closures = await availabilityRepo.findClosuresOverlapping(doctor.facilityId ?? null, rangeStart, rangeEnd);
-  const closureIntervals = closures.map((c) => ({ startDate: c.startDate, endDate: c.endDate }));
+  const closures = await availabilityRepo.findClosuresOverlapping(facilityId, rangeStart, rangeEnd);
+  const closureIntervals = closures.map((c: { startDate: Date; endDate: Date }) => ({
+    startDate: c.startDate,
+    endDate: c.endDate,
+  }));
 
   const existing = await availabilityRepo.findExistingSlotRanges(doctorProfileId, rangeStart, rangeEnd);
   const existingStarts = existing.map((slot) => slot.startTime.getTime());
