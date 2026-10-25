@@ -99,6 +99,7 @@ async function pollContract(contract: ContractConfig): Promise<void> {
     const response = cursor
       ? await server.getEvents({ filters, limit: 100, cursor })
       : await server.getEvents({ filters, limit: 100, startLedger: cursorRow.startLedger });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Stellar RPC getEvents returns dynamic Soroban event rows
     const rows = response.events.map((event: any) => decodeEscrowRpcEvent(event, contract.contractId));
     await prisma.$transaction(async (tx) => {
       for (const row of rows) {

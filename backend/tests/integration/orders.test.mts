@@ -258,7 +258,9 @@ describe('Orders integration tests', () => {
       .set('Authorization', `Bearer ${adminToken}`);
     expect(adminQueue.status).toBe(200);
     expect(adminQueue.body.length).toBeGreaterThan(0);
-    const disputeItem = adminQueue.body.find((d: any) => d.orderId === orderId);
+    const disputeItem = adminQueue.body.find(
+      (d: { orderId: string; id: string; reason: string; status: string }) => d.orderId === orderId,
+    );
     expect(disputeItem).toBeTruthy();
     expect(disputeItem.reason).toBe('Sample results missing');
     expect(disputeItem.status).toBe('pending');
