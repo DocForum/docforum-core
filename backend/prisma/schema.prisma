@@ -884,6 +884,7 @@ model LabOrder {
   status               OrderStatus @default(issued)
   supersedesLabOrderId String?
   createdAt            DateTime    @default(now())
+  expiresAt            DateTime?
 
   consultation    Consultation       @relation(fields: [consultationId], references: [id])
   patientProfile  PatientProfile     @relation(fields: [patientProfileId], references: [id])
@@ -898,6 +899,7 @@ model LabOrder {
   @@unique([supersedesLabOrderId])
   @@index([patientProfileId, createdAt])
   @@index([consultationId])
+  @@index([status, expiresAt])
 }
 
 model LabResult {

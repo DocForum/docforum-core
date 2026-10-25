@@ -34,8 +34,8 @@ export function createSlots(rows: { doctorProfileId: string; startTime: Date; en
 
 /**
  * THE mechanism that prevents double-booking (ARCHITECTURE.md §5.1): a
- * single conditional UPDATE, atomic at the database level regardless of
- * how many requests race to call this for the same slotId. Postgres
+ * single conditional UPDATE, atomic at the database level regardless of how
+ * many requests race to call this for the same slotId. Postgres
  * serializes concurrent UPDATEs to the same row via row-level locking —
  * exactly one caller's WHERE clause matches `status = 'open'`; every other
  * concurrent caller's WHERE clause evaluates against the now-committed
