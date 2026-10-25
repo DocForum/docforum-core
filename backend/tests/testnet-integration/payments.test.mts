@@ -129,7 +129,21 @@ describe('payments module against live testnet', () => {
     patientProfileId = patient.id;
 
     const payoutWallet = await fundedKeypair();
-    await paymentsService.linkWallet(facilityId, payoutWallet.publicKey());
+    // Issue #78 removed the typed-in link path: this live-testnet suite
+    // arranges its payee directly as an explicitly-unverified legacy
+    // link (test setup, not a product code path — there is no service
+    // that can create one anymore). Unverified links still fund until
+    // WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF, which this suite does not
+    // set, so the default grace window applies.
+    await prisma.walletLink.create({
+      data: {
+        ownerType: 'facility',
+        ownerId: facilityId,
+        stellarPublicKey: payoutWallet.publicKey(),
+        verificationMethod: 'unverified_legacy',
+        activeOwnerKey: `facility:${facilityId}`,
+      },
+    });
   });
 
   afterAll(async () => {

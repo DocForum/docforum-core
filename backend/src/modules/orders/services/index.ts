@@ -33,7 +33,10 @@ async function consultationContext(actor: auditService.AuditActor, id: string) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
   // Read through the consultations service, never its table (AGENTS.md hard rule 4).
   const consultation = await consultationsService.getConsultationRecord(id);
+  // Who first (treating doctor, verified profile — 403 otherwise), then the
+  // consultation's state (409), so another doctor never learns the state.
   const appointment = await appointmentsService.getDoctorAppointmentContext(actor.userId, consultation.appointmentId);
+  consultationsService.assertConsultationAcceptsOrders(consultation);
   return { consultation, appointment };
 }
 
@@ -94,6 +97,7 @@ export async function issuePrescription(actor: auditService.AuditActor, input: {
   }
   try {
     return await prisma.$transaction(async (tx) => {
+      await facilitiesService.requireFacilityForOrderKind(tx, input.facilityProfileId, 'prescription');
       const pricing = await resolveOrderAmount(tx, input);
       const order = await ordersRepo.createPrescription(tx, {
         consultationId: consultation.id, patientProfileId: appointment.patientProfileId,
@@ -137,6 +141,7 @@ export async function issueLabOrder(actor: auditService.AuditActor, input: {
   }
   try {
     return await prisma.$transaction(async (tx) => {
+      await facilitiesService.requireFacilityForOrderKind(tx, input.facilityProfileId, 'lab_order');
       const pricing = await resolveOrderAmount(tx, input);
       const order = await ordersRepo.createLabOrder(tx, {
         consultationId: consultation.id, patientProfileId: appointment.patientProfileId,

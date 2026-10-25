@@ -116,8 +116,9 @@ describe('facility price lists and intent pricing (issue #127)', () => {
     const slot = await prisma.availabilitySlot.create({
       data: { doctorProfileId, startTime, endTime: new Date(startTime.getTime() + 30 * MINUTE) },
     });
+    // Orders hang off a consultation whose visit happened (issue #10).
     const appointment = await prisma.appointment.create({
-      data: { patientProfileId, doctorProfileId, availabilitySlotId: slot.id },
+      data: { patientProfileId, doctorProfileId, availabilitySlotId: slot.id, status: 'completed' },
     });
     const consultation = await prisma.consultation.create({ data: { appointmentId: appointment.id } });
     consultationId = consultation.id;

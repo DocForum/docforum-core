@@ -279,6 +279,8 @@ moves stale prepared intents back to `created`. Against `@docforum/escrow-sdk`
 
 Verified doctors can create a consultation with `POST /orders/consultations` (`appointmentId`, optional `outcome` and `notes`) — the same write as `POST /consultations` plus the verified-doctor gate, so all of its one-per-appointment/encryption/audit rules apply. Issue a prescription with `POST /orders/consultations/:consultationId/prescriptions` (`facilityProfileId`, and `items`), or a lab order with `POST /orders/consultations/:consultationId/lab-orders` (`facilityProfileId`, `testType`, optional `urgency` and `notes`). Either route takes **exactly one** of a positive integer `amountStroops` (manual price) or a `catalogItemCode` (facility price list, issue #127) — the resolved amount and the code are snapshotted on the payment intent. Issuance creates its payment intent in the same transaction. Corrections create superseding immutable orders: a created intent moves to the correction; an escrowed intent remains linked to the original and is handled by the existing admin refund action.
 
+Issuance rules (issue #10): only the consultation's treating doctor with a verified profile may issue (`403` for any other doctor, patient, facility or admin; `401` anonymous; unknown consultation `404`). The consultation may be open (no `outcome` yet) or closed, but its appointment must be `completed` (`409` otherwise — checked after the caller, so other doctors only ever see `403`). `facilityProfileId` must be a pharmacy for a prescription and a lab for a lab order (`400`, nothing written).
+
 ## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
 
 Phase 8, issue #43. Every response carries an `X-Request-Id` header: a

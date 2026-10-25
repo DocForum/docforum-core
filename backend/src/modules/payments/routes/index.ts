@@ -11,11 +11,16 @@ paymentsRouter.get('/facility/ledger', authenticate, requireRole('facility'), pa
 paymentsRouter.post(
   '/wallet-link',
   authenticate,
-  requireRole('facility'),
+  requireRole('patient', 'facility'),
   requireVerifiedEmail,
   paymentsController.linkWallet,
 );
-paymentsRouter.get('/wallet-link', authenticate, requireRole('facility'), paymentsController.getOwnWallet);
+paymentsRouter.get(
+  '/wallet-link',
+  authenticate,
+  requireRole('patient', 'facility'),
+  paymentsController.getOwnWallet,
+);
 
 paymentsRouter.get('/intents/:id', authenticate, requireRole('admin'), paymentsController.getIntent);
 

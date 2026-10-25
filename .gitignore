@@ -4,6 +4,7 @@ build/
 backend/dist/
 backend/node_modules/
 .env
+temp_auto_push.bat
 .env.local
 *.log
 .DS_Store
@@ -11,3 +12,5 @@ backend/node_modules/
 # infra/docker/README.md and backend/tests/integration/)
 .devdb/
 *.tsbuildinfo
+.gitignore
+branch_structure.json
