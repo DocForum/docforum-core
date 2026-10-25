@@ -1234,6 +1234,24 @@ model EscrowChainEvent {
 // No PHI, ever: `metadata` is a small flat map of ids/codes validated by
 // record() — never names, contact details, DOB, intake text, or copies of
 // request/response bodies.
+// Feature flags (Phase 8, issue #132): one row per flag, in this
+// environment's own database (staging and production each have their own,
+// so flags are per environment by construction). `enabled` is the kill
+// switch: false = off for everyone. When true, a user is on if their id is
+// in `allowUserIds`; otherwise they must be in `allowRoles` (when that list
+// is non-empty) and fall inside the sticky `rolloutPercent` bucket. Changes
+// are made only through the admin endpoints, which audit every one.
+model FeatureFlag {
+  key            String   @id
+  description    String   @default("")
+  enabled        Boolean  @default(false)
+  rolloutPercent Int      @default(100)
+  allowRoles     Role[]   @default([])
+  allowUserIds   String[] @default([])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
 model AuditEvent {
   id          String   @id @default(uuid())
   // Null only for system-initiated transitions (none exist yet).

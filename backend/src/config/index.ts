@@ -243,6 +243,15 @@ export const config = {
     pendingTtlDays: positiveNumber(process.env.REFERRAL_PENDING_TTL_DAYS, 14),
     expirySweepIntervalSeconds: positiveNumber(process.env.REFERRAL_EXPIRY_SWEEP_INTERVAL_SECONDS, 60 * 60),
   },
+  // Feature flags (Phase 8, issue #132). Flags are cached in memory this
+  // long; an admin change takes effect immediately in the process that
+  // handled it and within this many seconds in the others.
+  featureFlags: {
+    cacheTtlSeconds: (() => {
+      const raw = Number(process.env.FEATURE_FLAG_CACHE_TTL_SECONDS);
+      return Number.isFinite(raw) && raw >= 0 && process.env.FEATURE_FLAG_CACHE_TTL_SECONDS ? raw : 15;
+    })(),
+  },
   // Guardians and dependents (Phase 8, issue #42, docs/adr/0011). Guardian
   // access ends automatically when the dependent reaches this age (UTC
   // calendar date, checked at request time).

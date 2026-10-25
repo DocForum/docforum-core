@@ -22,6 +22,7 @@ import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
 import { notificationsRouter } from './modules/notifications/routes';
+import { adminFlagsRouter, meFlagsRouter } from './modules/flags/routes';
 import { registerRetentionHolds } from './retention-holds';
 
 export function createApp() {
@@ -82,6 +83,9 @@ export function createApp() {
   app.use('/patients', patientAuditRouter);
   app.use('/referrals', referralsRouter);
   app.use('/notifications', notificationsRouter);
+  // Feature flags (Phase 8, issue #132).
+  app.use('/me', meFlagsRouter);
+  app.use('/admin', adminFlagsRouter);
   app.use('/consultations', consultationsRouter);
 
   // Must be registered last — Express only routes errors here once every

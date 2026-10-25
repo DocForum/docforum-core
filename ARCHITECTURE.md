@@ -489,6 +489,34 @@ to the caller's own profile (resolved from the authenticated user, never
 from the request) and strips all viewer PII to a role — a deleted viewer
 surfaces as `deleted_user`.
 
+### 4.14 Feature flags (Phase 8, issue #132)
+
+```
+FeatureFlag
+  key            text  PK        -- dotted, lowercase: 'payments.wallet_funding'
+  description    text
+  enabled        bool            -- kill switch: false = off for everyone
+  rolloutPercent int 0..100      -- sticky hash bucket (see below)
+  allowRoles     Role[]          -- empty = no role restriction
+  allowUserIds   text[]          -- always on (while enabled), bypasses role + percent
+  createdAt, updatedAt
+```
+
+One row per flag in each environment's own database, so staging and production
+are independent by construction. Evaluation (`modules/flags/evaluate.ts`) is a
+pure function: off if `enabled` is false; on if the user id is allowlisted;
+off if `allowRoles` is non-empty and excludes the user's role; otherwise on
+when `sha256(key:userId)` bucket (0–99) is below `rolloutPercent`. The bucket is
+a hash, never random, so a user's answer is the same on every request and
+raising the percentage never turns anyone off. Evaluation never throws and
+defaults to off (unknown flag, malformed row, database down with nothing
+cached). Flags are cached in memory for `FEATURE_FLAG_CACHE_TTL_SECONDS`
+(default 15). Changes go only through `PATCH /admin/feature-flags/:key`, which
+writes a `feature_flag.created` / `feature_flag.updated` `AuditEvent` in the
+same transaction (counts and the percentage only — never the allowlisted ids).
+First user: `payments.wallet_funding` gates `POST /payments/intents/:id/prepare`
+(ADR 0005: wallet funding launches as an option), seeded off.
+
 ### 4.13 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
 ```
 PaymentIntent
