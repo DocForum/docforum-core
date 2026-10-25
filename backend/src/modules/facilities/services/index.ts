@@ -453,3 +453,126 @@ export async function createFacilityAccount(
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code: unknown }).code === 'P2002';
 }
+
+/**
+ * Issue #15: fulfillment queue + status transitions.
+ * — `getFacilityQueue(facilityUserId, opts)`: the signed-in facility owner's
+ *   queue, cursor-paginated, newest first.
+ * — `transitionFulfillmentStatus(facilityUserId, fulfillmentId, status)`: only
+ *   the facility that owns the row may transition it; `fulfilled`/`rejected`
+ *   are terminal. When transitioning to `fulfilled`, the underlying
+ *   Prescription/LabOrder status is updated here — the only path to `fulfilled`
+ *   per ARCHITECTURE §5.3 hard rule 5 (patient/doctor `confirm-receipt` /
+ *   `dispute` never set `fulfilled`).
+ */
+export async function getFacilityQueue(
+  facilityUserId: string,
+  opts: { status?: 'pending' | 'in_progress' | 'fulfilled' | 'rejected'; limit?: number; cursor?: string },
+): Promise<{ items: Array<{ id: string; orderKind: 'prescription' | 'lab_order'; orderId: string; status: string; createdAt: Date; updatedAt: Date }>; nextCursor?: string }> {
+  const facility = await facilitiesRepo.findFacilityProfileByUserId(facilityUserId);
+  if (!facility) throw new HttpError(403, 'No facility profile is linked to this account.');
+  const raw = await facilitiesRepo.listFacilityFulfillments(facility.id, opts);
+  const hasMore = raw.length > (opts.limit ?? 20);
+  const items = hasMore ? raw.slice(0, -1) : raw;
+  return {
+    items: items.map((row) => ({
+      id: row.id,
+      orderKind: row.prescriptionId ? 'prescription' : 'lab_order',
+      orderId: row.prescriptionId ?? row.labOrderId!,
+      status: row.status,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    })),
+    ...(hasMore ? { nextCursor: items[items.length - 1]?.updatedAt.toISOString() } : {}),
+  };
+}
+
+export async function transitionFulfillmentStatus(
+  facilityUserId: string,
+  fulfillmentId: string,
+  status: 'in_progress' | 'fulfilled' | 'rejected',
+): Promise<{ id: string; status: string; orderKind: 'prescription' | 'lab_order'; orderId: string }> {
+  const facility = await facilitiesRepo.findFacilityProfileByUserId(facilityUserId);
+  if (!facility) throw new HttpError(403, 'No facility profile is linked to this account.');
+
+  const existing = await facilitiesRepo.findFulfillmentRecordById(fulfillmentId);
+  if (!existing) throw new HttpError(404, 'Fulfillment record not found.');
+  if (existing.facilityId !== facility.id) throw new HttpError(403, 'Only the facility that owns this fulfillment record may transition it.');
+  if (existing.status === 'fulfilled' || existing.status === 'rejected') {
+    throw new HttpError(409, `Fulfillment record already ${existing.status}; it is terminal.`);
+  }
+
+  const orderKind = existing.prescriptionId ? 'prescription' : 'lab_order';
+  const orderId = existing.prescriptionId ?? existing.labOrderId!;
+
+  try {
+    const row = await prisma.$transaction(async (tx) => {
+      const updated = await facilitiesRepo.updateFulfillmentStatus(tx, {
+        fulfillmentId, facilityId: facility.id, status,
+      });
+      if (status === 'fulfilled') {
+        // The only path to `fulfilled` — hard rule 5, ARCHITECTURE §5.3.
+        // Patient/doctor confirm-receipt/dispute never write this status.
+        if (orderKind === 'prescription') {
+          await tx.prescription.update({
+            where: { id: orderId },
+            data: { status: 'fulfilled' },
+          });
+        } else {
+          await tx.labOrder.update({
+            where: { id: orderId },
+            data: { status: 'fulfilled' },
+          });
+        }
+        await auditService.record(tx, { userId: facilityUserId, role: 'facility', requestId: null }, {
+          entityType: orderKind === 'prescription' ? 'Prescription' : 'LabOrder',
+          entityId: orderId, action: `${orderKind}.fulfilled`,
+          fromState: existing.status, toState: 'fulfilled',
+          metadata: { fulfillmentId, facilityId: facility.id },
+        });
+      }
+      return updated;
+    });
+    return {
+      id: row.id,
+      status: row.status,
+      orderKind,
+      orderId,
+    };
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw error;
+  }
+}
+
+/**
+ * Issue #15: create a FulfillmentRecord when an order is issued.
+ * Called from orders services within the same transaction.
+ * `orderKind` is the discriminator: 'prescription' or 'lab_order'.
+ */
+export async function createFulfillmentRecord(
+  db: Db,
+  input: { facilityId: string; orderKind: FacilityOrderKind; orderId: string },
+): Promise<{ id: string; status: 'pending' }> {
+  const { facilityId, orderKind, orderId } = input;
+  
+  if (orderKind === 'prescription') {
+    return db.fulfillmentRecord.create({
+      data: {
+        facilityId,
+        prescriptionId: orderId,
+        status: 'pending',
+      },
+      select: { id: true, status: true },
+    });
+  }
+  
+  return db.fulfillmentRecord.create({
+    data: {
+      facilityId,
+      labOrderId: orderId,
+      status: 'pending',
+    },
+    select: { id: true, status: true },
+  });
+}

@@ -8,6 +8,7 @@ import {
   createPriceVersionSchema,
   eligibleFacilitiesQuerySchema,
   priceFiltersSchema,
+  updateFulfillmentStatusSchema,
 } from '../validation';
 
 /** BigInt does not serialize through JSON.stringify — every price response
@@ -93,4 +94,25 @@ export async function createFacility(req: Request, res: Response) {
   const body = createFacilitySchema.parse(req.body);
   const facility = await facilitiesService.createFacilityAccount(auditActor(req), body);
   res.status(201).json(facility);
+}
+
+/** GET /facilities/me/queue — the signed-in facility owner's fulfillment queue. */
+export async function listFacilityQueue(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const opts = {
+    status: req.query.status === undefined ? undefined : req.query.status as any,
+    limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+    cursor: req.query.cursor === undefined ? undefined : String(req.query.cursor),
+  };
+  const queue = await facilitiesService.getFacilityQueue(req.user.id, opts);
+  res.status(200).json(queue);
+}
+
+/** PATCH /facilities/me/fulfillments/:fulfillmentId — transition a fulfillment record's status. */
+export async function transitionFulfillment(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const fulfillmentId = getParam(req, 'fulfillmentId');
+  const body = updateFulfillmentStatusSchema.parse(req.body);
+  const result = await facilitiesService.transitionFulfillmentStatus(req.user.id, fulfillmentId, body.status);
+  res.status(200).json(result);
 }

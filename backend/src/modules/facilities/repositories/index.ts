@@ -136,3 +136,45 @@ export async function createFacilityCapabilities(
     orderBy: [{ capabilityType: 'asc' }, { detail: 'asc' }],
   });
 }
+
+// --- Fulfillment queue (issue #15) -------------------------------------------
+
+export function findFulfillmentRecordById(fulfillmentId: string, db: Db = prisma) {
+  return db.fulfillmentRecord.findUnique({
+    where: { id: fulfillmentId },
+    select: { id: true, facilityId: true, prescriptionId: true, labOrderId: true, status: true, createdAt: true, updatedAt: true },
+  });
+}
+
+/** The facility's fulfillment queue — newest first, cursor-paginated
+ * (issue #15). `status` optionally narrows to one state (pending|in_progress|fulfilled|rejected). */
+export function listFacilityFulfillments(
+  facilityId: string,
+  input: { status?: 'pending' | 'in_progress' | 'fulfilled' | 'rejected'; limit?: number; cursor?: string },
+  db: Db = prisma,
+) {
+  return db.fulfillmentRecord.findMany({
+    where: {
+      facilityId,
+      ...(input.status ? { status: input.status } : {}),
+      ...(input.cursor ? { id: { lt: input.cursor } } : {}),
+    },
+    take: (input.limit ?? 20) + 1,
+    orderBy: { updatedAt: 'desc' },
+    select: { id: true, prescriptionId: true, labOrderId: true, status: true, createdAt: true, updatedAt: true },
+  });
+}
+
+/** Set a fulfillment row to a new status. Only a row owned by `facilityId`
+ * may transition, and `in_progress`→`fulfilled`/`rejected` etc. are allowed
+ * (no status is terminal until `fulfilled`/`rejected` — see services). */
+export function updateFulfillmentStatus(
+  db: Db,
+  input: { fulfillmentId: string; facilityId: string; status: 'in_progress' | 'fulfilled' | 'rejected' },
+) {
+  return db.fulfillmentRecord.update({
+    where: { id: input.fulfillmentId },
+    data: { status: input.status },
+    select: { id: true, facilityId: true, prescriptionId: true, labOrderId: true, status: true },
+  });
+}

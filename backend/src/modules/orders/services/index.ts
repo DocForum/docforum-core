@@ -104,6 +104,11 @@ export async function issuePrescription(actor: auditService.AuditActor, input: {
         prescribingDoctorId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
         amountStroops: pricing.amountStroops, supersedesPrescriptionId: predecessor?.id ?? null, items: input.items,
       });
+      await facilitiesService.createFulfillmentRecord(tx, {
+        facilityId: input.facilityProfileId,
+        orderKind: 'prescription',
+        orderId: order.id,
+      });
       const paymentIntent = await createOrderPayment(tx, {
         kind: 'prescription', orderId: order.id, patientProfileId: appointment.patientProfileId,
         doctorProfileId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
@@ -148,6 +153,11 @@ export async function issueLabOrder(actor: auditService.AuditActor, input: {
         orderingDoctorId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
         amountStroops: pricing.amountStroops, testType: input.testType, urgency: input.urgency,
         notes: encryptField(input.notes) ?? null, supersedesLabOrderId: predecessor?.id ?? null,
+      });
+      await facilitiesService.createFulfillmentRecord(tx, {
+        facilityId: input.facilityProfileId,
+        orderKind: 'lab_order',
+        orderId: order.id,
       });
       const paymentIntent = await createOrderPayment(tx, {
         kind: 'lab_order', orderId: order.id, patientProfileId: appointment.patientProfileId,
