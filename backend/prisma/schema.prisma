@@ -101,6 +101,16 @@ enum OrderStatus {
   superseded
 }
 
+enum OrderType {
+  pharmacy
+  lab
+}
+
+enum DisputeStatus {
+  pending
+  resolved
+}
+
 enum FulfillmentStatus {
   pending
   in_progress
@@ -168,16 +178,16 @@ model User {
   // (password reset, Phase 8 #33) invalidates every outstanding refresh
   // token for the user, since none of them carry the new value — the
   // interim kill switch issue #33 asked for while #18 doesn't exist yet.
-  tokenVersion             Int       @default(0)
+  tokenVersion          Int       @default(0)
   // Phase 8 (issue #41, docs/adr/0010): set once, irreversibly, when the
   // account is deleted. The row is anonymised in place (email tombstoned,
   // phone cleared, password unusable) rather than deleted, because clinical
   // and payment records still reference its patient profile. Refresh is
   // refused once set. Distinct from admin deactivation (#39), which is
   // reversible.
-  deletedAt                DateTime?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  deletedAt             DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   patientProfile  PatientProfile?
   doctorProfile   DoctorProfile?
@@ -192,6 +202,8 @@ model User {
   accessLogs              AccessLog[]
   // Phase 8 (issue #42, docs/adr/0011): dependents this user is guardian of.
   guardianships           Guardianship[]
+  sep10Challenges         Sep10Challenge[]
+  orderDisputeResolutions OrderDisputeResolution[]
 
   @@index([role])
 }
@@ -327,7 +339,7 @@ model PatientProfile {
   // (ADR 0010), and an accidental user delete must fail loudly rather than
   // take the clinical identity anchor with it. Optional since issue #42: a
   // dependent profile has no login.
-  user           User?           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user           User?              @relation(fields: [userId], references: [id], onDelete: Restrict)
   appointments   Appointment[]
   paymentIntents PaymentIntent[]
   prescriptions  Prescription[]
@@ -345,7 +357,9 @@ model PatientProfile {
   accessLogs AccessLog[]
 
   // Phase 8 (issue #42, docs/adr/0011): guardians of this (dependent) profile.
-  guardians  Guardianship[]
+  guardians     Guardianship[]
+  orders        Order[]
+  orderDisputes OrderDispute[]
 }
 
 // Phase 8 (issue #40): right-of-access export jobs. One row per request;
@@ -497,15 +511,21 @@ model FacilityProfile {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  capabilities   FacilityCapability[]
-  prescriptions  Prescription[]
-  labOrders      LabOrder[]
-  labResults     LabResult[]
-  paymentIntents PaymentIntent[]
-  fulfillments   FulfillmentRecord[]
-  walletLink     WalletLink?
-  prices         FacilityPrice[]
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  capabilities      FacilityCapability[]
+  prescriptions     Prescription[]
+  labOrders         LabOrder[]
+  labResults        LabResult[]
+  paymentIntents    PaymentIntent[]
+  fulfillments      FulfillmentRecord[]
+  // NOTE: no `walletLink` relation anymore — WalletLink is generalized to
+  // a polymorphic owner (patient | facility) as of issue #78, so it
+  // carries no FK relation to either profile (same shape as
+  // FulfillmentRecord's polymorphic order ref, §6.1.3). Ownership is
+  // validated in the payments service, not by the schema.
+  prices            FacilityPrice[]
+  orders            Order[]
+  fulfillmentProofs FulfillmentProof[]
 }
 
 model FacilityCapability {
@@ -530,7 +550,7 @@ model FacilityCapability {
 /// medication code the facility publishes), matching FacilityCapability.detail
 /// — no controlled vocabulary has been decided yet.
 model FacilityPrice {
-  id              String   @id @default(uuid())
+  id              String          @id @default(uuid())
   facilityId      String
   facility        FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
   catalogItemCode String
@@ -540,7 +560,7 @@ model FacilityPrice {
   asset           String
   amount          BigInt
   effectiveFrom   DateTime
-  createdAt       DateTime @default(now())
+  createdAt       DateTime        @default(now())
 
   // Two versions of the same item/asset cannot share an effective instant.
   @@unique([facilityId, catalogItemCode, asset, effectiveFrom])
@@ -640,6 +660,91 @@ model AccessLog {
   @@index([entityType, entityId])
 }
 
+// =========================================================================
+// Orders, Fulfillment Proofs, Disputes & Resolutions
+// =========================================================================
+
+model Order {
+  id                  String      @id @default(uuid())
+  orderType           OrderType
+  patientProfileId    String
+  facilityProfileId   String?
+  prescribingDoctorId String?
+  details             String?
+  status              OrderStatus @default(issued)
+
+  fulfilledAt DateTime?
+
+  confirmed          Boolean   @default(false)
+  confirmationSource String? // 'patient' | 'timeout'
+  confirmedAt        DateTime?
+
+  disputed   Boolean   @default(false)
+  disputedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patientProfile  PatientProfile   @relation(fields: [patientProfileId], references: [id])
+  facilityProfile FacilityProfile? @relation(fields: [facilityProfileId], references: [id])
+
+  fulfillmentProofs FulfillmentProof[]
+  disputes          OrderDispute[]
+
+  @@index([patientProfileId, status])
+  @@index([facilityProfileId, status])
+  @@index([status, confirmed, disputed])
+}
+
+model FulfillmentProof {
+  id                String   @id @default(uuid())
+  orderId           String
+  facilityProfileId String
+  referenceNumber   String
+  attachmentUrl     String?
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  order           Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id])
+
+  @@index([orderId])
+  @@index([facilityProfileId])
+}
+
+model OrderDispute {
+  id               String        @id @default(uuid())
+  orderId          String
+  patientProfileId String
+  reason           String
+  status           DisputeStatus @default(pending)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  order          Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  patientProfile PatientProfile           @relation(fields: [patientProfileId], references: [id])
+  resolutions    OrderDisputeResolution[]
+
+  @@index([orderId])
+  @@index([patientProfileId])
+  @@index([status])
+}
+
+model OrderDisputeResolution {
+  id              String   @id @default(uuid())
+  disputeId       String
+  adminUserId     String
+  resolutionNotes String
+  outcome         String // e.g. 'upheld' | 'rejected' | 'refunded'
+  createdAt       DateTime @default(now())
+
+  dispute   OrderDispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  adminUser User         @relation(fields: [adminUserId], references: [id])
+
+  @@index([disputeId])
+  @@index([adminUserId])
+}
+
 // Below this line: Phase 0 structural placeholders, not yet implemented.
 // See ROADMAP.md for phase order.
 // =========================================================================
@@ -685,8 +790,8 @@ model Consultation {
 // rule 3): `snapshotNotes` is a copy taken at creation, never a live
 // reference — reassign/cancel/cascade never touch it.
 model Referral {
-  id                        String         @id @default(uuid())
-  status                    ReferralStatus @default(pending)
+  id                        String                @id @default(uuid())
+  status                    ReferralStatus        @default(pending)
   patientProfileId          String
   // The consultation this referral grew out of. Required: every referral
   // is created from a consultation (PRD FR-7), which is also what gives
@@ -712,7 +817,7 @@ model Referral {
   // when repeated no-shows expire the referral. Both live on the
   // referral (not a Notification row) because Phase 6's dispatch layer
   // doesn't exist yet — the flag is the seam it will read.
-  noShowCount               Int            @default(0)
+  noShowCount               Int                   @default(0)
   referringDoctorNotifiedAt DateTime?
   // Issue #65: set (with a reason naming the matching hop) when the
   // target doctor/specialty was already in the ancestor chain — the
@@ -727,12 +832,12 @@ model Referral {
   // pending/declined, or after a cancelled/no-showed appointment returns
   // it to pending). Kept pointing at the last no-show when expired —
   // that appointment is why it expired.
-  resultingAppointmentId    String?        @unique
+  resultingAppointmentId    String?               @unique
   // Issue #8: set together with status `expired` — when, and why.
   expiredAt                 DateTime?
   expiredReason             ReferralExpiryReason?
-  createdAt                 DateTime       @default(now())
-  updatedAt                 DateTime       @updatedAt
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
 
   sourceConsultation   Consultation   @relation(fields: [sourceConsultationId], references: [id])
   patientProfile       PatientProfile @relation(fields: [patientProfileId], references: [id])
@@ -812,13 +917,14 @@ model LabOrder {
   status               OrderStatus @default(issued)
   supersedesLabOrderId String?
   createdAt            DateTime    @default(now())
+  expiresAt            DateTime?
 
-  consultation    Consultation    @relation(fields: [consultationId], references: [id])
-  patientProfile  PatientProfile  @relation(fields: [patientProfileId], references: [id])
-  orderingDoctor  DoctorProfile   @relation(fields: [orderingDoctorId], references: [id])
-  facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id])
-  supersedes      LabOrder?       @relation("LabOrderCorrections", fields: [supersedesLabOrderId], references: [id])
-  correctedBy     LabOrder?       @relation("LabOrderCorrections")
+  consultation    Consultation       @relation(fields: [consultationId], references: [id])
+  patientProfile  PatientProfile     @relation(fields: [patientProfileId], references: [id])
+  orderingDoctor  DoctorProfile      @relation(fields: [orderingDoctorId], references: [id])
+  facilityProfile FacilityProfile    @relation(fields: [facilityProfileId], references: [id])
+  supersedes      LabOrder?          @relation("LabOrderCorrections", fields: [supersedesLabOrderId], references: [id])
+  correctedBy     LabOrder?          @relation("LabOrderCorrections")
   result          LabResult?
   paymentIntent   PaymentIntent?
   fulfillment     FulfillmentRecord?
@@ -826,6 +932,7 @@ model LabOrder {
   @@unique([supersedesLabOrderId])
   @@index([patientProfileId, createdAt])
   @@index([consultationId])
+  @@index([status, expiresAt])
 }
 
 model LabResult {
@@ -927,7 +1034,7 @@ model PaymentIntent {
   // plain column rename, so existing rows keep their value. This module
   // never scales or converts amounts, so it never assumes an asset's
   // decimals (the allowlist carries them for clients only).
-  amount BigInt
+  amount          BigInt
   // The asset this intent is denominated in — `XLM` or `USDC` in the
   // default testnet allowlist. Assets are identified on-chain by the SAC
   // contract id, not by the code, so a new intent must name an allowlisted
@@ -944,15 +1051,15 @@ model PaymentIntent {
   // `preparedXdr` lets a retry return exactly the same transaction instead
   // of building a second one. Both are cleared when the preparation
   // expires back to `created`.
-  preparedTxHash    String?
-  preparedXdr       String?
+  preparedTxHash       String?
+  preparedXdr          String?
   preparedExpiryLedger Int?
-  preparedExpiresAt DateTime?
+  preparedExpiresAt    DateTime?
   // ADR 0005: escrow refund deadline = order expiry + grace. Orders don't
   // exist as real records yet (Phase 4), so the service uses the intent's
   // createdAt as the order-expiry anchor — see
   // config.payments.orderExpiryHours / refundGraceHours.
-  refundAfter DateTime?
+  refundAfter          DateTime?
 
   // Which facility price list entry priced this intent (issue #127). The
   // amount above is the snapshot; this code records *which* item it was for,
@@ -964,6 +1071,14 @@ model PaymentIntent {
   // release/refund against the right on-chain escrow.
   escrowId          BigInt?
   stellarTxHash     String?
+  // Snapshot of the payee address this intent was actually funded to
+  // (issue #78). Set at funding time from the facility's then-ACTIVE
+  // wallet link and never changed afterwards — so re-linking a
+  // different address later cannot rewrite which wallet an already-
+  // funded escrow paid, and the escrow keeps referencing its link even
+  // after that link is replaced. Append-only-in-spirit: written exactly
+  // once, with the funding transition.
+  fundedWalletAddress String?
   // Which deployed contract this intent was funded against — this repo
   // has already had two testnet contract IDs (Phase E1 vs. E2), so this
   // isn't hypothetical.
@@ -997,19 +1112,107 @@ model PatientWalletLink {
   patientProfile PatientProfile @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
 }
 
-model WalletLink {
-  id         String          @id @default(uuid())
-  // Scoped to the facility being paid, not the patient — v1 is a
-  // custodial model (docforum-core funds escrows from its own platform
-  // Stellar identity; patients never hold or sign with a wallet here).
-  // See ADR 0004.
-  facilityId String          @unique
-  facility   FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+// SEP-10 (Stellar Web Authentication) challenge issuance ledger —
+// one row per issued challenge, created by GET /payments/sep10/challenge
+// and redeemed exactly once by POST /payments/sep10/verify (issue #77,
+// ADR 0005 step 4: proving the caller controls a Stellar address before
+// it is ever trusted as payer or payee).
+//
+// The nonce is the random 64-byte value embedded in the challenge
+// transaction's `"<home domain> auth"` Manage Data operation. Storing it
+// (unique) is what makes a challenge single-use: verify consumes the row
+// with ONE conditional UPDATE (`consumedAt IS NULL AND expiresAt > now`),
+// so two concurrent replays can't both win — the same DB-level pattern
+// as booking's conditional slot update (ARCHITECTURE.md §5.1).
+//
+// Deliberately no other fields: no XDR, no signature, no PHI. The
+// challenge itself is re-derivable from the submitted XDR at verify
+// time; this table only proves "we issued this nonce to this user for
+// this account, it hasn't been used, and it hasn't expired."
+model Sep10Challenge {
+  id         String    @id @default(uuid())
+  userId     String
+  account    String // the G... (or M...) account the challenge was issued for
+  nonce      String    @unique // hex/utf8 nonce from the challenge's Manage Data op
+  expiresAt  DateTime // matches the challenge's timebounds maxTime (+ record TTL)
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  stellarPublicKey String
+  // Pruning and the "is this row still redeemable" check both scan by
+  // expiry — same reason LoginAttempt indexes its window. Lookups at
+  // verify time go through the unique `nonce` index.
+  @@index([expiresAt])
+}
+
+// Verified wallet links (issue #78, ADR 0005). Generalized from the
+// facility-only, typed-in-address shape: an owner is a PatientProfile or
+// a FacilityProfile (polymorphic ownerType+ownerId — deliberately no FK
+// relation, same shape as FulfillmentRecord's polymorphic order ref),
+// and every link carries HOW it was verified.
+//
+// A link row is immutable except for `replacedAt`/`activeOwnerKey`:
+// re-linking deactivates the old row and inserts a new one, so history
+// (including the address escrows were actually funded to — see
+// PaymentIntent.fundedWalletAddress) is preserved rather than mutated.
+//
+// `verificationMethod`:
+//   - `sep10` — created ONLY by the POST /payments/wallet-link
+//     verification flow (services/wallet-link.ts), inside the same
+//     transaction that consumes the SEP-10 nonce. No seed, script, admin
+//     route or internal service method may create a `sep10` row — the
+//     constructor for it is private to that flow.
+//   - `unverified_legacy` — backfilled by the add_verified_wallet_links
+//     migration for pre-existing facility rows (typed-in addresses).
+//     Usable for funding only until
+//     WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF passes.
+//
+// One ACTIVE link per owner, enforced at the DB level via
+// `activeOwnerKey`: it holds "<ownerType>:<ownerId>" while active and
+// NULL once replaced. A plain unique constraint on it gives exactly the
+// "at most one unreplaced row per owner" guarantee — Prisma's schema DSL
+// cannot express a partial unique index (`WHERE replacedAt IS NULL`),
+// and a raw-SQL index would be silently dropped by the next
+// `prisma migrate dev` as schema drift. Postgres treats NULLs as
+// distinct, so any number of replaced rows can coexist.
+enum WalletLinkOwnerType {
+  patient
+  facility
+}
+
+enum WalletLinkVerificationMethod {
+  sep10
+  unverified_legacy
+}
+
+model WalletLink {
+  id         String               @id @default(uuid())
+  ownerType  WalletLinkOwnerType
+  // PatientProfile.id or FacilityProfile.id. Polymorphic — no FK on
+  // purpose (see note above); existence + caller ownership are checked
+  // in services/wallet-link.ts before any write.
+  ownerId    String
+  // G… address. NEVER accepted from a client-supplied field: derived
+  // server-side from the account the SEP-10 challenge was issued for and
+  // successfully verified.
+  stellarPublicKey       String
+  verificationMethod     WalletLinkVerificationMethod
+  // Set iff verificationMethod = 'sep10' (time the challenge passed).
+  verifiedAt DateTime?
+  // Set when a newer link superseded this one. Only these two fields
+  // ever change on a row; stellarPublicKey/verificationMethod are
+  // write-once.
+  replacedAt DateTime?
+  // "<ownerType>:<ownerId>" while this is the owner's active link, NULL
+  // once replaced. The unique index on this column IS the one-active-
+  // link-per-owner DB guarantee.
+  activeOwnerKey String?  @unique
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Lookups by owner (active-link read path, deactivation sweep).
+  @@index([ownerType, ownerId])
 }
 
 // Soroban event ingestion (issue #86). Cursors are per contract deployment;
