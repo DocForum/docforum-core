@@ -1,10 +1,21 @@
-/*
-  Warnings:
+-- Phase 5 (issues #73 + #74): item-level fulfillment and facility location.
+--
+-- Deliberately adds ONLY what no other migration creates. When this branch
+-- was merged with main, two later migrations turned out to own the columns
+-- this one originally also added, and `migrate deploy` failed on the second
+-- definition (P3018 / 42701: column already exists):
+--
+--   * `PrescriptionItem.prescriptionId` (+ its index and FK) is added by
+--     `20261020000000_order_payment_intents`.
+--   * `FulfillmentRecord.facilityId` (+ its index and FK) and the drop of
+--     the polymorphic `orderType`/`orderId` pair belong to
+--     `20261022090000_fulfillment_record_typed_order_fks` (ADR 0012), which
+--     runs after this one and expects to add them itself.
+--
+-- So the schema-side work those two own stays with them; this file keeps the
+-- enum values, the `FulfillmentItem` table and the facility location columns
+-- that only Phase 5 introduces.
 
-  - Added the required column `facilityId` to the `FulfillmentRecord` table without a default value. This is not possible if the table is not empty.
-  - Added the required column `prescriptionId` to the `PrescriptionItem` table without a default value. This is not possible if the table is not empty.
-
-*/
 -- CreateEnum
 CREATE TYPE "FulfillmentItemStatus" AS ENUM ('pending', 'dispensed', 'unfulfilled');
 
@@ -18,12 +29,6 @@ ALTER TYPE "OrderStatus" ADD VALUE 'partially_fulfilled';
 ALTER TABLE "FacilityProfile" ADD COLUMN     "address" TEXT,
 ADD COLUMN     "latitude" DOUBLE PRECISION,
 ADD COLUMN     "longitude" DOUBLE PRECISION;
-
--- AlterTable
-ALTER TABLE "FulfillmentRecord" ADD COLUMN     "facilityId" TEXT NOT NULL;
-
--- AlterTable
-ALTER TABLE "PrescriptionItem" ADD COLUMN     "prescriptionId" TEXT NOT NULL;
 
 -- CreateTable
 CREATE TABLE "FulfillmentItem" (
@@ -53,21 +58,6 @@ CREATE UNIQUE INDEX "FulfillmentItem_orderType_dispensedKey_key" ON "Fulfillment
 
 -- CreateIndex
 CREATE INDEX "FacilityProfile_latitude_longitude_idx" ON "FacilityProfile"("latitude", "longitude");
-
--- CreateIndex
-CREATE INDEX "FulfillmentRecord_facilityId_idx" ON "FulfillmentRecord"("facilityId");
-
--- CreateIndex
-CREATE INDEX "FulfillmentRecord_orderType_orderId_idx" ON "FulfillmentRecord"("orderType", "orderId");
-
--- CreateIndex
-CREATE INDEX "PrescriptionItem_prescriptionId_idx" ON "PrescriptionItem"("prescriptionId");
-
--- AddForeignKey
-ALTER TABLE "PrescriptionItem" ADD CONSTRAINT "PrescriptionItem_prescriptionId_fkey" FOREIGN KEY ("prescriptionId") REFERENCES "Prescription"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "FulfillmentRecord" ADD CONSTRAINT "FulfillmentRecord_facilityId_fkey" FOREIGN KEY ("facilityId") REFERENCES "FacilityProfile"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "FulfillmentItem" ADD CONSTRAINT "FulfillmentItem_fulfillmentRecordId_fkey" FOREIGN KEY ("fulfillmentRecordId") REFERENCES "FulfillmentRecord"("id") ON DELETE CASCADE ON UPDATE CASCADE;

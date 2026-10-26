@@ -891,7 +891,9 @@ model Prescription {
   correctedBy       Prescription?      @relation("PrescriptionCorrections")
   items             PrescriptionItem[]
   paymentIntent     PaymentIntent?
-  fulfillment       FulfillmentRecord?
+  // One order → many fulfillment records (issue #73 split routing: one per
+  // facility the patient routes items to).
+  fulfillments      FulfillmentRecord[]
 
   @@unique([supersedesPrescriptionId])
   @@index([patientProfileId, createdAt])
@@ -934,7 +936,7 @@ model LabOrder {
   correctedBy     LabOrder?          @relation("LabOrderCorrections")
   result          LabResult?
   paymentIntent   PaymentIntent?
-  fulfillment     FulfillmentRecord?
+  fulfillments    FulfillmentRecord[]
 
   @@unique([supersedesLabOrderId])
   @@index([patientProfileId, createdAt])
@@ -970,8 +972,8 @@ model LabResult {
 /// facility writes.
 model FulfillmentRecord {
   id             String            @id @default(uuid())
-  prescriptionId String?           @unique
-  labOrderId     String?           @unique
+  prescriptionId String?
+  labOrderId     String?
   facilityId     String
   status         FulfillmentStatus @default(pending)
   createdAt      DateTime          @default(now())
@@ -983,6 +985,16 @@ model FulfillmentRecord {
   // Phase 5 (issue #73): one row per routed order item (issue #73).
   items        FulfillmentItem[]
 
+  // ADR 0012 required at most one record per order (a UNIQUE on each order
+  // FK). Issue #73's split routing — patient routes the items one facility
+  // couldn't dispense to a *second* facility — needs several records for
+  // one order, so the uniqueness moved down one level: at most one record
+  // per (order, facility), which is what actually prevents a duplicated
+  // routing. NULLs don't collide in Postgres, so each index only constrains
+  // the rows whose order FK it covers — same mechanism ADR 0012 relied on.
+  // See docs/adr/0012 amendment, 2026-10-26.
+  @@unique([prescriptionId, facilityId])
+  @@unique([labOrderId, facilityId])
   @@index([facilityId, status])
 }
 

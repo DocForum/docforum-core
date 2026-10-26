@@ -108,8 +108,9 @@ beforeAll(async () => {
   app = appModule.createApp();
   prisma = dbModule.prisma;
 
-  // The endpoint only requires authentication — no signup dance needed,
-  // and no patient location is ever attached to this account.
+  // The endpoint is public (it doubles as the price-comparison query), so
+  // this token only exists to prove an authenticated caller sees no
+  // privileged fields — and no patient location is ever attached to it.
   const user = await prisma.user.create({
     data: {
       email: `patient-${runId}@distance-example.test`,
@@ -134,8 +135,12 @@ describe('distance-sorted eligible facilities (issue #74)', () => {
       .set('Authorization', `Bearer ${patientToken}`);
     expect(res.status).toBe(200);
 
-    const withCoords = res.body.filter((row: { distanceKm: number | null }) => row.distanceKm !== null);
-    const withoutCoords = res.body.filter((row: { distanceKm: number | null }) => row.distanceKm === null);
+    // The endpoint keeps main's documented `{ facilities: [...] }`
+    // envelope (it is the price-aware public query too) — issue #74's
+    // location fields ride inside each row.
+    const rows = res.body.facilities;
+    const withCoords = rows.filter((row: { distanceKm: number | null }) => row.distanceKm !== null);
+    const withoutCoords = rows.filter((row: { distanceKm: number | null }) => row.distanceKm === null);
 
     // Ascending order, within rounding tolerance of the JS reference.
     for (let i = 1; i < withCoords.length; i++) {
@@ -150,13 +155,21 @@ describe('distance-sorted eligible facilities (issue #74)', () => {
     // matching capability here; no-location facility appears, sorted last.
     expect(withoutCoords).toHaveLength(1);
     expect(withoutCoords[0].name).toContain('No Location Pharmacy');
-    expect(res.body[res.body.length - 1].distanceKm).toBeNull();
+    expect(rows[rows.length - 1].distanceKm).toBeNull();
 
     // Response shape: distance only, never the facility's raw point-of-
     // interest lat/lng echoed as the patient's query — and no lat/lng
     // fields at all.
-    for (const row of res.body) {
-      expect(Object.keys(row).sort()).toEqual(['address', 'distanceKm', 'id', 'name', 'type']);
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual([
+        'address',
+        'distanceKm',
+        'facilityId',
+        'name',
+        'price',
+        'priceOnRequest',
+        'type',
+      ]);
     }
     // The patient's query point is never echoed back.
     expect(JSON.stringify(res.body)).not.toContain(String(CENTER.lat));
@@ -167,12 +180,13 @@ describe('distance-sorted eligible facilities (issue #74)', () => {
       .get(`/facilities/eligible?capabilityType=medication_dispense&near=${CENTER.lat},${CENTER.lng}&radiusKm=10`)
       .set('Authorization', `Bearer ${patientToken}`);
     expect(res.status).toBe(200);
-    const names = res.body.map((row: { name: string }) => row.name);
+    const rows = res.body.facilities as { name: string; distanceKm: number | null }[];
+    const names = rows.map((row) => row.name);
     // ~56km away → excluded by the 10km radius.
-    expect(names.some((name: string) => name.startsWith('Far Pharmacy'))).toBe(false);
+    expect(names.some((name) => name.startsWith('Far Pharmacy'))).toBe(false);
     // Out-of-radius-to-unknown: still present, sorted last.
-    expect(names.some((name: string) => name.startsWith('No Location Pharmacy'))).toBe(true);
-    expect(res.body[res.body.length - 1].distanceKm).toBeNull();
+    expect(names.some((name) => name.startsWith('No Location Pharmacy'))).toBe(true);
+    expect(rows[rows.length - 1].distanceKm).toBeNull();
   });
 
   it('filters by capability and returns name-sorted results without a point', async () => {
@@ -180,9 +194,10 @@ describe('distance-sorted eligible facilities (issue #74)', () => {
       .get('/facilities/eligible?capabilityType=lab_test')
       .set('Authorization', `Bearer ${patientToken}`);
     expect(res.status).toBe(200);
-    const types = new Set(res.body.map((row: { type: string }) => row.type));
+    const rows = res.body.facilities as { type: string; distanceKm: null }[];
+    const types = new Set(rows.map((row) => row.type));
     expect([...types]).toEqual(['lab']);
-    expect(res.body.every((row: { distanceKm: null }) => row.distanceKm === null)).toBe(true);
+    expect(rows.every((row) => row.distanceKm === null)).toBe(true);
   });
 
   it('validates the query contract', async () => {
@@ -196,8 +211,13 @@ describe('distance-sorted eligible facilities (issue #74)', () => {
       .set('Authorization', `Bearer ${patientToken}`);
     expect(radiusAlone.status).toBe(400);
 
-    const unauthenticated = await request(app).get('/facilities/eligible?near=6.5,3.4');
-    expect(unauthenticated.status).toBe(401);
+    // The endpoint is public (main's contract — patients compare prices
+    // before signing in), so there is no 401 here. What issue #74 requires
+    // is that a location query never resolves unqualified: `near` without
+    // `type`/`capabilityType` is rejected outright, and the point itself is
+    // never stored (asserted above and in the response shape).
+    const unqualifiedLocation = await request(app).get('/facilities/eligible?near=6.5,3.4');
+    expect(unqualifiedLocation.status).toBe(400);
   });
 
   it('measures query performance against a few thousand facilities (issue #74 DoD)', async () => {

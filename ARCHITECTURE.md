@@ -343,20 +343,26 @@ the original and is refunded through the existing admin refund action.
 ### 4.7 Fulfillment (facility-side)
 ```
 FulfillmentRecord
-  id, prescription_id (FK, nullable, unique), lab_order_id (FK, nullable, unique)
+  id, prescription_id (FK, nullable), lab_order_id (FK, nullable)
   facility_id (FK), status (enum: pending|in_progress|partially_fulfilled|fulfilled|rejected)
   created_at, updated_at
   items: FulfillmentItem[]
   # Exactly one of the two order FKs is set — enforced by a PostgreSQL CHECK,
-    not an application guard. One row per order, enforced by the unique on
-    each FK column (Postgres keeps NULLs, so each is at most one non-null).
+    not an application guard. One row per (order, facility): the UNIQUE is on
+    each (order FK, facility_id) pair (Postgres keeps NULLs, so each index only
+    constrains the rows its own FK covers). ADR 0012 originally put the UNIQUE
+    on the order FK alone — issue #73's split routing (remaining items go to a
+    second facility) needs several records per order, so uniqueness moved down
+    one level; see the ADR's 2026-10-26 amendment.
   # All three FKs are RESTRICT: deleting an order or a facility account cannot
     erase the fulfillment trail (docs/adr/0010's retention rule).
   # Replaces the Phase 0 polymorphic (order_type, order_id) pair.
     Decision + reasoning: docs/adr/0012 (issue #13).
   # facility_id is the OWNER: a facility may only ever write rows it owns
     # (hard rule 5). `status` is derived from the FulfillmentItem rows below —
-    # `fulfilled` is never settable by the facility directly.
+    # `fulfilled` is never settable by the facility directly. It is the
+    # facility the patient ROUTED to, which for a split order is not the
+    # order's own `facility_profile_id` (issue #73).
 
 FulfillmentItem  (Phase 5, issue #73 — item-level / partial fulfillment)
   id, fulfillment_record_id (FK, cascade)
