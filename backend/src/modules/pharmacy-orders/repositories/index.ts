@@ -2,7 +2,7 @@
 // access only. Facilities write ONLY through these paths (hard rule 5):
 // never to Prescription.status / LabOrder.status directly.
 import { prisma } from '../../../db/prisma-client';
-import type { FulfillmentStatus, Prisma } from '@prisma/client';
+import type { FulfillmentStatus, OrderType, Prisma } from '@prisma/client';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
@@ -46,7 +46,7 @@ export function countDispensedOrderItems(orderType: string, orderItemIds: string
 export function createFulfillmentRecord(
   db: DbClient,
   data: {
-    orderType: string;
+    orderType: 'prescription' | 'lab_order';
     orderId: string;
     facilityId: string;
     items: { orderType: string; orderItemId: string; quantityOrdered: number | null }[];
@@ -54,8 +54,11 @@ export function createFulfillmentRecord(
 ) {
   return db.fulfillmentRecord.create({
     data: {
-      orderType: data.orderType,
-      orderId: data.orderId,
+      // Typed order FKs (docs/adr/0012): exactly one of the two is set —
+      // the record still addresses one order, it just does so through the
+      // real relation instead of an (orderType, orderId) string pair.
+      prescriptionId: data.orderType === 'prescription' ? data.orderId : null,
+      labOrderId: data.orderType === 'lab_order' ? data.orderId : null,
       facilityId: data.facilityId,
       items: { create: data.items },
     },
@@ -100,4 +103,85 @@ export function listRecordItems(db: DbClient, fulfillmentRecordId: string) {
     where: { fulfillmentRecordId },
     orderBy: { createdAt: 'asc' },
   });
+}
+
+export async function findOrderById(tx: Prisma.TransactionClient, orderId: string, orderType?: OrderType) {
+  return tx.order.findFirst({
+    where: {
+      id: orderId,
+      ...(orderType ? { orderType } : {}),
+    },
+    include: {
+      fulfillmentProofs: true,
+      disputes: {
+        include: {
+          resolutions: true,
+        },
+      },
+    },
+  });
+}
+
+export async function createOrder(
+  tx: Prisma.TransactionClient,
+  data: {
+    orderType: OrderType;
+    patientProfileId: string;
+    prescribingDoctorId?: string;
+    details?: string;
+  },
+) {
+  return tx.order.create({
+    data: {
+      orderType: data.orderType,
+      patientProfileId: data.patientProfileId,
+      prescribingDoctorId: data.prescribingDoctorId,
+      details: data.details,
+      status: 'issued',
+    },
+    include: {
+      fulfillmentProofs: true,
+      disputes: true,
+    },
+  });
+}
+
+export async function createFulfillmentProof(
+  tx: Prisma.TransactionClient,
+  data: {
+    orderId: string;
+    facilityProfileId: string;
+    referenceNumber: string;
+    attachmentUrl?: string;
+    notes?: string;
+  },
+) {
+  return tx.fulfillmentProof.create({
+    data: {
+      orderId: data.orderId,
+      facilityProfileId: data.facilityProfileId,
+      referenceNumber: data.referenceNumber,
+      attachmentUrl: data.attachmentUrl,
+      notes: data.notes,
+    },
+  });
+}
+
+export async function markOrderFulfilled(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+  facilityProfileId: string,
+) {
+  const updated = await tx.order.updateMany({
+    where: {
+      id: orderId,
+      status: 'issued',
+    },
+    data: {
+      status: 'fulfilled',
+      fulfilledAt: new Date(),
+      facilityProfileId,
+    },
+  });
+  return updated.count > 0;
 }

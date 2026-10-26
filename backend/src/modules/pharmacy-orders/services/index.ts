@@ -18,7 +18,10 @@ import { Prisma } from '@prisma/client';
 import type { FulfillmentItem, FulfillmentStatus, Role } from '@prisma/client';
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
-import * as pharmacyOrdersRepo from '../repositories';
+import { storageService, type UploadAttachmentOptions } from '../../../utils/storage';
+import { computeConfirmedSignal, formatOrderResponse } from '../../../utils/order-utils';
+import { record as recordAudit, type AuditActor } from '../../audit/services';
+import * as repo from '../repositories';
 import * as prescriptionsService from '../../prescriptions/services';
 import * as labOrdersService from '../../lab-orders/services';
 
@@ -48,13 +51,13 @@ async function getOrderItems(orderType: OrderType, orderId: string): Promise<Ord
 /** The caller's own FacilityProfile id, or null for non-facility roles. */
 async function getOwnFacilityId(requester: Requester): Promise<string | null> {
   if (requester.role !== 'facility') return null;
-  const profile = await pharmacyOrdersRepo.findFacilityProfileByUserId(requester.userId);
+  const profile = await repo.findFacilityProfileByUserId(requester.userId);
   return profile?.id ?? null;
 }
 
 /** Hard rule 5: a facility can only ever touch records it owns. */
 async function requireOwnedRecord(recordId: string, requester: Requester) {
-  const record = await pharmacyOrdersRepo.findFulfillmentRecordById(recordId);
+  const record = await repo.findFulfillmentRecordById(recordId);
   if (!record) throw new HttpError(404, 'Fulfillment record not found.');
   if (requester.role === 'admin') return record;
   const facilityId = await getOwnFacilityId(requester);
@@ -83,7 +86,7 @@ function deriveRecordStatus(items: Pick<FulfillmentItem, 'status'>[]): Fulfillme
 async function applyOrderStatus(orderType: OrderType, orderId: string): Promise<DerivedOrderStatus> {
   if (orderType === 'prescription') {
     const items = await prescriptionsService.getItemsForFulfillment(orderId);
-    const dispensed = await pharmacyOrdersRepo.countDispensedOrderItems(
+    const dispensed = await repo.countDispensedOrderItems(
       'prescription',
       items.map((item) => item.id),
     );
@@ -98,7 +101,7 @@ async function applyOrderStatus(orderType: OrderType, orderId: string): Promise<
     return 'issued';
   }
   // A lab order is a single-item order — its fulfillment item IS the order.
-  const dispensed = await pharmacyOrdersRepo.countDispensedOrderItems('lab_order', [orderId]);
+  const dispensed = await repo.countDispensedOrderItems('lab_order', [orderId]);
   if (dispensed > 0) {
     await labOrdersService.applyFulfillmentStatus(orderId, 'fulfilled');
     return 'fulfilled';
@@ -119,7 +122,7 @@ export async function createFulfillment(
   if (requester.role !== 'patient' && requester.role !== 'admin') {
     throw new HttpError(403, 'You do not have permission to perform this action.');
   }
-  const facility = await pharmacyOrdersRepo.findFacilityProfileById(input.facilityId);
+  const facility = await repo.findFacilityProfileById(input.facilityId);
   if (!facility) throw new HttpError(404, 'Facility not found.');
 
   const orderItems = await getOrderItems(input.orderType, input.orderId);
@@ -135,7 +138,7 @@ export async function createFulfillment(
     throw new HttpError(400, `These items do not belong to this ${input.orderType}: ${unknownIds.join(', ')}.`);
   }
 
-  const alreadyDispensed = await pharmacyOrdersRepo.listDispensedOrderItemIds(input.orderType, requestedIds);
+  const alreadyDispensed = await repo.listDispensedOrderItemIds(input.orderType, requestedIds);
   if (alreadyDispensed.length > 0) {
     throw new HttpError(
       409,
@@ -144,7 +147,7 @@ export async function createFulfillment(
   }
 
   const quantityById = new Map(orderItems.map((item) => [item.id, item.quantityOrdered]));
-  return pharmacyOrdersRepo.createFulfillmentRecord(prisma, {
+  return repo.createFulfillmentRecord(prisma, {
     orderType: input.orderType,
     orderId: input.orderId,
     facilityId: input.facilityId,
@@ -191,7 +194,7 @@ export async function updateFulfillmentItem(
   const claimed = await prisma
     .$transaction(async (tx) => {
       try {
-        const ok = await pharmacyOrdersRepo.claimPendingItem(tx, itemId, recordId,
+        const ok = await repo.claimPendingItem(tx, itemId, recordId,
           input.status === 'dispensed'
             ? {
                 status: 'dispensed',
@@ -211,8 +214,8 @@ export async function updateFulfillmentItem(
         }
         throw error;
       }
-      const items = await pharmacyOrdersRepo.listRecordItems(tx, recordId);
-      await pharmacyOrdersRepo.updateRecordStatus(tx, recordId, deriveRecordStatus(items));
+      const items = await repo.listRecordItems(tx, recordId);
+      await repo.updateRecordStatus(tx, recordId, deriveRecordStatus(items));
       return true;
     })
     .catch((error) => {
@@ -225,14 +228,14 @@ export async function updateFulfillmentItem(
 
   if (!claimed) throw new HttpError(409, 'This item was already updated by the facility.');
 
-  if (record.orderType !== 'prescription' && record.orderType !== 'lab_order') {
-    // Can't happen — createFulfillment only ever writes the validated
-    // enum members — but keeps TypeScript honest instead of casting.
-    throw new HttpError(500, 'Fulfillment record has an unknown orderType.');
-  }
-  const orderStatus = await applyOrderStatus(record.orderType, record.orderId);
+  // Typed order FKs (docs/adr/0012): exactly one of prescriptionId /
+  // labOrderId is set, which is the record's order reference.
+  const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
+  const orderId = record.prescriptionId ?? record.labOrderId;
+  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
+  const orderStatus = await applyOrderStatus(orderType, orderId);
   return {
-    record: await pharmacyOrdersRepo.findFulfillmentRecordById(recordId),
+    record: await repo.findFulfillmentRecordById(recordId),
     orderStatus,
   };
 }
@@ -260,7 +263,7 @@ export async function updateFulfillmentRecord(
       })
       .then((result) => result.count === 1);
     if (!claimed) return null;
-    return pharmacyOrdersRepo.findFulfillmentRecordById(recordId);
+    return repo.findFulfillmentRecordById(recordId);
   });
   if (!updated) throw new HttpError(409, 'This fulfillment record has already reached a terminal state.');
   return updated;
@@ -282,12 +285,138 @@ export async function getOrderFulfillmentSummary(
   const items = await getOrderItems(orderType, orderId);
   const dispensedItems =
     orderType === 'prescription'
-      ? await pharmacyOrdersRepo.countDispensedOrderItems(
+      ? await repo.countDispensedOrderItems(
           'prescription',
           items.map((item) => item.id),
         )
-      : await pharmacyOrdersRepo.countDispensedOrderItems('lab_order', [orderId]);
+      : await repo.countDispensedOrderItems('lab_order', [orderId]);
   const status: DerivedOrderStatus =
     dispensedItems === items.length ? 'fulfilled' : dispensedItems > 0 ? 'partially_fulfilled' : 'issued';
   return { orderType, orderId, totalItems: items.length, dispensedItems, status };
+}
+
+export { computeConfirmedSignal, formatOrderResponse };
+
+export interface FulfillOrderInput {
+  referenceNumber: string;
+  attachment?: string | UploadAttachmentOptions;
+  notes?: string;
+}
+
+export async function createPharmacyOrder(data: {
+  patientProfileId?: string;
+  prescribingDoctorId?: string;
+  details?: string;
+}) {
+  if (!data.patientProfileId || typeof data.patientProfileId !== 'string') {
+    throw new HttpError(400, 'Patient profile ID is required.');
+  }
+
+  const patient = await prisma.patientProfile.findUnique({
+    where: { id: data.patientProfileId },
+  });
+  if (!patient) {
+    throw new HttpError(404, 'Patient profile not found.');
+  }
+
+  const order = await prisma.$transaction(async (tx) => {
+    return repo.createOrder(tx, {
+      orderType: 'pharmacy',
+      patientProfileId: data.patientProfileId!,
+      prescribingDoctorId: data.prescribingDoctorId,
+      details: data.details,
+    });
+  });
+
+  return formatOrderResponse(order);
+}
+
+export async function fulfillPharmacyOrder(
+  orderId: string,
+  facilityUserId: string,
+  input: FulfillOrderInput,
+  actor: AuditActor,
+) {
+  if (!orderId || typeof orderId !== 'string') {
+    throw new HttpError(400, 'Order ID is required.');
+  }
+
+  const existingCheck = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!existingCheck || existingCheck.orderType !== 'pharmacy') {
+    throw new HttpError(404, 'Pharmacy order not found.');
+  }
+
+  if (!input?.referenceNumber || typeof input.referenceNumber !== 'string' || input.referenceNumber.trim().length === 0) {
+    throw new HttpError(400, 'Reference number is required for fulfillment proof.');
+  }
+
+  const facilityProfile = await prisma.facilityProfile.findUnique({
+    where: { userId: facilityUserId },
+  });
+  if (!facilityProfile) {
+    throw new HttpError(403, 'Facility profile required.');
+  }
+
+  let attachmentUrl: string | undefined = undefined;
+  if (input.attachment) {
+    attachmentUrl = await storageService.uploadAttachment(input.attachment);
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const existing = await repo.findOrderById(tx, orderId, 'pharmacy');
+    if (!existing) {
+      throw new HttpError(404, 'Pharmacy order not found.');
+    }
+    if (existing.status === 'fulfilled') {
+      throw new HttpError(409, 'Pharmacy order has already been fulfilled.');
+    }
+    if (existing.status !== 'issued') {
+      throw new HttpError(400, `Pharmacy order cannot be fulfilled from status: ${existing.status}`);
+    }
+
+    const marked = await repo.markOrderFulfilled(tx, orderId, facilityProfile.id);
+    if (!marked) {
+      throw new HttpError(409, 'Failed to transition order status to fulfilled.');
+    }
+
+    await repo.createFulfillmentProof(tx, {
+      orderId,
+      facilityProfileId: facilityProfile.id,
+      referenceNumber: input.referenceNumber.trim(),
+      attachmentUrl,
+      notes: input.notes,
+    });
+
+    await recordAudit(tx, actor, {
+      entityType: 'Order',
+      entityId: orderId,
+      action: 'order.fulfilled',
+      fromState: 'issued',
+      toState: 'fulfilled',
+      metadata: {
+        orderType: 'pharmacy',
+        referenceNumber: input.referenceNumber.trim(),
+        facilityProfileId: facilityProfile.id,
+      },
+    });
+
+    const updated = await repo.findOrderById(tx, orderId, 'pharmacy');
+    if (!updated) {
+      throw new HttpError(500, 'Failed to fetch updated order.');
+    }
+    return updated;
+  });
+
+  return formatOrderResponse(result);
+}
+
+export async function getPharmacyOrderById(orderId: string) {
+  if (!orderId || typeof orderId !== 'string') {
+    throw new HttpError(400, 'Order ID is required.');
+  }
+  const order = await repo.findOrderById(prisma, orderId, 'pharmacy');
+  if (!order) {
+    throw new HttpError(404, 'Pharmacy order not found.');
+  }
+  return formatOrderResponse(order);
 }

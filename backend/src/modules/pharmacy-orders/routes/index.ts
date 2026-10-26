@@ -46,3 +46,13 @@ pharmacyOrdersRouter.get(
   authenticate,
   pharmacyOrdersController.getOrderFulfillmentStatus,
 );
+
+// Generic pharmacy order (Order model) creation and fulfillment proof.
+pharmacyOrdersRouter.post('/', authenticate, pharmacyOrdersController.createPharmacyOrder);
+pharmacyOrdersRouter.get('/:id', authenticate, pharmacyOrdersController.getPharmacyOrder);
+pharmacyOrdersRouter.post(
+  '/:id/fulfill',
+  authenticate,
+  requireRole('facility'),
+  pharmacyOrdersController.fulfillPharmacyOrder,
+);

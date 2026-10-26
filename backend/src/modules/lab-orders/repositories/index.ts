@@ -24,3 +24,10 @@ export function applyOrderStatusIf(
     .updateMany({ where: { id, status: { in: allowedFrom } }, data: { status: to } })
     .then((result) => result.count === 1);
 }
+
+export {
+  findOrderById,
+  createOrder,
+  createFulfillmentProof,
+  markOrderFulfilled,
+} from '../../pharmacy-orders/repositories';

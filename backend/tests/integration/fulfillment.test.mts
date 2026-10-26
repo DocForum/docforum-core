@@ -77,9 +77,43 @@ async function createFacility(name: string, type: 'pharmacy' | 'lab') {
   return { profile, token };
 }
 
+/** A minimal clinical context for one order — doctor + slot + appointment +
+ * consultation. Orders are versioned rows hanging off a consultation since
+ * issue #10, so a fixture order needs the whole chain (same shape as
+ * tests/integration/order-fixtures.mts). Each call makes a fresh doctor so
+ * the slot's unique claim never collides between fixtures. */
+async function createOrderContext(): Promise<{ consultationId: string; doctorProfileId: string }> {
+  contextSeq += 1;
+  const user = await prisma.user.create({
+    data: {
+      email: `fulfillment-doctor-${contextSeq}-${runId}@example.com`,
+      passwordHash: 'unused',
+      role: 'doctor',
+    },
+  });
+  const doctor = await prisma.doctorProfile.create({
+    data: { userId: user.id, fullName: 'Fulfillment Fixture Doctor', verificationStatus: 'verified' },
+  });
+  const startTime = new Date(Date.now() + contextSeq * 60 * 60 * 1000);
+  const slot = await prisma.availabilitySlot.create({
+    data: { doctorProfileId: doctor.id, startTime, endTime: new Date(startTime.getTime() + 30 * 60 * 1000) },
+  });
+  const appointment = await prisma.appointment.create({
+    data: { patientProfileId, doctorProfileId: doctor.id, availabilitySlotId: slot.id },
+  });
+  const consultation = await prisma.consultation.create({ data: { appointmentId: appointment.id } });
+  return { consultationId: consultation.id, doctorProfileId: doctor.id };
+}
+
 async function createPrescriptionWithItems(drugNames: string[]) {
+  const context = await createOrderContext();
   return prisma.prescription.create({
     data: {
+      consultationId: context.consultationId,
+      patientProfileId,
+      prescribingDoctorId: context.doctorProfileId,
+      facilityProfileId: facilityA.profile.id,
+      amountStroops: 1_000n,
       items: {
         create: drugNames.map((drugName) => ({
           drugName,
@@ -97,6 +131,8 @@ let app: App;
 let prisma: Prisma;
 let signAccessToken: (payload: { sub: string; role: 'patient' | 'doctor' | 'facility' | 'admin' }) => string;
 let patientToken: string;
+let patientProfileId: string;
+let contextSeq = 0;
 let facilityA: Awaited<ReturnType<typeof createFacility>>;
 let facilityB: Awaited<ReturnType<typeof createFacility>>;
 
@@ -139,6 +175,10 @@ beforeAll(async () => {
   });
 
   patientToken = await signupVerifiedPatient();
+  const patientUser = await prisma.user.findUniqueOrThrow({
+    where: { email: `patient-${runId}@example.com` },
+  });
+  patientProfileId = (await prisma.patientProfile.findUniqueOrThrow({ where: { userId: patientUser.id } })).id;
   facilityA = await createFacility('Facility A', 'pharmacy');
   facilityB = await createFacility('Facility B', 'pharmacy');
 }, 120_000);
@@ -391,11 +431,18 @@ describe('partial fulfillment (issue #73)', () => {
   });
 
   it('fulfills a lab order (single-item order) through the same item path', async () => {
-    const user = await prisma.user.findUnique({ where: { email: `patient-${runId}@example.com` } });
+    const context = await createOrderContext();
     const labOrder = await prisma.labOrder.create({
-      data: { testType: 'malaria rapid test', urgency: 'routine' },
+      data: {
+        consultationId: context.consultationId,
+        patientProfileId,
+        orderingDoctorId: context.doctorProfileId,
+        facilityProfileId: facilityA.profile.id,
+        amountStroops: 500n,
+        testType: 'malaria rapid test',
+        urgency: 'routine',
+      },
     });
-    void user;
 
     const routed = await request(app)
       .post('/pharmacy-orders/fulfillments')

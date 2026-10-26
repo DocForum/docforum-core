@@ -1,3 +1,67 @@
-// notifications services — placeholder. Other modules must only import from here,
-// never from repositories/ directly. See AGENTS.md "Non-negotiable rules".
-export {};
+// notifications services — the only exported surface other modules may
+// call. Other modules must only import from here, never from
+// repositories/ directly. See AGENTS.md "Non-negotiable rules".
+//
+// Provider-agnostic by design (ARCHITECTURE.md §1.5 / §2, PRD OQ / issue
+// #17): outbound delivery goes through a `NotificationChannel` interface,
+// and the default implementation is a console adapter. The default real
+// provider is decided in docs/adr/ (see ADR for the email/SMS provider
+// decision). Wiring that provider in is a new adapter behind this same
+// interface — only the adapter changes, feature code does not.
+import { config } from '../../../config';
+import { formatMessage, resolveLocale } from '../../../i18n';
+
+export interface NotificationMessage {
+  /** Destination address — an email for now (the only channel interface we need). */
+  to: string;
+  subject: string;
+  body: string;
+}
+
+export interface NotificationChannel {
+  send(message: NotificationMessage): Promise<void>;
+}
+
+/** Dev/default adapter. Writes the message to stdout instead of sending
+ * it anywhere — the only way to read a reset link in local dev until the
+ * decided provider adapter is wired in. Never logs a password, only the
+ * single-use link (whose token is useless once used/expired). */
+export const consoleNotificationChannel: NotificationChannel = {
+  async send(message: NotificationMessage) {
+    // eslint-disable-next-line no-console
+    console.log(`[notifications] → ${message.to}\n${message.subject}\n${message.body}`);
+  },
+};
+
+let channel: NotificationChannel = consoleNotificationChannel;
+
+/** Swap the delivery adapter (real provider in prod, a spy in tests).
+ * Returns the previous channel so callers can restore it. */
+export function setNotificationChannel(next: NotificationChannel): NotificationChannel {
+  const previous = channel;
+  channel = next;
+  return previous;
+}
+
+export async function send(message: NotificationMessage): Promise<void> {
+  await channel.send(message);
+}
+
+/** Single-use, expiring reset link. The raw token is passed through to
+ * the channel and never stored — only its hash is (auth module's
+ * repository). */
+export async function sendPasswordResetLink(input: {
+  email: string;
+  token: string;
+  expiresAt: Date;
+  locale?: string;
+}): Promise<void> {
+  const link = `${config.appBaseUrl}/reset-password?token=${encodeURIComponent(input.token)}`;
+  const minutes = Math.round((input.expiresAt.getTime() - Date.now()) / 60_000);
+  const locale = resolveLocale(input.locale);
+  await send({
+    to: input.email,
+    subject: formatMessage(locale, 'notifications.passwordReset.subject'),
+    body: formatMessage(locale, 'notifications.passwordReset.body', { minutes, link }),
+  });
+}

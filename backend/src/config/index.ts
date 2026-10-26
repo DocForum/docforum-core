@@ -1,4 +1,17 @@
 import 'dotenv/config';
+import { parsePaymentsConfig } from './payments';
+
+const payoutPrivacyMode = process.env.PAYOUT_PRIVACY_MODE ?? 'facility';
+if (payoutPrivacyMode !== 'facility' && payoutPrivacyMode !== 'pooled') {
+  throw new Error('PAYOUT_PRIVACY_MODE must be either "facility" or "pooled".');
+}
+
+/** A strictly positive number from an env var, else the default. A typo like
+ * `REFERRAL_PENDING_TTL_DAYS=0` must not silently expire every referral. */
+function positiveNumber(raw: string | undefined, fallback: number): number {
+  const value = Number(raw);
+  return raw !== undefined && raw !== '' && Number.isFinite(value) && value > 0 ? value : fallback;
+}
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -17,6 +30,77 @@ function parseTrustProxy(raw: string | undefined, isProduction: boolean): boolea
   return raw;
 }
 
+/** A payment asset the escrow may be denominated in (issue #79). The
+ * contract id is the Stellar Asset Contract address the escrow pulls from;
+ * `decimals` is informational for clients (every amount in this API is
+ * already in the asset's smallest unit, so the server never scales one). */
+export interface PaymentAsset {
+  code: string;
+  tokenContractId: string;
+  decimals: number;
+  /** Set for issued assets (e.g. USDC). Native XLM has none and needs no
+   * trustline; every issued asset's payee must have one before funding. */
+  issuer?: string;
+}
+
+// Testnet defaults. Override per environment with PAYMENT_ASSETS; production
+// must set it explicitly (mainnet contract ids differ). Only assets without
+// clawback, transfer fees or rebasing belong in the allowlist — escrow
+// threat model T5 — and the parser refuses entries that opt into clawback or
+// rebasing. This is a curated policy list, not an on-chain capability probe.
+const TESTNET_NATIVE_SAC = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+const TESTNET_USDC_SAC = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
+const TESTNET_USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+
+const STELLAR_CONTRACT_ID = /^C[A-Z2-7]{55}$/;
+const STELLAR_PUBLIC_KEY = /^G[A-Z2-7]{55}$/;
+
+function parsePaymentAssets(raw: string | undefined): PaymentAsset[] {
+  const fallback: PaymentAsset[] = [
+    { code: 'XLM', tokenContractId: process.env.ESCROW_TOKEN_ID ?? TESTNET_NATIVE_SAC, decimals: 7 },
+    {
+      code: 'USDC',
+      tokenContractId: TESTNET_USDC_SAC,
+      decimals: 7,
+      issuer: TESTNET_USDC_ISSUER,
+    },
+  ];
+  if (!raw) return fallback;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('PAYMENT_ASSETS must be a JSON array of { code, tokenContractId, decimals, issuer? }.');
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error('PAYMENT_ASSETS must be a non-empty JSON array.');
+  }
+  const seen = new Set<string>();
+  return parsed.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) throw new Error(`PAYMENT_ASSETS[${index}] must be an object.`);
+    const { code, tokenContractId, decimals, issuer, clawback, rebase } = entry as Record<string, unknown>;
+    if (clawback === true || rebase === true) {
+      throw new Error(`PAYMENT_ASSETS[${index}] opts into clawback/rebasing, which the escrow allowlist forbids (T5).`);
+    }
+    if (typeof code !== 'string' || !/^[A-Z0-9]{1,12}$/.test(code)) {
+      throw new Error(`PAYMENT_ASSETS[${index}].code must be 1-12 uppercase alphanumeric characters.`);
+    }
+    if (seen.has(code)) throw new Error(`PAYMENT_ASSETS contains duplicate asset code ${code}.`);
+    seen.add(code);
+    if (typeof tokenContractId !== 'string' || !STELLAR_CONTRACT_ID.test(tokenContractId)) {
+      throw new Error(`PAYMENT_ASSETS[${index}].tokenContractId must be a Stellar contract id.`);
+    }
+    if (typeof decimals !== 'number' || !Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+      throw new Error(`PAYMENT_ASSETS[${index}].decimals must be an integer between 0 and 18.`);
+    }
+    if (issuer !== undefined && (typeof issuer !== 'string' || !STELLAR_PUBLIC_KEY.test(issuer))) {
+      throw new Error(`PAYMENT_ASSETS[${index}].issuer must be a Stellar public key.`);
+    }
+    return { code, tokenContractId, decimals, ...(issuer ? { issuer } : {}) };
+  });
+}
+
 const PRODUCTION_CORS_ORIGINS = ['https://docforum.github.io'];
 const LOCAL_DEV_CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
 
@@ -26,6 +110,17 @@ function parseCorsOrigins(raw: string | undefined, isProduction: boolean): strin
     .split(',')
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
+}
+
+/** Issue #78: the date after which funding refuses facility wallet links
+ * that were never SEP-10 verified. Defaults to 2027-01-01 (UTC) — a
+ * deliberate fail-closed default: legacy links keep working for a
+ * defined grace window without any deployment needing to remember to
+ * set the variable, but "never enforce" is never the default. Returns
+ * NaN for a malformed value so startup validation can name the var. */
+function parseWalletLinkCutoff(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return Date.parse('2027-01-01T00:00:00Z');
+  return Date.parse(raw);
 }
 
 export const config = {
@@ -41,6 +136,21 @@ export const config = {
     // until that's built (Phase 8).
     accessTtl: '15m',
     refreshTtl: '30d',
+  },
+  // Base URL of docforum-web, used to build the link in outbound
+  // notifications (password reset today). Not a provider decision — see
+  // issue #17 — just the URL the recipient is sent to.
+  appBaseUrl: process.env.APP_BASE_URL ?? 'http://localhost:5173',
+  passwordReset: {
+    // Raw tokens are single-use and short-lived; only their SHA-256 hash
+    // is stored (see PasswordResetToken in schema.prisma).
+    tokenTtlMinutes: Number(process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES ?? 30),
+    // Rate limits on POST /auth/password-reset/request, so the endpoint
+    // can't be used to spam an inbox. Applied per email AND per IP —
+    // either limit being hit returns 429. See auth/services/rate-limit.ts
+    // for the (in-memory, single-process) caveat.
+    requestsPerEmailPerHour: Number(process.env.PASSWORD_RESET_REQUESTS_PER_EMAIL_PER_HOUR ?? 3),
+    requestsPerIpPerHour: Number(process.env.PASSWORD_RESET_REQUESTS_PER_IP_PER_HOUR ?? 10),
   },
   // Phase 8 hardening knobs (issues #34/#35/#37). Env-configurable so a
   // preview deployment can be tightened without a code change, and so
@@ -86,6 +196,13 @@ export const config = {
     pruneIntervalSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_INTERVAL_SECONDS ?? 60 * 60),
     pruneAfterSeconds: Number(process.env.LOGIN_THROTTLE_PRUNE_AFTER_SECONDS ?? 24 * 60 * 60),
   },
+  // PHI read-access log (Phase 8, issue #45). How long AccessLog rows are
+  // kept before the prune job (src/server.ts) deletes them. Reads are far
+  // higher volume than AuditEvent writes, so this gets its own, shorter
+  // retention instead of AuditEvent's append-forever lifetime.
+  accessLog: {
+    retentionDays: Number(process.env.ACCESS_LOG_RETENTION_DAYS ?? 365),
+  },
   // Patient data export (Phase 8, issue #40). Env-configurable so a
   // deployment can tune retention and memory bounds without a code change.
   patientExport: {
@@ -109,6 +226,29 @@ export const config = {
     staleAfterSeconds: Number(process.env.PATIENT_EXPORT_STALE_AFTER_SECONDS ?? 15 * 60),
     maxAttempts: Number(process.env.PATIENT_EXPORT_MAX_ATTEMPTS ?? 3),
   },
+
+  // Account deletion purge (Phase 8, issue #41, docs/adr/0010). Only
+  // tombstones with no retained records are ever purged; the grace period is
+  // operational (lets requests in flight under a still-valid access token
+  // finish), not a legal retention period — that one is an open decision.
+  accountPurge: {
+    graceHours: Number(process.env.ACCOUNT_PURGE_GRACE_HOURS ?? 24),
+    intervalSeconds: Number(process.env.ACCOUNT_PURGE_INTERVAL_SECONDS ?? 6 * 60 * 60),
+  },
+  // Referral expiry (Phase 3, issue #8). A referral still `pending` this
+  // long after it was created — or after it last returned to `pending` —
+  // is moved to the terminal `expired` state by an interval sweep
+  // (src/jobs/referral-expiry.ts). A v1 default, not a tuned value.
+  referrals: {
+    pendingTtlDays: positiveNumber(process.env.REFERRAL_PENDING_TTL_DAYS, 14),
+    expirySweepIntervalSeconds: positiveNumber(process.env.REFERRAL_EXPIRY_SWEEP_INTERVAL_SECONDS, 60 * 60),
+  },
+  // Guardians and dependents (Phase 8, issue #42, docs/adr/0011). Guardian
+  // access ends automatically when the dependent reaches this age (UTC
+  // calendar date, checked at request time).
+  patients: {
+    ageOfMajorityYears: Number(process.env.AGE_OF_MAJORITY_YEARS ?? 18),
+  },
   // Explicit, per-environment CORS allowlist (Phase 8, issue #37). A single
   // configured origin string was one typo away from "reflect whatever origin
   // asked"; an allowlist makes every permitted frontend a deliberate entry.
@@ -129,16 +269,57 @@ export const config = {
     sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
     path: '/',
   },
-  // Deliberately NOT required at startup via requireEnv() — unrelated
-  // parts of the app (auth, availability, etc.) shouldn't fail to boot
-  // just because payments isn't configured. The payments module itself
-  // (services/index.ts) validates these are present before doing
-  // anything that needs them, with a clear error naming which is
-  // missing. See docs/adr/0004-custodial-payments-v1.md.
+  // Admin invites (Phase 8, issue #39). `acceptUrl` is where the invite link
+  // points — docforum-web owns the page that consumes `?token=`.
+  adminInvites: {
+    ttlHours: Number(process.env.ADMIN_INVITE_TTL_HOURS ?? 72),
+    acceptUrl: process.env.ADMIN_INVITE_ACCEPT_URL ?? 'http://localhost:5173/accept-admin-invite',
+  },
+  orders: {
+    confirmationWindowHours: Number(process.env.ORDER_CONFIRMATION_WINDOW_HOURS ?? 72),
+    expiryIntervalSeconds: Number(process.env.ORDER_EXPIRY_INTERVAL_SECONDS ?? 300),
+  },
   payments: {
-    platformPayerSecret: process.env.PLATFORM_PAYER_SECRET,
-    platformReleaserSecret: process.env.PLATFORM_RELEASER_SECRET,
-    escrowContractId: process.env.ESCROW_CONTRACT_ID,
-    escrowTokenId: process.env.ESCROW_TOKEN_ID,
+    ...parsePaymentsConfig(process.env),
+    // Issue #79: per-environment asset allowlist (USDC + native XLM by
+    // default on testnet). The legacy `escrowTokenId`/`assetAllowlist`
+    // fields above remain for the pre-#79 native-XLM path.
+    assets: parsePaymentAssets(process.env.PAYMENT_ASSETS),
+    // Horizon is read only for payee trustline checks — never for contract
+    // calls, which go through the SDK.
+    horizonUrl: process.env.HORIZON_URL ?? 'https://horizon-testnet.stellar.org',
+    // Issue #80: how long a prepared, unsigned create_escrow transaction is
+    // considered live before the expiry job returns the intent to `created`.
+    prepareTtlSeconds: Number(process.env.PAYMENT_PREPARE_TTL_SECONDS ?? 5 * 60),
+    // ADR 0005: refund_after = order expiry + grace. Orders are still
+    // placeholders without an expiry field (Phase 4), so the intent's own
+    // createdAt is the order-expiry anchor today.
+    orderExpiryHours: Number(process.env.PAYMENT_ORDER_EXPIRY_HOURS ?? 72),
+    refundGraceHours: Number(process.env.PAYMENT_REFUND_GRACE_HOURS ?? 24),
+    // Expiry sweep cadence (src/jobs/payment-intents.ts).
+    prepareExpirySweepIntervalSeconds: Number(process.env.PAYMENT_PREPARE_EXPIRY_SWEEP_INTERVAL_SECONDS ?? 60),
+    payoutPrivacyMode,
+    payoutPrivacyPoolAddress: process.env.PAYOUT_PRIVACY_POOL_ADDRESS,
+    walletLinkUnverifiedFundingCutoff: parseWalletLinkCutoff(
+      process.env.WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF,
+    ),
+  },
+  // SEP-10 Stellar Web Authentication (issue #77, ADR 0005 step 4).
+  sep10: {
+    signingSecret: process.env.SEP10_SIGNING_SECRET,
+    homeDomain: process.env.SEP10_HOME_DOMAIN,
+    webAuthDomain: process.env.SEP10_WEB_AUTH_DOMAIN,
+    networkPassphrase: process.env.SEP10_NETWORK_PASSPHRASE ?? 'Test SDF Network ; September 2015',
+    horizonUrl: process.env.SEP10_HORIZON_URL ?? 'https://horizon-testnet.stellar.org',
+    challengeTimeoutSeconds: Number(process.env.SEP10_CHALLENGE_TIMEOUT_SECONDS ?? 300),
+  },
+  // Structured logging (Phase 9). Level is configurable per environment;
+  // tests run quiet by default so captured output stays readable.
+  log: {
+    level:
+      process.env.LOG_LEVEL ??
+      (process.env.NODE_ENV === 'test' ? 'silent' : process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
+    // Header carrying the request id; accepted from the client or generated.
+    requestIdHeader: 'x-request-id',
   },
 } as const;
