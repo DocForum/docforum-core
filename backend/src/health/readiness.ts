@@ -89,7 +89,7 @@ export function createReadinessChecker(checks: ReadinessChecks, cacheMs = CACHE_
     if (cached && cached.expiresAt > Date.now()) return cached.value;
     if (inFlight) return inFlight;
 
-    inFlight = (async () => {
+    const pending: Promise<ReadinessResult> = (async () => {
       const [configuration, database, migrations, payments] = await Promise.all([
         checks.configuration().then(() => 'ok' as const, () => 'failed' as const),
         checks.database().then(() => 'ok' as const, () => 'failed' as const),
@@ -97,15 +97,17 @@ export function createReadinessChecker(checks: ReadinessChecks, cacheMs = CACHE_
         checks.payments(),
       ]);
       const ready = configuration === 'ok' && database === 'ok' && migrations === 'ok';
-      return {
+      const result: ReadinessResult = {
         status: ready ? 'ready' : 'not_ready',
         checks: { configuration, database, migrations, payments },
       };
+      return result;
     })().finally(() => {
       inFlight = undefined;
     });
+    inFlight = pending;
 
-    const value = await inFlight;
+    const value = await pending;
     cached = { expiresAt: Date.now() + cacheMs, value };
     return value;
   };

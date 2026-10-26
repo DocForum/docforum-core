@@ -13,6 +13,7 @@ import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import { readCsrfHeader } from '../../../middleware/csrf';
 import { getParam } from '../../../request-params';
+import { resolveLocale } from '../../../i18n';
 
 const REFRESH_COOKIE = 'docforum_refresh';
 const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30d — matches config.jwt.refreshTtl
@@ -56,7 +57,10 @@ function sessionResponse(res: Response, session: authService.AuthSession) {
 
 export async function signup(req: Request, res: Response) {
   const input = signupSchema.parse(req.body);
-  const session = await authService.signup(input, sessionContext(req));
+  const session = await authService.signup(
+    { ...input, locale: resolveLocale(undefined, req.headers['accept-language']) },
+    sessionContext(req),
+  );
   sessionResponse(res, session);
 }
 

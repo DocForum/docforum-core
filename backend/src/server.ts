@@ -5,19 +5,37 @@ import { pruneOldAccessLogs } from './modules/audit/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
 import { startEscrowEventPoller } from './jobs/escrow-events';
 import { validatePlatformSigners } from './modules/payments/services/platform-signers';
-import { verifyPaymentsNetwork } from './modules/payments/services';
+import { validateSep10Config, validateWalletLinkConfig, verifyPaymentsNetwork } from './modules/payments/services';
+import { startAccountPurgeJob } from './jobs/account-purge';
+import { startPaymentIntentJobs } from './jobs/payment-intents';
+import { startReferralExpiryJob } from './jobs/referral-expiry';
+import { startOrderExpiryJob } from './jobs/order-expiry';
+import { expireUnfulfilledOrders } from './jobs/lab-order-expiry';
 import { prisma } from './db/prisma-client';
-
 
 const app = createApp();
 
 let server: ReturnType<typeof app.listen> | undefined;
 let shuttingDown = false;
+
+// Patient data export worker + expiry cleanup (Phase 8, issue #40).
 const stopPatientExports = startPatientExportJobs();
 const stopEscrowEventPoller = startEscrowEventPoller();
+// Deleted-account tombstone purge (Phase 8, issue #41, docs/adr/0010).
+const stopAccountPurge = startAccountPurgeJob();
+// Prepared-transaction expiry (Phase 5.5, issue #80): an unsigned
+// create_escrow transaction that outlives its window moves the intent back
+// to `created` so the patient can prepare again.
+const stopPaymentIntentJobs = startPaymentIntentJobs();
+// Referral expiry (Phase 3, issue #8): pending referrals nobody acted on
+// within REFERRAL_PENDING_TTL_DAYS become `expired`.
+const stopReferralExpiry = startReferralExpiryJob();
+// Unconfirmed order expiry job (auto-confirm when window elapses with no dispute).
+const stopOrderExpiry = startOrderExpiryJob();
 
 async function startServer() {
-  await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork()]);
+  await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork(), validateSep10Config()]);
+  validateWalletLinkConfig();
   if (shuttingDown) return;
   server = app.listen(config.port, () => {
     // eslint-disable-next-line no-console
@@ -37,8 +55,13 @@ async function shutdown(signal: string) {
   // eslint-disable-next-line no-console
   console.log(`[shutdown] ${signal} received; draining HTTP requests`);
   clearInterval(pruneTimer);
+  clearInterval(orderExpiryTimer);
   stopPatientExports();
   stopEscrowEventPoller();
+  stopAccountPurge();
+  stopPaymentIntentJobs();
+  stopReferralExpiry();
+  stopOrderExpiry();
   if (server) {
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => server?.closeAllConnections(), 10_000);
@@ -90,4 +113,6 @@ const pruneTimer = setInterval(() => {
 }, config.loginThrottle.pruneIntervalSeconds * 1000);
 pruneTimer.unref();
 
-// Patient data export worker + expiry cleanup (Phase 8, issue #40).
+// Lab orders still unfulfilled past their expiresAt move to `expired`.
+const orderExpiryTimer = setInterval(() => { void expireUnfulfilledOrders().catch((err) => console.error("[jobs] order expiry failed:", err)); }, 60 * 60 * 1000);
+orderExpiryTimer.unref();
