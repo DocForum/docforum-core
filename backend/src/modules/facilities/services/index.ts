@@ -235,6 +235,22 @@ export function facilityRequirementForOrderKind(orderKind: FacilityOrderKind) {
 }
 
 /**
+ * Issue #10: the facility an order is issued to must exist and be of the
+ * order kind's type (pharmacy ↔ prescription, lab ↔ lab order). Checked
+ * before the order row is written, so an unknown id is a 400 instead of a
+ * foreign-key failure (500) and a wrong-type facility never gets an order
+ * row at all. Same message as the payment-intent guard it front-runs.
+ */
+export async function requireFacilityForOrderKind(db: Db, facilityProfileId: string, orderKind: FacilityOrderKind) {
+  const { facilityType } = facilityRequirementForOrderKind(orderKind);
+  const facility = await facilitiesRepo.findFacilityProfileById(facilityProfileId, db);
+  if (!facility || facility.type !== facilityType) {
+    throw new HttpError(400, `The selected facility must be a ${facilityType} facility.`);
+  }
+  return { id: facility.id, type: facility.type };
+}
+
+/**
  * Facilities of `type`, each with the price in force at `at` for the optional
  * `catalogItemCode` — the patient-facing comparison query (issue #127).
  *
