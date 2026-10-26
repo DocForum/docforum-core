@@ -110,6 +110,23 @@ export async function getConsultationRecord(consultationId: string) {
   return consultation;
 }
 
+/**
+ * Issue #10: the state rule for hanging a prescription or lab order off a
+ * consultation. A consultation is orderable while it is open (no `outcome`
+ * yet — "active") or after sign-off ("completed"), as long as the visit
+ * behind it actually happened: its appointment must be `completed`. The
+ * close routes already refuse to create a consultation for anything else,
+ * so this is the last line of defence for rows that reached the table
+ * another way (or an appointment that is not in the state the record
+ * claims). Callers check *who* is asking first, so a stranger learns
+ * nothing about the consultation's state from this 409.
+ */
+export function assertConsultationAcceptsOrders(consultation: { appointment: { status: string } | null }) {
+  if (!consultation.appointment || consultation.appointment.status !== 'completed') {
+    throw new HttpError(409, 'Orders can only be issued from a consultation whose appointment is completed.');
+  }
+}
+
 /** Visible to the treating doctor and the patient of the underlying
  * appointment — nothing wider in v1. `notes` is decrypted for the reader;
  * the stored ciphertext never leaves this module. */
