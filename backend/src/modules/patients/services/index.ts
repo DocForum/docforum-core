@@ -1,9 +1,13 @@
-import { HttpError } from '../../../http-error';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../../../db/prisma-client';
+import type { PatientProfile } from '@prisma/client';
 import { config } from '../../../config';
+import { HttpError } from '../../../http-error';
 import * as patientsRepo from '../repositories';
 import { ChunkWriter, EXPORT_SCHEMA_VERSION, ExportSectionError, writeExportBundle } from './export-bundle';
 import { listExportSections, type PatientExportSection } from './export-registry';
 import type { PatientExport, PatientExportStatus } from '@prisma/client';
+import * as authService from '../../auth/services';
 
 // The registry is part of this module's service surface: other modules
 // import `PatientExportSection`/`paginate` from here to build their section,
@@ -16,10 +20,17 @@ export {
 } from './export-registry';
 export type { ExportSubject, PatientExportSection } from './export-registry';
 export { EXPORT_FORMAT, EXPORT_SCHEMA_VERSION } from './export-bundle';
+import { isMinor } from './majority';
+
+export { isMinor, majorityDate } from './majority';
 
 export async function getMyPatientProfile(userId: string) {
   const profile = await patientsRepo.findPatientProfileByUserId(userId);
-  if (!profile) throw new HttpError(404, 'No patient profile for this account.');
+  // An anonymised profile (issue #41) belongs to a deleted account: every
+  // patient route resolves the caller through here, so a still-valid access
+  // token stops reaching booking, listing, etc. the moment the account is
+  // deleted.
+  if (!profile || profile.anonymizedAt) throw new HttpError(404, 'No patient profile for this account.');
   return profile;
 }
 
@@ -171,7 +182,10 @@ async function generateClaimedExport(
   try {
     // The owning user is needed by account-level sections (auth module).
     const owner = await patientsRepo.findPatientProfileOwner(record.patientProfileId);
-    if (!owner) throw new ExportSectionError('profile', new Error('profile missing'));
+    // A dependent profile (issue #42) has no login, so it can never be the
+    // subject of `POST /patients/me/export`; refuse rather than export it
+    // without an account section.
+    if (!owner?.userId) throw new ExportSectionError('profile', new Error('profile missing'));
     await writeExportBundle({
       exportId,
       generatedAt,
@@ -284,4 +298,252 @@ export async function getPatientProfileById(id: string) {
   const profile = await patientsRepo.findPatientProfileById(id);
   if (!profile) throw new HttpError(404, 'Patient profile not found.');
   return profile;
+}
+
+// --- Account deletion (Phase 8, issue #41, docs/adr/0010) ----------------
+
+/**
+ * `DELETE /patients/me`. Anonymises the caller's identity (auth module:
+ * User row; this module: PatientProfile) in one transaction and keeps every
+ * clinical, order and payment record, per ADR 0010's retention table.
+ *
+ * Idempotent: an already-deleted account returns `alreadyDeleted: true`
+ * without checking the password (it no longer has a usable one) and without
+ * touching anything; two concurrent requests anonymise exactly once.
+ */
+export async function deleteMyAccount(
+  userId: string,
+  password: string,
+  ip?: string | null,
+): Promise<{ alreadyDeleted: boolean }> {
+  if (await authService.isAccountDeleted(userId)) return { alreadyDeleted: true };
+  const profile = await getMyPatientProfile(userId);
+
+  try {
+    await authService.confirmPassword(userId, password, ip);
+  } catch (err) {
+    // A concurrent deletion may have replaced the password between our two
+    // checks; that request already did the work, so this one is a no-op.
+    if (await authService.isAccountDeleted(userId)) return { alreadyDeleted: true };
+    throw err;
+  }
+
+  const unusablePasswordHash = await authService.createUnusablePasswordHash();
+  const deletedAt = new Date();
+  const anonymized = await prisma.$transaction(async (tx) => {
+    if (!(await authService.anonymizeAccount(tx, userId, { unusablePasswordHash, deletedAt }))) return false;
+    await patientsRepo.anonymizeProfile(tx, profile.id, deletedAt);
+    await patientsRepo.deleteExportsForPatient(tx, profile.id);
+    await patientsRepo.revokeGuardianshipsOfGuardian(tx, userId, deletedAt);
+    return true;
+  });
+  return { alreadyDeleted: !anonymized };
+}
+
+/** A module that keeps records about a patient which must survive account
+ * deletion (ADR 0010). The purge never removes a profile any hold reports
+ * true for. Registered in src/retention-holds.ts. */
+export interface RetentionHold {
+  name: string;
+  holds(patientProfileId: string): Promise<boolean>;
+}
+
+const retentionHolds = new Map<string, RetentionHold>();
+
+export function registerRetentionHold(hold: RetentionHold): void {
+  const existing = retentionHolds.get(hold.name);
+  if (existing && existing !== hold) throw new Error(`Retention hold "${hold.name}" is already registered.`);
+  retentionHolds.set(hold.name, hold);
+}
+
+export function listRetentionHolds(): RetentionHold[] {
+  return [...retentionHolds.values()];
+}
+
+/**
+ * True when a delete was refused by a foreign key that still references the
+ * row. Postgres reports `ON DELETE RESTRICT` as SQLSTATE 23001
+ * (restrict_violation), which Prisma surfaces as an *unknown* request error
+ * rather than P2003 (P2003 is 23503, what NO ACTION raises) — so both shapes
+ * are checked.
+ */
+export function isForeignKeyRefusal(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientKnownRequestError) return err.code === 'P2003';
+  if (err instanceof Prisma.PrismaClientUnknownRequestError) {
+    return /23001|violates RESTRICT setting of foreign key constraint/.test(err.message);
+  }
+  return false;
+}
+
+export interface PurgeResult {
+  purged: number;
+  held: number;
+  failed: number;
+}
+
+/**
+ * Scheduled purge (ADR 0010): hard-deletes tombstones only — anonymised
+ * patients with no retained records, once the grace period has passed.
+ * Clinical, order and payment records are never deleted (their retention
+ * period is an open decision). Race-safe: holds are checked first and the
+ * RESTRICT foreign keys backstop the delete, so a record created in between
+ * makes that one delete fail and the account is simply kept. Re-running is a
+ * no-op for everything already purged.
+ */
+export async function purgeDeletedPatientAccounts(now = new Date()): Promise<PurgeResult> {
+  const anonymizedBefore = new Date(now.getTime() - config.accountPurge.graceHours * 60 * 60 * 1000);
+  const holds = listRetentionHolds();
+  if (holds.length === 0) {
+    // Fail closed: with no holds registered (a wiring bug) everything would
+    // look purgeable. The RESTRICT FKs would still stop it, but don't try.
+    throw new Error('No retention holds registered — refusing to purge.');
+  }
+
+  const result: PurgeResult = { purged: 0, held: 0, failed: 0 };
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await patientsRepo.findAnonymizedProfilesPage(anonymizedBefore, cursor, 100);
+    if (page.length === 0) break;
+    cursor = page[page.length - 1]!.id;
+
+    for (const profile of page) {
+      const held = await Promise.all(holds.map((hold) => hold.holds(profile.id)));
+      if (held.some(Boolean)) {
+        result.held += 1;
+        continue;
+      }
+      try {
+        await prisma.$transaction(async (tx) => {
+          if (!(await patientsRepo.deleteAnonymizedProfile(tx, profile.id))) return;
+          // Anonymised profiles always had a login (a dependent has none and
+          // can't delete itself), but the column is nullable since #42.
+          if (profile.userId) await authService.purgeAnonymizedAccount(tx, profile.userId);
+        });
+        result.purged += 1;
+      } catch (err) {
+        if (isForeignKeyRefusal(err)) {
+          // A RESTRICT FK refused: a record exists that no hold reported yet.
+          result.held += 1;
+        } else {
+          result.failed += 1;
+          // eslint-disable-next-line no-console
+          console.error(`[jobs] account purge failed for one profile: ${err instanceof Error ? err.name : typeof err}`);
+        }
+      }
+    }
+    if (page.length < 100) break;
+  }
+  return result;
+}
+
+// --- Guardians and dependents (Phase 8, issue #42, docs/adr/0011) --------
+
+export interface DependentView {
+  id: string;
+  fullName: string;
+  dateOfBirth: Date;
+  guardianSince: Date;
+}
+
+function isActive(guardianship: { revokedAt: Date | null; dependentProfile: PatientProfile }, now: Date): boolean {
+  const dob = guardianship.dependentProfile.dateOfBirth;
+  // A dependent always has a DOB (DB CHECK); treat a missing one as inactive
+  // rather than as "forever a minor".
+  return guardianship.revokedAt === null && dob !== null && isMinor(dob, config.patients.ageOfMajorityYears, now);
+}
+
+function toDependentView(guardianship: { createdAt: Date; dependentProfile: PatientProfile }): DependentView {
+  const profile = guardianship.dependentProfile;
+  return {
+    id: profile.id,
+    fullName: profile.fullName,
+    dateOfBirth: profile.dateOfBirth!,
+    guardianSince: guardianship.createdAt,
+  };
+}
+
+/**
+ * Creates a new dependent profile owned by the caller (create-only — there
+ * is no way to link an existing profile or account; see ADR 0011). The
+ * dependent must be under the age of majority, with a DOB not in the
+ * future.
+ */
+export async function createMyDependent(
+  guardianUserId: string,
+  input: { fullName: string; dateOfBirth: Date },
+  now = new Date(),
+): Promise<DependentView> {
+  // The guardian must be a patient with their own profile (the route also
+  // requires the patient role).
+  await getMyPatientProfile(guardianUserId);
+  if (input.dateOfBirth.getTime() > now.getTime()) {
+    throw new HttpError(400, 'dateOfBirth cannot be in the future.');
+  }
+  if (!isMinor(input.dateOfBirth, config.patients.ageOfMajorityYears, now)) {
+    throw new HttpError(
+      400,
+      `A dependent must be under ${config.patients.ageOfMajorityYears}. An adult needs their own account.`,
+      'DEPENDENT_NOT_A_MINOR',
+    );
+  }
+  const { profile, guardianship } = await patientsRepo.createDependentWithGuardianship({
+    guardianUserId,
+    fullName: input.fullName,
+    dateOfBirth: input.dateOfBirth,
+  });
+  return toDependentView({ createdAt: guardianship.createdAt, dependentProfile: profile });
+}
+
+/** The caller's dependents they can currently act for: not revoked and still
+ * under the age of majority. Never anyone else's. */
+export async function listMyDependents(guardianUserId: string, now = new Date()): Promise<DependentView[]> {
+  await getMyPatientProfile(guardianUserId); // 404 for a deleted account (issue #41), like every patient route
+  const guardianships = await patientsRepo.findUnrevokedGuardianshipsForGuardian(guardianUserId);
+  return guardianships.filter((g) => isActive(g, now)).map(toDependentView);
+}
+
+/**
+ * THE authorisation check for acting on a patient profile (booking, listing
+ * appointments — and every future dependent-scoped surface). Returns the
+ * profile the caller may act for:
+ *   - no `patientProfileId`, or the caller's own profile id -> own profile;
+ *   - an active dependent of the caller -> that dependent;
+ *   - a dependent whose guardianship ended (revoked / reached majority)
+ *     -> 403 GUARDIANSHIP_INACTIVE;
+ *   - anything else -> 404, the same as a profile that doesn't exist (no
+ *     enumeration of other patients or other guardians' dependents).
+ */
+export async function resolveActingProfile(
+  userId: string,
+  patientProfileId?: string,
+  now = new Date(),
+): Promise<PatientProfile> {
+  const own = await patientsRepo.findPatientProfileByUserId(userId);
+  // A deleted account (issue #41) acts for no one — not for itself and not
+  // for its former dependents — even while its access token is still valid.
+  if (own?.anonymizedAt) throw new HttpError(404, 'No patient profile for this account.');
+  if (!patientProfileId) {
+    if (!own) throw new HttpError(404, 'No patient profile for this account.');
+    return own;
+  }
+  if (own && own.id === patientProfileId) return own;
+
+  const guardianship = await patientsRepo.findGuardianship(userId, patientProfileId);
+  if (!guardianship) throw new HttpError(404, 'Patient profile not found.');
+  if (!isActive(guardianship, now)) {
+    throw new HttpError(
+      403,
+      'Your guardianship of this patient has ended, so you can no longer act for them.',
+      'GUARDIANSHIP_INACTIVE',
+    );
+  }
+  return guardianship.dependentProfile;
+}
+
+/** Retention hold (issues #41/#42, docs/adr/0010 + 0011): a deleted
+ * guardian's tombstone stays while Guardianship rows name it — they are the
+ * record of who had access to a minor's profile, and the FK is RESTRICT. */
+export async function hasGuardianshipsAsGuardian(patientProfileId: string): Promise<boolean> {
+  const profile = await patientsRepo.findPatientProfileById(patientProfileId);
+  return profile?.userId ? patientsRepo.guardianHasGuardianships(profile.userId) : false;
 }

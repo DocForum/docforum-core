@@ -1,0 +1,7 @@
+{
+  "errors.EMAIL_NOT_VERIFIED": "Verify your email address before continuing.",
+  "notifications.emailVerification.subject": "Verify your DocForum email address",
+  "notifications.emailVerification.body": "Confirm this email address to book appointments and pay for orders. Open this single-use link within {minutes, plural, one {# minute} other {# minutes}}: {link}",
+  "notifications.passwordReset.subject": "Reset your DocForum password",
+  "notifications.passwordReset.body": "A password reset was requested for this account. Open this single-use link within {minutes, plural, one {# minute} other {# minutes}} to choose a new password: {link} If you did not request this, you can ignore this message — your password is unchanged."
+}

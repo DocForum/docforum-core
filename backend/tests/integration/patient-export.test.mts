@@ -181,7 +181,7 @@ describe('patient data export', () => {
     const bobPrescription = await createOrderFixture(prisma, { patientProfileId: bob.profileId, facilityProfileId: facilityId, kind: 'prescription', amountStroops: 9n, tag: `bob-rx-${runId}` });
     await prisma.paymentIntent.create({ data: {
       prescriptionId: bobPrescription.id, patientProfileId: bob.profileId, facilityId,
-      amountStroops: 9n, stellarTxHash: 'b'.repeat(64),
+      amount: 9n, assetCode: 'XLM', stellarTxHash: 'b'.repeat(64),
     } });
   }, 180_000);
 
@@ -301,7 +301,8 @@ describe('patient data export', () => {
     expect(payments[0]).toMatchObject({
       labOrderId: aliceLabOrder.id,
       status: 'escrowed',
-      amountStroops: '12345678901',
+      amount: '12345678901',
+      assetCode: 'XLM',
       escrowId: '42',
       stellarTxHash: 'a'.repeat(64),
       sorobanContractId: 'CCONTRACT',

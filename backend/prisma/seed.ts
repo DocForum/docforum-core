@@ -96,7 +96,7 @@ async function seed() {
   const existingCapability = await prisma.facilityCapability.findFirst({ where: capability });
   if (!existingCapability) await prisma.facilityCapability.create({ data: capability });
   await prisma.walletLink.upsert({
-    where: { facilityId: facility.id },
+    where: { activeOwnerKey: `facility:${facility.id}` },
     create: walletLinkFactory(facility.id),
     update: {},
   });

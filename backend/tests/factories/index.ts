@@ -92,7 +92,9 @@ export const paymentIntentFactory = (
   prescriptionId: order.kind === 'prescription' ? order.id : null,
   labOrderId: order.kind === 'lab_order' ? order.id : null,
   status: 'created',
-  amountStroops: 1_000n,
+  // Smallest unit of `assetCode` (stroops for XLM) — see issue #79.
+  amount: 1_000n,
+  assetCode: 'XLM',
   ...overrides,
 });
 
@@ -100,7 +102,14 @@ export const walletLinkFactory = (
   facilityId: string,
   overrides: Partial<Prisma.WalletLinkUncheckedCreateInput> = {},
 ): Prisma.WalletLinkUncheckedCreateInput => ({
-  facilityId,
+  // Wallet links are polymorphic over patient/facility owners and carry
+  // their SEP-10 verification state; `activeOwnerKey` is the DB-level
+  // one-active-link-per-owner guarantee.
+  ownerType: 'facility',
+  ownerId: facilityId,
   stellarPublicKey: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+  verificationMethod: 'sep10',
+  verifiedAt: new Date(),
+  activeOwnerKey: `facility:${facilityId}`,
   ...overrides,
 });

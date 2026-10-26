@@ -154,7 +154,15 @@ describe('AuditEvent foundation', () => {
 
     const facilityUser = await prisma.user.create({ data: { email: `lab-${runId}@example.com`, passwordHash: 'x', role: 'facility' } });
     facilityId = (await prisma.facilityProfile.create({ data: { userId: facilityUser.id, name: 'Audit Lab', type: 'lab' } })).id;
-    await prisma.walletLink.create({ data: { facilityId, stellarPublicKey: `G${'A'.repeat(55)}` } });
+    await prisma.walletLink.create({
+      data: {
+        ownerType: 'facility',
+        ownerId: facilityId,
+        stellarPublicKey: `G${'A'.repeat(55)}`,
+        verificationMethod: 'sep10',
+        activeOwnerKey: `facility:${facilityId}`,
+      },
+    });
   }, 180_000);
 
   afterAll(async () => {
@@ -301,7 +309,7 @@ describe('AuditEvent foundation', () => {
         actorUserId: admin.id,
         actorRole: 'admin',
         requestId: `pay-fund-${runId}`,
-        metadata: { orderType: 'lab_order', orderId: intent.labOrderId, amountStroops: '5000', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
+        metadata: { orderType: 'lab_order', orderId: intent.labOrderId, amount: '5000', assetCode: 'XLM', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
       });
       expect((events[0]!.metadata as Record<string, unknown>).escrowId).toMatch(/^\d+$/);
       const serialized = JSON.stringify(events);
