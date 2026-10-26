@@ -1,6 +1,6 @@
 import { prisma } from '../../../db/prisma-client';
 import { Prisma } from '@prisma/client';
-import type { ReferralStatus } from '@prisma/client';
+import type { ReferralExpiryReason as ExpiryReason, ReferralStatus } from '@prisma/client';
 import type { ChainNode } from '../loop';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
@@ -19,6 +19,21 @@ export interface CreateReferralData {
 
 export function createReferral(db: DbClient, data: CreateReferralData) {
   return db.referral.create({ data });
+}
+
+/**
+ * Active load per target doctor (issue #6, ADR 0008): referrals still
+ * `pending` or `accepted`. Terminal rows are excluded on purpose — a
+ * completed/declined/expired/cancelled referral is no longer outstanding
+ * work, so it must stop steering where future referrals land. Doctors
+ * with no rows are simply absent from the result (load = 0).
+ */
+export function countActiveReferralsByTargetDoctor(db: DbClient, targetDoctorIds: string[]) {
+  return db.referral.groupBy({
+    by: ['targetDoctorId'],
+    where: { targetDoctorId: { in: targetDoctorIds }, status: { in: ['pending', 'accepted'] } },
+    _count: { _all: true },
+  });
 }
 
 export function findReferralById(db: DbClient, id: string) {
@@ -43,6 +58,8 @@ export function updateReferralConditional(
     resultingAppointmentId?: string | null;
     noShowCount?: number;
     referringDoctorNotifiedAt?: Date;
+    expiredAt?: Date;
+    expiredReason?: ExpiryReason;
   },
 ) {
   return db.referral.updateMany({
@@ -52,6 +69,28 @@ export function updateReferralConditional(
       resultingAppointmentId: expected.resultingAppointmentId,
     },
     data,
+  });
+}
+
+/**
+ * Time-based expiry (issue #8): one conditional UPDATE moves every referral
+ * that is still `pending` and has not changed since `cutoff` to `expired`.
+ * Because the WHERE re-checks `status = 'pending'` in the same statement, a
+ * patient accepting/declining at the same moment either wins (the row no
+ * longer matches) or loses (the row is expired and their conditional update
+ * matches nothing) — never both. Re-running it is a no-op.
+ */
+export function expireStalePendingReferrals(db: DbClient, cutoff: Date, now: Date) {
+  return db.referral.updateMany({
+    where: { status: 'pending', updatedAt: { lt: cutoff } },
+    data: {
+      status: 'expired',
+      expiredAt: now,
+      expiredReason: 'ttl',
+      // Same seam as the no-show expiry: Phase 6 notifications read this to
+      // tell the referring doctor their referral lapsed.
+      referringDoctorNotifiedAt: now,
+    },
   });
 }
 
@@ -187,4 +226,8 @@ export function listAdminQueue(filters: {
     },
     orderBy: { createdAt: 'asc' },
   });
+}
+
+export async function patientHasReferrals(patientProfileId: string): Promise<boolean> {
+  return (await prisma.referral.findFirst({ where: { patientProfileId }, select: { id: true } })) !== null;
 }

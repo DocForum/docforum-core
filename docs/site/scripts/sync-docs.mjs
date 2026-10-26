@@ -59,25 +59,25 @@ async function main() {
 
   // The interactive reference must always describe the API that ships with
   // this commit. Do not silently publish a stale, absent, or malformed spec.
-  const specSource = path.join(CORE_ROOT, 'docs/api/openapi.json');
+  const specSource = path.join(CORE_ROOT, 'backend/openapi.json');
   const specDestination = path.join(SITE_ROOT, 'api/openapi.json');
   if (!existsSync(specSource)) {
     throw new Error(
-      'Missing docs/api/openapi.json. Generate it with the OpenAPI generator from issue #112 before building the docs site.',
+      'Missing backend/openapi.json. Generate it with `node scripts/gen-openapi.mjs` in backend/ (issue #112) before building the docs site.',
     );
   }
   let spec;
   try {
     spec = JSON.parse(await readFile(specSource, 'utf8'));
   } catch (error) {
-    throw new Error(`Invalid docs/api/openapi.json: ${error.message}`);
+    throw new Error(`Invalid backend/openapi.json: ${error.message}`);
   }
   if (!/^3\.\d+\.\d+$/.test(spec.openapi ?? '') || !spec.paths || typeof spec.paths !== 'object') {
-    throw new Error('Invalid docs/api/openapi.json: expected an OpenAPI 3.x document with a paths object.');
+    throw new Error('Invalid backend/openapi.json: expected an OpenAPI 3.x document with a paths object.');
   }
   await mkdir(path.dirname(specDestination), { recursive: true });
   await copyFile(specSource, specDestination);
-  console.log('  synced (local)  docs/api/openapi.json -> docs/site/api/openapi.json');
+  console.log('  synced (local)  backend/openapi.json -> docs/site/api/openapi.json');
 
   console.log('docforum-core (local — this repo):');
   await copyLocal('PRD.md', 'product/prd.md');

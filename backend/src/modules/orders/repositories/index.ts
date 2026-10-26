@@ -3,13 +3,8 @@ import type { Prisma } from '@prisma/client';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
-export function createConsultation(db: DbClient, input: { appointmentId: string; outcome: 'resolved' | 'referred' | 'follow_up_needed' | null; notes: string | null }) {
-  return db.consultation.create({ data: input });
-}
-
-export function findConsultation(id: string, db: DbClient = prisma) {
-  return db.consultation.findUnique({ where: { id } });
-}
+// Consultation rows are owned by the consultations module; this module goes
+// through its services (see orders/services) rather than writing them here.
 
 export function findPrescriptionForCorrection(id: string, db: DbClient = prisma) {
   return db.prescription.findUnique({ where: { id }, include: { correctedBy: true } });
@@ -35,6 +30,7 @@ export function createLabOrder(db: DbClient, input: {
 }) {
   return db.labOrder.create({ data: input });
 }
+
 export function findPrescriptionExportPage(patientProfileId: string, cursor: string | undefined, take: number) {
   return prisma.prescription.findMany({
     where: { patientProfileId }, orderBy: [{ id: 'asc' }], take,
@@ -46,5 +42,103 @@ export function findLabOrderExportPage(patientProfileId: string, cursor: string 
   return prisma.labOrder.findMany({
     where: { patientProfileId }, orderBy: [{ id: 'asc' }], take,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), include: { result: true },
+  });
+}
+
+export async function patientHasOrders(patientProfileId: string): Promise<boolean> {
+  const [prescription, labOrder] = await Promise.all([
+    prisma.prescription.findFirst({ where: { patientProfileId }, select: { id: true } }),
+    prisma.labOrder.findFirst({ where: { patientProfileId }, select: { id: true } }),
+  ]);
+  return prescription !== null || labOrder !== null;
+}
+
+export async function findOrderForPatient(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+  patientProfileId: string,
+) {
+  return tx.order.findFirst({
+    where: {
+      id: orderId,
+      patientProfileId,
+    },
+    include: {
+      fulfillmentProofs: true,
+      disputes: {
+        include: {
+          resolutions: true,
+        },
+      },
+    },
+  });
+}
+
+export async function confirmOrderReceiptConditional(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+  patientProfileId: string,
+  windowStart: Date,
+) {
+  const result = await tx.order.updateMany({
+    where: {
+      id: orderId,
+      patientProfileId,
+      status: 'fulfilled',
+      confirmed: false,
+      disputed: false,
+      fulfilledAt: {
+        gte: windowStart,
+      },
+    },
+    data: {
+      confirmed: true,
+      confirmedAt: new Date(),
+      confirmationSource: 'patient',
+    },
+  });
+  return result.count > 0;
+}
+
+export async function disputeOrderConditional(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+  patientProfileId: string,
+  windowStart: Date,
+) {
+  const result = await tx.order.updateMany({
+    where: {
+      id: orderId,
+      patientProfileId,
+      status: 'fulfilled',
+      confirmed: false,
+      disputed: false,
+      fulfilledAt: {
+        gte: windowStart,
+      },
+    },
+    data: {
+      disputed: true,
+      disputedAt: new Date(),
+    },
+  });
+  return result.count > 0;
+}
+
+export async function createOrderDispute(
+  tx: Prisma.TransactionClient,
+  data: {
+    orderId: string;
+    patientProfileId: string;
+    reason: string;
+  },
+) {
+  return tx.orderDispute.create({
+    data: {
+      orderId: data.orderId,
+      patientProfileId: data.patientProfileId,
+      reason: data.reason,
+      status: 'pending',
+    },
   });
 }

@@ -4,8 +4,12 @@
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import {
+  anonymizeUser,
   consumeVerificationToken,
   createSelfServeUser,
+  deleteAnonymizedUser,
+  deleteLoginAttemptBucket,
+  deleteVerificationTokensForUser,
   findLatestVerificationToken,
   findUserByEmail,
   findUserById,
@@ -28,8 +32,11 @@ import {
 } from './login-throttle';
 import { csrfTokensMatch, generateCsrfToken } from '../../../middleware/csrf';
 import { redeemAdminInvite } from '../../users/services';
-import type { Role } from '@prisma/client';
 import type { PatientExportSection } from '../../patients/services';
+import type { Locale } from '../../../i18n';
+import { formatMessage, resolveLocale } from '../../../i18n';
+import { randomBytes } from 'node:crypto';
+import type { Prisma, Role } from '@prisma/client';
 
 // Re-exported so middleware/auth.ts (shared infra, not a peer module) can
 // verify tokens through this module's service surface rather than
@@ -47,6 +54,11 @@ export {
   type ConfirmPasswordResetInput,
   type RequestPasswordResetInput,
 } from './password-reset';
+
+// Hashing is auth's business (issue #14): the admin-only facility-creation
+// path in the facilities module hashes the initial password through this
+// service surface rather than depending on bcrypt directly.
+export { hashPassword, verifyPassword } from './password';
 
 export {
   assertSessionUsable,
@@ -75,6 +87,7 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   role: Role;
+  locale: string;
   // Phase 8, issue #34 — exposed so docforum-web can gate booking UI on it
   // without a second round trip. The server-side guard is the real
   // enforcement point (`assertEmailVerified`).
@@ -101,6 +114,7 @@ function toPublicUser(user: {
   id: string;
   email: string;
   role: Role;
+  locale?: string;
   emailVerifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -109,6 +123,7 @@ function toPublicUser(user: {
     id: user.id,
     email: user.email,
     role: user.role,
+    locale: user.locale ?? 'en',
     emailVerifiedAt: user.emailVerifiedAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
@@ -116,10 +131,10 @@ function toPublicUser(user: {
 }
 
 function issueTokensForSession(
-  user: { id: string; role: Role; tokenVersion?: number },
+  user: { id: string; role: Role; tokenVersion?: number; locale?: string },
   sessionId: string,
 ): { accessToken: string; refreshToken: string; csrfToken: string } {
-  const payload = { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0 };
+  const payload = { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0, locale: user.locale ?? 'en' };
   // A fresh CSRF token per session, and per rotation — bound into the
   // refresh token so verifying it needs no server-side state (issue #37).
   const csrfToken = generateCsrfToken();
@@ -135,7 +150,7 @@ function issueTokensForSession(
 
 /** Starts a new session (one per login) and issues its first token pair. */
 async function issueNewSession(
-  user: { id: string; role: Role; tokenVersion?: number },
+  user: { id: string; role: Role; tokenVersion?: number; locale?: string },
   context: SessionContext,
 ): Promise<{ accessToken: string; refreshToken: string; csrfToken: string; sessionId: string }> {
   const session = await startSession({ userId: user.id, ...context });
@@ -147,6 +162,7 @@ export interface SignupInput {
   email: string;
   password: string;
   fullName: string;
+  locale?: Locale;
 }
 
 export async function signup(input: SignupInput, context: SessionContext = {}): Promise<AuthSession> {
@@ -169,6 +185,7 @@ export async function signup(input: SignupInput, context: SessionContext = {}): 
     passwordHash,
     role: input.role,
     fullName: input.fullName,
+    locale: input.locale,
   });
 
   // Phase 8, issue #34: the account is created and usable for browsing
@@ -204,6 +221,7 @@ export async function signupWithInvite(input: SignupWithInviteInput, context: Se
       id: user.id,
       email: user.email,
       role: user.role,
+      locale: user.locale,
       // No verification email is sent on the invite path — the invite itself
       // is the admin-vetted proof of address, so this stays null rather than
       // claiming a verification that never happened.
@@ -252,7 +270,10 @@ export async function login(input: LoginInput, context: SessionContext = {}): Pr
   // Same message whether the email doesn't exist or the password is wrong —
   // and the same *cost*, hence the dummy comparison for an absent account.
   const valid = await verifyPassword(input.password, user?.passwordHash ?? ABSENT_ACCOUNT_HASH);
-  if (!user || !valid) {
+  // `deletedAt` (issue #41): a deleted account's password is already
+  // unusable and its address is a tombstone, so this is defence in depth —
+  // and it answers exactly like a wrong password.
+  if (!user || !valid || user.deletedAt) {
     const afterFailure = await registerFailedLogin(throttleKeys);
     if (afterFailure.blocked) throw new LoginThrottledError(afterFailure.retryAfterSeconds);
     throw new HttpError(401, 'Invalid email or password.');
@@ -275,24 +296,20 @@ export async function login(input: LoginInput, context: SessionContext = {}): Pr
 
 /** Mints a fresh token, retires any outstanding one, and hands the link to
  * the email dispatcher. The raw token is never persisted and never logged. */
-async function issueEmailVerification(user: { id: string; email: string }): Promise<void> {
+async function issueEmailVerification(user: { id: string; email: string; locale?: string }): Promise<void> {
   const token = generateVerificationToken();
   const expiresAt = new Date(Date.now() + config.auth.emailVerification.tokenTtlMinutes * 60_000);
 
   await replaceVerificationToken({ userId: user.id, tokenHash: hashVerificationToken(token), expiresAt });
 
   const link = `${config.auth.emailVerification.landingUrl}?token=${encodeURIComponent(token)}`;
+  const locale = resolveLocale(user.locale);
+  const minutes = config.auth.emailVerification.tokenTtlMinutes;
   try {
     await sendEmail({
       to: user.email,
-      subject: 'Verify your DocForum email address',
-      text: [
-        'Confirm this email address to book appointments and pay for orders:',
-        '',
-        link,
-        '',
-        `The link expires in ${Math.round(config.auth.emailVerification.tokenTtlMinutes / 60)} hour(s).`,
-      ].join('\n'),
+      subject: formatMessage(locale, 'notifications.emailVerification.subject'),
+      text: formatMessage(locale, 'notifications.emailVerification.body', { minutes, link }),
     });
   } catch (err) {
     // A provider hiccup must not fail signup — the account exists and is
@@ -402,7 +419,8 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   }
 
   const user = await findUserById(payload.sub);
-  if (!user) throw new HttpError(401, 'Invalid or expired refresh token.');
+  // A deleted account (issue #41) can't refresh its way back in.
+  if (!user || user.deletedAt) throw new HttpError(401, 'Invalid or expired refresh token.');
 
   // Deactivated accounts can't refresh out of their deactivation, and a
   // session revoked by deactivation/reactivation can't come back to life
@@ -499,3 +517,80 @@ export const accountExportSection: PatientExportSection = {
     ];
   },
 };
+// --- Account deletion (Phase 8, issue #41, docs/adr/0010) ----------------
+// The patients module orchestrates `DELETE /patients/me`; this module owns
+// everything about the login identity it touches.
+
+/**
+ * Re-confirms the caller's password for a destructive action. Shares the
+ * login throttle's per-account bucket: a locked account is refused before
+ * the hash is compared, and a wrong password counts as a failed login — so
+ * a stolen access token can't be used to brute-force the password here.
+ */
+export async function confirmPassword(userId: string, password: string, ip?: string | null): Promise<void> {
+  const user = await findUserById(userId);
+  if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
+
+  const throttleKeys = { emailKey: emailThrottleKey(user.email), ipKey: normalizeClientIp(ip) };
+  const gate = await checkLoginThrottle(throttleKeys);
+  if (gate.blocked) {
+    const afterFailure = await registerFailedLogin(throttleKeys);
+    throw new LoginThrottledError(Math.max(gate.retryAfterSeconds, afterFailure.retryAfterSeconds));
+  }
+
+  if (!(await verifyPassword(password, user.passwordHash))) {
+    const afterFailure = await registerFailedLogin(throttleKeys);
+    if (afterFailure.blocked) throw new LoginThrottledError(afterFailure.retryAfterSeconds);
+    throw new HttpError(403, 'Password confirmation failed.', 'PASSWORD_CONFIRMATION_FAILED');
+  }
+}
+
+export async function isAccountDeleted(userId: string): Promise<boolean> {
+  const user = await findUserById(userId);
+  return Boolean(user?.deletedAt);
+}
+
+/** The address a deleted account is left with: unique (derived from the id),
+ * stable across retries, and undeliverable (`.invalid` is reserved, RFC
+ * 2606). It frees the original address for a new signup. */
+export function tombstoneEmail(userId: string): string {
+  return `deleted+${userId}@deleted.invalid`;
+}
+
+/** A real bcrypt hash of 32 random bytes nobody ever sees — so the deleted
+ * account's login can never succeed, and the login path still pays a
+ * normal bcrypt comparison. Computed outside the deletion transaction
+ * (bcrypt is deliberately slow). */
+export function createUnusablePasswordHash(): Promise<string> {
+  return hashPassword(randomBytes(32).toString('base64url'));
+}
+
+/**
+ * Anonymises the login identity, inside the caller's transaction: email to
+ * its tombstone, phone cleared, password unusable, verification cleared,
+ * `deletedAt` set; verification tokens and the old address's login-throttle
+ * bucket deleted. Returns false (and changes nothing) if the account was
+ * already deleted — repeat and concurrent deletions are no-ops.
+ */
+export async function anonymizeAccount(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  input: { unusablePasswordHash: string; deletedAt: Date },
+): Promise<boolean> {
+  const user = await findUserById(userId, tx);
+  if (!user || user.deletedAt) return false;
+  const anonymized = await anonymizeUser(tx, userId, {
+    tombstoneEmail: tombstoneEmail(userId),
+    unusablePasswordHash: input.unusablePasswordHash,
+    deletedAt: input.deletedAt,
+  });
+  if (!anonymized) return false;
+  await deleteVerificationTokensForUser(tx, userId);
+  await deleteLoginAttemptBucket(tx, 'email', emailThrottleKey(user.email));
+  return true;
+}
+
+/** Tombstone purge: removes an already-anonymised User row. */
+export function purgeAnonymizedAccount(tx: Prisma.TransactionClient, userId: string): Promise<boolean> {
+  return deleteAnonymizedUser(tx, userId);
+}

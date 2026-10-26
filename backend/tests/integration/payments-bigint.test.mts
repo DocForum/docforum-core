@@ -1,7 +1,7 @@
 // Hermetic BigInt round-trip through Prisma 7's node-postgres driver adapter
 // (Phase 8, issue #47).
 //
-// Why this file exists: the upgrade issue calls out `PaymentIntent.amountStroops`
+// Why this file exists: the upgrade issue calls out `PaymentIntent.amount`
 // (a Prisma `BigInt`, i.e. Postgres `bigint`, i.e. stroop count) as the field
 // most likely to break when the Rust query engine is replaced by a driver
 // adapter, and names the testnet payment test as its coverage. That test
@@ -97,17 +97,17 @@ describe('PaymentIntent BigInt round-trip (Prisma 7 driver adapter)', () => {
     await pg.stop();
   });
 
-  async function roundTrip(amountStroops: bigint, orderId: string) {
+  async function roundTrip(amount: bigint, orderId: string) {
     // Goes through the module's own service, so this exercises the real write
     // path rather than a hand-built query.
     const order = await createOrderFixture(prisma, {
-      patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops, tag: orderId,
+      patientProfileId, facilityProfileId: facilityId, kind: 'lab_order', amountStroops: amount, tag: orderId,
     });
     const created = await prisma.$transaction((tx) => paymentsService.createIntentForIssuedOrder(tx, {
       kind: 'lab_order', orderId: order.id, patientProfileId, doctorProfileId: order.doctorProfileId,
-      facilityProfileId: facilityId, amountStroops, supersedesId: null,
+      facilityProfileId: facilityId, amountStroops: amount, supersedesId: null,
     }));
-    expect(created.amountStroops).toBe(amountStroops);
+    expect(created.amount).toBe(amount);
 
     // Re-read from the database, bypassing the in-memory object the create
     // returned — this is the assertion that actually proves the adapter
@@ -119,17 +119,17 @@ describe('PaymentIntent BigInt round-trip (Prisma 7 driver adapter)', () => {
   it('round-trips an amount above Number.MAX_SAFE_INTEGER without precision loss', async () => {
     const reloaded = await roundTrip(UNSAFE_AMOUNT, `bigint-unsafe-${runId}`);
 
-    expect(typeof reloaded.amountStroops).toBe('bigint');
-    expect(reloaded.amountStroops).toBe(UNSAFE_AMOUNT);
+    expect(typeof reloaded.amount).toBe('bigint');
+    expect(reloaded.amount).toBe(UNSAFE_AMOUNT);
     // Guards against a future refactor that "helpfully" converts to Number.
-    expect(Number(reloaded.amountStroops)).not.toBe(UNSAFE_AMOUNT);
+    expect(Number(reloaded.amount)).not.toBe(UNSAFE_AMOUNT);
   });
 
   it('round-trips a realistic stroop amount', async () => {
     const reloaded = await roundTrip(XLM_AMOUNT, `bigint-normal-${runId}`);
 
-    expect(typeof reloaded.amountStroops).toBe('bigint');
-    expect(reloaded.amountStroops).toBe(XLM_AMOUNT);
+    expect(typeof reloaded.amount).toBe('bigint');
+    expect(reloaded.amount).toBe(XLM_AMOUNT);
   });
 
   it('round-trips a nullable BigInt (escrowId) as null, then as a value', async () => {

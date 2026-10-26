@@ -1,8 +1,8 @@
-// Shared fixtures for the Phase-3 referral integration tests. Each test
-// file still owns its own embedded Postgres + port + app instance (see
-// booking.test.mts for the pattern); this module only bundles the HTTP
-// flows every referral test repeats: signup, verify, promote, generate
-// slots, book, complete, consult.
+// Shared fixtures for the Phase-3 referral integration tests and the
+// Phase-9 end-to-end care-thread test. Each test file still owns its own
+// embedded Postgres + port + app instance (see booking.test.mts for the
+// pattern); this module only bundles the HTTP flows every test repeats:
+// signup, verify, promote, generate slots, book, complete, consult.
 //
 // Fixture-only direct DB writes (specialty links, doctor verification,
 // role promotion, createdAt backdating) are deliberate: the APIs those
@@ -211,7 +211,13 @@ export async function consultationRitual(
 export async function createReferral(
   app: App,
   doctor: { accessToken: string },
-  input: { sourceConsultationId: string; targetDoctorId: string; targetSpecialtyId?: string; snapshotNotes: string },
+  input: {
+    sourceConsultationId: string;
+    // Either a named doctor or a specialty (issue #6 routing, ADR 0008).
+    targetDoctorId?: string;
+    targetSpecialtyId?: string;
+    snapshotNotes: string;
+  },
 ) {
   return request(app).post('/referrals').set('Authorization', `Bearer ${doctor.accessToken}`).send(input);
 }
@@ -226,4 +232,11 @@ export async function acceptReferral(
     .post(`/referrals/${referralId}/accept`)
     .set('Authorization', `Bearer ${patient.accessToken}`)
     .send({ availabilitySlotId });
+}
+
+/** Phase-gate helper for the end-to-end care-thread test: each phase's
+ * steps stay skipped (with a reason) until the phase lands, so the
+ * scaffold can merge before every module exists. */
+export function phaseGate(enabled: boolean, reason: string): { enabled: boolean; reason: string } {
+  return { enabled, reason };
 }
