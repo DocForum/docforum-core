@@ -7,8 +7,10 @@
 type EscrowSdkModule = typeof import('@docforum/escrow-sdk', { with: { 'resolution-mode': 'import' } });
 
 let modulePromise: Promise<EscrowSdkModule> | undefined;
+let override: EscrowSdkModule | undefined;
 
 export function loadEscrowSdk(): Promise<EscrowSdkModule> {
+  if (override) return Promise.resolve(override);
   modulePromise ??= import('@docforum/escrow-sdk');
   return modulePromise;
 }
@@ -17,7 +19,18 @@ export function loadEscrowSdk(): Promise<EscrowSdkModule> {
  * fund/release/refund substitute a fake SDK instead of calling testnet.
  * `undefined` restores the real one. Never called by application code. */
 export function setEscrowSdkForTests(sdk: EscrowSdkModule | undefined): void {
+  override = sdk;
   modulePromise = sdk ? Promise.resolve(sdk) : undefined;
+}
+
+export type EscrowSdkForTests = EscrowSdkModule;
+
+export function setEscrowSdkOverride(sdk: EscrowSdkForTests): void {
+  setEscrowSdkForTests(sdk);
+}
+
+export function resetEscrowSdkOverride(): void {
+  setEscrowSdkForTests(undefined);
 }
 
 export type EscrowSdkKeypair = InstanceType<EscrowSdkModule['Keypair']>;

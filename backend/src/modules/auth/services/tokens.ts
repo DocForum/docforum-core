@@ -39,7 +39,11 @@ export interface RefreshTokenPayload extends AccessTokenPayload {
  * Sign with the current key (first in the keyring) and record its `kid` in
  * the header, so verification can pick the matching secret during rotation.
  */
-function signWithKeyring(keys: JwtSigningKey[], payload: object, expiresIn: string): string {
+function signWithKeyring(
+  keys: readonly JwtSigningKey[],
+  payload: object,
+  expiresIn: NonNullable<jwt.SignOptions['expiresIn']>,
+): string {
   const [current] = keys;
   return jwt.sign(payload, current.secret, { expiresIn, keyid: current.kid });
 }

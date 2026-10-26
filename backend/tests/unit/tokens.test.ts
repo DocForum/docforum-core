@@ -56,7 +56,8 @@ describe('access token key rotation', () => {
   const originalKeys = config.jwt.accessKeys;
 
   function withKeyring(keys: typeof originalKeys) {
-    config.jwt.accessKeys = keys;
+    // config is `as const`; the keyring is swapped only inside this suite.
+    (config.jwt as { accessKeys: typeof originalKeys }).accessKeys = keys;
   }
 
   it('signs with the current key and records its kid in the header', () => {
