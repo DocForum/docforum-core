@@ -112,6 +112,17 @@ function parseCorsOrigins(raw: string | undefined, isProduction: boolean): strin
     .filter((origin) => origin.length > 0);
 }
 
+/** Issue #78: the date after which funding refuses facility wallet links
+ * that were never SEP-10 verified. Defaults to 2027-01-01 (UTC) — a
+ * deliberate fail-closed default: legacy links keep working for a
+ * defined grace window without any deployment needing to remember to
+ * set the variable, but "never enforce" is never the default. Returns
+ * NaN for a malformed value so startup validation can name the var. */
+function parseWalletLinkCutoff(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return Date.parse('2027-01-01T00:00:00Z');
+  return Date.parse(raw);
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: requireEnv('DATABASE_URL'),
@@ -289,6 +300,9 @@ export const config = {
     prepareExpirySweepIntervalSeconds: Number(process.env.PAYMENT_PREPARE_EXPIRY_SWEEP_INTERVAL_SECONDS ?? 60),
     payoutPrivacyMode,
     payoutPrivacyPoolAddress: process.env.PAYOUT_PRIVACY_POOL_ADDRESS,
+    walletLinkUnverifiedFundingCutoff: parseWalletLinkCutoff(
+      process.env.WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF,
+    ),
   },
   // SEP-10 Stellar Web Authentication (issue #77, ADR 0005 step 4).
   sep10: {

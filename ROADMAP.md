@@ -72,7 +72,7 @@ and issue links.
 **Status: Partially implemented (issue #76: facility-side fulfillment proof, patient confirm/dispute, unconfirmed order expiry, admin dispute queue implemented and tested).**
 - [ ] `Prescription` + `PrescriptionItem` models, **append-only** (issuance creates a row; corrections use `supersedes_prescription_id` — ARCHITECTURE.md §4.5, hard rule in ARCHITECTURE_ESSENTIALS.md). Tracked as [issue #9](https://github.com/DocForum/docforum-core/issues/9) (High, 200 pts), which also covers `LabOrder`/`LabResult` (same append-only rule).
 - [ ] `LabOrder` + `LabResult` models, same append-only rule — folded into issue #9 above.
-- [ ] Specialist UI: issue prescription/lab order from a consultation. Tracked as [issue #10](https://github.com/DocForum/docforum-core/issues/10) (Medium, 150 pts) — depends on #9.
+- [x] Specialist UI: issue prescription/lab order from a consultation. Tracked as [issue #10](https://github.com/DocForum/docforum-core/issues/10) (Medium, 150 pts) — depends on #9. **Backend done:** `POST /orders/consultations/:consultationId/{prescriptions,lab-orders}` go through the append-only issuance path, are limited to the consultation's treating doctor (verified profile), and refuse consultations whose appointment isn't `completed` (409) or an unknown/wrong-type facility (400). Tested in `backend/tests/integration/orders-issuance.test.mts`. The doctor screen is tracked in `docforum-web`.
 - [ ] Patient UI: view active/past orders. Tracked as [issue #11](https://github.com/DocForum/docforum-core/issues/11) (Medium, 150 pts) — depends on #9.
 - [x] Facility fulfillment proof & patient confirmation/dispute workflow. Tracked as issue #76. Facility fulfillment requires reference number and optional attachment. Patient confirm-receipt/dispute are mutually exclusive via DB conditional update. Derived `confirmedSignal` boolean. Idempotent expiry job for unconfirmed orders. Admin dispute queue and append-only resolution logs.
 
@@ -108,9 +108,10 @@ and issue links.
 ## Phase 6 — Notifications
 **Status update:** The provider decision and channel adapter work are implemented in this PR via ADR 0007. Trigger-point wiring remains pending on Phases 3 and 4.
 **Status: Not started. Provider decision scoped into issue #17; trigger-point build-out blocked by Phases 3 & 4 and deliberately left unscoped until those land.**
+**Status: In progress — provider decision made (see `docs/adr/0013-notification-provider.md`, issue #17). Trigger-point build-out still blocked by Phases 3 & 4 and deliberately left unscoped until those land.**
 - [ ] `Notification` model + dispatch interface (provider-agnostic, per ARCHITECTURE.md §2) — part of the trigger-point work, still blocked.
 - [ ] Trigger points per PRD FR-15/FR-16 (booking confirmed, referral created/accepted/declined, order ready, results available, new booking, lab results returned) — still blocked by Phases 3/4.
-- [ ] Pick and integrate a real provider (email/SMS) behind the interface — provider choice is currently undecided (ARCHITECTURE.md §8). Tracked as [issue #17](https://github.com/DocForum/docforum-core/issues/17) (Trivial, 100 pts) — a decision task, unblocked now.
+- [x] Pick and integrate a real provider (email/SMS) behind the interface — **decided:** email via Postmark (SMS deferred, no provider chosen); the adapter stays behind the provider-agnostic dispatch interface and no provider calls live in business logic. Tracked as [issue #17](https://github.com/DocForum/docforum-core/issues/17) (Trivial, 100 pts) — decision recorded in `docs/adr/0013-notification-provider.md`; integration itself is still to be built.
 
 ## Phase 7 — Frontend: core flows end-to-end
 **Status: Superseded.** This phase predates the 3-repo org split (see the org note at the top of this file) — all frontend work described below is actually tracked in `docforum-web`'s own `ROADMAP.md` (Phases W2–W5, issues opened there). Left in place as a historical record rather than deleted, but no issues are or will be opened against it here.
@@ -133,7 +134,7 @@ and issue links.
 - [ ] Account deletion with clinical-record retention: `DELETE /patients/me` (password re-confirmation, throttled) anonymises the identity in place and keeps appointments + payment intents intact; `PatientProfile.userId` FK CASCADE → RESTRICT (migration); interval purge of record-free tombstones (`src/jobs/account-purge.ts`, holds in `src/retention-holds.ts`). Decisions in `docs/adr/0010` — the **legal retention period for clinical/order/payment records stays an open decision** (kept indefinitely until set). Tracked as [issue #41](https://github.com/DocForum/docforum-core/issues/41) (High, 200 pts) — **in review**, branch `feat/41-account-deletion-retention`. Follow-up when #40 also merges: delete a deleted patient's `PatientExport` rows inside the anonymisation transaction (ADR 0010 table).
 - [ ] Guardian and dependent accounts: booking on behalf of a minor. Dependents are guardian-owned `PatientProfile`s with no login, linked through a real `Guardianship` relation that replaces the unenforced `guardianUserId` string (migration refuses to run over legacy values); `POST`/`GET /patients/me/dependents` (create-only — no linking of existing profiles); `patientProfileId` on `POST /appointments` (and `GET /appointments/mine`) authorised in the service layer before the unchanged booking transaction; access ends automatically at `AGE_OF_MAJORITY_YEARS` (default 18). Decisions in `docs/adr/0011`; PRD §8.2.5 marked resolved/re-scoped. Tracked as [issue #42](https://github.com/DocForum/docforum-core/issues/42) (High, 200 pts) — **in review**, branch `feat/42-guardian-dependent-accounts`. Follow-ups: majority account-claim flow, guardian/admin revoke endpoints, guardianship verification beyond self-assertion.
 - [ ] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts) — unblocked now, operates on Phase 1's auth module.
-- [ ] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — unblocked now, operates on Phase 1's `AvailabilitySlot`.
+- [x] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — **investigated, not applicable as currently designed.** Phase 1's `claimOpenSlot` claims a slot directly via a single conditional `UPDATE ... WHERE status = 'open'` inside the booking transaction (proven by `backend/tests/integration/booking.test.mts`: 8 concurrent attempts, exactly 1 wins) — there is no intermediate `held` status, so an abandoned hold cannot exist and there is nothing for a TTL job to release. No hold state was introduced to give this issue something to do. Revisit if a multi-step booking flow (e.g. reserving a slot while a patient fills out Phase 2 intake) introduces a `held` state; that flow would need a `heldAt`/`holdExpiresAt` column plus a sweep job, and this issue should be reopened then.
 - [x] Access-control test suite: who may read intake, consultation and payment data. Integration tests (`tests/integration/access-control.test.mts`) establishing the test harness and access-control patterns for the three PHI data categories; intake/consultation test cases are scaffolded as placeholders until Phase 2/3 routes exist, payment-intent access cases exercise the live admin-gated routes. Tracked as [issue #44](https://github.com/DocForum/docforum-core/issues/44) — **Done**.
 - [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. **One Phase 3 access path is now worth auditing (`GET /consultations/:id` — treating doctor + that appointment's patient only, and referral snapshot exposure on `GET /referrals/mine` / `/created`), but intake and orders remain unbuilt, so the audit as scoped stays blocked.** Not yet scoped into an issue.
 - [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence). Tracked as [issue #20](https://github.com/DocForum/docforum-core/issues/20) (Trivial, 100 pts) — a decision task, unblocked now.
@@ -395,6 +396,24 @@ and issue links.
   seam so the 15 unit + 18 integration tests run with zero network.
   Docs updated: ARCHITECTURE §4.10, essentials data-model map,
   docs/api/README.md (endpoints + errors + unfunded behaviour).
+- 2026-10-16 — Implemented issue #78 (verified wallet links, stacked on
+  #77's branch): `WalletLink` generalized from facility-only/typed-in to
+  an owner (patient | facility) with `verificationMethod` /
+  `verifiedAt` / `replacedAt`, one active link per owner enforced by a
+  DB unique sentinel (Prisma can't express a partial index — noted in
+  the schema), and the migration backfills existing facility rows as
+  `unverified_legacy` (proven by a real migration test that inserts an
+  old-shape row first). `POST /payments/wallet-link` now takes only a
+  signed SEP-10 challenge (strict body — a raw address is a 400) and
+  creates the link inside the same transaction that consumes the nonce;
+  the only `sep10`-row writer is that flow. Patient link responses
+  carry ADR 0005's on-chain privacy notice verbatim (unit-tested
+  against the ADR file). Funding refuses unverified legacy links after
+  `WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF` (default 2027-01-01,
+  startup-validated, `409 WALLET_LINK_UNVERIFIED`) and snapshots
+  `PaymentIntent.fundedWalletAddress` so re-linking can't rewrite an
+  escrow's payee. 8 unit + 12 integration tests (fake Horizon + fake
+  escrow SDK — no network). ADR 0005 unchanged (no factual conflict).
 - 2026-10-15 — Started Phase 8's auth-hardening work, scoped as issues #34 (email verification), #35 (login brute-force throttling), #37 (CSRF
   for the cookie-authenticated endpoints + per-environment CORS allowlist) and #39 (admin account lifecycle). All four are independent of Phases
   3–7 and of each other. #34 merged as PR #137: `User.emailVerifiedAt` +
@@ -554,3 +573,5 @@ and issue links.
   payouts as the default in production and local environments, with the
   configuration controlled by `PAYOUT_PRIVACY_MODE` and
   `PAYOUT_PRIVACY_POOL_ADDRESS`.
+- 2026-10-22 — Closed issue #19 (held-slot TTL/release job) as **not applicable as currently designed**, per the issue's own allowance for that outcome. Investigation: Phase 1's `claimOpenSlot` claims a slot directly with a conditional `UPDATE` inside the booking transaction and has no intermediate `held` status, so there is no abandoned-hold risk to bound — confirmed against `backend/tests/integration/booking.test.mts` (8 concurrent attempts, exactly 1 succeeds) and the absence of any `held`/`holdExpiresAt` field in `schema.prisma`. No hold state was introduced just to have something to release. Documented in the Phase 8 checklist; revisit if a multi-step booking flow (e.g. reserving a slot during Phase 2 intake) introduces a hold.
+- 2026-10-22 — Fixed the syntax error in `backend/src/modules/availability/repositories/index.ts` (TS1110, "Type expected" at line 31) that failed the local syntax check before push. The malformed type annotation in the repository's export was corrected in place; no other identifiers, exports, or formatting in that file were touched, and the held-slot investigation above is unchanged.
