@@ -1,0 +1,2 @@
+Phase 5.5: Validate Stellar public keys with checksum-accurate StrKey validation ([issue #26](https://github.com/DocForum/docforum-core/issues/26)).
+Replaces the basic regex shape gate in `backend/src/modules/payments/validation.ts` with `StrKey.isValidEd25519PublicKey` from `@stellar/stellar-sdk`, ensuring invalid CRC16 checksums, malformed prefixes, non-base32 characters, and incorrect lengths are rejected at input validation time while preserving helpful validation error messages. Comprehensive unit test suite added in `backend/tests/unit/stellar-validation.test.mts`.
