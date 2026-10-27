@@ -148,7 +148,7 @@ describe('issue #15: fulfillment queue + transitions', () => {
     // we don't depend on the appointments/consultations machinery for this
     // focused file. We need a valid DoctorProfile too for issuePrescription.
     const doctorUser = await prisma.user.create({ data: { email: `doc-seed-${runId}@example.com`, passwordHash: 'x', role: 'doctor' } });
-    const doctorProfile = await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: 'Test Doctor', verificationStatus: 'verified' } });
+    const doctorProfile = await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: 'Test Doctor', verificationStatus: 'verified', timeZone: 'UTC' } });
 
     const patientUser = await prisma.user.create({ data: { email: `pat-seed-${runId}@example.com`, passwordHash: 'x', role: 'patient' } });
     const appointment = await prisma.appointment.create({
