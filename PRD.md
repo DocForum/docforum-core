@@ -134,6 +134,8 @@ The core value proposition: **collapse a multi-visit, multi-queue hospital journ
 
 ## 10. Success metrics (draft — revisit once instrumented)
 
+Definitions and current availability are documented in [`docs/success-metrics.md`](docs/success-metrics.md). The admin endpoint currently reports only no-show rate and booking lead time; metrics requiring absent or not-yet-approved instrumentation remain unavailable.
+
 - Time from "patient opens app with symptom" to "patient has a prescription or lab order" (target: reduce vs. baseline in-person path).
 - Referral completion rate (% of referrals that reach `completed`, not abandoned).
 - % of orders fulfilled within N days of issuance.
