@@ -1,8 +1,12 @@
-# Local dev DB only — not a deployment target. See ARCHITECTURE.md §8
-# (deployment target still undecided).
+# Local dev stack. See ARCHITECTURE.md §8 (deployment target still undecided).
 #
-# Usage: docker compose -f infra/docker/docker-compose.yml up -d
-# Then: cd backend && cp .env.example .env && npx prisma migrate dev
+# Usage:
+#   docker compose -f infra/docker/docker-compose.yml up --build -d
+#   cd backend && npx prisma migrate deploy
+#
+# Endpoints:
+#   GET http://localhost:4000/health
+#   GET http://localhost:4000/specialties
 services:
   postgres:
     image: postgres:16
@@ -20,6 +24,26 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://docforum:docforum@127.0.0.1:5432/docforum_dev
+      PORT: '4000'
+      JWT_ACCESS_SECRET: dev-jwt-access-secret
+      JWT_REFRESH_SECRET: dev-jwt-refresh-secret
+      SEP10_SIGNING_SECRET: SC3Z2YBPD7KGXC73CTBNDRGQOIUSAZUH445QIB2PPKWO7CXULRY75JGJ
+      SEP10_HOME_DOMAIN: localhost
+      SEP10_WEB_AUTH_DOMAIN: localhost
+      FIELD_ENCRYPTION_KEY_V1: BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=
+      FIELD_ENCRYPTION_ACTIVE_VERSION: v1
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   docforum_postgres_data:
