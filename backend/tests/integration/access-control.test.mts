@@ -65,6 +65,7 @@ const KNOWN_ROUTES = [
   'POST /orders/consultations',
   'POST /orders/consultations/:consultationId/prescriptions',
   'POST /orders/consultations/:consultationId/lab-orders',
+  'GET /orders/mine',
   'POST /pharmacy-orders/:id/fulfill',
   'POST /lab-orders/:id/fulfill',
   'POST /orders/:id/confirm-receipt',
@@ -137,6 +138,7 @@ const ACCESS_MATRIX: MatrixRow[] = [
   { method: 'POST', path: '/orders/consultations', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
   { method: 'POST', path: '/orders/consultations/:consultationId/prescriptions', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
   { method: 'POST', path: '/orders/consultations/:consultationId/lab-orders', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
+  { method: 'GET', path: '/orders/mine', expected: { anon: 401, patient: 200, doctor: 403, facility: 403, admin: 403 } },
 
   // Pharmacy & Lab Orders fulfillment — facility-only
   { method: 'POST', path: '/pharmacy-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 404, admin: 403 } },

@@ -219,6 +219,12 @@ Every write also records an `AuditEvent` (`consultation.closed`) in the same
 transaction, so the event exists iff the consultation was written.
 
 
+## Orders (`/orders`) — `backend/src/modules/orders`
+
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /orders/mine` | patient | Returns the caller's prescriptions and lab orders, showing only the latest row in each supersedes chain by default. Add `?includeHistory=true` to include corrected versions. |
+
 ## Referrals (`/referrals`) — `backend/src/modules/referrals`
 
 | Method & path | Auth | Body | Notes |
