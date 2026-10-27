@@ -77,8 +77,8 @@ describe('issue #15: fulfillment queue + transitions', () => {
     const adminTok = await login(`admin-${runId}@example.com`);
 
     // Create two facilities: one lab, one pharmacy (prescription).
-    const labFac = await createFacility(adminTok, { email: `lab-${runId}@example.com`, type: 'lab', capabilities: [{ capabilityType: 'lab_test' }] });
-    const pharmaFac = await createFacility(adminTok, { email: `pharma-${runId}@example.com`, type: 'pharmacy', capabilities: [{ capabilityType: 'medication_dispense' }] });
+    const labFac = await createFacility(adminTok, { email: `lab-${runId}@example.com`, name: `Lab Facility ${runId}`, type: 'lab', capabilities: [{ capabilityType: 'lab_test' }] });
+    const pharmaFac = await createFacility(adminTok, { email: `pharma-${runId}@example.com`, name: `Pharma Facility ${runId}`, type: 'pharmacy', capabilities: [{ capabilityType: 'medication_dispense' }] });
     labFacilityId = labFac.profileId;
     prescriptionFacilityId = pharmaFac.profileId;
 
@@ -136,6 +136,9 @@ describe('issue #15: fulfillment queue + transitions', () => {
       email: overrides.email as string, password: PASSWORD, name: overrides.name as string,
       type: overrides.type as 'lab' | 'pharmacy', capabilities: [{ capabilityType: overrides.capabilityType as 'lab_test' | 'medication_dispense', detail: null }],
     });
+    if (res.status !== 201) {
+      console.error(`createFacility failed: status=${res.status} body=${JSON.stringify(res.body)}`);
+    }
     expect(res.status).toBe(201);
     return { profileId: res.body.id, userId: res.body.userId };
   }
