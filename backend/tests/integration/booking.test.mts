@@ -25,7 +25,7 @@ import { availabilitySlotFactory } from '../factories/index.js';
 import { runWithRlsContext, withRlsBypass } from '../../src/db/prisma-client.js';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5433;
+const PORT = Number(process.env.TEST_POSTGRES_PORT ?? 5433);
 const CONCURRENT_PATIENTS = 8;
 const runId = Date.now();
 
@@ -36,6 +36,7 @@ const pg = new EmbeddedPostgres({
   password: 'docforum',
   port: PORT,
   persistent: false,
+  initdbFlags: ['--encoding=UTF8'],
 });
 
 // Must match vitest.config.mts's DATABASE_URL for this to be the same
@@ -78,7 +79,7 @@ describe('booking concurrency', () => {
     await pg.start();
     await pg.createDatabase('docforum_test');
 
-    execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
+    execFileSync(process.execPath, [path.join(BACKEND_ROOT, 'node_modules/prisma/build/index.js'), 'migrate', 'deploy'], {
       cwd: BACKEND_ROOT,
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: 'pipe',
@@ -163,6 +164,21 @@ describe('booking concurrency', () => {
     const [{ id: otherUserId }] = await prisma.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM "User" WHERE role = 'patient' AND id <> ${ownerId} LIMIT 1
     `;
+
+    const [rlsState] = await runWithRlsContext({ userId: otherUserId, role: 'patient' }, () =>
+      prisma.$transaction((tx) => tx.$queryRaw<Array<{ currentUser: string; userId: string; role: string }>>`
+        SELECT current_user AS "currentUser",
+          current_setting('app.current_user_id', true) AS "userId",
+          current_setting('app.current_role', true) AS "role"
+      `),
+    );
+    expect(rlsState).toEqual({ currentUser: 'docforum_app', userId: otherUserId, role: 'patient' });
+    const databaseDenied = await runWithRlsContext({ userId: otherUserId, role: 'patient' }, () =>
+      prisma.$transaction((tx) => tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM "Appointment" WHERE id = ${appointmentId}
+      `),
+    );
+    expect(databaseDenied).toEqual([]);
 
     const denied = await runWithRlsContext({ userId: otherUserId, role: 'patient' }, () =>
       prisma.appointment.findUnique({ where: { id: appointmentId } }),

@@ -17,10 +17,18 @@ GRANT docforum_rls_bypass TO CURRENT_USER;
 -- runtime table privileges; policies narrow only the protected tables.
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO docforum_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO docforum_app;
+-- BYPASSRLS is not a privilege grant: trusted jobs and test harnesses still
+-- need ordinary SQL privileges on tables created by the migration owner.
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO docforum_rls_bypass;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO docforum_rls_bypass;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO docforum_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO docforum_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO docforum_rls_bypass;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO docforum_rls_bypass;
 
 -- Force policies for table owners too. The policy allows patient requests
 -- only their own/guardian-owned rows; non-patient application roles retain
