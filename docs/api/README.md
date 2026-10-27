@@ -8,6 +8,14 @@ the rest of the file alone.
 
 Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
 
+## Health
+
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /health/live` | none | Process liveness only; returns `200` while the HTTP process is running. |
+| `GET /health/ready` | none | Cached for three seconds. Returns `200` when required configuration, Postgres, and the latest committed Prisma migration are ready; otherwise `503`. A configured Stellar RPC result is reported separately and does not make the whole API unready. |
+| `GET /health` | none | Backward-compatible alias for liveness. |
+
 ## Auth (`/auth`) — `backend/src/modules/auth`
 
 | Method & path | Auth | Body | Notes |
@@ -281,6 +289,10 @@ Verified doctors can create a consultation with `POST /orders/consultations` (`a
 
 Issuance rules (issue #10): only the consultation's treating doctor with a verified profile may issue (`403` for any other doctor, patient, facility or admin; `401` anonymous; unknown consultation `404`). The consultation may be open (no `outcome` yet) or closed, but its appointment must be `completed` (`409` otherwise — checked after the caller, so other doctors only ever see `403`). `facilityProfileId` must be a pharmacy for a prescription and a lab for a lab order (`400`, nothing written).
 
+## Admin success metrics (`/admin/metrics`) — `backend/src/modules/metrics`
+
+`GET /admin/metrics?from=<RFC3339>&to=<RFC3339>` is admin-only. Both parameters must include a timezone offset; they are normalized to UTC and form a half-open interval. The requested range may not exceed 366 days. The response contains aggregate no-show rate and mean booking lead time where at least five completed/no-show appointments qualify. Smaller cells are returned with `status: "suppressed"` and null values. Symptom-to-order, referral completion, and fulfillment-within-N metrics are currently returned with `status: "not_yet_available"`. See [`success-metrics.md`](../success-metrics.md) for formulas and exclusions.
+
 ## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
 
 Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
@@ -447,6 +459,20 @@ record.
 
 A scheduled purge later hard-deletes deleted accounts that have **no**
 retained records, `ACCOUNT_PURGE_GRACE_HOURS` (default 24) after deletion.
+
+## Feature flags (`/me/flags`, `/admin/feature-flags`) — `backend/src/modules/flags`
+
+Phase 8, issue #132 (model: ARCHITECTURE.md §4.14).
+
+| Endpoint | Who | Body | Notes |
+|---|---|---|---|
+| `GET /me/flags` | any authenticated user | — | `{ flags: { "<key>": boolean } }` — every known flag evaluated for the caller. Unknown/erroring flags read as `false`; it never fails because of a flag. |
+| `GET /admin/feature-flags` | admin | — | `{ items: [{ key, description, enabled, rolloutPercent, allowRoles, allowUserIds, updatedAt }] }`, read straight from the database. |
+| `PATCH /admin/feature-flags/:key` | admin | any of `{ description?, enabled?, rolloutPercent? (0–100), allowRoles?, allowUserIds? }` | Creates the flag if it doesn't exist (key: lowercase dotted segments, ≤ 64 chars). `400` for an invalid key/body or unknown field. Writes an `AuditEvent` (`feature_flag.created` / `feature_flag.updated`, `entityType: 'FeatureFlag'`) in the same transaction. |
+
+Evaluation: off if `enabled` is false; on if the user id is in `allowUserIds`; off if `allowRoles` is non-empty and excludes the user's role; otherwise on when the user's sticky hash bucket is below `rolloutPercent`. Flags are cached in memory (`FEATURE_FLAG_CACHE_TTL_SECONDS`, default 15); a change is visible at once in the process that handled it.
+
+`POST /payments/intents/:id/prepare` is behind `payments.wallet_funding` (seeded **off**): while it's off for the caller it returns `403` with `code: "FEATURE_DISABLED"`.
 
 ## Not yet implemented
 

@@ -42,6 +42,8 @@ type Prisma = typeof import('../../src/db/prisma-client.js').prisma;
 // ---------------------------------------------------------------------------
 const KNOWN_ROUTES = [
   'GET /health',
+  'GET /health/live',
+  'GET /health/ready',
   'POST /auth/signup',
   'POST /auth/login',
   'POST /auth/refresh',
@@ -69,6 +71,7 @@ const KNOWN_ROUTES = [
   'POST /orders/:id/dispute',
   'GET /orders/:id',
   'GET /admin/orders/disputes',
+  'GET /admin/metrics',
   'POST /admin/orders/disputes/:id/resolve',
   'GET /payments/intents/:id',
   'POST /payments/intents/:id/fund',
@@ -96,6 +99,8 @@ interface MatrixRow {
 const ACCESS_MATRIX: MatrixRow[] = [
   // Health — public
   { method: 'GET', path: '/health', expected: { anon: 200, patient: 200, doctor: 200, facility: 200, admin: 200 } },
+  { method: 'GET', path: '/health/live', expected: { anon: 200, patient: 200, doctor: 200, facility: 200, admin: 200 } },
+  { method: 'GET', path: '/health/ready', expected: { anon: 200, patient: 200, doctor: 200, facility: 200, admin: 200 } },
 
   // Auth — public signup/login/refresh; logout needs CSRF token (403 without)
   // signup/login are tested in seedActors — direct assertions below use fresh emails
@@ -144,6 +149,7 @@ const ACCESS_MATRIX: MatrixRow[] = [
 
   // Admin Order Disputes — admin-only
   { method: 'GET', path: '/admin/orders/disputes', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 200 } },
+  { method: 'GET', path: '/admin/metrics', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 400 } }, // admin passes authorization; required UTC range is missing
   { method: 'POST', path: '/admin/orders/disputes/:id/resolve', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
 
   // Payments — admin-triggered in v1; wallet-link is patient and facility (issue #78)
