@@ -129,6 +129,20 @@ backend is down between steps 2 and 4.
 7. Update the expiry date at the top of this section (and in
    `ROADMAP.md` Phase 9).
 
+### Restore synthetic demo data
+
+The preview can be populated with repeatable synthetic accounts and
+availability after `prisma migrate deploy`:
+
+```sh
+DEMO_SEED_PASSWORD='<at least 12 characters>' ALLOW_SYNTHETIC_SEED=true npm run db:seed
+```
+
+The seed uses `example.test` addresses and non-clinical names, and is
+idempotent. `ALLOW_SYNTHETIC_SEED` is required when Render sets
+`NODE_ENV=production`; never run this against a production patient database.
+The seed password is supplied through the environment and is not committed.
+
 Upgrading the existing instance to a paid plan instead keeps its data
 and removes the expiry entirely; do that if renewing monthly gets old
 before issue #22 picks a real production target.
