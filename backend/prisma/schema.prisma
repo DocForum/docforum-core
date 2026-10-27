@@ -90,6 +90,12 @@ enum ReferralExpiryReason {
 
 enum OrderStatus {
   issued
+  // Phase 5 (issue #73): order-level status is DERIVED from item-level
+  // fulfillment rows, so a partially dispensed multi-item prescription
+  // doesn't have to lie ('fulfilled') or refuse the whole order. Written
+  // only by this order's own module service after a fulfillment item
+  // changes — never by a facility directly (hard rule 5).
+  partially_fulfilled
   fulfilled
   expired
   superseded
@@ -108,8 +114,27 @@ enum DisputeStatus {
 enum FulfillmentStatus {
   pending
   in_progress
+  // Phase 5 (issue #73): every item under this record was dispensed.
   fulfilled
+  // Every item under this record reached a terminal state, at least one
+  // was dispensed, and at least one could not be dispensed. The order as
+  // a whole may still reach `fulfilled` if the patient routes the
+  // remaining items to a second facility.
+  partially_fulfilled
+  // Facility rejected the whole record without dispensing anything.
   rejected
+}
+
+// Phase 5 (issue #73): per-item dispensing state. One row per
+// (fulfillment record, order item).
+enum FulfillmentItemStatus {
+  // Routed to this facility, awaiting dispensing.
+  pending
+  // Facility dispensed it (quantityDispensed > 0).
+  dispensed
+  // Facility confirmed it cannot dispense it (e.g. out of stock) — the
+  // patient may route this item to a different facility afterwards.
+  unfulfilled
 }
 
 enum Urgency {
@@ -475,6 +500,14 @@ model FacilityProfile {
   userId    String       @unique
   name      String
   type      FacilityType
+  // Phase 5 (issue #74): physical location so patients can find the
+  // nearest qualified facility (PRD FR-13). All three nullable on
+  // purpose — a facility that hasn't filled them in still appears in
+  // eligible-facility queries, just sorted last (see
+  // facilities/repositories).
+  address   String?
+  latitude  Float?
+  longitude Float?
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 

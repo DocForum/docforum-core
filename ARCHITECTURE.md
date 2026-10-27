@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — DocForum
 
 Status: Draft v0.1
-Last updated: 2026-09-09
+Last updated: 2026-10-17
 
 > **Contribution rule:** Any PR that changes a data model, a service boundary, or the tech stack must update this file in the same PR, and reflect the essentials in `ARCHITECTURE_ESSENTIALS.md`. Also update `ROADMAP.md` status if the change closes/opens roadmap work.
 
@@ -181,6 +181,11 @@ DoctorSpecialty (join table)
 
 FacilityProfile (1:1 User)
   id, user_id, name, type (enum: lab|pharmacy), capabilities: FacilityCapability[]
+  address (nullable), latitude (nullable), longitude (nullable)
+    # Added Phase 5 (issue #74) for PRD FR-13 distance sorting. All three
+    # nullable: a facility that hasn't registered coordinates still appears
+    # in eligible-facility queries, sorted last. Composite b-tree index on
+    # (latitude, longitude) backs the bounding-box prefilter — see §5.4.
 
 FacilityCapability
   id, facility_profile_id, capability_type (enum: lab_test|medication_dispense), detail (e.g. test category)
@@ -545,10 +550,32 @@ T5, enforced as a curated config policy.
 
 ### 5.3 Order issuance and fulfillment
 1. Specialist issues `Prescription` and/or `LabOrder` from a `Consultation`.
-2. Patient views eligible facilities filtered by `FacilityCapability` matching the order.
-3. Patient selects a facility → `FulfillmentRecord` created (`pending`).
-4. Facility updates its own `FulfillmentRecord` status; for labs, attaches `LabResult`.
-5. Order's own `status` field is updated to `fulfilled` only via this facility-confirmed path — patient/doctor cannot self-mark it.
+2. Patient views eligible facilities filtered by `FacilityCapability` matching the order — optionally sorted by distance from a patient-supplied point (§5.4).
+3. Patient selects a facility → `FulfillmentRecord` created (`pending`) with one `FulfillmentItem` per routed item. Splitting a partially dispensed order across a second facility is the same call scoped to the remaining items (issue #73).
+4. Facility updates its own `FulfillmentRecord` status; for labs, attaches `LabResult`. An item becomes `dispensed` only through `PATCH /pharmacy-orders/fulfillments/:id/items/:itemId`, a one-shot conditional update backed by the `(orderType, dispensedKey)` unique index — a second facility dispensing the same item is a constraint violation (409), even under concurrency.
+5. Order's own `status` field is updated to `fulfilled` only via this facility-confirmed path — patient/doctor cannot self-mark it. Since issue #73 this includes `partially_fulfilled`, and the write happens as a post-commit derivation in `pharmacy-orders/services` through the prescriptions/lab-orders module services (rules 4 and 5): facilities never touch `Prescription`/`LabOrder` rows, pharmacy-orders never writes those tables directly, and the update is conditional and forward-only.
+
+**Payment release rule under partial fulfillment (issue #73 — decided):**
+partial fulfillment **never** releases escrow. Release eligibility requires
+the order to derive `fulfilled` — every item of the order dispensed,
+wherever it was routed. A `partially_fulfilled` order holds the escrow no
+matter how many items the dispensing facility already delivered. Rationale:
+v1 has one `PaymentIntent` per order (ADR 0004), so releasing on partial
+state would either over-pay a single facility for goods not delivered or
+need a proration model that doesn't exist yet. Consequence: a patient who
+walks away from the deliberately-un-routed remainder keeps the escrow held
+until the admin refund path (`POST /payments/intents/:id/refund`) resolves
+it. Prorated/partial release is an open question, logged in §6.2 — the
+rule is "no release until the decided rule is met", and the decided rule
+is *all items dispensed*. (Release itself remains admin-triggered in v1
+per ADR 0004; this rule is what makes that action's eligibility check
+honest once wired.)
+
+### 5.4 Facility discovery by distance (Phase 5, issue #74)
+1. Patient calls `GET /facilities/eligible?capabilityType=…&near=lat,lng&radiusKm=…`.
+2. The repository applies an **indexed bounding box** prefilter (`(latitude, longitude)` composite index) that is provably a superset of the radius circle, then computes exact haversine distance in SQL over those rows and sorts ascending (`NULLS LAST` — facilities without coordinates stay discoverable, just last).
+3. The patient's `near` point never leaves the request: it is only ever a bind parameter in that statement — not stored, not logged, not echoed back (the response carries per-facility `distanceKm` only).
+4. **Why not PostGIS:** it needs an extension on every deployment (CI's throwaway DBs, the Render free-tier preview, bare local Postgres) to order one column, which is exactly the ceremony §6.3 warns against; bounding-box + haversine is exact here because the box is a superset. Measured in `backend/tests/integration/facility-distance.test.mts` (p50 ≈ 5 ms over ~3 000 facilities).
 
 ## 6. Hard questions (architecture-level — see PRD §8 for product-level)
 
@@ -567,6 +594,8 @@ T5, enforced as a curated config policy.
 3. No schema support yet for a doctor working across multiple facilities/locations (PRD edge case 6) — `AvailabilitySlot` currently assumes one calendar per doctor.
 4. ~~No audit-log table~~ **Foundation resolved 2026-10-17 (issue #43):** `AuditEvent` (§4.10) + `audit.record()` in the same transaction as the change, append-only at the DB level, wired into booking (both booking paths), doctor verification, payment fund/release/refund, the patient's referral accept/decline and the referral admin actions (`referral.reassign`, `referral.cancel` — Phase 3, issue #68, written as `entity_type = 'Referral'` rows in the same table). **Still open:** the referral's creation and the cascade-driven `completed`/`expired` transitions (no actor to attribute them to yet), the remaining Phase 4 transitions (prescriptions, lab orders, fulfillment), the admin login-throttle clear (`/auth/login-attempts/clear`) still only logs to the console; the app connects as the database owner, which could disable the triggers — enforcing append-only against the owner needs a separate least-privilege DB role (deployment work, issue #22). PRD §7 auditability is therefore "a real mechanism exists" rather than "auditability is done"; remaining coverage stays an open gap.
 5. CSRF on the cookie-authenticated routes — the refresh cookie has to be `SameSite=None; Secure` (the Pages frontend is a different site — see `docs/adr/0003`), which means any site the patient visits can make their browser send it to `/auth/refresh` and `/auth/logout`. **Resolved 2026-10-15 (issue #37):** a per-session CSRF token is bound into the refresh token and required in the `X-CSRF-Token` header, the `Origin` header is validated against an explicit allowlist, and CORS is now a per-environment allowlist (`CORS_ORIGINS`) instead of one configured string. The double-submit cookie pattern — the usual answer — is *not* usable here: a cookie set by this API is a third-party cookie to `docforum.github.io`, so the frontend's JavaScript can never read it; the token travels in the login/refresh response body instead. A request with no `Origin` (curl, server-to-server) is allowed through the Origin check but still needs the token. See `backend/src/middleware/csrf.ts`, and `docs/api/README.md` for what the client must send. Consequence: refresh cookies issued before this change carry no `csrf` claim and are rejected, i.e. existing sessions need one re-login.
+6. **Discovered 2026-10-17 (issue #73): payment proration under partial fulfillment is undecided.** The release rule (§5.3) is "all items dispensed or nothing" — safe, but it means a facility that dispensed 2 of 3 items gets nothing until the last item lands, and an abandoned remainder holds the whole escrow until an admin refunds it. Alternatives (prorated release per facility, split intents per routed record) need a product decision; deliberately not designed here.
+7. **Discovered 2026-10-17 (issue #73): a patient can't yet read their own order's fulfillment record.** The pharmacy-orders read path gates on owning facility / admin, because `PatientProfile ↔ Prescription/LabOrder` linkage doesn't exist until Phase 4 (issue #9). The derived `GET /pharmacy-orders/orders/:id/fulfillment-status` is intentionally coarse-grained so patients get an honest status before that linkage lands; record-level patient reads are blocked on Phase 4, not forgotten.
 
 ### 6.3 What's overengineered (architecture-level, for v1)?
 1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is. **Resolved 2026-10-22 (issue #13, `docs/adr/0012-fulfillment-record-typed-order-fks.md`):** the polymorphism was the premature part and it is gone. Splitting into two tables was weighed and rejected — it would give the §5.3 step-5 transition two implementations and the facility queue a cross-table union, i.e. *more* ceremony than the single typed-FK table, not less.
