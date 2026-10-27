@@ -10,6 +10,7 @@ import { appointmentsRouter } from './modules/appointments/routes';
 import { appointmentConsultationsRouter, consultationsRouter } from './modules/consultations/routes';
 import { ordersRouter } from './modules/orders/routes';
 import { adminOrdersRouter } from './modules/orders/routes/admin';
+import { metricsRouter } from './modules/metrics/routes';
 import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
 import { labOrdersRouter } from './modules/lab-orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
@@ -79,6 +80,7 @@ export function createApp() {
   app.use('/pharmacy-orders', pharmacyOrdersRouter);
   app.use('/lab-orders', labOrdersRouter);
   app.use('/admin', adminOrdersRouter);
+  app.use('/admin', metricsRouter);
   app.use('/payments', paymentsRouter);
   // Phase 5 (issues #73/#74): /facilities and /pharmacy-orders mounts
   // (/pharmacy-orders is mounted above, with the order routes).

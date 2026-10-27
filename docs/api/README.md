@@ -289,6 +289,10 @@ Verified doctors can create a consultation with `POST /orders/consultations` (`a
 
 Issuance rules (issue #10): only the consultation's treating doctor with a verified profile may issue (`403` for any other doctor, patient, facility or admin; `401` anonymous; unknown consultation `404`). The consultation may be open (no `outcome` yet) or closed, but its appointment must be `completed` (`409` otherwise — checked after the caller, so other doctors only ever see `403`). `facilityProfileId` must be a pharmacy for a prescription and a lab for a lab order (`400`, nothing written).
 
+## Admin success metrics (`/admin/metrics`) — `backend/src/modules/metrics`
+
+`GET /admin/metrics?from=<RFC3339>&to=<RFC3339>` is admin-only. Both parameters must include a timezone offset; they are normalized to UTC and form a half-open interval. The requested range may not exceed 366 days. The response contains aggregate no-show rate and mean booking lead time where at least five completed/no-show appointments qualify. Smaller cells are returned with `status: "suppressed"` and null values. Symptom-to-order, referral completion, and fulfillment-within-N metrics are currently returned with `status: "not_yet_available"`. See [`success-metrics.md`](../success-metrics.md) for formulas and exclusions.
+
 ## Audit trail (`/admin/audit-events`) — `backend/src/modules/audit`
 
 Phase 8, issue #43. Every response carries an `X-Request-Id` header: a
