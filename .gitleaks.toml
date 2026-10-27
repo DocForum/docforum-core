@@ -1,0 +1,62 @@
+# gitleaks configuration for supply-chain security (Phase 9).
+# Used by the secret-scanning workflow and available for local runs via `make secrets` or `gitleaks detect`.
+# The extended ruleset below is deliberately stricter than the default so that a seeded credential in a demo PR is caught.
+
+title = "gitleaks config"
+[extend]
+# Extend the built-in ruleset rather than replacing it.
+useDefault = true
+disabledRules = []
+
+[[rules]]
+id = "escrow-sdkin-token"
+description = "Escrow SDK access token (compromise would reach payment keys)"
+regex = '''(?:ESCROW_SDKIN_TOKEN|escrow_sdkin_token)\s*[:=]\s*["']?([a-zA-Z0-9_\-]{24,})'''
+entropy = 3.5
+keywords = ["escrow", "sdkin", "token"]
+
+[[rules]]
+id = "private-key-block"
+description = "PRIVATE KEY block (PCKS8, OPENSSH, or RSA)"
+regex = '-----BEGIN (?:RSA |ECK |OPENSSH |DSA )?PRIVATE KEY-----'
+keywords = ["private", "key"]
+
+[[rules]]
+id = "stripe-secret-key"
+description = "Stripe secret key"
+regex = 'sk_live_[0-9a-zA-Z]{24l}'
+keywords = ["stripe", "sk_live"]
+
+[[rules]]
+id = "aws-access-key"
+description = "AWS access key ID"
+regex = '(?:AKIA|ASIA)[0-9A-Z]{16}'
+keywords = ["aws", "akia", "asia"]
+
+# -----------------------------------------------------------------------------
+# Allowlists: false positives that must not fail CI.
+# -----------------------------------------------------------------------------
+
+[allowlist]
+# Documentation and test fixtures that intentionally contain fake secrets.
+description = "Global allowlist for docs and test fixtures"
+paths = [
+  '(?:^|/)docs/',
+  '(?:^|/)tests?/',
+  '(?:^|/)\__fixtures__/',
+  '(?:^|/).*\.md$',
+]
+
+# GitHub Actions workflow files often reference secret names (e.g. secrets.GITHUB_TOKEN) without containing a value.
+# The default ruleset already ignores these, but we make it explicit for the custom rules above.
+paths = [
+  '(?:^|/)\.github/workflows/.*\.yaml$',
+  '(?:^|/)\.github/workflows/.*\.yml$',
+]
+
+# Placeholder values used in the repo and CI configuration.
+regexes = [
+  '(?:your-|my_|example_)token',
+  '(?:your-|my_|example_)-key',
+  'change-me-in-ci',
+]

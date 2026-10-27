@@ -1,0 +1,83 @@
+name: CodeQL 
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (TypeScript)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'javascript-typescript' ]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.0
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQ
+        uses: github/codeql-action/init@v3.26.1
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+          config-file: .github/codeql/codeql-config.yml
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@V3.26.1
+
+      - name: Perform CodeQ Analysis
+        uses: github/codeql-action/analyze@v3.26.1
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload: always
+
+      - name: Enforce high-severity gate
+        if: always()
+        env:
+          GHRA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "Not a PR{ no gate applied."
+            exit 0
+          fi
+          gh secret scanning alerts list \
+            --repo "${{ github.repository }}" \
+            --state open \
+            --json state,secret_type |> codeql_alerts.json || echo '[]' > codeql_alerts.json
+          echo "CodeQ summary reported below."
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/code-scanning/analyses?ref-ref=${{ github.event.pull_request.head.sha }}" \
+            > analyses.json || echo '[]' > analyses.json
+          node -e '
+            const fs = require("fs");
+            const analyses = JSON.parse(fs.readFileSync("analyses.json", "utf8"));
+            const high = (analyses || []).filter(a => a.rules && a.rules.some(rule => ["error", "warning"].includes(String(rule.severity).toLowerCase()) || ["error", "warning"].includes(String(rule.severity).toLowerCase())));
+            const highSeverity = (analyses || []).filter(a => (a.rules || []).some(r => ["error", "warning"].includes(String(r.severity).toLowerCase())));
+            if (highSeverity.length > 0) {
+              console.error("CodeQL found high-severity alerts on this PR.");
+              process.exit(1);
+            }
+            console.log("No high-severity CodeQ  alerts detected.");
+          '
