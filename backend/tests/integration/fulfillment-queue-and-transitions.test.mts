@@ -38,22 +38,18 @@ const pg = new EmbeddedPostgres({
 const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_fulfillment_test`;
 type App = ReturnType<typeof import('../../src/app.js').createApp>;
 type Prisma = typeof import('../../src/db/prisma-client.js').prisma;
-type FacilitiesService = typeof import('../../src/modules/facilities/services/index.js');
 type OrdersService = typeof import('../../src/modules/orders/services/index.js');
 
 describe('issue #15: fulfillment queue + transitions', () => {
   let app: App;
   let prisma: Prisma;
-  let facilitiesService: FacilitiesService;
   let ordersService: OrdersService;
-  let adminToken: string;
-  let adminUserId: string;
   let labFacilityToken: string;
   let prescriptionFacilityToken: string;
   let patientToken: string;
   let doctorToken: string;
-let labFacilityId: string;
-let prescriptionFacilityId: string;
+  let labFacilityId: string;
+  let prescriptionFacilityId: string;
 
   beforeAll(async () => {
     await pg.initialise();
@@ -68,29 +64,29 @@ let prescriptionFacilityId: string;
 
     process.env.DATABASE_URL = databaseUrl;
 
-    const [appModule, dbModule, facilitiesModule, ordersModule] = await Promise.all([
+    const [appModule, dbModule, ordersModule] = await Promise.all([
       import('../../src/app.js'),
       import('../../src/db/prisma-client.js'),
-      import('../../src/modules/facilities/services/index.js'),
       import('../../src/modules/orders/services/index.js'),
     ]);
     app = appModule.createApp();
     prisma = dbModule.prisma;
-    facilitiesService = facilitiesModule;
     ordersService = ordersModule;
 
-    adminUserId = await createAdmin(runId).userId;
-    adminToken = await login(`admin-${runId}@example.com`);
+    await createAdmin(runId);
+    const adminTok = await login(`admin-${runId}@example.com`);
 
     // Create two facilities: one lab, one pharmacy (prescription).
-    labFacilityId = await createFacility(adminToken, { email: `lab-${runId}@example.com`, type: 'lab', capabilities: [{ capabilityType: 'lab_test' }] }).profileId;
-    prescriptionFacilityId = await createFacility(adminToken, { email: `pharma-${runId}@example.com`, type: 'pharmacy', capabilities: [{ capabilityType: 'medication_dispense' }] }).profileId;
+    const labFac = await createFacility(adminTok, { email: `lab-${runId}@example.com`, type: 'lab', capabilities: [{ capabilityType: 'lab_test' }] });
+    const pharmaFac = await createFacility(adminTok, { email: `pharma-${runId}@example.com`, type: 'pharmacy', capabilities: [{ capabilityType: 'medication_dispense' }] });
+    labFacilityId = labFac.profileId;
+    prescriptionFacilityId = pharmaFac.profileId;
 
     labFacilityToken = await login(`lab-${runId}@example.com`);
     prescriptionFacilityToken = await login(`pharma-${runId}@example.com`);
 
-    patientToken = await signup('patient', `pat-${runId}@example.com`).accessToken;
-    doctorToken = await signup('doctor', `doc-${runId}@example.com`).accessToken;
+    patientToken = (await signupAs('patient', `pat-${runId}@example.com`)).accessToken;
+    doctorToken = (await signupAs('doctor', `doc-${runId}@example.com`)).accessToken;
   });
 
   afterAll(async () => {
@@ -99,7 +95,7 @@ let prescriptionFacilityId: string;
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
-  async function signupAs(role: 'patient' | 'doctor' | 'facility', runId: number, email: string) {
+  async function signupAs(role: 'patient' | 'doctor' | 'facility', email: string) {
     const res = await request(app).post('/auth/signup').send({ role, email, password: PASSWORD, fullName: `Issue #15 ${role}` });
     expect(res.status).toBe(200);
     return { email, accessToken: res.body.accessToken as string, userId: res.body.id as string };
@@ -149,20 +145,20 @@ let prescriptionFacilityId: string;
     // we don't depend on the appointments/consultations machinery for this
     // focused file. We need a valid DoctorProfile too for issuePrescription.
     const doctorUser = await prisma.user.create({ data: { email: `doc-seed-${runId}@example.com`, passwordHash: 'x', role: 'doctor' } });
-    const doctorProfile = await prisma.doctorProfile.create({ data: { userId: doctorUser.id, isVerified: true, specialization: null } });
+    const doctorProfile = await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: 'Test Doctor', verificationStatus: 'verified' } });
 
     const patientUser = await prisma.user.create({ data: { email: `pat-seed-${runId}@example.com`, passwordHash: 'x', role: 'patient' } });
     const appointment = await prisma.appointment.create({
-      data: { patientProfileId: patientUser.id, doctorProfileId: doctorProfile.id, scheduledAt: new Date(), status: 'confirmed' },
+      data: { patientProfileId: patientUser.id, doctorProfileId: doctorProfile.id, scheduledAt: new Date(), status: 'scheduled' },
     });
     const consultation = await prisma.consultation.create({
       data: { appointmentId: appointment.id, outcome: 'resolved', notes: null },
     });
 
-    const createdPrescription = await ordersService.issuePrescription({
-      actor: { userId: patientUser.id, role: 'patient', requestId: null },
-      input: { consultationId: consultation.id, facilityProfileId: labFacilityId, items: [{ drugName: 'Test Drug', dosage: '1mg', frequency: 'once', duration: '1 day' }] },
-    });
+    const createdPrescription = await ordersService.issuePrescription(
+      { userId: patientUser.id, role: 'patient', requestId: null },
+      { consultationId: consultation.id, facilityProfileId: labFacilityId, items: [{ drugName: 'Test Drug', dosage: '1mg', frequency: 'once', duration: '1 day' }] },
+    );
     expect(createdPrescription.paymentIntent).toBeDefined();
 
     const fulfills = await prisma.fulfillmentRecord.findMany({
@@ -231,7 +227,7 @@ let prescriptionFacilityId: string;
 
     // The underlying prescription was flipped to fulfilled — the only path
     // (ARCHITECTURE §5.3 hard rule 5).
-    const prescUpdated = await prisma.prescription.findUniqueOrThrow({ where: { id: target.prescriptionId } });
+    const prescUpdated = await prisma.prescription.findUniqueOrThrow({ where: { id: target.prescriptionId! } });
     expect(prescUpdated.status).toBe('fulfilled');
 
     // Terminal states can't re-transition.
@@ -257,7 +253,7 @@ let prescriptionFacilityId: string;
     expect(updated.status).toBe(200);
     expect(updated.body.orderKind).toBe('lab_order');
 
-    const labUpdated = await prisma.labOrder.findUniqueOrThrow({ where: { id: target.labOrderId } });
+    const labUpdated = await prisma.labOrder.findUniqueOrThrow({ where: { id: target.labOrderId! } });
     expect(labUpdated.status).toBe('fulfilled');
   });
 
@@ -312,7 +308,7 @@ let prescriptionFacilityId: string;
   it('invalid status payload is rejected by validation', async () => {
     const records = await prisma.fulfillmentRecord.findMany({
       where: { facilityId: labFacilityId, labOrderId: { not: null } },
-      select: { id: true, status: true },
+      select: { id: true, status: true, labOrderId: true },
     });
     const target = records.find((r) => r.labOrderId && r.status === 'pending')!;
     const invalid = await request(app)

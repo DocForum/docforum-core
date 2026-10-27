@@ -23,7 +23,7 @@ import {
   selectCurrentPrice,
 } from '../pricing';
 import { parseStroopsAmount } from '../../../utils/stroops';
-import type { CapabilityType, FacilityType } from '@prisma/client';
+import type { CapabilityType, FacilityType, FulfillmentStatus } from '@prisma/client';
 
 const MAX_CATALOG_ITEM_CODE_LENGTH = 100;
 const MAX_ASSET_ID_LENGTH = 120;
@@ -553,7 +553,7 @@ export async function transitionFulfillmentStatus(
 export async function createFulfillmentRecord(
   db: Db,
   input: { facilityId: string; orderKind: FacilityOrderKind; orderId: string },
-): Promise<{ id: string; status: 'pending' }> {
+): Promise<{ id: string; status: FulfillmentStatus }> {
   const { facilityId, orderKind, orderId } = input;
   
   if (orderKind === 'prescription') {
