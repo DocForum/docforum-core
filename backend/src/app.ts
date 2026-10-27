@@ -24,6 +24,7 @@ import { referralsRouter } from './modules/referrals/routes';
 import { notificationsRouter } from './modules/notifications/routes';
 import { adminFlagsRouter, meFlagsRouter } from './modules/flags/routes';
 import { registerRetentionHolds } from './retention-holds';
+import { getReadiness } from './health/readiness';
 
 export function createApp() {
   const app = express();
@@ -50,6 +51,12 @@ export function createApp() {
   app.use(express.json());
   app.use(cookieParser());
 
+  app.get('/health/live', (_req, res) => res.status(200).json({ status: 'live' }));
+  app.get('/health/ready', async (_req, res) => {
+    const readiness = await getReadiness();
+    res.status(readiness.status === 'ready' ? 200 : 503).json(readiness);
+  });
+  // Keep the original liveness path for existing monitors and clients.
   app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 
   app.use('/auth', authRouter);

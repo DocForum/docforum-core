@@ -8,6 +8,14 @@ the rest of the file alone.
 
 Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
 
+## Health
+
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /health/live` | none | Process liveness only; returns `200` while the HTTP process is running. |
+| `GET /health/ready` | none | Cached for three seconds. Returns `200` when required configuration, Postgres, and the latest committed Prisma migration are ready; otherwise `503`. A configured Stellar RPC result is reported separately and does not make the whole API unready. |
+| `GET /health` | none | Backward-compatible alias for liveness. |
+
 ## Auth (`/auth`) — `backend/src/modules/auth`
 
 | Method & path | Auth | Body | Notes |
