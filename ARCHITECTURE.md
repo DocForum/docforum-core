@@ -171,6 +171,7 @@ Guardianship (Phase 8, issue #42 — docs/adr/0011)
 
 DoctorProfile (1:1 User)
   id, user_id, full_name, verification_status (enum: pending|verified|rejected)
+  time_zone (IANA identifier used when interpreting the doctor's availability)
   specialties: DoctorSpecialty[]
 
 Specialty (controlled vocabulary, admin-managed)
@@ -206,6 +207,19 @@ Appointment
   # this column. History rows keep their referral_id, so the lineage of a
   # referral that produced several appointments survives the link being
   # cleared (Referral.appointments holds the full list).
+
+WaitlistEntry
+  id, patient_profile_id (required), doctor_profile_id (nullable),
+  specialty_id (nullable), facility_capability_id (nullable),
+  availability_slot_id (nullable), status (pending|on_hold|accepted|expired),
+  earliest_acceptable, latest_acceptable, hold_duration_minutes,
+  created_at, updated_at
+  # A patient's waitlist request may target a doctor, specialty, or
+  # facility capability. A time-boxed offer may reference an availability
+  # slot; deleting its target profile/capability clears that optional link.
+
+WindowTime
+  id, start, end (unique pair)
 
 IntakeForm
   id, patient_profile_id, symptoms (structured: array of {symptom, duration, severity}), free_text_notes
@@ -488,6 +502,34 @@ Patient-facing query (`GET /patients/me/access-log`) is scoped server-side
 to the caller's own profile (resolved from the authenticated user, never
 from the request) and strips all viewer PII to a role — a deleted viewer
 surfaces as `deleted_user`.
+
+### 4.14 Feature flags (Phase 8, issue #132)
+
+```
+FeatureFlag
+  key            text  PK        -- dotted, lowercase: 'payments.wallet_funding'
+  description    text
+  enabled        bool            -- kill switch: false = off for everyone
+  rolloutPercent int 0..100      -- sticky hash bucket (see below)
+  allowRoles     Role[]          -- empty = no role restriction
+  allowUserIds   text[]          -- always on (while enabled), bypasses role + percent
+  createdAt, updatedAt
+```
+
+One row per flag in each environment's own database, so staging and production
+are independent by construction. Evaluation (`modules/flags/evaluate.ts`) is a
+pure function: off if `enabled` is false; on if the user id is allowlisted;
+off if `allowRoles` is non-empty and excludes the user's role; otherwise on
+when `sha256(key:userId)` bucket (0–99) is below `rolloutPercent`. The bucket is
+a hash, never random, so a user's answer is the same on every request and
+raising the percentage never turns anyone off. Evaluation never throws and
+defaults to off (unknown flag, malformed row, database down with nothing
+cached). Flags are cached in memory for `FEATURE_FLAG_CACHE_TTL_SECONDS`
+(default 15). Changes go only through `PATCH /admin/feature-flags/:key`, which
+writes a `feature_flag.created` / `feature_flag.updated` `AuditEvent` in the
+same transaction (counts and the percentage only — never the allowlisted ids).
+First user: `payments.wallet_funding` gates `POST /payments/intents/:id/prepare`
+(ADR 0005: wallet funding launches as an option), seeded off.
 
 ### 4.13 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
 ```

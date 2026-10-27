@@ -24,6 +24,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `User` (guardian) —< `Guardianship` >— `PatientProfile` (dependent, `userId` null) (Phase 8, issue #42 — docs/adr/0011; create-only, access ends at `AGE_OF_MAJORITY_YEARS`; authorise any act-for-a-patient path through `patientsService.resolveActingProfile`).
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` (`availability_slot_id` nullable — a cancelled appointment releases its slot; booking safety is `claimOpenSlot`, not that column) → `IntakeForm`, `Consultation`
+`PatientProfile` → `WaitlistEntry` (optional doctor/specialty/facility capability/slot targets; time-boxed offer status)
 `Consultation` (`appointmentId` **UNIQUE** — closing a consultation is a create-once operation, `409` on a second attempt; one writer, `consultationsService.createConsultation`, reached from `POST /consultations`, `POST /appointments/:id/consultation` and the orders flow; see docs/adr/0009) → (outcome=referred) → `Referral` (snapshot! required `target_doctor_id` — routed at creation when only a specialty is named, ADR 0008; self-FK lineage `parent_referral_id`, no-show/loop/admin flags) → new `Appointment`
 `Appointment` → `Consultation` → immutable `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
 `FulfillmentRecord` (facility-owned) references exactly one order through real FKs (`prescription_id` XOR `lab_order_id`, enforced by a DB CHECK — docs/adr/0012) but doesn't mutate it; one row per order.
