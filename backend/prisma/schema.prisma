@@ -52,6 +52,7 @@ enum AppointmentStatus {
   scheduled
   completed
   cancelled
+  late_cancelled
   no_show
 }
 
@@ -125,16 +126,11 @@ enum FulfillmentStatus {
   rejected
 }
 
-// Phase 5 (issue #73): per-item dispensing state. One row per
-// (fulfillment record, order item).
-enum FulfillmentItemStatus {
-  // Routed to this facility, awaiting dispensing.
+enum WaitlistStatus {
   pending
-  // Facility dispensed it (quantityDispensed > 0).
-  dispensed
-  // Facility confirmed it cannot dispense it (e.g. out of stock) — the
-  // patient may route this item to a different facility afterwards.
-  unfulfilled
+  on_hold
+  accepted
+  expired
 }
 
 enum Urgency {
@@ -173,6 +169,8 @@ model User {
   // refresh-token revocation list (issue #18) — this is the narrow "revoke
   // everything for one account" case that deactivation needs.
   sessionsInvalidatedAt DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
   // Per-user refresh-token version. Embedded in every access/refresh token
   // as `tv` and compared against this column at refresh time. Bumping it
   // (password reset, Phase 8 #33) invalidates every outstanding refresh
@@ -186,8 +184,6 @@ model User {
   // refused once set. Distinct from admin deactivation (#39), which is
   // reversible.
   deletedAt             DateTime?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
 
   patientProfile  PatientProfile?
   doctorProfile   DoctorProfile?
@@ -339,19 +335,20 @@ model PatientProfile {
   // (ADR 0010), and an accidental user delete must fail loudly rather than
   // take the clinical identity anchor with it. Optional since issue #42: a
   // dependent profile has no login.
-  user           User?              @relation(fields: [userId], references: [id], onDelete: Restrict)
-  appointments   Appointment[]
-  paymentIntents PaymentIntent[]
-  prescriptions  Prescription[]
-  labOrders      LabOrder[]
-  dataExports    PatientExport[]
+  user            User?              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  appointments    Appointment[]
+  waitlistEntries WaitlistEntry[]
+  paymentIntents  PaymentIntent[]
+  prescriptions   Prescription[]
+  labOrders       LabOrder[]
+  dataExports     PatientExport[]
   // Phase 3: the referrals this patient is the subject of (the opposite
   // side of Referral.patientProfileId).
-  referrals      Referral[]
+  referrals       Referral[]
   // ADR 0005 step 1 (issue #80): the patient's verified Stellar payer
   // address, when one has been linked. Optional because linking is a
   // separate flow that nothing creates rows for yet.
-  walletLink     PatientWalletLink?
+  walletLink      PatientWalletLink?
 
   // Phase 8 (issue #45): who viewed this patient's records.
   accessLogs AccessLog[]
@@ -458,6 +455,7 @@ model DoctorProfile {
   userId             String             @unique
   fullName           String
   verificationStatus VerificationStatus @default(pending)
+  timeZone           String // IANA time zone identifier, e.g. "Europe/London", "America/New_York"
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -467,6 +465,7 @@ model DoctorProfile {
   appointments       Appointment[]
   prescriptions      Prescription[]
   labOrders          LabOrder[]
+  waitlistEntries    WaitlistEntry[]
   // Referral sides a doctor can sit on: `referringReferrals` are ones
   // they created; `targetedReferrals` are ones aimed at them (whether
   // they ultimately see the patient or not).
@@ -481,7 +480,8 @@ model Specialty {
   name String @unique
   slug String @unique
 
-  doctors DoctorSpecialty[]
+  doctors         DoctorSpecialty[]
+  waitlistEntries WaitlistEntry[]
 }
 
 model DoctorSpecialty {
@@ -536,7 +536,8 @@ model FacilityProfile {
 }
 
 model FacilityCapability {
-  id                String         @id @default(uuid())
+  waitlistEntries   WaitlistEntry[]
+  id                String          @id @default(uuid())
   facilityProfileId String
   capabilityType    CapabilityType
   // e.g. a lab test category, or a medication class — free text on purpose,
@@ -576,13 +577,14 @@ model FacilityPrice {
 }
 
 model AvailabilitySlot {
-  id              String     @id @default(uuid())
+  id              String          @id @default(uuid())
+  waitlistEntries WaitlistEntry[]
   doctorProfileId String
-  status          SlotStatus @default(open)
+  status          SlotStatus      @default(open)
   startTime       DateTime
   endTime         DateTime
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
   appointment   Appointment?
@@ -998,50 +1000,40 @@ model FulfillmentRecord {
   @@index([facilityId, status])
 }
 
-// Phase 5 (issue #73): item-level fulfillment rows under a
-// FulfillmentRecord. A prescription with three items gets one row per
-// routed item, so one out-of-stock drug doesn't force the pharmacy to
-// either lie ("fulfilled") or refuse the whole order.
-model FulfillmentItem {
+model WaitlistEntry {
   id                  String   @id @default(uuid())
-  fulfillmentRecordId String
-  // Mirrors the parent record's polymorphic shape: "prescription" |
-  // "lab_order" (a lab order is a single-item order, so orderItemId = the
-  // LabOrder's own id).
-  orderType           String
-  orderItemId         String // PrescriptionItem.id | LabOrder.id
-  // How many units the order asked for (nullable — the Phase 4 item
-  // models don't carry quantities yet; a lab order has no quantity at
-  // all). null = "not tracked", not zero.
-  quantityOrdered     Int?
-  quantityDispensed   Int      @default(0)
-  status              FulfillmentItemStatus @default(pending)
-  // Derived enforcement column for the "one dispenser per item" DB
-  // constraint below. Equals orderItemId exactly when status =
-  // 'dispensed', NULL otherwise, so the plain unique index
-  // (orderType, dispensedKey) only ever collides on non-NULL values —
-  // i.e. two facilities trying to dispense the SAME item.
-  //
-  // This is a partial unique index (`WHERE status = 'dispensed'`)
-  // expressed with a nullable column on purpose: Prisma cannot represent
-  // partial indexes in schema.prisma, and migrate diff would try to drop
-  // one it found in the database. Set/cleared only inside the dispense
-  // transaction in pharmacy-orders/services.
-  dispensedKey        String?
-  dispensedAt         DateTime?
+  patientProfileId    String
+  doctorProfileId     String?
+  specialtyId         String?
+  status              String // pending | on_hold | accepted | expired
+  // Time window during which the patient is willing to accept a slot
+  earliestAcceptable  DateTime
+  latestAcceptable    DateTime
+  // Time-boxed hold: when a slot is offered, it's held for this duration
+  holdDurationMinutes Int
+  // Audit trail
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  fulfillmentRecord FulfillmentRecord @relation(fields: [fulfillmentRecordId], references: [id], onDelete: Cascade)
+  patientProfile       PatientProfile      @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+  doctorProfile        DoctorProfile?      @relation(fields: [doctorProfileId], references: [id], onDelete: SetNull)
+  specialty            Specialty?          @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
+  facilityCapability   FacilityCapability? @relation(fields: [facilityCapabilityId], references: [id])
+  facilityCapabilityId String?
+  availabilitySlot     AvailabilitySlot?   @relation(fields: [availabilitySlotId], references: [id])
+  availabilitySlotId   String?
 
-  // The same item can't be routed twice under one record.
-  @@unique([fulfillmentRecordId, orderType, orderItemId])
-  // Hard constraint: a single order item can't be dispensed by two
-  // facilities (issue #73 edge case). Multiple pending/unfulfilled rows
-  // for the same item across records are allowed — that's exactly what
-  // "route the remaining items to a second facility" needs.
-  @@unique([orderType, dispensedKey])
-  @@index([orderType, orderItemId])
+  @@unique([patientProfileId, doctorProfileId, specialtyId])
+  @@index([status])
+  @@index([patientProfileId, status])
+}
+
+model WindowTime {
+  id    String   @id @default(uuid())
+  start DateTime
+  end   DateTime
+
+  @@unique([start, end])
 }
 
 model Notification {
@@ -1334,6 +1326,24 @@ model EscrowChainEvent {
 // No PHI, ever: `metadata` is a small flat map of ids/codes validated by
 // record() — never names, contact details, DOB, intake text, or copies of
 // request/response bodies.
+// Feature flags (Phase 8, issue #132): one row per flag, in this
+// environment's own database (staging and production each have their own,
+// so flags are per environment by construction). `enabled` is the kill
+// switch: false = off for everyone. When true, a user is on if their id is
+// in `allowUserIds`; otherwise they must be in `allowRoles` (when that list
+// is non-empty) and fall inside the sticky `rolloutPercent` bucket. Changes
+// are made only through the admin endpoints, which audit every one.
+model FeatureFlag {
+  key            String   @id
+  description    String   @default("")
+  enabled        Boolean  @default(false)
+  rolloutPercent Int      @default(100)
+  allowRoles     Role[]   @default([])
+  allowUserIds   String[] @default([])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
 model AuditEvent {
   id          String   @id @default(uuid())
   // Null only for system-initiated transitions (none exist yet).

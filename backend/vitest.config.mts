@@ -16,6 +16,9 @@ export default defineConfig({
     // so its hook also seeds the full actor set and needs headroom.
     hookTimeout: 120_000,
     env: {
+      // Legacy integration fixtures run as the explicit maintenance role
+      // unless a test supplies a request identity with runWithRlsContext.
+      RLS_TEST_BYPASS: '1',
       JWT_ACCESS_SECRET: 'test-access-secret',
       JWT_REFRESH_SECRET: 'test-refresh-secret',
       // SEP-10 (issue #77) — a throwaway keypair used ONLY by the test

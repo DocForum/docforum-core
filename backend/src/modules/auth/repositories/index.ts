@@ -88,7 +88,7 @@ export function createSelfServeUser(input: CreateSelfServeUserInput) {
       });
     } else {
       await tx.doctorProfile.create({
-        data: { userId: user.id, fullName: input.fullName },
+        data: { userId: user.id, fullName: input.fullName, timeZone: 'UTC' },
       });
     }
 
