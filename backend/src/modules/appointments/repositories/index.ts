@@ -16,6 +16,30 @@ export function createAppointment(
   return db.appointment.create({ data });
 }
 
+/** Find a single appointment by ID (used inside transactions). */
+export function findAppointmentById(db: DbClient, id: string) {
+  return db.appointment.findUnique({ where: { id } });
+}
+
+/** Update an appointment (used inside transactions). */
+export async function updateAppointment(
+  db: DbClient,
+  id: string,
+  data: { availabilitySlotId?: string; status?: AppointmentStatus },
+) {
+  return db.appointment.update({ where: { id }, data });
+}
+
+/** Update an appointment's availabilitySlotId (used inside transactions). */
+export async function updateAvailabilitySlotId(
+  db: DbClient,
+  id: string,
+  data: { availabilitySlotId: string },
+) {
+  return db.appointment.update({ where: { id }, data });
+}
+
+
 /** One keyset page of a patient's appointments, oldest first (patient data
  * export, issue #40). Appointment columns only — slot/doctor details come
  * from those modules' services, not a join. */
@@ -54,10 +78,6 @@ export function findAppointmentsForDoctorOnDay(doctorProfileId: string, start: D
 /** Minimal appointment context for a doctor-owned consultation. */
 export function findAppointmentDoctorContext(id: string) {
   return prisma.appointment.findUnique({ where: { id }, include: { doctorProfile: { select: { id: true, userId: true, verificationStatus: true } } } });
-}
-
-export function findAppointmentById(db: DbClient, id: string) {
-  return db.appointment.findUnique({ where: { id } });
 }
 
 /**

@@ -14,5 +14,12 @@ doctorsRouter.patch(
   doctorsController.setVerification,
 );
 
+doctorsRouter.patch(
+  '/:doctorProfileId/specialties/:specialtyId/verification',
+  authenticate,
+  requireRole('admin'),
+  doctorsController.setDoctorSpecialtyVerification,
+);
+
 export const specialtiesRouter = Router();
 specialtiesRouter.get('/', doctorsController.listSpecialties);
