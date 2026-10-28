@@ -24,6 +24,7 @@
     "test:mutation": "stryker run"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1156.0",
     "@docforum/escrow-sdk": "https://github.com/DocForum/docforum-escrow/releases/download/sdk-v0.2.0/docforum-escrow-sdk-0.2.0.tgz",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",

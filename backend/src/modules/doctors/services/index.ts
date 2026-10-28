@@ -174,3 +174,24 @@ export async function doctorVerificationQueueCounts() {
     : null;
   return { count: stats.count, oldestAgeSeconds };
 }
+
+export async function setDoctorSpecialtyVerification(
+  doctorProfileId: string,
+  specialtyId: string,
+  status: VerificationStatus,
+  reviewer: string,
+  rejectionReason?: string,
+) {
+  const assignment = await doctorsRepo.findDoctorSpecialtyByDoctorAndSpecialty(doctorProfileId, specialtyId);
+  if (!assignment) {
+    throw new HttpError(404, 'Doctor does not have this specialty assigned.');
+  }
+  return doctorsRepo.updateDoctorSpecialtyVerification(
+    prisma,
+    doctorProfileId,
+    specialtyId,
+    status,
+    reviewer,
+    status === 'rejected' ? (rejectionReason ?? null) : null,
+  );
+}

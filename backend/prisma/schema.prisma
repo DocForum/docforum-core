@@ -472,14 +472,19 @@ model Specialty {
 }
 
 model DoctorSpecialty {
-  id              String @id @default(uuid())
-  doctorProfileId String
-  specialtyId     String
+  id                 String             @id @default(uuid())
+  doctorProfileId    String
+  specialtyId        String
+  verificationStatus VerificationStatus @default(pending)
+  reviewer           String?
+  reviewDate         DateTime?
+  rejectionReason    String?
 
   doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
   specialty     Specialty     @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
 
   @@unique([doctorProfileId, specialtyId])
+  @@index([verificationStatus])
 }
 
 model FacilityProfile {
@@ -920,7 +925,15 @@ model LabResult {
   id                   String   @id @default(uuid())
   labOrderId           String   @unique
   fulfillingFacilityId String
+  // Never written: a result file is not addressed by URL (issue #16).
   resultFileUrl        String?
+  // Issue #16 (docs/adr/0014): the file lives in a private object-storage
+  // bucket under this opaque, server-generated key — not a URL, never sent
+  // to a client. It is read back only through
+  // GET /orders/lab-orders/:labOrderId/result, which re-checks access.
+  resultObjectKey      String?  @unique
+  resultContentType    String?
+  resultByteSize       Int?
   summary              String?
   createdAt            DateTime @default(now())
 
@@ -992,6 +1005,19 @@ model WindowTime {
   end   DateTime
 
   @@unique([start, end])
+}
+
+model RateLimitRecord {
+  id         String   @id @default(uuid())
+  key        String
+  scope      String
+  cost       Int      @default(1)
+  consumedAt DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([key, scope, consumedAt])
+  @@index([consumedAt])
 }
 
 model Notification {
