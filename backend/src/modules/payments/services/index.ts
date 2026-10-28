@@ -23,6 +23,7 @@ import { getMyPatientProfile, paginate, type PatientExportSection } from '../../
 import { prisma } from '../../../db/prisma-client';
 import { parseStroopsAmount } from '../../../utils/stroops';
 import * as auditService from '../../audit/services';
+import * as flagsService from '../../flags/services';
 import type { Prisma } from '@prisma/client';
 import { transitionPaymentIntentStatus } from './state-machine';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
@@ -583,6 +584,11 @@ export async function preparePaymentIntent(
   now = new Date(),
 ): Promise<PreparePaymentIntentResult> {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  // ADR 0005: wallet funding launches "as an option, not the default" — it is
+  // behind a flag (issue #132), off until an admin enables it for a cohort.
+  if (!(await flagsService.isEnabled(flagsService.WALLET_FUNDING_FLAG, { id: actor.userId, role: actor.role ?? 'patient' }))) {
+    throw new HttpError(403, 'Wallet payments are not enabled for this account.', 'FEATURE_DISABLED');
+  }
   const patientProfileId = await getOwnPatientProfileId(actor.userId);
 
   let intent = await getPaymentIntent(id);
