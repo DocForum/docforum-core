@@ -22,7 +22,13 @@ export async function replaceDoctorSpecialties(
 ) {
   await tx.doctorSpecialty.deleteMany({ where: { doctorProfileId } });
   if (specialtyIds.length > 0) {
-    await tx.doctorSpecialty.createMany({ data: specialtyIds.map((specialtyId) => ({ doctorProfileId, specialtyId })) });
+    await tx.doctorSpecialty.createMany({
+      data: specialtyIds.map((specialtyId) => ({
+        doctorProfileId,
+        specialtyId,
+        verificationStatus: 'pending',
+      })),
+    });
   }
 }
 
@@ -158,6 +164,33 @@ export function findEligibleDoctorsForSpecialty(specialtyId: string, excludeDoct
     },
     select: { doctorProfileId: true },
     orderBy: { doctorProfileId: 'asc' },
+  });
+}
+
+export function findDoctorSpecialtyByDoctorAndSpecialty(doctorProfileId: string, specialtyId: string, db: DbClient = prisma) {
+  return db.doctorSpecialty.findUnique({
+    where: { doctorProfileId_specialtyId: { doctorProfileId, specialtyId } },
+    include: { specialty: true },
+  });
+}
+
+export async function updateDoctorSpecialtyVerification(
+  db: DbClient,
+  doctorProfileId: string,
+  specialtyId: string,
+  status: VerificationStatus,
+  reviewer: string,
+  rejectionReason?: string | null,
+) {
+  return db.doctorSpecialty.update({
+    where: { doctorProfileId_specialtyId: { doctorProfileId, specialtyId } },
+    data: {
+      verificationStatus: status,
+      reviewer,
+      reviewDate: new Date(),
+      rejectionReason: rejectionReason ?? null,
+    },
+    include: { specialty: true },
   });
 }
 

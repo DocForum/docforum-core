@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { registerPath } from '../../docs/openapi/registry';
+// @ts-ignore TS1479: @stellar/stellar-sdk types are ESM-only but CJS runtime exports are present
+import { StrKey } from '@stellar/stellar-sdk';
 
 // Issue #78 — the typed-in address body is GONE. strictObject: a
 // client that still sends `stellarPublicKey` (or anything else) is a
@@ -50,14 +52,20 @@ registerPath({
   },
 });
 
-// SEP-10 (issue #77). Shape-only gate: the checksum-accurate strkey
+// Checksum-accurate StrKey Ed25519 public key validation (issue #26).
+export const stellarPublicKeySchema = z
+  .string()
+  .refine((key) => StrKey.isValidEd25519PublicKey(key), {
+    message: 'account must be a valid Stellar public key (starts with G, 56 chars).',
+  });
+
+// SEP-10 (issue #77, #26). Shape-only gate: the checksum-accurate strkey
 // validation (and the 400) happens in services/sep10.ts via
 // StrKey.isValidEd25519PublicKey, so the service layer is safe for
-// non-HTTP callers too.
+// non-HTTP callers too. Validates that the account query parameter is a
+// valid Ed25519 public key with a correct checksum.
 export const sep10ChallengeQuerySchema = z.object({
-  account: z
-    .string()
-    .regex(/^G[A-Z2-7]{55}$/, 'account must be a valid Stellar public key (starts with G, 56 chars).'),
+  account: stellarPublicKeySchema,
 });
 
 export const sep10VerifySchema = z.object({
