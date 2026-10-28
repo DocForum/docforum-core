@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import * as doctorsService from '../services';
-import { publicDoctorListQuerySchema, setMySpecialtiesSchema, setVerificationStatusSchema } from '../validation';
+import { publicDoctorListQuerySchema, setDoctorSpecialtyVerificationSchema, setMySpecialtiesSchema, setVerificationStatusSchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
@@ -31,4 +31,18 @@ export async function setVerification(req: Request, res: Response) {
   const doctorProfileId = getParam(req, 'doctorProfileId');
   const profile = await doctorsService.setVerificationStatus(auditActor(req), doctorProfileId, status);
   res.status(200).json(profile);
+}
+
+export async function setDoctorSpecialtyVerification(req: Request, res: Response) {
+  const { status, reviewer, rejectionReason } = setDoctorSpecialtyVerificationSchema.parse(req.body);
+  const doctorProfileId = getParam(req, 'doctorProfileId');
+  const specialtyId = getParam(req, 'specialtyId');
+  const result = await doctorsService.setDoctorSpecialtyVerification(
+    doctorProfileId,
+    specialtyId,
+    status,
+    reviewer,
+    rejectionReason,
+  );
+  res.status(200).json(result);
 }

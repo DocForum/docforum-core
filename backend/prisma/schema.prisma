@@ -485,14 +485,19 @@ model Specialty {
 }
 
 model DoctorSpecialty {
-  id              String @id @default(uuid())
-  doctorProfileId String
-  specialtyId     String
+  id                 String             @id @default(uuid())
+  doctorProfileId    String
+  specialtyId        String
+  verificationStatus VerificationStatus @default(pending)
+  reviewer           String?
+  reviewDate         DateTime?
+  rejectionReason    String?
 
   doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
   specialty     Specialty     @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
 
   @@unique([doctorProfileId, specialtyId])
+  @@index([verificationStatus])
 }
 
 model FacilityProfile {
@@ -1042,6 +1047,19 @@ model WindowTime {
   end   DateTime
 
   @@unique([start, end])
+}
+
+model RateLimitRecord {
+  id         String   @id @default(uuid())
+  key        String
+  scope      String
+  cost       Int      @default(1)
+  consumedAt DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([key, scope, consumedAt])
+  @@index([consumedAt])
 }
 
 model Notification {
