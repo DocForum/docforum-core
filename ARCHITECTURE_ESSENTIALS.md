@@ -10,6 +10,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
 - Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue. Existing interval jobs: login-throttle prune (`src/server.ts`), patient-export worker/cleanup (`src/jobs/patient-exports.ts`) and deleted-account tombstone purge (`src/jobs/account-purge.ts`), all started only from `server.ts`.
 - New module holding patient data? Register a patient-export section (ARCHITECTURE.md §3.1) — right of access must stay complete.
+- File storage = **Amazon S3**, private bucket (`docs/adr/0014`, issue #16), only through `src/utils/object-storage.ts`. Never return an object key or a public/presigned URL: clinical files are served by the API after an access check.
 
 ## Hard rules (violating these = request changes on the PR)
 1. **Never mutate a `Prescription` or `LabOrder` after issuance.** Corrections = new row with `supersedes_*_id`.
@@ -27,13 +28,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `PatientProfile` → `WaitlistEntry` (optional doctor/specialty/facility capability/slot targets; time-boxed offer status)
 `Consultation` (`appointmentId` **UNIQUE** — closing a consultation is a create-once operation, `409` on a second attempt; one writer, `consultationsService.createConsultation`, reached from `POST /consultations`, `POST /appointments/:id/consultation` and the orders flow; see docs/adr/0009) → (outcome=referred) → `Referral` (snapshot! required `target_doctor_id` — routed at creation when only a specialty is named, ADR 0008; self-FK lineage `parent_referral_id`, no-show/loop/admin flags) → new `Appointment`
 `Appointment` → `Consultation` → immutable `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
-`FulfillmentRecord` (facility-owned) references exactly one order through real FKs (`prescription_id` XOR `lab_order_id`, enforced by a DB CHECK — docs/adr/0012) but doesn't mutate it; one row per **(order, facility)** (ADR 0012 amendment 2026-10-26 — issue #73's split routing gives one order a record per facility), carrying `FulfillmentItem` rows (Phase 5 issue #73: one row per routed order item —
-  dispensed/unfulfilled per item; double-dispense blocked by a DB unique index on `(orderType, dispensedKey)`;
-  order `status` derives from items → `partially_fulfilled`/`fulfilled`, applied only through the order module's
-  service, never by the facility). Payment release requires full fulfillment — see ARCHITECTURE.md §5.3.
-`FacilityProfile` carries nullable `address`/`latitude`/`longitude` (Phase 5 issue #74) + a composite
-  `(latitude, longitude)` index backing the distance-sorted `GET /facilities/eligible?near=lat,lng` query —
-  the patient's point is never stored (ARCHITECTURE.md §5.4).
+`LabResult` (issue #16) — one per `LabOrder`, attached once by the order's own facility; the file is in object storage under `resultObjectKey`, readable only by the patient, ordering doctor and fulfilling facility.
+`FulfillmentRecord` (facility-owned) references exactly one order through real FKs (`prescription_id` XOR `lab_order_id`, enforced by a DB CHECK — docs/adr/0012) but doesn't mutate it; one row per order.
 `User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking, consultation/referral mutations and payment mutations, never login/browsing).
 `User` → `AccessLog` (Phase 8, issue #45 — PHI read-access log: who viewed which clinical record, when; fire-and-forget writes, fail-open).
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).

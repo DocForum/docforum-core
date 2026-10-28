@@ -32,6 +32,8 @@ export type AuditEntityType =
   | 'Consultation'
   | 'Prescription'
   | 'LabOrder'
+  // Issue #16: a facility attaching a result file (`lab_result.attached`).
+  | 'LabResult'
   | 'Referral'
   | 'FacilityPrice'
   // Issue #14: admin-only facility account creation (`facility.created`).
