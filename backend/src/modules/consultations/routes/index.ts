@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
+import { authenticate, requireRole } from '../../../middleware/auth';
 import * as consultationsController from '../controllers';
 
 /**
@@ -42,6 +42,5 @@ consultationsRouter.post(
   '/:consultationId/referrals',
   authenticate,
   requireRole('doctor'),
-  requireVerifiedEmail,
   consultationsController.createReferrals,
 );

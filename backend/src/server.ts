@@ -4,6 +4,7 @@ import { pruneLoginAttempts } from './modules/auth/services';
 import { pruneOldAccessLogs } from './modules/audit/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
 import { startEscrowEventPoller } from './jobs/escrow-events';
+import { startConsultationAutoSignOffJob } from './jobs/consultation-auto-sign-off';
 import { validatePlatformSigners } from './modules/payments/services/platform-signers';
 import { validateSep10Config, validateWalletLinkConfig, verifyPaymentsNetwork } from './modules/payments/services';
 import { startAccountPurgeJob } from './jobs/account-purge';

@@ -19,6 +19,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 4. **Cross-module access only through a module's service interface.** Never import another module's `repositories/*` directly.
 5. **Facilities write to their own `FulfillmentRecord` only** — never directly to `Prescription.status` / `LabOrder.status`.
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
+7. **Never edit a `Consultation` note/outcome once it's signed off.** Corrections = `ConsultationAddendum` rows. Enforced by a DB trigger on the `Consultation` table (`notes`/`outcome`/`signedAt`), not only in the repository — a direct `UPDATE` must fail (issue #64).
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` (including `locale`, default `en`, Phase 9 #133) → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)

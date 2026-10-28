@@ -18,6 +18,63 @@ import * as patientsService from '../../patients/services';
 import * as consultationsRepo from '../repositories';
 import * as referralsService from '../../referrals/services';
 import type { ReferralTargetInput } from '../../referrals/services';
+import * as consultationsRepo from '../repositories';
+import type { ConsultationOutcome } from '@prisma/client';
+
+export interface ConsultationReadModel {
+  id: string;
+  doctorProfileId: string;
+  notes: string | null;
+  outcome: ConsultationOutcome | null;
+  signedAt: Date | null;
+  createdAt: Date;
+  /** false once signed off — clients should hide the note editor. */
+  editable: boolean;
+  addenda: { id: string; body: string; authorDoctorProfileId: string; createdAt: Date }[];
+}
+
+function toReadModel(consultation: {
+  id: string;
+  doctorProfileId: string;
+  notes: string | null;
+  outcome: ConsultationOutcome | null;
+  signedAt: Date | null;
+  createdAt: Date;
+  addenda: { id: string; body: string; authorDoctorProfileId: string; createdAt: Date }[];
+}): ConsultationReadModel {
+  return {
+    id: consultation.id,
+    doctorProfileId: consultation.doctorProfileId,
+    notes: consultation.notes,
+    outcome: consultation.outcome,
+    signedAt: consultation.signedAt,
+    createdAt: consultation.createdAt,
+    // Signed-off notes are immutable, but addenda are still allowed — the
+    // note body itself is what stops being editable.
+    editable: consultation.signedAt === null,
+    addenda: consultation.addenda,
+  };
+}
+
+/** The caller's own doctor profile (cross-module access through the doctors
+ * module's service interface, never its repository). */
+async function requireAuthoringDoctor(userId: string) {
+  return doctorsService.getMyDoctorProfile(userId);
+}
+
+async function requireOwnConsultation(userId: string, consultationId: string) {
+  const consultation = await consultationsRepo.findConsultationById(consultationId);
+  if (!consultation) throw new HttpError(404, 'Consultation not found.');
+
+  const doctorProfile = await requireAuthoringDoctor(userId);
+  // Same 404 whether it doesn't exist or belongs to another doctor — a
+  // consultation id shouldn't confirm whose patient thread it is.
+  if (consultation.doctorProfileId !== doctorProfile.id) {
+    throw new HttpError(404, 'Consultation not found.');
+  }
+
+  return consultation;
+}
 
 export interface ConsultationInput {
   appointmentId: string;
@@ -144,13 +201,13 @@ export async function getConsultation(userId: string, consultationId: string) {
       return { ...consultation, notes: decryptField(consultation.notes) };
     }
   }
-  throw new HttpError(403, 'You do not have access to this consultation.');
+  return signedOff;
 }
 
 /**
  * POST /consultations/:id/referrals (issue #66): multiple simultaneous
- * referrals from one consultation, atomically. Delegates to the
- * referrals service — the referral write surface lives there; this is a
+ * referrals from one consultation, atomically. Delegates to the referrals
+ * service — the referral write surface lives there; this is a
  * service-to-service call across the module boundary, never a repository
  * import.
  */
