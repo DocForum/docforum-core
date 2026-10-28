@@ -336,6 +336,7 @@ model PatientProfile {
   // address, when one has been linked. Optional because linking is a
   // separate flow that nothing creates rows for yet.
   walletLink      PatientWalletLink?
+  intakes        IntakeForm[]
 
   // Phase 8 (issue #45): who viewed this patient's records.
   accessLogs AccessLog[]
@@ -731,9 +732,17 @@ model OrderDisputeResolution {
 // =========================================================================
 
 model IntakeForm {
-  id        String   @id @default(uuid())
-  createdAt DateTime @default(now())
-  // TODO: patientProfileId, symptoms (Json), freeTextNotes
+  id               String   @id @default(uuid())
+  patientProfileId String
+  // JSON is validated at the module boundary as an array of structured
+  // symptom records; keeping it flexible avoids a premature symptom catalog.
+  symptoms         Json
+  freeTextNotes    String?
+  createdAt        DateTime @default(now())
+
+  patientProfile PatientProfile @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+
+  @@index([patientProfileId, createdAt])
 }
 
 // Phase 3 (issue #5 minimal + lineage for #65): a Consultation is the
