@@ -1,1 +1,0 @@
-Added the admin-only `GET /admin/metrics` endpoint with UTC date windows, a minimum-cell suppression threshold, and current booking lead-time/no-show aggregates. Metrics requiring missing or unapproved instrumentation are reported as unavailable.
