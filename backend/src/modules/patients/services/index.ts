@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { prisma } from '../../../db/prisma-client';
+import { prisma, runWithRlsContext } from '../../../db/prisma-client';
 import type { PatientProfile } from '@prisma/client';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
@@ -185,15 +185,16 @@ async function generateClaimedExport(
     // A dependent profile (issue #42) has no login, so it can never be the
     // subject of `POST /patients/me/export`; refuse rather than export it
     // without an account section.
-    if (!owner?.userId) throw new ExportSectionError('profile', new Error('profile missing'));
-    await writeExportBundle({
+    const ownerUserId = owner?.userId;
+    if (!owner || !ownerUserId) throw new ExportSectionError('profile', new Error('profile missing'));
+    await runWithRlsContext({ userId: ownerUserId, role: 'patient' }, () => writeExportBundle({
       exportId,
       generatedAt,
-      subject: { patientProfileId: owner.id, userId: owner.userId },
+      subject: { patientProfileId: owner.id, userId: ownerUserId },
       sections,
       pageSize: config.patientExport.pageSize,
       writer,
-    });
+    }));
   } catch (err) {
     const section = err instanceof ExportSectionError ? err.section : null;
     // Log the error *type* only — a driver or section error message can

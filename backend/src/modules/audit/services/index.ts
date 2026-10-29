@@ -32,12 +32,15 @@ export type AuditEntityType =
   | 'Consultation'
   | 'Prescription'
   | 'LabOrder'
+  // Issue #16: a facility attaching a result file (`lab_result.attached`).
+  | 'LabResult'
   | 'Referral'
   | 'FacilityPrice'
   // Issue #14: admin-only facility account creation (`facility.created`).
   | 'FacilityProfile'
   | 'Order'
-  | 'OrderDispute';
+  | 'OrderDispute'
+  | 'FeatureFlag';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;

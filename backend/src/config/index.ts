@@ -101,6 +101,30 @@ function parsePaymentAssets(raw: string | undefined): PaymentAsset[] {
   });
 }
 
+/** Object storage driver for lab result files (Phase 5, issue #16 —
+ * docs/adr/0014). `s3` talks to a private S3 bucket (or any S3-compatible
+ * endpoint); `memory` is a process-local map for tests only and is refused in
+ * production. Unset with no bucket configured = `none`: the server still
+ * starts (the Render preview has no bucket), and the result endpoints answer
+ * 503 instead of pretending to store anything. */
+function parseObjectStorageDriver(
+  raw: string | undefined,
+  bucket: string | undefined,
+  isProduction: boolean,
+): 's3' | 'memory' | 'none' {
+  const driver = raw && raw !== '' ? raw : bucket ? 's3' : 'none';
+  if (driver !== 's3' && driver !== 'memory' && driver !== 'none') {
+    throw new Error('OBJECT_STORAGE_DRIVER must be one of "s3", "memory" or "none".');
+  }
+  if (driver === 'memory' && isProduction) {
+    throw new Error('OBJECT_STORAGE_DRIVER=memory is for tests only and is refused in production.');
+  }
+  if (driver === 's3' && !bucket) {
+    throw new Error('OBJECT_STORAGE_DRIVER=s3 requires OBJECT_STORAGE_BUCKET.');
+  }
+  return driver;
+}
+
 const PRODUCTION_CORS_ORIGINS = ['https://docforum.github.io'];
 const LOCAL_DEV_CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
 
@@ -111,6 +135,39 @@ function parseCorsOrigins(raw: string | undefined, isProduction: boolean): strin
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
 }
+
+export interface JwtSigningKey {
+  /** Key id written into the token header so verification picks the right secret. */
+  kid: string;
+  secret: string;
+}
+
+/**
+ * Build the signing keyring for one token type. The first entry is the
+ * current key (new tokens are signed with it). An optional `_PREVIOUS` secret
+ * stays in the keyring during a rotation overlap, so tokens minted before the
+ * rotation keep verifying until they expire. Remove `_PREVIOUS` once the
+ * overlap window (the token TTL) has passed. See docs/runbooks/secret-rotation.md.
+ */
+function jwtSigningKeys(prefix: 'ACCESS' | 'REFRESH'): JwtSigningKey[] {
+  const keys: JwtSigningKey[] = [
+    {
+      kid: process.env[`JWT_${prefix}_KID`] || `${prefix.toLowerCase()}-current`,
+      secret: requireEnv(`JWT_${prefix}_SECRET`),
+    },
+  ];
+  const previous = process.env[`JWT_${prefix}_SECRET_PREVIOUS`];
+  if (previous) {
+    keys.push({
+      kid: process.env[`JWT_${prefix}_KID_PREVIOUS`] || `${prefix.toLowerCase()}-previous`,
+      secret: previous,
+    });
+  }
+  return keys;
+}
+
+const accessKeys = jwtSigningKeys('ACCESS');
+const refreshKeys = jwtSigningKeys('REFRESH');
 
 /** Issue #78: the date after which funding refuses facility wallet links
  * that were never SEP-10 verified. Defaults to 2027-01-01 (UTC) — a
@@ -127,8 +184,10 @@ export const config = {
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: requireEnv('DATABASE_URL'),
   jwt: {
-    accessSecret: requireEnv('JWT_ACCESS_SECRET'),
-    refreshSecret: requireEnv('JWT_REFRESH_SECRET'),
+    accessSecret: accessKeys[0].secret,
+    refreshSecret: refreshKeys[0].secret,
+    accessKeys,
+    refreshKeys,
     // Short-lived access token; refresh token is the long-lived one.
     // No revocation list yet for either — see ARCHITECTURE_ESSENTIALS.md
     // "Known unresolved design gaps" (JWT refresh rotation without a
@@ -179,6 +238,10 @@ export const config = {
   // the deployment (Render terminates TLS in front of exactly one hop), so
   // set TRUST_PROXY explicitly there; `1` is the value that matches it.
   trustProxy: parseTrustProxy(process.env.TRUST_PROXY, process.env.NODE_ENV === 'production'),
+  rateLimit: {
+    windowSeconds: positiveNumber(process.env.RATE_LIMIT_WINDOW_SECONDS, 60),
+    maxRequests: positiveNumber(process.env.RATE_LIMIT_MAX_REQUESTS, 100),
+  },
   loginThrottle: {
     // Sliding window: failures older than this don't count toward a lock.
     windowSeconds: Number(process.env.LOGIN_THROTTLE_WINDOW_SECONDS ?? 15 * 60),
@@ -202,6 +265,14 @@ export const config = {
   // retention instead of AuditEvent's append-forever lifetime.
   accessLog: {
     retentionDays: Number(process.env.ACCESS_LOG_RETENTION_DAYS ?? 365),
+  },
+  // Idempotent retries (Phase 8, issue #48). Env-configurable so tests can
+  // use short windows and deployments can tune retention without a code
+  // change.
+  idempotency: {
+    recordTtlHours: Number(process.env.IDEMPOTENCY_RECORD_TTL_HOURS ?? 24),
+    inProgressTimeoutSeconds: Number(process.env.IDEMPOTENCY_IN_PROGRESS_TIMEOUT_SECONDS ?? 30),
+    maxCachedBodyBytes: Number(process.env.IDEMPOTENCY_MAX_CACHED_BODY_BYTES ?? 1024 * 1024),
   },
   // Patient data export (Phase 8, issue #40). Env-configurable so a
   // deployment can tune retention and memory bounds without a code change.
@@ -243,6 +314,15 @@ export const config = {
     pendingTtlDays: positiveNumber(process.env.REFERRAL_PENDING_TTL_DAYS, 14),
     expirySweepIntervalSeconds: positiveNumber(process.env.REFERRAL_EXPIRY_SWEEP_INTERVAL_SECONDS, 60 * 60),
   },
+  // Feature flags (Phase 8, issue #132). Flags are cached in memory this
+  // long; an admin change takes effect immediately in the process that
+  // handled it and within this many seconds in the others.
+  featureFlags: {
+    cacheTtlSeconds: (() => {
+      const raw = Number(process.env.FEATURE_FLAG_CACHE_TTL_SECONDS);
+      return Number.isFinite(raw) && raw >= 0 && process.env.FEATURE_FLAG_CACHE_TTL_SECONDS ? raw : 15;
+    })(),
+  },
   // Guardians and dependents (Phase 8, issue #42, docs/adr/0011). Guardian
   // access ends automatically when the dependent reaches this age (UTC
   // calendar date, checked at request time).
@@ -278,6 +358,26 @@ export const config = {
   orders: {
     confirmationWindowHours: Number(process.env.ORDER_CONFIRMATION_WINDOW_HOURS ?? 72),
     expiryIntervalSeconds: Number(process.env.ORDER_EXPIRY_INTERVAL_SECONDS ?? 300),
+  },
+  // Lab result files (Phase 5, issue #16 — docs/adr/0014). The bucket must be
+  // private: files are only ever served back through the API, which checks
+  // access on every read. Credentials come from the AWS SDK's default chain
+  // (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or an instance role) — never
+  // from this object.
+  objectStorage: {
+    driver: parseObjectStorageDriver(
+      process.env.OBJECT_STORAGE_DRIVER,
+      process.env.OBJECT_STORAGE_BUCKET,
+      process.env.NODE_ENV === 'production',
+    ),
+    bucket: process.env.OBJECT_STORAGE_BUCKET ?? '',
+    region: process.env.OBJECT_STORAGE_REGION ?? 'us-east-1',
+    // Only for S3-compatible providers / local MinIO; unset = AWS S3.
+    endpoint: process.env.OBJECT_STORAGE_ENDPOINT || undefined,
+    forcePathStyle: process.env.OBJECT_STORAGE_FORCE_PATH_STYLE === 'true',
+  },
+  labResults: {
+    maxBytes: positiveNumber(process.env.LAB_RESULT_MAX_BYTES, 10 * 1024 * 1024),
   },
   payments: {
     ...parsePaymentsConfig(process.env),

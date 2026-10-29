@@ -32,7 +32,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | Frontend state/data | React Query (server state) + lightweight store (Zustand) for client-only UI state | Avoids over-centralizing server data into a global store. |
 | Realtime (messaging/notifications) | WebSocket gateway (or managed pub/sub, e.g. Pusher/Ably) behind an internal `notifications` interface | Swappable; not custom infra from day one. |
 | Video/voice (if/when needed) | Third-party embed (Twilio/Daily/Agora) behind an interface, not built in-house | PRD §8.3.1 — explicitly flagged as overengineering risk if built custom. |
-| File/result storage | Object storage (S3-compatible) for lab result attachments | Never store clinical files directly in Postgres rows. |
+| File/result storage | Object storage (S3-compatible) for lab result attachments — **decided 2026-10-24 (issue #16, `docs/adr/0014`): Amazon S3**, a private SSE-encrypted bucket per environment, via `@aws-sdk/client-s3` behind `backend/src/utils/object-storage.ts` | Never store clinical files directly in Postgres rows. Files are never addressed by URL (public or presigned): the row keeps an opaque key and the API serves the bytes after an access check on every read. |
 | Email / SMS delivery | **Postmark** (transactional email) and **Twilio** (SMS), both behind the provider-agnostic `notifications` dispatch interface and the `email-dispatcher.ts` seam. Decided per `docs/adr/` (Phase 6, issue #17). | Transactional-only providers with no marketing-list coupling; swappable because business logic only ever calls the internal `Notification` dispatch interface, never a provider SDK. |
 | Field-level encryption | AES-256-GCM envelope encryption (`backend/src/utils/field-encryption.ts`, Phase 8 issue #46) for clinical free text (`Consultation.notes`, `Referral.snapshotNotes`) | Limits blast radius of a leaked DB dump / over-broad read replica — encryption at rest doesn't protect against those. Versioned key-id prefix enables rotation without rewriting every row. **Constraint: encrypted fields cannot be searched or indexed** — they're write-once/read-decrypt blobs. |
 | Background jobs | Simple queue (BullMQ on Redis) for reminders, order-expiry checks, notification delivery | Needed for FR-15/16 and the "orphaned order" hard question (PRD §8.1.3). |
@@ -55,6 +55,7 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `lab-orders` — lab order issuance and versioning.
 - `pharmacy-orders` — facility fulfillment for pharmacy orders (reference number required, optional attachment via `StorageProvider`, audit event logged).
 - `orders` — patient order confirmation and dispute handling (`POST /orders/:id/confirm-receipt`, `POST /orders/:id/dispute`), derived `confirmedSignal` calculation, unconfirmed order expiry job, and admin dispute queue (`GET /admin/orders/disputes`, `POST /admin/orders/disputes/:id/resolve`).
+- `orders` also owns lab result attachment (issue #16, `docs/adr/0014`): `POST /orders/lab-orders/:labOrderId/result` (the order's own facility only, create-once) writes the file to object storage and a `LabResult` row; `GET` on the same path serves it to the patient, the ordering doctor and the fulfilling facility only (PRD §7). `services/lab-results.ts`.
 - `notifications` — outbound notification dispatch, provider-agnostic.
 - `payments` — `PaymentIntent`, the facility payee `WalletLink`, and the patient payer `PatientWalletLink` (§4.13). Relational metadata only; every Stellar call goes through `@docforum/escrow-sdk` via `services/escrow-sdk-loader.ts`. Assets are allowlisted per environment (issue #79), and the prepare half of ADR 0005 (issue #80) builds the unsigned patient transaction without moving funds.
 - `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking (both the direct and the referral-origin path), consultation closing (Phase 2, issue #4), doctor verification, payment fund/release/refund, the patient's referral accept/decline, and the referral admin actions (Phase 3, issue #68 — `referral.reassign` / `referral.cancel`, recorded as `entityType: 'Referral'` rows; there is no second, referral-specific audit table). **Phase 4 transitions (fulfillment) must call `record()` in the same transaction when they're built** — prescriptions and lab orders already do. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
@@ -171,6 +172,7 @@ Guardianship (Phase 8, issue #42 — docs/adr/0011)
 
 DoctorProfile (1:1 User)
   id, user_id, full_name, verification_status (enum: pending|verified|rejected)
+  time_zone (IANA identifier used when interpreting the doctor's availability)
   specialties: DoctorSpecialty[]
 
 Specialty (controlled vocabulary, admin-managed)
@@ -180,11 +182,24 @@ DoctorSpecialty (join table)
   id, doctor_profile_id, specialty_id
 
 FacilityProfile (1:1 User)
-  id, user_id, name, type (enum: lab|pharmacy), capabilities: FacilityCapability[]
+  id, user_id, name, type (enum: lab|pharmacy), version (int, default 1 — issue #49, §5.4)
+  capabilities: FacilityCapability[]
 
 FacilityCapability
   id, facility_profile_id, capability_type (enum: lab_test|medication_dispense), detail (e.g. test category)
+  version (int, default 1 — issue #49, §5.4)
 ```
+**`version` columns (Phase 8, issue #49):** added by
+`backend/prisma/migrations/20261019090000_add_optimistic_concurrency/` as
+`INTEGER NOT NULL DEFAULT 1` on exactly the mutable records above plus
+`Appointment` (§4.2) and `PaymentIntent`. They are the storage half of the
+`ETag`/`If-Match` convention in §5.4 and carry no meaning on their own —
+nothing may treat a higher `version` as "more correct", and no code may
+compare-then-write instead of guarding the UPDATE itself. Tables that are
+append-only (`Prescription`, `LabOrder`) or immutable
+(`Specialty`, `WalletLink`, `AuditEvent`, the export tables) deliberately do
+**not** have one; the integration test asserts that set so a later change
+can't quietly widen it.
 
 ### 4.2 Availability & Appointments
 ```
@@ -192,12 +207,16 @@ AvailabilitySlot
   id, doctor_profile_id, start_time, end_time, status (enum: open|held|booked)
   # Uniqueness/exclusion constraint at DB level on (doctor_profile_id, start_time, end_time)
   # to make double-booking a constraint violation, not an app-logic bug.
+  # No `version`: a slot is only ever moved by the conditional claim in §5.1,
+    not edited.
 
 Appointment
   id, patient_profile_id, doctor_profile_id, availability_slot_id (FK, unique, NULLABLE)
   intake_id (FK -> IntakeForm — still not a column, Phase 2 issue #1/#2)
   status (enum: scheduled|completed|cancelled|no_show)
   origin (enum: direct_booking|referral), referral_id (nullable FK -> Referral)
+  version (int, default 1 — issue #49, §5.4; no If-Match-guarded route exists
+    for appointments yet, but every future status write must move it)
   created_at, updated_at
   # availability_slot_id is nullable (Phase 3): a cancelled appointment
   # releases its slot back to `open` and drops the unique link, so the
@@ -206,6 +225,19 @@ Appointment
   # this column. History rows keep their referral_id, so the lineage of a
   # referral that produced several appointments survives the link being
   # cleared (Referral.appointments holds the full list).
+
+WaitlistEntry
+  id, patient_profile_id (required), doctor_profile_id (nullable),
+  specialty_id (nullable), facility_capability_id (nullable),
+  availability_slot_id (nullable), status (pending|on_hold|accepted|expired),
+  earliest_acceptable, latest_acceptable, hold_duration_minutes,
+  created_at, updated_at
+  # A patient's waitlist request may target a doctor, specialty, or
+  # facility capability. A time-boxed offer may reference an availability
+  # slot; deleting its target profile/capability clears that optional link.
+
+WindowTime
+  id, start, end (unique pair)
 
 IntakeForm
   id, patient_profile_id, symptoms (structured: array of {symptom, duration, severity}), free_text_notes
@@ -322,6 +354,11 @@ LabOrder
 LabResult
   id, lab_order_id (FK, unique), fulfilling_facility_id (FK), result_file_url, summary
   created_at
+  result_object_key (unique, opaque — issue #16), result_content_type, result_byte_size
+  # The file is in object storage under result_object_key (docs/adr/0014);
+    the key is never returned to a client. result_file_url is not written.
+  # Create-once: one result per order (the lab_order_id unique), attached by
+    the order's own facility; a superseded order takes no result.
 ```
 The facility and total are captured at issuance. The issuing clinician supplies
 `amount_stroops` in native XLM stroops because v1 has no facility catalog or
@@ -489,6 +526,34 @@ to the caller's own profile (resolved from the authenticated user, never
 from the request) and strips all viewer PII to a role — a deleted viewer
 surfaces as `deleted_user`.
 
+### 4.14 Feature flags (Phase 8, issue #132)
+
+```
+FeatureFlag
+  key            text  PK        -- dotted, lowercase: 'payments.wallet_funding'
+  description    text
+  enabled        bool            -- kill switch: false = off for everyone
+  rolloutPercent int 0..100      -- sticky hash bucket (see below)
+  allowRoles     Role[]          -- empty = no role restriction
+  allowUserIds   text[]          -- always on (while enabled), bypasses role + percent
+  createdAt, updatedAt
+```
+
+One row per flag in each environment's own database, so staging and production
+are independent by construction. Evaluation (`modules/flags/evaluate.ts`) is a
+pure function: off if `enabled` is false; on if the user id is allowlisted;
+off if `allowRoles` is non-empty and excludes the user's role; otherwise on
+when `sha256(key:userId)` bucket (0–99) is below `rolloutPercent`. The bucket is
+a hash, never random, so a user's answer is the same on every request and
+raising the percentage never turns anyone off. Evaluation never throws and
+defaults to off (unknown flag, malformed row, database down with nothing
+cached). Flags are cached in memory for `FEATURE_FLAG_CACHE_TTL_SECONDS`
+(default 15). Changes go only through `PATCH /admin/feature-flags/:key`, which
+writes a `feature_flag.created` / `feature_flag.updated` `AuditEvent` in the
+same transaction (counts and the percentage only — never the allowlisted ids).
+First user: `payments.wallet_funding` gates `POST /payments/intents/:id/prepare`
+(ADR 0005: wallet funding launches as an option), seeded off.
+
 ### 4.13 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
 ```
 PaymentIntent
@@ -550,6 +615,48 @@ T5, enforced as a curated config policy.
 4. Facility updates its own `FulfillmentRecord` status; for labs, attaches `LabResult`.
 5. Order's own `status` field is updated to `fulfilled` only via this facility-confirmed path — patient/doctor cannot self-mark it.
 
+### 5.4 Mutable-record optimistic concurrency (Phase 8, issue #49)
+Slot booking (§5.1) is protected by a conditional update, but nothing else was: a
+doctor editing their profile in one tab and an admin in another, or two tabs
+updating the same appointment, silently overwrote each other — last write wins,
+and the loser never finds out. This is the convention that closes that whole
+class of bug, and **new mutable-resource routes must follow it.**
+
+1. An individual mutable-resource read returns a strong `ETag` carrying the row's
+   integer `version`, e.g. `ETag: "4"` (also mirrored as `version` in the JSON
+   body). Collection reads deliberately do not get one: a client fetches the
+   individual resource before editing.
+2. `PATCH`/`PUT` sends that exact value back in `If-Match`. Missing header →
+   `428 Precondition Required` (`code: 'IF_MATCH_REQUIRED'`); weak validator, a
+   validator list, or anything else that isn't one strong `"<int>"` → `400`
+   (`code: 'INVALID_IF_MATCH'`) rather than a guess at which member was meant;
+   a version that no longer matches → `412 Precondition Failed`
+   (`code: 'VERSION_CONFLICT'`).
+3. The repository performs **one** conditional update — `UPDATE ... WHERE id = ?
+   AND version = ?` with `version = version + 1` in the same statement — and
+   returns the row that statement wrote. A zero-row result is a stale write.
+   Read-compare-write is forbidden: it reopens the exact race it closes, because
+   two callers can both read version 4 and both pass a check made before the
+   write. In Prisma that is `updateManyAndReturn` / `updateMany` with
+   `count === 1`, never `findUnique` → compare → `update`.
+4. Everything else keeps working the way it did. Endpoints whose state
+   transition is *already* conditional (booking's slot claim, payment
+   fund/release/refund, doctor verification, token redemption) keep that status
+   guard and are **not** additionally `If-Match`-gated — two guards on one write
+   produce two different failure modes and the second one teaches clients
+   nothing. They do still increment `version`, and still publish the new `ETag`,
+   so a client can precondition whatever it does next. Every other write to a
+   versioned row increments it too, including system writes (email verification).
+5. Applies to `User`, `PatientProfile`, `DoctorProfile`, `FacilityProfile`,
+   `FacilityCapability`, `Appointment` and `PaymentIntent` (columns documented in
+   §4.1/§4.2). Append-only `Prescription`/`LabOrder` are excluded by design —
+   a correction is a new row (`supersedes_*`), so there is nothing to lose.
+6. Shared pieces live in `backend/src/middleware/optimistic-concurrency.ts`
+   (`requireIfMatch`, `expectedVersion`, `setVersionEtag`, `versionConflict`) so
+   every module answers with the same status, message and code. Proof:
+   `backend/tests/integration/optimistic-concurrency.test.mts`, including eight
+   simultaneous writes on one version where exactly one succeeds.
+
 ## 6. Hard questions (architecture-level — see PRD §8 for product-level)
 
 ### 6.1 What do we think would break?
@@ -559,6 +666,8 @@ T5, enforced as a curated config policy.
 4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
 5. **Discovered 2026-10-15 while building email verification (Phase 8, issue #34):** the email/SMS provider is still undecided (Phase 6, issue #17), so verification links can't actually be delivered in a hosted environment yet — `backend/src/modules/auth/services/email-dispatcher.ts` is a no-op seam until a provider is integrated. Until then `backend/scripts/mark-email-verified.mjs` is the documented out-of-band path for an operator with DB access. Not a reason to skip the guard: the guard is what makes the flow safe once delivery exists, and shipping it locked-off would just mean shipping it untested.
 
++6. **Resolved 2026-10-19 (issue #49):** silent last-write-wins on every mutable record that wasn't the slot claim — a doctor in one tab and an admin in another, or two tabs editing one appointment, each wrote and the second erased the first with no signal to either. §5.4 now makes the compare and the write one conditional statement behind an `If-Match` precondition. **Still open:** the convention is only *enforced* where a route opts in, so a future mutable route that forgets `requireIfMatch` silently opts out — there is no lint or schema-level way to catch that yet, and ESLint itself is still untracked (issue #28).
+
 6. **Discovered 2026-10-17 (issue #41):** after `DELETE /patients/me`, the caller's access token (stateless JWT, 15-minute TTL) still passes `authenticate` until it expires — there's no revocation list (item 4 above, issue #18). It can't reach anything: every patient route resolves the caller through `getMyPatientProfile`, which refuses an anonymised profile; booking/payments refuse it via `requireVerifiedEmail` (verification is cleared); refresh refuses `deleted_at`. Closing the window itself is #18's job. Also: Postgres reports `ON DELETE RESTRICT` as SQLSTATE 23001, which Prisma surfaces as an *unknown* request error, not `P2003` — `patients/services` `isForeignKeyRefusal` handles both; `middleware/error-handler.ts` currently maps neither to a 4xx.
 
 ### 6.2 What edge cases are we missing (architecture-level)?
@@ -567,17 +676,22 @@ T5, enforced as a curated config policy.
 3. No schema support yet for a doctor working across multiple facilities/locations (PRD edge case 6) — `AvailabilitySlot` currently assumes one calendar per doctor.
 4. ~~No audit-log table~~ **Foundation resolved 2026-10-17 (issue #43):** `AuditEvent` (§4.10) + `audit.record()` in the same transaction as the change, append-only at the DB level, wired into booking (both booking paths), doctor verification, payment fund/release/refund, the patient's referral accept/decline and the referral admin actions (`referral.reassign`, `referral.cancel` — Phase 3, issue #68, written as `entity_type = 'Referral'` rows in the same table). **Still open:** the referral's creation and the cascade-driven `completed`/`expired` transitions (no actor to attribute them to yet), the remaining Phase 4 transitions (prescriptions, lab orders, fulfillment), the admin login-throttle clear (`/auth/login-attempts/clear`) still only logs to the console; the app connects as the database owner, which could disable the triggers — enforcing append-only against the owner needs a separate least-privilege DB role (deployment work, issue #22). PRD §7 auditability is therefore "a real mechanism exists" rather than "auditability is done"; remaining coverage stays an open gap.
 5. CSRF on the cookie-authenticated routes — the refresh cookie has to be `SameSite=None; Secure` (the Pages frontend is a different site — see `docs/adr/0003`), which means any site the patient visits can make their browser send it to `/auth/refresh` and `/auth/logout`. **Resolved 2026-10-15 (issue #37):** a per-session CSRF token is bound into the refresh token and required in the `X-CSRF-Token` header, the `Origin` header is validated against an explicit allowlist, and CORS is now a per-environment allowlist (`CORS_ORIGINS`) instead of one configured string. The double-submit cookie pattern — the usual answer — is *not* usable here: a cookie set by this API is a third-party cookie to `docforum.github.io`, so the frontend's JavaScript can never read it; the token travels in the login/refresh response body instead. A request with no `Origin` (curl, server-to-server) is allowed through the Origin check but still needs the token. See `backend/src/middleware/csrf.ts`, and `docs/api/README.md` for what the client must send. Consequence: refresh cookies issued before this change carry no `csrf` claim and are rejected, i.e. existing sessions need one re-login.
+6. **Added 2026-10-19 (issue #48):** an `IdempotencyKey` row caches a *copy of a response body* for 24 hours (§4.12). Today every opted-in route returns non-PHI data (an appointment id and status, a payment intent), so this is transport bookkeeping and not a patient-data surface — it is not part of the patient-export bundle (§3.1) and no endpoint lists it. **The condition that would change that:** if a route returning clinical free text (consultation notes, intake payloads, lab results) ever opts in, each row becomes a temporary PHI copy subject to right-of-access and retention, and the export registry in §3.1 has to gain a section for it before that route is allowed to opt in. Until then, adding a route to the opted-in list is a deliberate decision, not a default.
+
+6. **Discovered 2026-10-24 (issue #16):** lab result files have two read gaps. (a) The right-of-access export (§4.11) lists the `LabResult` row, but the file bytes are not in the bundle; the patient downloads them separately through `GET /orders/lab-orders/:labOrderId/result`. (b) Read access mirrors consultation notes exactly: the patient's own account, the ordering doctor, and the fulfilling facility. So an active guardian of a dependent (ADR 0011) can't read a dependent's result, and neither can a doctor further along the referral thread. Widening either needs a deliberate decision, not a quiet one.
 
 ### 6.3 What's overengineered (architecture-level, for v1)?
 1. Polymorphic fulfillment design (§4.7) may itself be premature abstraction — two small, boring, separate tables might beat one clever polymorphic one at this stage. Flagged as a design smell to revisit, not shipped as-is. **Resolved 2026-10-22 (issue #13, `docs/adr/0012-fulfillment-record-typed-order-fks.md`):** the polymorphism was the premature part and it is gone. Splitting into two tables was weighed and rejected — it would give the §5.3 step-5 transition two implementations and the facility queue a cross-table union, i.e. *more* ceremony than the single typed-FK table, not less.
 2. BullMQ/Redis job queue before there's a single job that needs it — fine to stub with a simple cron/interval check initially and introduce a real queue when reminder/expiry logic actually exists.
 3. Designing for horizontal service extraction (module boundary purity, §3) before there's a single reason to split — worth doing lightly (it's cheap discipline), but not worth extra ceremony (e.g., separate repos, separate CI, internal API versioning) yet.
 4. **Added 2026-10-17 (issue #40):** export bundles are stored as text chunks in Postgres (`PatientExportChunk`, §4.11), not in object storage as §2's file-storage row prescribes — no object-storage provider is integrated yet, and a filesystem store would break on Render's ephemeral disk and on any second instance. The chunks are read/written only by `patients/repositories`, are short-lived (`PATIENT_EXPORT_TTL_HOURS`, default 24) and are deleted by the cleanup job, so moving to S3 later swaps one storage seam rather than the design. Revisit when lab-result storage (Phase 5, issue #16) picks a provider.
+   **Update 2026-10-24 (issue #16):** the provider is picked (Amazon S3, `docs/adr/0014`) and `utils/object-storage.ts` exists. Export chunks deliberately stay in Postgres for now: moving them is a separate change, and this item stays open until it is made.
 
 ## 7. Non-functional / cross-cutting
 
 - **Testing**: unit tests per module (`backend/tests/unit`), integration tests for booking/referral/order flows specifically because those are the correctness-critical paths (`backend/tests/integration`).
 - **Security — login throttling (Phase 8, issue #35)**: `POST /auth/login` is throttled per normalised email *and* per client IP, in Postgres (`LoginAttempt`, §4.9): exponential backoff with `Retry-After` from `LOGIN_THROTTLE_BACKOFF_AFTER` failures, a temporary lock at `LOGIN_THROTTLE_LOCK_AFTER`, and a cleanup interval in `src/server.ts`. Two things this depends on operationally: (1) `TRUST_PROXY` must be set correctly in production — Render terminates TLS in front of exactly one hop, so `TRUST_PROXY=1`; leaving it unset makes every request look like Render's proxy (one shared bucket for everyone), and `true` lets a client spoof `X-Forwarded-For` for a fresh bucket per request; (2) the throttle deliberately does not reveal whether an account exists — locked, backoff and unknown-account responses are identical, and an absent account still pays the bcrypt comparison cost so response timing doesn't leak either.
+- **Idempotent retries (Phase 8, issue #48)**: `POST /appointments`, `POST /payments/intents` and `POST /payments/intents/:id/{fund,release,refund}` honour an `Idempotency-Key` header (`src/middleware/idempotency.ts`). A repeat of the same key with the same request body inside 24 h replays the stored status and body instead of running the mutation again; the same key with a different body is `422`; a second request arriving while the first is still running is `409 IN_PROGRESS` with a `Retry-After`, because ownership is decided by the unique constraint on `(userId, key)` rather than by an in-memory lock that would be correct on one instance and broken on two. Keys are namespaced per user, and 5xx is never cached so a client can retry a failed call with the same key. See §4.12 for the model.
 - **Migrations**: Prisma migrations are the only way schema changes happen — no manual DB edits, ever.
 - **Environments**: local (Docker Compose), staging, production — staging/production infra choice is an open item (see ROADMAP).
 

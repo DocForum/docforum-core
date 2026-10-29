@@ -52,6 +52,7 @@ enum AppointmentStatus {
   scheduled
   completed
   cancelled
+  late_cancelled
   no_show
 }
 
@@ -112,6 +113,13 @@ enum FulfillmentStatus {
   rejected
 }
 
+enum WaitlistStatus {
+  pending
+  on_hold
+  accepted
+  expired
+}
+
 enum Urgency {
   routine
   urgent
@@ -123,6 +131,7 @@ enum Urgency {
 
 model User {
   id                    String    @id @default(uuid())
+  version     Int      @default(1)
   email                 String    @unique
   phone                 String?
   passwordHash          String
@@ -148,6 +157,8 @@ model User {
   // refresh-token revocation list (issue #18) — this is the narrow "revoke
   // everything for one account" case that deactivation needs.
   sessionsInvalidatedAt DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
   // Per-user refresh-token version. Embedded in every access/refresh token
   // as `tv` and compared against this column at refresh time. Bumping it
   // (password reset, Phase 8 #33) invalidates every outstanding refresh
@@ -161,8 +172,6 @@ model User {
   // refused once set. Distinct from admin deactivation (#39), which is
   // reversible.
   deletedAt             DateTime?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
 
   patientProfile  PatientProfile?
   doctorProfile   DoctorProfile?
@@ -293,6 +302,7 @@ model RefreshSession {
 
 model PatientProfile {
   id           String    @id @default(uuid())
+  version     Int      @default(1)
   // Null for a dependent (Phase 8, issue #42, docs/adr/0011): a
   // guardian-owned profile with no login of its own. Still unique, so a
   // login owns at most one profile. A DB CHECK (see the
@@ -314,19 +324,20 @@ model PatientProfile {
   // (ADR 0010), and an accidental user delete must fail loudly rather than
   // take the clinical identity anchor with it. Optional since issue #42: a
   // dependent profile has no login.
-  user           User?              @relation(fields: [userId], references: [id], onDelete: Restrict)
-  appointments   Appointment[]
-  paymentIntents PaymentIntent[]
-  prescriptions  Prescription[]
-  labOrders      LabOrder[]
-  dataExports    PatientExport[]
+  user            User?              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  appointments    Appointment[]
+  waitlistEntries WaitlistEntry[]
+  paymentIntents  PaymentIntent[]
+  prescriptions   Prescription[]
+  labOrders       LabOrder[]
+  dataExports     PatientExport[]
   // Phase 3: the referrals this patient is the subject of (the opposite
   // side of Referral.patientProfileId).
-  referrals      Referral[]
+  referrals       Referral[]
   // ADR 0005 step 1 (issue #80): the patient's verified Stellar payer
   // address, when one has been linked. Optional because linking is a
   // separate flow that nothing creates rows for yet.
-  walletLink     PatientWalletLink?
+  walletLink      PatientWalletLink?
 
   // Phase 8 (issue #45): who viewed this patient's records.
   accessLogs AccessLog[]
@@ -430,9 +441,11 @@ model Guardianship {
 
 model DoctorProfile {
   id                 String             @id @default(uuid())
+  version     Int      @default(1)
   userId             String             @unique
   fullName           String
   verificationStatus VerificationStatus @default(pending)
+  timeZone           String // IANA time zone identifier, e.g. "Europe/London", "America/New_York"
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -442,6 +455,7 @@ model DoctorProfile {
   appointments       Appointment[]
   prescriptions      Prescription[]
   labOrders          LabOrder[]
+  waitlistEntries    WaitlistEntry[]
   // Referral sides a doctor can sit on: `referringReferrals` are ones
   // they created; `targetedReferrals` are ones aimed at them (whether
   // they ultimately see the patient or not).
@@ -456,22 +470,29 @@ model Specialty {
   name String @unique
   slug String @unique
 
-  doctors DoctorSpecialty[]
+  doctors         DoctorSpecialty[]
+  waitlistEntries WaitlistEntry[]
 }
 
 model DoctorSpecialty {
-  id              String @id @default(uuid())
-  doctorProfileId String
-  specialtyId     String
+  id                 String             @id @default(uuid())
+  doctorProfileId    String
+  specialtyId        String
+  verificationStatus VerificationStatus @default(pending)
+  reviewer           String?
+  reviewDate         DateTime?
+  rejectionReason    String?
 
   doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
   specialty     Specialty     @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
 
   @@unique([doctorProfileId, specialtyId])
+  @@index([verificationStatus])
 }
 
 model FacilityProfile {
   id        String       @id @default(uuid())
+  version     Int      @default(1)
   userId    String       @unique
   name      String
   type      FacilityType
@@ -496,7 +517,9 @@ model FacilityProfile {
 }
 
 model FacilityCapability {
-  id                String         @id @default(uuid())
+  waitlistEntries   WaitlistEntry[]
+  id                String          @id @default(uuid())
+  version     Int      @default(1)
   facilityProfileId String
   capabilityType    CapabilityType
   // e.g. a lab test category, or a medication class — free text on purpose,
@@ -536,13 +559,14 @@ model FacilityPrice {
 }
 
 model AvailabilitySlot {
-  id              String     @id @default(uuid())
+  id              String          @id @default(uuid())
+  waitlistEntries WaitlistEntry[]
   doctorProfileId String
-  status          SlotStatus @default(open)
+  status          SlotStatus      @default(open)
   startTime       DateTime
   endTime         DateTime
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
   appointment   Appointment?
@@ -559,6 +583,7 @@ model AvailabilitySlot {
 
 model Appointment {
   id                 String            @id @default(uuid())
+  version     Int      @default(1)
   patientProfileId   String
   doctorProfileId    String
   // Nullable because a CANCELLED appointment releases its slot back to
@@ -906,7 +931,15 @@ model LabResult {
   id                   String   @id @default(uuid())
   labOrderId           String   @unique
   fulfillingFacilityId String
+  // Never written: a result file is not addressed by URL (issue #16).
   resultFileUrl        String?
+  // Issue #16 (docs/adr/0014): the file lives in a private object-storage
+  // bucket under this opaque, server-generated key — not a URL, never sent
+  // to a client. It is read back only through
+  // GET /orders/lab-orders/:labOrderId/result, which re-checks access.
+  resultObjectKey      String?  @unique
+  resultContentType    String?
+  resultByteSize       Int?
   summary              String?
   createdAt            DateTime @default(now())
 
@@ -942,6 +975,55 @@ model FulfillmentRecord {
   facility     FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Restrict)
 
   @@index([facilityId, status])
+}
+
+model WaitlistEntry {
+  id                  String   @id @default(uuid())
+  patientProfileId    String
+  doctorProfileId     String?
+  specialtyId         String?
+  status              String // pending | on_hold | accepted | expired
+  // Time window during which the patient is willing to accept a slot
+  earliestAcceptable  DateTime
+  latestAcceptable    DateTime
+  // Time-boxed hold: when a slot is offered, it's held for this duration
+  holdDurationMinutes Int
+  // Audit trail
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  patientProfile       PatientProfile      @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+  doctorProfile        DoctorProfile?      @relation(fields: [doctorProfileId], references: [id], onDelete: SetNull)
+  specialty            Specialty?          @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
+  facilityCapability   FacilityCapability? @relation(fields: [facilityCapabilityId], references: [id])
+  facilityCapabilityId String?
+  availabilitySlot     AvailabilitySlot?   @relation(fields: [availabilitySlotId], references: [id])
+  availabilitySlotId   String?
+
+  @@unique([patientProfileId, doctorProfileId, specialtyId])
+  @@index([status])
+  @@index([patientProfileId, status])
+}
+
+model WindowTime {
+  id    String   @id @default(uuid())
+  start DateTime
+  end   DateTime
+
+  @@unique([start, end])
+}
+
+model RateLimitRecord {
+  id         String   @id @default(uuid())
+  key        String
+  scope      String
+  cost       Int      @default(1)
+  consumedAt DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([key, scope, consumedAt])
+  @@index([consumedAt])
 }
 
 model Notification {
@@ -981,6 +1063,7 @@ enum PaymentIntentStatus {
 
 model PaymentIntent {
   id             String              @id @default(uuid())
+  version     Int      @default(1)
   prescriptionId String?             @unique
   labOrderId     String?             @unique
   status         PaymentIntentStatus @default(created)
@@ -1234,6 +1317,24 @@ model EscrowChainEvent {
 // No PHI, ever: `metadata` is a small flat map of ids/codes validated by
 // record() — never names, contact details, DOB, intake text, or copies of
 // request/response bodies.
+// Feature flags (Phase 8, issue #132): one row per flag, in this
+// environment's own database (staging and production each have their own,
+// so flags are per environment by construction). `enabled` is the kill
+// switch: false = off for everyone. When true, a user is on if their id is
+// in `allowUserIds`; otherwise they must be in `allowRoles` (when that list
+// is non-empty) and fall inside the sticky `rolloutPercent` bucket. Changes
+// are made only through the admin endpoints, which audit every one.
+model FeatureFlag {
+  key            String   @id
+  description    String   @default("")
+  enabled        Boolean  @default(false)
+  rolloutPercent Int      @default(100)
+  allowRoles     Role[]   @default([])
+  allowUserIds   String[] @default([])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
 model AuditEvent {
   id          String   @id @default(uuid())
   // Null only for system-initiated transitions (none exist yet).
@@ -1254,4 +1355,49 @@ model AuditEvent {
   @@index([entityType, entityId, createdAt])
   @@index([actorUserId, createdAt])
   @@index([createdAt, id])
+}
+
+// --- Idempotency (Phase 8, issue #48) ---------------------------------------
+// One row per in-flight or completed `Idempotency-Key` request, so a client
+// retrying after a mobile timeout gets the first response back instead of
+// creating a second booking or a second payment.
+//
+// Scoped to (userId, key) — the unique constraint below is the whole
+// concurrency mechanism. There is no in-memory lock anywhere: whoever wins
+// the INSERT owns the attempt, everyone else reads the row. Two instances of
+// this API therefore behave identically to one.
+//
+// `responseStatus`/`responseBody`/`responseHeaders` are NULL while the
+// attempt is still running. That gap is what a concurrent duplicate sees, and
+// what it waits on. It is NOT audit history: a 5xx deletes the row outright
+// so the client can retry with the same key, and an attempt abandoned by a
+// crashed process is taken over once it is older than the in-progress
+// timeout. Rows are removed once `expiresAt` passes (24h by default).
+//
+// Deliberately NOT an `AuditEvent` and not a patient-data record: the cached
+// body is a copy of a response the requesting user already received, kept
+// only as long as a retry could still arrive, and it is never exported or
+// listed. See ARCHITECTURE.md §4.12.
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  // Scope: a key is only ever compared against the same user's other keys,
+  // so one user can never replay (or read) another user's stored response.
+  userId       String
+  key          String
+  method       String
+  // Route pattern, not the URL: '/payments/intents/:id/fund'. Stored so a
+  // row is self-describing when debugging, and folded into requestHash so a
+  // key reused on a different route is refused rather than replayed.
+  route        String
+  // SHA-256 of the canonical request. Same key + same body -> replay;
+  // same key + different body -> 422.
+  requestHash  String
+  responseStatus  Int?
+  responseBody    Json?
+  responseHeaders Json?
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@unique([userId, key])
+  @@index([expiresAt])
 }

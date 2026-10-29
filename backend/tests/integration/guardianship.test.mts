@@ -377,7 +377,7 @@ describe('guardian and dependent profiles', () => {
       INSERT INTO "User" ("id","email","passwordHash","role","updatedAt") VALUES ('u1','u1@example.com','x','patient',NOW());
       INSERT INTO "User" ("id","email","passwordHash","role","updatedAt") VALUES ('doc','doc@example.com','x','doctor',NOW());
       INSERT INTO "PatientProfile" ("id","userId","fullName","guardianUserId","updatedAt") VALUES ('p1','u1','Existing Patient',${guardianUserId === null ? 'NULL' : `'${guardianUserId}'`},NOW());
-      INSERT INTO "DoctorProfile" ("id","userId","fullName","updatedAt") VALUES ('d1','doc','Doc',NOW());
+      INSERT INTO "DoctorProfile" ("id","userId","fullName","timeZone","updatedAt") VALUES ('d1','doc','Doc','UTC',NOW());
       INSERT INTO "AvailabilitySlot" ("id","doctorProfileId","status","startTime","endTime","updatedAt") VALUES ('s1','d1','booked',NOW(),NOW() + interval '30 minutes',NOW());
       INSERT INTO "Appointment" ("id","patientProfileId","doctorProfileId","availabilitySlotId","updatedAt") VALUES ('a1','p1','d1','s1',NOW());
     `;

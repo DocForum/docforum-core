@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import * as ordersService from '../services';
+import * as labResultsService from '../services/lab-results';
 import { consultationSchema, labOrderSchema, prescriptionSchema } from '../validation';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
@@ -40,6 +41,27 @@ export async function disputeOrder(req: Request, res: Response) {
   const actor = auditActor(req);
   const order = await ordersService.disputeOrder(id, req.user!.id, reason, actor);
   res.status(200).json(serialize(order));
+}
+
+export async function attachLabResult(req: Request, res: Response) {
+  const result = await labResultsService.attachLabResult(auditActor(req), getParam(req, 'labOrderId'), {
+    body: req.body, contentType: req.headers['content-type'],
+  });
+  res.status(201).json(result);
+}
+
+export async function downloadLabResult(req: Request, res: Response) {
+  const file = await labResultsService.openLabResultFile(req.user!, getParam(req, 'labOrderId'), req.originalUrl);
+  res.set({
+    'Content-Type': file.contentType,
+    'Content-Length': String(file.body.length),
+    'Content-Disposition': `attachment; filename="${file.filename}"`,
+    // Medical data: never cached by a browser or shared proxy, never sniffed
+    // into something renderable.
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.status(200).send(file.body);
 }
 
 export async function getOrder(req: Request, res: Response) {

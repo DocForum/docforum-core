@@ -5,13 +5,14 @@
 // suites that build the app never start a timer.
 import { config } from '../config';
 import { purgeDeletedPatientAccounts } from '../modules/patients/services';
+import { runWithRlsBypassContext } from '../db/prisma-client';
 
 export function startAccountPurgeJob(): () => void {
   let running = false;
   const run = () => {
     if (running) return;
     running = true;
-    void purgeDeletedPatientAccounts()
+    void runWithRlsBypassContext(() => purgeDeletedPatientAccounts())
       .then(({ purged, held, failed }) => {
         if (purged > 0 || failed > 0) {
           // Counts only — never ids or personal fields.

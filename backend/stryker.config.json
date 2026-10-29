@@ -1,0 +1,11 @@
+{
+  "testRunner": "vitest",
+  "mutate": [
+    "src/modules/**/*.ts"
+  ],
+  "reporters": [
+    "clear-text",
+    "html"
+  ],
+  "coverageAnalysis": "perTest"
+}

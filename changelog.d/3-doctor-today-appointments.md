@@ -1,1 +1,0 @@
-Phase 2: added a doctor-scoped `GET /appointments/doctor/today` view over scheduled appointments for the current server-local day ([issue #3](https://github.com/DocForum/docforum-core/issues/3)). Existing lifecycle transitions and referral cascades remain unchanged.

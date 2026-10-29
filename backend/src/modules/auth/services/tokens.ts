@@ -3,7 +3,7 @@
 // invalidates all outstanding tokens without a per-request DB read — the
 // check happens where the token is actually exchanged (refresh).
 import jwt from 'jsonwebtoken';
-import { config } from '../../../config';
+import { config, type JwtSigningKey } from '../../../config';
 import type { Role } from '@prisma/client';
 
 export interface AccessTokenPayload {
@@ -38,18 +38,55 @@ export interface RefreshTokenPayload extends AccessTokenPayload {
   tv: number;
 }
 
+/**
+ * Sign with the current key (first in the keyring) and record its `kid` in
+ * the header, so verification can pick the matching secret during rotation.
+ */
+function signWithKeyring(
+  keys: readonly JwtSigningKey[],
+  payload: object,
+  expiresIn: NonNullable<jwt.SignOptions['expiresIn']>,
+): string {
+  const [current] = keys;
+  return jwt.sign(payload, current.secret, { expiresIn, keyid: current.kid });
+}
+
+/**
+ * Verify against the key named by the token's `kid`. A token with an unknown
+ * `kid` is rejected, not checked against every key. A token without a `kid`
+ * (minted before rotation support) is tried against each key in order.
+ */
+function verifyWithKeyring<T>(keys: JwtSigningKey[], token: string): T {
+  const decoded = jwt.decode(token, { complete: true });
+  const kid = typeof decoded?.header.kid === 'string' ? decoded.header.kid : undefined;
+  const candidates = kid === undefined ? keys : keys.filter((key) => key.kid === kid);
+  if (candidates.length === 0) {
+    throw new jwt.JsonWebTokenError('Unknown signing key');
+  }
+
+  let lastError: unknown;
+  for (const key of candidates) {
+    try {
+      return jwt.verify(token, key.secret) as T;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 export function signAccessToken(payload: AccessTokenPayload): string {
-  return jwt.sign(payload, config.jwt.accessSecret, { expiresIn: config.jwt.accessTtl });
+  return signWithKeyring(config.jwt.accessKeys, payload, config.jwt.accessTtl);
 }
 
 export function signRefreshToken(payload: RefreshTokenPayload): string {
-  return jwt.sign(payload, config.jwt.refreshSecret, { expiresIn: config.jwt.refreshTtl });
+  return signWithKeyring(config.jwt.refreshKeys, payload, config.jwt.refreshTtl);
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
-  return jwt.verify(token, config.jwt.accessSecret) as AccessTokenPayload;
+  return verifyWithKeyring<AccessTokenPayload>(config.jwt.accessKeys, token);
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {
-  return jwt.verify(token, config.jwt.refreshSecret) as RefreshTokenPayload;
+  return verifyWithKeyring<RefreshTokenPayload>(config.jwt.refreshKeys, token);
 }

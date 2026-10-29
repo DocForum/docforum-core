@@ -108,7 +108,7 @@ describe('facility price lists and intent pricing (issue #127)', () => {
     });
     doctorActor = { userId: doctorUser.id, role: 'doctor', requestId: null };
     const doctor = await prisma.doctorProfile.create({
-      data: { userId: doctorUser.id, fullName: 'Prices Test Doctor', verificationStatus: 'verified' },
+      data: { userId: doctorUser.id, fullName: 'Prices Test Doctor', timeZone: 'UTC', verificationStatus: 'verified' },
     });
     doctorProfileId = doctor.id;
 

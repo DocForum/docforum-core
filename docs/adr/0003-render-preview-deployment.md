@@ -18,7 +18,9 @@ GitHub Pages UI preview has a real backend to call, nothing more.
 
 - Web service: Node, free plan, root dir `backend/`, auto-deploys on push
   to `main`, build: `npm install && npx prisma generate && npm run build`,
-  start: `npx prisma migrate deploy && npm start`.
+  start: `npx prisma migrate deploy && npm start`, health check path:
+  `/health/ready`. Render must use readiness, not the liveness endpoint, so
+  it does not send traffic to a process whose database migrations are pending.
 - Database: Render Postgres, free plan, same region (`oregon`) for
   internal networking.
 - `TRUST_PROXY=1` (Phase 8, issue #35): Render terminates TLS in front of
@@ -126,6 +128,20 @@ backend is down between steps 2 and 4.
    bootstrap CLI added in issue #39 — replace it once that lands.
 7. Update the expiry date at the top of this section (and in
    `ROADMAP.md` Phase 9).
+
+### Restore synthetic demo data
+
+The preview can be populated with repeatable synthetic accounts and
+availability after `prisma migrate deploy`:
+
+```sh
+DEMO_SEED_PASSWORD='<at least 12 characters>' ALLOW_SYNTHETIC_SEED=true npm run db:seed
+```
+
+The seed uses `example.test` addresses and non-clinical names, and is
+idempotent. `ALLOW_SYNTHETIC_SEED` is required when Render sets
+`NODE_ENV=production`; never run this against a production patient database.
+The seed password is supplied through the environment and is not committed.
 
 Upgrading the existing instance to a paid plan instead keeps its data
 and removes the expiry entirely; do that if renewing monthly gets old

@@ -9,28 +9,41 @@ export function listOpenSlots(doctorProfileId: string) {
 
 export interface GenerateSlotsInput {
   doctorProfileId: string;
-  /** ISO date, e.g. "2026-09-20" — single day only, no recurrence
+  /** ISO date, e.g. "2026-10-19" — single day only, no recurrence
    * (ARCHITECTURE.md §6.3.6 overengineering guardrail: fixed-length slot
    * generation only, no recurrence/buffer engine). */
   date: string;
-  startHour: number; // 0-23, UTC
-  endHour: number; // 0-23, UTC, exclusive
+  /** IANA time zone identifier, e.g. "Europe/London", "America/New_York"
+   *   The doctor's local wall-clock hours are interpreted in this zone.
+   *   If omitted, defaults to UTC (backward-compatible). */
+  timeZone?: string;
+  startHour: number; // 0-23, local wall-clock
+  endHour: number; // 0-23, local wall-clock, exclusive
   slotLengthMinutes: number;
 }
 
 export async function generateSlots(input: GenerateSlotsInput) {
-  const { doctorProfileId, date, startHour, endHour } = input;
+  const { doctorProfileId } = input;
+  let proposedSlots: ReturnType<typeof buildSlotRanges>;
   try {
-    buildSlotRanges(input);
+    proposedSlots = buildSlotRanges(input);
   } catch (error) {
     throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
   }
-  const dayStart = new Date(`${date}T00:00:00.000Z`);
-  const rangeStart = new Date(dayStart.getTime() + startHour * 60 * 60 * 1_000);
-  const rangeEnd = new Date(dayStart.getTime() + endHour * 60 * 60 * 1_000);
-  const existing = await availabilityRepo.findExistingSlotRanges(doctorProfileId, rangeStart, rangeEnd);
+  if (proposedSlots.length === 0) return { created: 0 };
+
+  const existing = await availabilityRepo.findExistingSlotRanges(
+    doctorProfileId,
+    proposedSlots[0].startTime,
+    proposedSlots[proposedSlots.length - 1].endTime,
+  );
   const existingStarts = existing.map((slot) => slot.startTime.getTime());
-  const rows = buildSlotRanges(input, existingStarts);
+  let rows: ReturnType<typeof buildSlotRanges>;
+  try {
+    rows = buildSlotRanges(input, existingStarts);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
+  }
 
   if (rows.length === 0) return { created: 0 };
 

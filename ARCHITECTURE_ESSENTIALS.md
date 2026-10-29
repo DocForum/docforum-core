@@ -10,6 +10,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
 - Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue. Existing interval jobs: login-throttle prune (`src/server.ts`), patient-export worker/cleanup (`src/jobs/patient-exports.ts`) and deleted-account tombstone purge (`src/jobs/account-purge.ts`), all started only from `server.ts`.
 - New module holding patient data? Register a patient-export section (ARCHITECTURE.md §3.1) — right of access must stay complete.
+- File storage = **Amazon S3**, private bucket (`docs/adr/0014`, issue #16), only through `src/utils/object-storage.ts`. Never return an object key or a public/presigned URL: clinical files are served by the API after an access check.
 
 ## Hard rules (violating these = request changes on the PR)
 1. **Never mutate a `Prescription` or `LabOrder` after issuance.** Corrections = new row with `supersedes_*_id`.
@@ -18,14 +19,17 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 4. **Cross-module access only through a module's service interface.** Never import another module's `repositories/*` directly.
 5. **Facilities write to their own `FulfillmentRecord` only** — never directly to `Prescription.status` / `LabOrder.status`.
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
+7. **Mutable-record edits use optimistic concurrency (Phase 8, issue #49).** Individual-resource read returns a strong version `ETag` (`"4"`); PATCH/PUT must send it in `If-Match` — missing is `428`, weak/list/garbage is `400`, stale is `412`. Write it as ONE conditional `UPDATE ... WHERE id = ? AND version = ?` that increments `version` (Prisma: `updateManyAndReturn`); read-compare-write is forbidden. Status transitions that are *already* conditional (booking, payment status, verification) keep their own guard, don't get a second `If-Match` one, but still bump + republish the version. Append-only `Prescription`/`LabOrder` are excluded. See ARCHITECTURE.md §5.4.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` (including `locale`, default `en`, Phase 9 #133) → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
 `User` (guardian) —< `Guardianship` >— `PatientProfile` (dependent, `userId` null) (Phase 8, issue #42 — docs/adr/0011; create-only, access ends at `AGE_OF_MAJORITY_YEARS`; authorise any act-for-a-patient path through `patientsService.resolveActingProfile`).
 `DoctorProfile` —< `DoctorSpecialty` >— `Specialty`
 `AvailabilitySlot` (doctor's calendar) → `Appointment` (`availability_slot_id` nullable — a cancelled appointment releases its slot; booking safety is `claimOpenSlot`, not that column) → `IntakeForm`, `Consultation`
+`PatientProfile` → `WaitlistEntry` (optional doctor/specialty/facility capability/slot targets; time-boxed offer status)
 `Consultation` (`appointmentId` **UNIQUE** — closing a consultation is a create-once operation, `409` on a second attempt; one writer, `consultationsService.createConsultation`, reached from `POST /consultations`, `POST /appointments/:id/consultation` and the orders flow; see docs/adr/0009) → (outcome=referred) → `Referral` (snapshot! required `target_doctor_id` — routed at creation when only a specialty is named, ADR 0008; self-FK lineage `parent_referral_id`, no-show/loop/admin flags) → new `Appointment`
 `Appointment` → `Consultation` → immutable `Prescription`(+`PrescriptionItem`) / `LabOrder`(+`LabResult`)
+`LabResult` (issue #16) — one per `LabOrder`, attached once by the order's own facility; the file is in object storage under `resultObjectKey`, readable only by the patient, ordering doctor and fulfilling facility.
 `FulfillmentRecord` (facility-owned) references exactly one order through real FKs (`prescription_id` XOR `lab_order_id`, enforced by a DB CHECK — docs/adr/0012) but doesn't mutate it; one row per order.
 `User` → `EmailVerificationToken` (Phase 8, issue #34 — hashed/expiring, single-use; `User.emailVerifiedAt` gates booking, consultation/referral mutations and payment mutations, never login/browsing).
 `User` → `AccessLog` (Phase 8, issue #45 — PHI read-access log: who viewed which clinical record, when; fire-and-forget writes, fail-open).
@@ -33,6 +37,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
 Account deletion (Phase 8, issue #41 — docs/adr/0010): anonymise in place (`User.deletedAt`, `PatientProfile.anonymizedAt`), never cascade. `PatientProfile.userId` is ON DELETE RESTRICT; new patient-linked clinical tables must be RESTRICT too **and** register a retention hold in `src/retention-holds.ts`.
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile` → `PatientWalletLink` (payer address, ADR 0005) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85), whose `amount` is in the smallest unit of a per-environment allowlisted `assetCode` (issue #79)
+
+Mutable records above (plus `Appointment` and `PaymentIntent`) carry a `version` int for the `ETag`/`If-Match` convention — hard rule 7, ARCHITECTURE.md §5.4. Mutable profile fields a new route exposes need a conditional write, not just a `.update()`.
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
 - **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule.

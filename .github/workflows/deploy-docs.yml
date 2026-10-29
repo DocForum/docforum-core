@@ -7,13 +7,11 @@
 # placeholder — see ROADMAP.md): different trigger (push to main, not
 # pull_request) and different purpose (deploy, not verify).
 #
-# KNOWN GAP: only triggers on a push to *this* repo. A docs-relevant
-# change landing in docforum-web or docforum-escrow alone does not
-# rebuild this site automatically — it goes stale until this repo's next
-# push, or someone runs workflow_dispatch by hand. Closing that gap needs
-# a repository_dispatch sender workflow in each sibling repo plus a
-# cross-repo token stored as a secret here; not built yet, tracked as a
-# real gap rather than silently accepted or falsely claimed as automated.
+# Upstream automated rebuilds: triggers on pushes to main that touch docs
+# in this repo, manual workflow_dispatch, or cross-repo repository_dispatch
+# events (types: [upstream-docs-updated, docs-sync]) sent when sibling repos
+# (docforum-web, docforum-escrow) update their main branch docs.
+# See docs/site/README.md for the token setup and sender workflow configuration.
 name: Deploy docs site
 
 on:
@@ -28,6 +26,10 @@ on:
       - 'docs/adr/**'
       - 'docs/api/**'
   workflow_dispatch:
+  repository_dispatch:
+    types:
+      - upstream-docs-updated
+      - docs-sync
 
 permissions:
   contents: read
