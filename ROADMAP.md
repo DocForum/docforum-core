@@ -122,7 +122,7 @@ and issue links.
 - [ ] ~~Shared: auth screens (signup/login per role).~~ → already built, `docforum-web` Phase W1.
 
 ## Phase 8 — Hardening (safety, audit, security)
-**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 — #34 and #35 are merged; #37 and #39 are open PRs. An access-control test suite (#44) is built and tested. Each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
+**Status: In progress. In addition to the original five items (#18–#20 scoped, two still blocked), four auth-hardening items are scoped as #34, #35, #37 and #39 — #34 and #35 are merged; #37 and #39 are open PRs. An access-control test suite (#44) is built and tested, and `Idempotency-Key` replay protection (#48) is in review. Each is independent of the others and of Phases 3–7, and each carries its own schema/doc updates.**
 
 - [x] Admin success-metrics endpoint for available booking lead-time and no-show measures; unsupported PRD metrics are explicitly marked unavailable. Definitions and suppression policy: `docs/success-metrics.md`. Tracked as [issue #124](https://github.com/DocForum/docforum-core/issues/124).
 
