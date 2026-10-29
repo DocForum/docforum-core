@@ -134,7 +134,7 @@ describe('issue #15: fulfillment queue + transitions', () => {
   async function createFacility(token: string, overrides: Record<string, unknown>) {
     const res = await request(app).post('/facilities').set('Authorization', `Bearer ${token}`).send({
       email: overrides.email as string, password: PASSWORD, name: overrides.name as string,
-      type: overrides.type as 'lab' | 'pharmacy', capabilities: [{ capabilityType: overrides.capabilityType as 'lab_test' | 'medication_dispense', detail: null }],
+      type: overrides.type as 'lab' | 'pharmacy', capabilities: overrides.capabilities,
     });
     if (res.status !== 201) {
       console.error(`createFacility failed: status=${res.status} body=${JSON.stringify(res.body)}`);
