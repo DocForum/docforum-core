@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — DocForum
 
-Status: Draft v0.1
-Last updated: 2026-09-09
+Status: Draft v0.2
+Last updated: 2026-10-18
 
 > **Contribution rule:** Any PR that changes a data model, a service boundary, or the tech stack must update this file in the same PR, and reflect the essentials in `ARCHITECTURE_ESSENTIALS.md`. Also update `ROADMAP.md` status if the change closes/opens roadmap work.
 
@@ -24,6 +24,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | Backend language/runtime | Node.js (TypeScript) | Single language across stack, large ecosystem, easy hiring. |
 | Backend framework | Express 5 — **decided 2026-09-14**, resolving the "(or Fastify)" either/or | Minimal, unopinionated, matches "modular monolith" — avoid a heavy framework that fights the module boundaries. Express 5's native async-handler error forwarding (rejected promises reach the error middleware without a manual wrapper) was a real factor, not just familiarity. |
 | Request validation | Zod | Not originally listed here — added alongside Phase 1's real request bodies. Schemas live per-module (`modules/*/validation.ts`), thrown `ZodError`s are caught centrally by `middleware/error-handler.ts`. |
+| API contract | OpenAPI 3.1, generated from the Zod schemas via `zod-to-openapi` (`backend/src/openapi/`), committed at `docs/api/openapi.json` | The hand-written `docs/api/README.md` was the only contract and `docforum-web` built against assumed shapes. Generating the spec from the same Zod objects the routes validate with means the contract can't drift from the code without CI failing. Served at `/openapi.json` in non-production only (see §7). |
 | Password hashing | bcryptjs | Pure-JS, not a native bcrypt binding — one less native build dependency for a repo with no other native deps yet. |
 | Database | PostgreSQL | Relational integrity is critical (bookings, orders, referrals all have strict FK/state constraints); JSONB available for the flexible parts (intake payload). |
 | ORM / schema | Prisma 7, with the `@prisma/adapter-pg` (node-postgres) driver adapter — **upgraded 2026-10-16 to clear a high-severity advisory; see `docs/adr/0006`** | Schema-as-code, migrations, keeps `backend/prisma/schema.prisma` as the single source of truth for data models (mirrors §4 below). Two v7 facts that constrain where code goes: (a) there is no Rust query engine any more, so the client must be constructed with a driver adapter (`src/db/prisma-client.ts`) — bare `new PrismaClient()` throws; (b) the CLI's datasource URL lives in `backend/prisma.config.ts`, not in the schema's `datasource` block. The `prisma-client-js` generator is retained deliberately, so the client still generates into `node_modules/@prisma/client` and this backend stays CommonJS (see §3 note on `@docforum/escrow-sdk` being ESM-only). Requires Node >= 20.19. |
@@ -59,6 +60,7 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `notifications` — outbound notification dispatch, provider-agnostic.
 - `payments` — `PaymentIntent`, the facility payee `WalletLink`, and the patient payer `PatientWalletLink` (§4.13). Relational metadata only; every Stellar call goes through `@docforum/escrow-sdk` via `services/escrow-sdk-loader.ts`. Assets are allowlisted per environment (issue #79), and the prepare half of ADR 0005 (issue #80) builds the unsigned patient transaction without moving funds.
 - `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking (both the direct and the referral-origin path), consultation closing (Phase 2, issue #4), doctor verification, payment fund/release/refund, the patient's referral accept/decline, and the referral admin actions (Phase 3, issue #68 — `referral.reassign` / `referral.cancel`, recorded as `entityType: 'Referral'` rows; there is no second, referral-specific audit table). **Phase 4 transitions (fulfillment) must call `record()` in the same transaction when they're built** — prescriptions and lab orders already do. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
+- `openapi` — the machine-readable API contract (Phase 9). Not a runtime module: it owns `backend/src/openapi/registry.ts` (one `OpenAPIRegistry`, the shared `bearerAuth` security scheme, the `ErrorEnvelope` / `ValidationErrorEnvelope` response components, and the BigInt-as-string helper) and `backend/src/openapi/document.ts` (assembles the 3.1 document). Each module registers its own paths and schemas from its own `validation.ts` via a `register<Module>Paths(registry)` function exported from `modules/<name>/openapi.ts` — the registry never reaches into a module's internals, and a module's `validation.ts` stays the single source of truth for request shapes. `backend/scripts/generate-openapi.mjs` writes `docs/api/openapi.json`; `createApp()` serves that same generated document at `GET /openapi.json` only when `NODE_ENV !== 'production'`.
 
 ### 3.1 Patient data export registry (Phase 8, issue #40)
 
@@ -128,8 +130,6 @@ User
     Backfilled to created_at for pre-existing rows in the
     add_email_verification migration, so accounts from before this phase
     are treated as verified)
-  locale (string, default `en` — Phase 9 issue #133; selected from
-    Accept-Language at signup, unsupported tags fall back to `en`)
   locale (string, default `en` — Phase 9 issue #133; supported language
     selected from Accept-Language at signup, unsupported tags fall back to `en`)
   deleted_at (nullable — Phase 8 issue #41, docs/adr/0010; set once,
@@ -494,7 +494,8 @@ schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }
 ### 4.12 Escrow chain event observations (issue #86)
 
 EscrowEventCursor has one row per deployed escrow contract and persists the Soroban RPC pagination cursor and retention error. EscrowChainEvent is uniquely keyed by (contractId, eventId) and records the contract event, ledger, transaction hash, escrow id, match state, and alert timestamp. These are observations, not a source of payment state: matching checks the locally owned PaymentIntent; the poller never mutates a payment transition.
-### 4.11 PHI read-access log (Phase 8, issue #45)
+
+### 4.13 PHI read-access log (Phase 8, issue #45)
 ```
 AccessLog
   id, accessed_by (nullable FK → User, SET NULL on delete — the row keeps
@@ -690,6 +691,7 @@ class of bug, and **new mutable-resource routes must follow it.**
 ## 7. Non-functional / cross-cutting
 
 - **Testing**: unit tests per module (`backend/tests/unit`), integration tests for booking/referral/order flows specifically because those are the correctness-critical paths (`backend/tests/integration`).
+- **API contract (Phase 9)**: `docs/api/openapi.json` is generated, not hand-edited — `npm run openapi:generate` in `backend/` rewrites it from the Zod schemas, and `npm run openapi:check` regenerates into a temp file and diffs against the committed one. CI runs the check, so a schema change without a regenerated spec fails the build (the reviewer's drift test). Response schemas are registered alongside request schemas and asserted in tests: every route's success response is parsed against its registered Zod response schema in the integration suite, so a handler that returns a shape the spec doesn't describe fails a test rather than silently diverging. **BigInt fields** (payment `amountStroops`, escrow ids, ledger numbers) are declared as `type: string` in the spec and serialised as strings on the wire — the response schemas use `z.bigint().transform(String)` (or the shared `bigIntString` helper) so the JSON never contains a bare number that a JS client would round. **Admin routes** are registered under an `admin` tag with `security: [{ bearerAuth: [] }]` and an `x-internal: true` extension; they are included in the committed spec (so the frontend can generate admin types) but the tag + extension is what marks them as not part of the public surface — do not add a route without one of the two. Adding a route or changing a request/response shape is a §4-adjacent change: update this file's §3 module list if a new module appears, and regenerate the spec in the same PR.
 - **Security — login throttling (Phase 8, issue #35)**: `POST /auth/login` is throttled per normalised email *and* per client IP, in Postgres (`LoginAttempt`, §4.9): exponential backoff with `Retry-After` from `LOGIN_THROTTLE_BACKOFF_AFTER` failures, a temporary lock at `LOGIN_THROTTLE_LOCK_AFTER`, and a cleanup interval in `src/server.ts`. Two things this depends on operationally: (1) `TRUST_PROXY` must be set correctly in production — Render terminates TLS in front of exactly one hop, so `TRUST_PROXY=1`; leaving it unset makes every request look like Render's proxy (one shared bucket for everyone), and `true` lets a client spoof `X-Forwarded-For` for a fresh bucket per request; (2) the throttle deliberately does not reveal whether an account exists — locked, backoff and unknown-account responses are identical, and an absent account still pays the bcrypt comparison cost so response timing doesn't leak either.
 - **Idempotent retries (Phase 8, issue #48)**: `POST /appointments`, `POST /payments/intents` and `POST /payments/intents/:id/{fund,release,refund}` honour an `Idempotency-Key` header (`src/middleware/idempotency.ts`). A repeat of the same key with the same request body inside 24 h replays the stored status and body instead of running the mutation again; the same key with a different body is `422`; a second request arriving while the first is still running is `409 IN_PROGRESS` with a `Retry-After`, because ownership is decided by the unique constraint on `(userId, key)` rather than by an in-memory lock that would be correct on one instance and broken on two. Keys are namespaced per user, and 5xx is never cached so a client can retry a failed call with the same key. See §4.12 for the model.
 - **Migrations**: Prisma migrations are the only way schema changes happen — no manual DB edits, ever.
@@ -703,6 +705,7 @@ class of bug, and **new mutable-resource routes must follow it.**
   see `docs/adr/0003-render-preview-deployment.md`. Explicitly not this
   decision: no secrets manager, no backups, disposable data, 30-day
   free-tier DB expiry.
+- API documentation hosting — the spec is committed to `docs/api/openapi.json` and served at `/openapi.json` in non-production only. Whether a hosted docs UI (Swagger UI / Scalar) is deployed, and whether the production API exposes the spec behind auth, is deferred; the committed file is the contract of record until then.
 - Notification provider — **resolved (Phase 6, issue #17):** Postmark for
   email and Twilio for SMS, behind the provider-agnostic `notifications`
   interface (see §2). Provider SDK calls must stay inside the dispatch

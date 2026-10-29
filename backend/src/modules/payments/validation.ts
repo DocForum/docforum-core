@@ -14,6 +14,22 @@ export const walletLinkSchema = z.strictObject({
   transaction: z.string().min(1),
 });
 
+// Response envelope for the wallet-link endpoint. Payment amounts
+// are BigInt in the DB, so they are serialised as strings in the
+// API contract (see openapi registry BigInt helper).
+export const linkWalletResponseSchema = z.object({
+  walletId: z.string(),
+  stellarPublicKey: z
+    .string()
+    .regex(/^G[A-Z2-7]{55}$/, 'stellarPublicKey must be a valid Stellar public key (starts with G, 56 chars).'),
+  linkedAt: z.string(),
+});
+
+export const paymentAmountSchema = z.object({
+  amount: z.string().regex(/^[0-9]+$/, 'amount must be a decimal string representing a BigInt'),
+  currency: z.string().length(3),
+});
+
 // Checksum-accurate StrKey Ed25519 public key validation (issue #26).
 export const stellarPublicKeySchema = z
   .string()
@@ -21,8 +37,11 @@ export const stellarPublicKeySchema = z
     message: 'account must be a valid Stellar public key (starts with G, 56 chars).',
   });
 
-// SEP-10 (issue #77, #26). Validates that the account query parameter is a valid
-// Ed25519 public key with a correct checksum.
+// SEP-10 (issue #77, #26). Shape-only gate: the checksum-accurate strkey
+// validation (and the 400) happens in services/sep10.ts via
+// StrKey.isValidEd25519PublicKey, so the service layer is safe for
+// non-HTTP callers too. Validates that the account query parameter is a
+// valid Ed25519 public key with a correct checksum.
 export const sep10ChallengeQuerySchema = z.object({
   account: stellarPublicKeySchema,
 });
