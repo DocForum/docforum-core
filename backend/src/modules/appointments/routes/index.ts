@@ -26,6 +26,23 @@ appointmentsRouter.post(
 appointmentsRouter.get('/mine', authenticate, requireRole('patient'), appointmentsController.listMine);
 appointmentsRouter.get('/doctor/today', authenticate, requireRole('doctor'), appointmentsController.listDoctorToday);
 
+// In-person check-in (Phase 2): the patient records arrival within a
+// window around the appointment start. Only the owning patient may check in.
+appointmentsRouter.post(
+  '/:appointmentId/check-in',
+  authenticate,
+  requireRole('patient'),
+  appointmentsController.checkIn,
+);
+
+// Live queue position for the appointment. Patients see only their own
+// position and an estimate derived from the doctor's running delay.
+appointmentsRouter.get(
+  '/:appointmentId/queue',
+  authenticate,
+  appointmentsController.getQueue,
+);
+
 // Reschedule an appointment atomically: claim new slot and release old one
 // (Phase 2, issue #55). Requires verified email.
 appointmentsRouter.post(
