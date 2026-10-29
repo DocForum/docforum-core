@@ -15,6 +15,10 @@ export const publicDoctorListQuerySchema = z.object({
   cursor: z.string().uuid().optional(),
 }).strict();
 
+export const updateDoctorProfileSchema = z.object({
+  fullName: z.string().trim().min(1).max(200),
+}).strict();
+
 export const setDoctorSpecialtyVerificationSchema = z.object({
   status: z.enum(['pending', 'verified', 'rejected']),
   reviewer: z.string().min(1),

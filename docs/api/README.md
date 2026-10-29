@@ -31,12 +31,12 @@ Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec ye
 
 `POST /auth/signup` creates the account **unverified** (`user.emailVerifiedAt`
 is `null` in the response and in `GET`-style payloads). Unverified accounts
-can log in, refresh, and browse; they get
+can login, refresh, and browse; they get
 `403 { message, code: 'EMAIL_NOT_VERIFIED' }` from mutating routes that
 depend on a trustworthy contact address:
 
-- `POST /appointments` (booking)
-- `POST /consultations`, `POST /consultations/:id/referrals`
+-` POST /appointments` (booking)
+-` POST /consultations`, `POST /consultations/:id/referrals`
 - `POST /referrals`, `POST /referrals/from-consultation/:id`,
   `POST /referrals/:id/{accept,decline}`
 - `POST /payments/wallet-link`, `POST /payments/intents/:id/prepare`,
@@ -75,8 +75,7 @@ routes are therefore protected by:
    server-side state. On `/auth/logout` there is no session token to match
    against, so the header's presence is required instead (the impact of a
    forged logout is a forced sign-out, not data loss).
-2. **An `Origin` allowlist** — a request whose `Origin` is present and not on
-   the CORS allowlist is rejected with `403 Origin not allowed.`
+2. **An `Origin` allowlist** — a request whose `Origin` is present and not on the CORS allowlist is rejected with `403 Origin not allowed.`
 3. **An explicit per-environment CORS allowlist** — `CORS_ORIGINS`
    (comma-separated; `CORS_ORIGIN` still works as a single origin).
    Production defaults to `https://docforum.github.io`; local dev to
@@ -97,9 +96,7 @@ response body instead. See `backend/src/middleware/csrf.ts`.
 
 **Requests with no `Origin` header** (curl, server-to-server): allowed past
 the Origin check, but the CSRF header is still required — an attacker's page
-can't win by suppressing `Origin`. Sessions issued before this change carry
-no `csrf` claim in their refresh token, so they are rejected with `403` and
-need one re-login.
+can't win by suppressing `Origin`. Sessions issued before this change carry no `csrf` claim in their refresh token, so they are rejected with `403` and need one re-login.
 
 ### Login throttling (Phase 8, issue #35)
 
@@ -110,15 +107,13 @@ single instance). Bucket size is capped by the first limit reached:
 | Phase | Response |
 |---|---|
 | Below `LOGIN_THROTTLE_BACKOFF_AFTER` failures (default 3) in the window | normal `401 { message: 'Invalid email or password.' }` |
-| At/after it | `429` with a `Retry-After: <seconds>` header, growing exponentially (`LOGIN_THROTTLE_BACKOFF_BASE_SECONDS` × 2ⁿ, capped at `LOGIN_THROTTLE_BACKOFF_MAX_SECONDS`) |
+| At/after it | `429` with a `Retry-After: <seconds>` header, growing exponentially (`LOGIN_THROTTLE_BACKOFF_BASE_SECONDS` × 2, capped at `LOGIN_THROTTLE_BACKOFF_MAX_SECONDS`) |
 | At `LOGIN_THROTTLE_LOCK_AFTER` failures (default 10) | `429` locked for `LOGIN_THROTTLE_LOCK_SECONDS` (default 15 min). The lock is set once per window and is not extended by further attempts |
 | Window (`LOGIN_THROTTLE_WINDOW_SECONDS`, default 15 min) | New window restarts the count at 1 and clears the lock |
 
-A successful login clears the **per-account** counter. The per-IP bucket is
-left alone, so one valid login can't reset a shared-IP budget.
+A successful login clears the ** per-account** counter. The per-IP bucket is left alone, so one valid login can't reset a shared-IP budget.
 
-Clients should honour `Retry-After` and must **not** treat a `429` as
-"account locked permanently". The response is identical for a real and a
+Clients should honour `Retry-After` and must **not** treat a  `429` as "account locked permanently". The response is identical for a real and a
 non-existent address, and for a locked and a backing-off bucket — it
 deliberately reveals nothing about whether the account exists (an absent
 account also pays bcrypt's comparison cost, so timing doesn't leak either).
@@ -127,12 +122,12 @@ account also pays bcrypt's comparison cost, so timing doesn't leak either).
 user is stuck behind: body `{ email?, ip? }` (at least one), returns
 `{ cleared }`. Clear **both** when a lock was taken out via the account's IP,
 or the IP bucket will keep refusing them. It's logged to the server console
-— the `AuditEvent` table (ARCHITECTURE.md §4.10) records booking, doctor
+— the `AuditEvent` table (ARCHITECTURE .md §4.10) records booking, doctor
 verification, payments and the referral admin actions, but not the
 login-throttle clear, so that's still the interim record.
 
 Under the hood this uses Express's `trust proxy` setting via the
-`TRUST_PROXY` env var: `1` behind Render's single proxy hop, `false` (the
+`TRUST_PROXY` env var: `1 ` behind Render's single proxy hop, `false` (the
 default) locally. See `ARCHITECTURE.md` §7 — the wrong value is a security
 bug in either direction. A cleanup interval in `src/server.ts` prunes
 buckets whose last failure is older than
@@ -143,7 +138,7 @@ revocation list yet (see `ARCHITECTURE_ESSENTIALS.md` known gaps —
 JWT refresh rotation without a revocation list). Refresh tokens: httpOnly
 cookie, 30-day TTL, `SameSite=None; Secure` in production and
 `Lax`/insecure locally — the attributes live in `config.cookie`
-(`backend/src/config/index.ts`) so the refresh and CSRF cookies can never
+`backend/src/config/index.ts`) so the refresh and CSRF cookies can never
 drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 
 Every token carries a `tv` claim (the user's `tokenVersion` at issue time).
@@ -185,6 +180,10 @@ against `tokenVersion` on every `POST /auth/refresh`.
 | `GET /appointments/doctor/today` | doctor | — | Caller's scheduled appointments for the current server-local calendar day, ordered by slot start time. |
 | `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'\|'cancelled'\|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
 | `PATCH /appointments/:appointmentId/cancel` | patient (own appointment) | — | Patient-side cancellation, `scheduled` only. Same slot-release + cascade behaviour as above. |
+| `POST /appointments/:appointmentId/check-in` | patient (own appointment) | — | Records the patient's arrival time (`checkedInAt`). Only allowed within a window around the appointment start (`CHECK_IN_WINDOW_MINUTES`, default 30 before/after). `409` if already checked in or outside the window. |
+| `PATCH /appointments/:appointmentId/start` | doctor (treating doctor only) | — | Marks the appointment as `in_progress` and records `startedAt`. `409` unless `scheduled` (and checked in, if check-in is required). |
+| `PATCH /appointments/:appointmentId/complete` | doctor (treating doctor only) | — | Marks the appointment as `completed` and records `completedAt`; same referral cascade as the status transition above. `409` unless `in_progress`. |
+| `GET /appointments/:appointmentId/queue` | patient (own appointment) or treating doctor | — | Returns `{ position, estimatedWaitMinutes, checkedInAt, startedAt }` for the caller's own appointment only — never other patients' details. Position is the count of earlier same-day appointments for that doctor still not completed; the estimate is a simple running-average delay (actual start minus scheduled start) applied to the remaining appointments ahead in the queue. |
 
 ## Consultations (`/consultations` + `/appointments`) — `backend/src/modules/consultations`
 

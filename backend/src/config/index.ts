@@ -266,6 +266,14 @@ export const config = {
   accessLog: {
     retentionDays: Number(process.env.ACCESS_LOG_RETENTION_DAYS ?? 365),
   },
+  // Idempotent retries (Phase 8, issue #48). Env-configurable so tests can
+  // use short windows and deployments can tune retention without a code
+  // change.
+  idempotency: {
+    recordTtlHours: Number(process.env.IDEMPOTENCY_RECORD_TTL_HOURS ?? 24),
+    inProgressTimeoutSeconds: Number(process.env.IDEMPOTENCY_IN_PROGRESS_TIMEOUT_SECONDS ?? 30),
+    maxCachedBodyBytes: Number(process.env.IDEMPOTENCY_MAX_CACHED_BODY_BYTES ?? 1024 * 1024),
+  },
   // Patient data export (Phase 8, issue #40). Env-configurable so a
   // deployment can tune retention and memory bounds without a code change.
   patientExport: {
