@@ -1,6 +1,7 @@
 import { createApp } from './app';
 import { config } from './config';
 import { pruneLoginAttempts } from './modules/auth/services';
+import { pruneIdempotencyKeys } from './middleware/idempotency';
 import { pruneOldAccessLogs } from './modules/audit/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
 import { startEscrowEventPoller } from './jobs/escrow-events';
@@ -109,6 +110,21 @@ const pruneTimer = setInterval(() => {
     .catch((err) => {
       // eslint-disable-next-line no-console
       console.error('[jobs] access-log prune failed:', err);
+    });
+
+  // Idempotency-key retention (Phase 8, issue #48): drop rows whose TTL has
+  // passed. Correctness does not depend on it, but pruning keeps the table
+  // bounded.
+  void pruneIdempotencyKeys()
+    .then((removed) => {
+      if (removed > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[jobs] pruned ${removed} expired idempotency-key row(s)`);
+      }
+    })
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[jobs] idempotency-key prune failed:', err);
     });
 }, config.loginThrottle.pruneIntervalSeconds * 1000);
 pruneTimer.unref();
