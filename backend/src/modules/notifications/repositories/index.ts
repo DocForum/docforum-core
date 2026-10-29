@@ -16,10 +16,16 @@ export interface EnqueueInput {
 }
 
 export async function enqueue(db: Prisma.TransactionClient, input: EnqueueInput) {
-  // Upsert on the natural key so a repeated enqueue is a no-op.
-  return db.notification.upsert({
+  // Idempotent enqueue: if a notification with the same dedupeKey already
+  // exists, return it unchanged instead of creating a duplicate.
+  const existing = await db.notification.findFirst({
     where: { dedupeKey: input.dedupeKey },
-    create: {
+  });
+  if (existing) {
+    return existing;
+  }
+  return db.notification.create({
+    data: {
       userId: input.userId,
       kind: input.kind,
       channel: input.channel,
@@ -28,7 +34,6 @@ export async function enqueue(db: Prisma.TransactionClient, input: EnqueueInput)
       scheduledAt: input.scheduledAt,
       status: 'pending',
     },
-    update: {},
   });
 }
 
