@@ -182,16 +182,24 @@ DoctorSpecialty (join table)
   id, doctor_profile_id, specialty_id
 
 FacilityProfile (1:1 User)
-  id, user_id, name, type (enum: lab|pharmacy), capabilities: FacilityCapability[]
-  address (nullable), latitude (nullable), longitude (nullable)
-    # Added Phase 5 (issue #74) for PRD FR-13 distance sorting. All three
-    # nullable: a facility that hasn't registered coordinates still appears
-    # in eligible-facility queries, sorted last. Composite b-tree index on
-    # (latitude, longitude) backs the bounding-box prefilter — see §5.4.
+  id, user_id, name, type (enum: lab|pharmacy), version (int, default 1 — issue #49, §5.4)
+  capabilities: FacilityCapability[]
 
 FacilityCapability
   id, facility_profile_id, capability_type (enum: lab_test|medication_dispense), detail (e.g. test category)
+  version (int, default 1 — issue #49, §5.4)
 ```
+**`version` columns (Phase 8, issue #49):** added by
+`backend/prisma/migrations/20261019090000_add_optimistic_concurrency/` as
+`INTEGER NOT NULL DEFAULT 1` on exactly the mutable records above plus
+`Appointment` (§4.2) and `PaymentIntent`. They are the storage half of the
+`ETag`/`If-Match` convention in §5.4 and carry no meaning on their own —
+nothing may treat a higher `version` as "more correct", and no code may
+compare-then-write instead of guarding the UPDATE itself. Tables that are
+append-only (`Prescription`, `LabOrder`) or immutable
+(`Specialty`, `WalletLink`, `AuditEvent`, the export tables) deliberately do
+**not** have one; the integration test asserts that set so a later change
+can't quietly widen it.
 
 ### 4.2 Availability & Appointments
 ```
@@ -199,12 +207,16 @@ AvailabilitySlot
   id, doctor_profile_id, start_time, end_time, status (enum: open|held|booked)
   # Uniqueness/exclusion constraint at DB level on (doctor_profile_id, start_time, end_time)
   # to make double-booking a constraint violation, not an app-logic bug.
+  # No `version`: a slot is only ever moved by the conditional claim in §5.1,
+    not edited.
 
 Appointment
   id, patient_profile_id, doctor_profile_id, availability_slot_id (FK, unique, NULLABLE)
   intake_id (FK -> IntakeForm — still not a column, Phase 2 issue #1/#2)
   status (enum: scheduled|completed|cancelled|no_show)
   origin (enum: direct_booking|referral), referral_id (nullable FK -> Referral)
+  version (int, default 1 — issue #49, §5.4; no If-Match-guarded route exists
+    for appointments yet, but every future status write must move it)
   created_at, updated_at
   # availability_slot_id is nullable (Phase 3): a cancelled appointment
   # releases its slot back to `open` and drops the unique link, so the
@@ -673,6 +685,48 @@ honest once wired.)
 3. The patient's `near` point never leaves the request: it is only ever a bind parameter in that statement — not stored, not logged, not echoed back (the response carries per-facility `distanceKm` only).
 4. **Why not PostGIS:** it needs an extension on every deployment (CI's throwaway DBs, the Render free-tier preview, bare local Postgres) to order one column, which is exactly the ceremony §6.3 warns against; bounding-box + haversine is exact here because the box is a superset. Measured in `backend/tests/integration/facility-distance.test.mts` (p50 ≈ 5 ms over ~3 000 facilities).
 
+### 5.4 Mutable-record optimistic concurrency (Phase 8, issue #49)
+Slot booking (§5.1) is protected by a conditional update, but nothing else was: a
+doctor editing their profile in one tab and an admin in another, or two tabs
+updating the same appointment, silently overwrote each other — last write wins,
+and the loser never finds out. This is the convention that closes that whole
+class of bug, and **new mutable-resource routes must follow it.**
+
+1. An individual mutable-resource read returns a strong `ETag` carrying the row's
+   integer `version`, e.g. `ETag: "4"` (also mirrored as `version` in the JSON
+   body). Collection reads deliberately do not get one: a client fetches the
+   individual resource before editing.
+2. `PATCH`/`PUT` sends that exact value back in `If-Match`. Missing header →
+   `428 Precondition Required` (`code: 'IF_MATCH_REQUIRED'`); weak validator, a
+   validator list, or anything else that isn't one strong `"<int>"` → `400`
+   (`code: 'INVALID_IF_MATCH'`) rather than a guess at which member was meant;
+   a version that no longer matches → `412 Precondition Failed`
+   (`code: 'VERSION_CONFLICT'`).
+3. The repository performs **one** conditional update — `UPDATE ... WHERE id = ?
+   AND version = ?` with `version = version + 1` in the same statement — and
+   returns the row that statement wrote. A zero-row result is a stale write.
+   Read-compare-write is forbidden: it reopens the exact race it closes, because
+   two callers can both read version 4 and both pass a check made before the
+   write. In Prisma that is `updateManyAndReturn` / `updateMany` with
+   `count === 1`, never `findUnique` → compare → `update`.
+4. Everything else keeps working the way it did. Endpoints whose state
+   transition is *already* conditional (booking's slot claim, payment
+   fund/release/refund, doctor verification, token redemption) keep that status
+   guard and are **not** additionally `If-Match`-gated — two guards on one write
+   produce two different failure modes and the second one teaches clients
+   nothing. They do still increment `version`, and still publish the new `ETag`,
+   so a client can precondition whatever it does next. Every other write to a
+   versioned row increments it too, including system writes (email verification).
+5. Applies to `User`, `PatientProfile`, `DoctorProfile`, `FacilityProfile`,
+   `FacilityCapability`, `Appointment` and `PaymentIntent` (columns documented in
+   §4.1/§4.2). Append-only `Prescription`/`LabOrder` are excluded by design —
+   a correction is a new row (`supersedes_*`), so there is nothing to lose.
+6. Shared pieces live in `backend/src/middleware/optimistic-concurrency.ts`
+   (`requireIfMatch`, `expectedVersion`, `setVersionEtag`, `versionConflict`) so
+   every module answers with the same status, message and code. Proof:
+   `backend/tests/integration/optimistic-concurrency.test.mts`, including eight
+   simultaneous writes on one version where exactly one succeeds.
+
 ## 6. Hard questions (architecture-level — see PRD §8 for product-level)
 
 ### 6.1 What do we think would break?
@@ -682,6 +736,8 @@ honest once wired.)
  Issue #73's `FulfillmentItem` rows hang off this same single table (`fulfillment_record_id` FK), so item-level fulfillment inherits the ADR 0012 shape instead of re-opening it — only `FulfillmentItem.order_type`/`order_item_id` keep a discriminator, and those name an item inside the record's own order, not a second polymorphic reference.4. JWT refresh rotation without a revocation list — a stolen refresh token has no clean kill switch until this is added.
 5. **Discovered 2026-10-15 while building email verification (Phase 8, issue #34):** the email/SMS provider is still undecided (Phase 6, issue #17), so verification links can't actually be delivered in a hosted environment yet — `backend/src/modules/auth/services/email-dispatcher.ts` is a no-op seam until a provider is integrated. Until then `backend/scripts/mark-email-verified.mjs` is the documented out-of-band path for an operator with DB access. Not a reason to skip the guard: the guard is what makes the flow safe once delivery exists, and shipping it locked-off would just mean shipping it untested.
 
++6. **Resolved 2026-10-19 (issue #49):** silent last-write-wins on every mutable record that wasn't the slot claim — a doctor in one tab and an admin in another, or two tabs editing one appointment, each wrote and the second erased the first with no signal to either. §5.4 now makes the compare and the write one conditional statement behind an `If-Match` precondition. **Still open:** the convention is only *enforced* where a route opts in, so a future mutable route that forgets `requireIfMatch` silently opts out — there is no lint or schema-level way to catch that yet, and ESLint itself is still untracked (issue #28).
+
 6. **Discovered 2026-10-17 (issue #41):** after `DELETE /patients/me`, the caller's access token (stateless JWT, 15-minute TTL) still passes `authenticate` until it expires — there's no revocation list (item 4 above, issue #18). It can't reach anything: every patient route resolves the caller through `getMyPatientProfile`, which refuses an anonymised profile; booking/payments refuse it via `requireVerifiedEmail` (verification is cleared); refresh refuses `deleted_at`. Closing the window itself is #18's job. Also: Postgres reports `ON DELETE RESTRICT` as SQLSTATE 23001, which Prisma surfaces as an *unknown* request error, not `P2003` — `patients/services` `isForeignKeyRefusal` handles both; `middleware/error-handler.ts` currently maps neither to a 4xx.
 
 ### 6.2 What edge cases are we missing (architecture-level)?
@@ -690,8 +746,7 @@ honest once wired.)
 3. No schema support yet for a doctor working across multiple facilities/locations (PRD edge case 6) — `AvailabilitySlot` currently assumes one calendar per doctor.
 4. ~~No audit-log table~~ **Foundation resolved 2026-10-17 (issue #43):** `AuditEvent` (§4.10) + `audit.record()` in the same transaction as the change, append-only at the DB level, wired into booking (both booking paths), doctor verification, payment fund/release/refund, the patient's referral accept/decline and the referral admin actions (`referral.reassign`, `referral.cancel` — Phase 3, issue #68, written as `entity_type = 'Referral'` rows in the same table). **Still open:** the referral's creation and the cascade-driven `completed`/`expired` transitions (no actor to attribute them to yet), the remaining Phase 4 transitions (prescriptions, lab orders, fulfillment), the admin login-throttle clear (`/auth/login-attempts/clear`) still only logs to the console; the app connects as the database owner, which could disable the triggers — enforcing append-only against the owner needs a separate least-privilege DB role (deployment work, issue #22). PRD §7 auditability is therefore "a real mechanism exists" rather than "auditability is done"; remaining coverage stays an open gap.
 5. CSRF on the cookie-authenticated routes — the refresh cookie has to be `SameSite=None; Secure` (the Pages frontend is a different site — see `docs/adr/0003`), which means any site the patient visits can make their browser send it to `/auth/refresh` and `/auth/logout`. **Resolved 2026-10-15 (issue #37):** a per-session CSRF token is bound into the refresh token and required in the `X-CSRF-Token` header, the `Origin` header is validated against an explicit allowlist, and CORS is now a per-environment allowlist (`CORS_ORIGINS`) instead of one configured string. The double-submit cookie pattern — the usual answer — is *not* usable here: a cookie set by this API is a third-party cookie to `docforum.github.io`, so the frontend's JavaScript can never read it; the token travels in the login/refresh response body instead. A request with no `Origin` (curl, server-to-server) is allowed through the Origin check but still needs the token. See `backend/src/middleware/csrf.ts`, and `docs/api/README.md` for what the client must send. Consequence: refresh cookies issued before this change carry no `csrf` claim and are rejected, i.e. existing sessions need one re-login.
-6. **Discovered 2026-10-17 (issue #73): payment proration under partial fulfillment is undecided.** The release rule (§5.3) is "all items dispensed or nothing" — safe, but it means a facility that dispensed 2 of 3 items gets nothing until the last item lands, and an abandoned remainder holds the whole escrow until an admin refunds it. Alternatives (prorated release per facility, split intents per routed record) need a product decision; deliberately not designed here.
-7. **Discovered 2026-10-17 (issue #73): a patient can't yet read their own order's fulfillment record.** The pharmacy-orders read path gates on owning facility / admin, because `PatientProfile ↔ Prescription/LabOrder` linkage doesn't exist until Phase 4 (issue #9). The derived `GET /pharmacy-orders/orders/:id/fulfillment-status` is intentionally coarse-grained so patients get an honest status before that linkage lands; record-level patient reads are blocked on Phase 4, not forgotten.
+6. **Added 2026-10-19 (issue #48):** an `IdempotencyKey` row caches a *copy of a response body* for 24 hours (§4.12). Today every opted-in route returns non-PHI data (an appointment id and status, a payment intent), so this is transport bookkeeping and not a patient-data surface — it is not part of the patient-export bundle (§3.1) and no endpoint lists it. **The condition that would change that:** if a route returning clinical free text (consultation notes, intake payloads, lab results) ever opts in, each row becomes a temporary PHI copy subject to right-of-access and retention, and the export registry in §3.1 has to gain a section for it before that route is allowed to opt in. Until then, adding a route to the opted-in list is a deliberate decision, not a default.
 
 6. **Discovered 2026-10-24 (issue #16):** lab result files have two read gaps. (a) The right-of-access export (§4.11) lists the `LabResult` row, but the file bytes are not in the bundle; the patient downloads them separately through `GET /orders/lab-orders/:labOrderId/result`. (b) Read access mirrors consultation notes exactly: the patient's own account, the ordering doctor, and the fulfilling facility. So an active guardian of a dependent (ADR 0011) can't read a dependent's result, and neither can a doctor further along the referral thread. Widening either needs a deliberate decision, not a quiet one.
 
@@ -706,6 +761,7 @@ honest once wired.)
 
 - **Testing**: unit tests per module (`backend/tests/unit`), integration tests for booking/referral/order flows specifically because those are the correctness-critical paths (`backend/tests/integration`).
 - **Security — login throttling (Phase 8, issue #35)**: `POST /auth/login` is throttled per normalised email *and* per client IP, in Postgres (`LoginAttempt`, §4.9): exponential backoff with `Retry-After` from `LOGIN_THROTTLE_BACKOFF_AFTER` failures, a temporary lock at `LOGIN_THROTTLE_LOCK_AFTER`, and a cleanup interval in `src/server.ts`. Two things this depends on operationally: (1) `TRUST_PROXY` must be set correctly in production — Render terminates TLS in front of exactly one hop, so `TRUST_PROXY=1`; leaving it unset makes every request look like Render's proxy (one shared bucket for everyone), and `true` lets a client spoof `X-Forwarded-For` for a fresh bucket per request; (2) the throttle deliberately does not reveal whether an account exists — locked, backoff and unknown-account responses are identical, and an absent account still pays the bcrypt comparison cost so response timing doesn't leak either.
+- **Idempotent retries (Phase 8, issue #48)**: `POST /appointments`, `POST /payments/intents` and `POST /payments/intents/:id/{fund,release,refund}` honour an `Idempotency-Key` header (`src/middleware/idempotency.ts`). A repeat of the same key with the same request body inside 24 h replays the stored status and body instead of running the mutation again; the same key with a different body is `422`; a second request arriving while the first is still running is `409 IN_PROGRESS` with a `Retry-After`, because ownership is decided by the unique constraint on `(userId, key)` rather than by an in-memory lock that would be correct on one instance and broken on two. Keys are namespaced per user, and 5xx is never cached so a client can retry a failed call with the same key. See §4.12 for the model.
 - **Migrations**: Prisma migrations are the only way schema changes happen — no manual DB edits, ever.
 - **Environments**: local (Docker Compose), staging, production — staging/production infra choice is an open item (see ROADMAP).
 

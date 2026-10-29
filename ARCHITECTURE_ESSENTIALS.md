@@ -19,6 +19,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 4. **Cross-module access only through a module's service interface.** Never import another module's `repositories/*` directly.
 5. **Facilities write to their own `FulfillmentRecord` only** — never directly to `Prescription.status` / `LabOrder.status`.
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
+7. **Mutable-record edits use optimistic concurrency (Phase 8, issue #49).** Individual-resource read returns a strong version `ETag` (`"4"`); PATCH/PUT must send it in `If-Match` — missing is `428`, weak/list/garbage is `400`, stale is `412`. Write it as ONE conditional `UPDATE ... WHERE id = ? AND version = ?` that increments `version` (Prisma: `updateManyAndReturn`); read-compare-write is forbidden. Status transitions that are *already* conditional (booking, payment status, verification) keep their own guard, don't get a second `If-Match` one, but still bump + republish the version. Append-only `Prescription`/`LabOrder` are excluded. See ARCHITECTURE.md §5.4.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` (including `locale`, default `en`, Phase 9 #133) → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
@@ -36,6 +37,8 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
 Account deletion (Phase 8, issue #41 — docs/adr/0010): anonymise in place (`User.deletedAt`, `PatientProfile.anonymizedAt`), never cascade. `PatientProfile.userId` is ON DELETE RESTRICT; new patient-linked clinical tables must be RESTRICT too **and** register a retention hold in `src/retention-holds.ts`.
 `FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile` → `PatientWalletLink` (payer address, ADR 0005) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85), whose `amount` is in the smallest unit of a per-environment allowlisted `assetCode` (issue #79)
+
+Mutable records above (plus `Appointment` and `PaymentIntent`) carry a `version` int for the `ETag`/`If-Match` convention — hard rule 7, ARCHITECTURE.md §5.4. Mutable profile fields a new route exposes need a conditional write, not just a `.update()`.
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
 - **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule.
