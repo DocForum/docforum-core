@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { registerPath } from '../../docs/openapi/registry';
 // @ts-ignore TS1479: @stellar/stellar-sdk types are ESM-only but CJS runtime exports are present
 import { StrKey } from '@stellar/stellar-sdk';
 
@@ -28,28 +27,7 @@ export const linkWalletResponseSchema = z.object({
 
 export const paymentAmountSchema = z.object({
   amount: z.string().regex(/^[0-9]+$/, 'amount must be a decimal string representing a BigInt'),
-  currency: z.string().len(3),
-});
-
-registerPath({
-  method: 'post',
-  path: '/payments/wallet',
-  summary: 'Link a Stellar wallet to the authenticated user',
-  tags: ['payments'],
-  security: [{ bearerAuth: [] }],
-  request: {
-    body: {
-      content: { 'application/json': { schema: linkWalletSchema } },
-    },
-  },
-  responses: {
-    200: {
-      description: 'Wallet linked',
-      content: { 'application/json': { schema: linkWalletResponseSchema } },
-    },
-    400: { description: 'Validation error', ref: 'ErrorEnvelope' },
-    401: { description: 'Unauthenticated', ref: 'ErrorEnvelope' },
-  },
+  currency: z.string().length(3),
 });
 
 // Checksum-accurate StrKey Ed25519 public key validation (issue #26).
