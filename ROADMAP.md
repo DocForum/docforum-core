@@ -7,7 +7,7 @@ tested on branch `feat/referral-phase3-cascade-multi-loop-admin`, #6 and
 #8 open. Phase 2 is partially unblocked by that work (#3/#4 minimal
 slices). Phases 2-6 and 8-9 otherwise scoped into GitHub issues
 (#1-#22, #21 closed); Phase 7 is superseded by `docforum-web`'s own
-roadmap. Phase 6's appointment notifications (booking confirmations, new-booking alerts, reminders) are in progress. Phase 9's end-to-end care-thread integration test is in progress
+roadmap. Phase 6's appointment notifications (booking confirmations, new-booking alerts, reminders) are in progress — CI typecheck failures on PR #187 (unused imports, missing `emitBookingConfirmed`/`emitNewBookingAlert`, notification channel type mismatches, Prisma field mismatches in `notifications/repositories`) are being fixed as part of that work. Phase 9's end-to-end care-thread integration test is in progress
 (scaffold + phase-gated steps). See each phase section below for status
 and issue links.
 

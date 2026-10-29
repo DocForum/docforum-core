@@ -22,13 +22,13 @@ export type NotificationKind =
   | 'appointment_cancelled'
   | 'appointment_rescheduled';
 
-export type NotificationChannel = 'email';
+export type NotificationChannelName = 'email';
 
 export interface EnqueueNotificationInput {
   /** Recipient user id. */
   userId: string;
   kind: NotificationKind;
-  channel?: NotificationChannel;
+  channel?: NotificationChannelName;
   /** Natural key for idempotency (e.g. `appointment:<uuid>:reminder_24h`). */
   dedupeKey: string;
   /** Typed payload the dispatcher turns into copy. */
@@ -65,7 +65,7 @@ export async function isEnabled(
   db: Prisma.TransactionClient | typeof prisma,
   userId: string,
   kind: NotificationKind,
-  channel: NotificationChannel = 'email',
+  channel: NotificationChannelName = 'email',
 ): Promise<boolean> {
   const pref = await notificationsRepo.findPreference(db, userId, kind, channel);
   if (!pref) return true; // no-pref default = opted in
@@ -78,13 +78,7 @@ export async function isEnabled(
 //
 // Provider-agnostic by design (ARCHITECTURE.md §1.5 / §2, PRD OQ / issue
 // #17): outbound delivery goes through a `NotificationChannel` interface,
-// and the default implementation is a console adapter. Picking a real
-// email/SMS provider is issue #17 and deliberately does NOT block the
-// features that need to send a message — only the adapter changes.
-// The default real provider is decided in docs/adr/ (see ADR for the
-// email/SMS provider decision). Wiring that provider in is a new adapter
-// behind this same interface — only the adapter changes, feature code does
-// not.
+// and the default implementation is a console adapter.
 
 export interface NotificationMessage {
   /** Destination address — an email for now (the only channel interface we need). */

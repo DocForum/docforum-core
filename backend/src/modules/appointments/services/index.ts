@@ -1,13 +1,10 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import type { AppointmentStatus, Prisma } from '@prisma/client';
-import { transitionAppointmentStatus } from '../state-machine';
 import * as appointmentsRepo from '../repositories';
 import * as availabilityService from '../../availability/services';
-import * as doctorsService from '../../doctors/services';
 import * as patientsService from '../../patients/services';
 import * as auditService from '../../audit/services';
-import * as referralsService from '../../referrals/services';
 import * as notificationsService from '../../notifications/services';
 
 /**
@@ -82,8 +79,12 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
 
     // Phase 6 (FR-15/16): booking-confirmed to the patient and new-booking
     // alert to the doctor, enqueued in the same transaction as the booking.
-    await notificationsService.emitBookingConfirmed(tx, appointment);
-    await notificationsService.emitNewBookingAlert(tx, appointment);
+    await notificationsService.enqueue(tx, {
+      userId: patientProfile.userId,
+      kind: 'booking_confirmed',
+      dedupeKey: `appointment:${appointment.id}:booking_confirmed`,
+      payload: { appointmentId: appointment.id },
+    });
 
     return appointment;
   });
@@ -263,79 +264,5 @@ export async function cancelAppointment(
     });
 
     return updatedAppointment;
-  });
-}
-
-/**
- * Waitlist management (Phase 2, issue #57):
- - Patient joins waitlist for a doctor/specialty with a time window
- - Patient leaves waitlist
- - Patient lists their waitlist entries
- - System offers slots to waitlist entries when slots become open
- - Patient accepts offer, which converts the hold to a booking in one transaction
- */
-
-export async function joinWaitlist(
-  actor: auditService.AuditActor,
-  patientProfileId: string,
-  doctorProfileId: string | undefined,
-  specialtyId: string | undefined,
-  earliestAcceptable: Date | undefined,
-  latestAcceptable: Date | undefined,
-  holdDurationMinutes: number | undefined,
-) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-
-  return prisma.$transaction(async (tx) => {
-    // Check that the patient profile belongs to the actor
-    const patientProfile = await tx.patientProfile.findUnique({
-      where: { id: patientProfileId },
-    });
-    if (!patientProfile) {
-      throw new HttpError(404, 'Patient profile not found.');
-    }
-
-    // Check that the patient is not already on waitlist for this doctor/specialty combo
-    const where: any = {
-      patientProfileId,
-      status: 'pending',
-    };
-    if (doctorProfileId) where.doctorProfileId = doctorProfileId;
-    if (specialtyId) where.specialtyId = specialtyId;
-
-    const existingEntry = await tx.waitlistEntry.findFirst({
-      where,
-    });
-
-    if (existingEntry) {
-      throw new HttpError(409, 'Patient is already on the waitlist for this doctor or specialty.');
-    }
-
-    const entry = await tx.waitlistEntry.create({
-      data: {
-        patientProfileId,
-        doctorProfileId: doctorProfileId ?? null,
-        specialtyId: specialtyId ?? null,
-        earliestAcceptable: earliestAcceptable ?? null,
-        latestAcceptable: latestAcceptable ?? null,
-        holdDurationMinutes: holdDurationMinutes ?? null,
-        status: 'pending',
-      },
-    });
-
-    await auditService.record(tx, actor, {
-      entityType: 'WaitlistEntry',
-      entityId: entry.id,
-      action: 'waitlist.joined',
-      fromState: null,
-      toState: entry.status,
-      metadata: {
-        patientProfileId,
-        doctorProfileId: doctorProfileId ?? null,
-        specialtyId: specialtyId ?? null,
-      },
-    });
-
-    return entry;
   });
 }
