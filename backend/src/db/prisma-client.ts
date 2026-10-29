@@ -65,7 +65,10 @@ const adapter = new PrismaPg({
 // `runWithQueryCounter` (AsyncLocalStorage), keeping the count isolated even
 // when tests run concurrently. Production behaviour is unchanged: when no
 // counter is active, the listener is a no-op.
-const extendedClient = new PrismaClient({ adapter });
+const extendedClient = new PrismaClient({
+  adapter,
+  log: [{ emit: 'event', level: 'query' }],
+} as ConstructorParameters<typeof PrismaClient>[0]);
 const protectedDelegates = new Set<PropertyKey>(['appointment', 'paymentIntent', 'consultation']);
 
 export interface QueryCounter {
@@ -77,7 +80,9 @@ const queryCounterStorage = new AsyncLocalStorage<QueryCounter>();
 // Attach a single process-wide listener that increments the counter active
 // for the current async context, if any. Registering once avoids leaking
 // listeners across tests.
-extendedClient.$on('query', () => {
+(extendedClient as unknown as {
+  $on(event: 'query', cb: () => void): void;
+}).$on('query', () => {
   const counter = queryCounterStorage.getStore();
   if (counter) counter.count += 1;
 });
