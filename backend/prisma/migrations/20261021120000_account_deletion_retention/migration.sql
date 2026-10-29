@@ -9,4 +9,3 @@ ALTER TABLE "User" ADD COLUMN     "deletedAt" TIMESTAMP(3);
 
 -- AddForeignKey
 ALTER TABLE "PatientProfile" ADD CONSTRAINT "PatientProfile_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
