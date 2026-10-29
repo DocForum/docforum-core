@@ -107,6 +107,8 @@ describe('prepare endpoint (issue #80)', () => {
     const dbModule = await import('../../src/db/prisma-client.js');
     prisma = dbModule.prisma;
     paymentsService = await import('../../src/modules/payments/services/index.js');
+    // Wallet funding is behind a feature flag (issue #132), off by default.
+    await prisma.featureFlag.update({ where: { key: 'payments.wallet_funding' }, data: { enabled: true } });
 
     paymentsService.setEscrowSdkForTests({
       Keypair,

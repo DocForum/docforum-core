@@ -84,6 +84,345 @@ export async function listMyAppointments(userId: string, patientProfileId?: stri
 }
 
 /**
+ * Reschedules an appointment atomically: in one transaction, claims the new
+ * slot and releases the old one. The new slot must belong to the same
+ * doctor (or be explicitly allowed).
+ *
+ * Requirements from issue #55:\n - Add `POST /appointments/:id/reschedule` with `{ newSlotId }`\n - In one transaction: conditionally claim the new slot (`WHERE status = 'open'`),
+ *   re-point the appointment, and release the old slot back to `open`\n - Respect a configurable cutoff (e.g. no reschedule within 2h of start)\n - Concurrency tests: two patients rescheduling into the same slot, and a
+ *   reschedule racing a fresh booking\n */
+export async function rescheduleSlot(
+  actor: auditService.AuditActor,
+  appointmentId: string,
+  newSlotId: string,
+  cutoffHours: number = 2,
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+
+  return prisma.$transaction(async (tx) => {
+    // First, get the existing appointment to find its current slot
+    const existingAppointment = await appointmentsRepo.findAppointmentById(tx, appointmentId);
+    if (!existingAppointment) {
+      throw new HttpError(404, 'Appointment not found.');
+    }
+
+    // Check that the appointment belongs to this patient
+    if (existingAppointment.patientProfileId !== patientProfile.id) {
+      throw new HttpError(403, 'This appointment does not belong to you.');
+    }
+    const currentSlotId = existingAppointment.availabilitySlotId;
+    if (!currentSlotId) {
+      throw new HttpError(409, 'Appointment no longer has an active slot.');
+    }
+
+    // Check cutoff: no reschedule within cutoffHours of slot start
+    const slot = await availabilityService.getSlot(tx, currentSlotId);
+    if (!slot) {
+      throw new HttpError(404, 'Original slot not found.');
+    }
+
+    const slotStart = slot.startTime;
+    const now = new Date();
+    const cutoffMs = cutoffHours * 60 * 60 * 1000;
+    if (now.getTime() - slotStart.getTime() < -cutoffMs) {
+      // Slot hasn't started yet and we're within the cutoff window
+      throw new HttpError(409, `Rescheduling is not allowed within ${cutoffHours} hours of the slot start time.`);
+    }
+
+    // Claim the new slot atomically
+    const newClaimed = await availabilityService.claimOpenSlot(tx, newSlotId);
+    if (!newClaimed) {
+      throw new HttpError(409, 'The new slot is no longer available.');
+    }
+
+    // Release the old slot atomically (only if it's still booked by this appointment)
+    await tx.availabilitySlot.updateMany({
+      where: { id: currentSlotId, status: 'booked' },
+      data: { status: 'open' },
+    });
+
+    // Re-point the appointment to the new slot
+    const updatedAppointment = await appointmentsRepo.updateAppointment(tx, appointmentId, {
+      availabilitySlotId: newSlotId,
+    });
+
+    await auditService.record(tx, actor, {
+      entityType: 'Appointment',
+      entityId: updatedAppointment.id,
+      action: 'appointment.rescheduled',
+      fromState: existingAppointment.status,
+      toState: updatedAppointment.status,
+      metadata: {
+        oldSlotId: currentSlotId,
+        newSlotId,
+      },
+    });
+
+    return updatedAppointment;
+  });
+}
+
+/**
+ * Cancels an appointment atomically: releases the slot back to `open` and
+ * marks the appointment as cancelled. Includes cutoff window logic.
+ *
+ * Requirements from issue #56:\n - Patient can cancel an appointment\n - Before cutoff (2h before slot start): slot releases to `open`\n - After cutoff: slot stays booked, appointment marked `late_cancelled`\n - Concurrency: slot release is conditional on status = `booked`\n */
+export async function cancelAppointment(
+  actor: auditService.AuditActor,
+  appointmentId: string,
+  reason: 'patient' | 'doctor' = 'patient',
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+
+  return prisma.$transaction(async (tx) => {
+    // First, get the existing appointment to find its current slot
+    const existingAppointment = await appointmentsRepo.findAppointmentById(tx, appointmentId);
+    if (!existingAppointment) {
+      throw new HttpError(404, 'Appointment not found.');
+    }
+
+    // Check that the caller is the patient
+    if (existingAppointment.patientProfileId !== patientProfile.id) {
+      throw new HttpError(403, 'Only the patient can cancel this appointment.');
+    }
+    const currentSlotId = existingAppointment.availabilitySlotId;
+    if (!currentSlotId) {
+      throw new HttpError(409, 'Appointment no longer has an active slot.');
+    }
+
+    // Check cutoff: no cancellation within 2 hours of slot start
+    const slot = await availabilityService.getSlot(tx, currentSlotId);
+    if (!slot) {
+      throw new HttpError(404, 'Original slot not found.');
+    }
+
+    const slotStart = slot.startTime;
+    const now = new Date();
+    const cutoffMs = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
+
+    // Determine the new status based on cutoff
+    let newStatus: string;
+    let slotStatus: string;
+
+    if (now.getTime() - slotStart.getTime() < -cutoffMs) {
+      // Slot hasn't started yet and we're within the cutoff window
+      newStatus = 'cancelled';
+      slotStatus = 'open';
+    } else {
+      // Past cutoff: slot stays booked, appointment marked late-cancelled
+      newStatus = 'late_cancelled';
+      slotStatus = 'booked';
+    }
+
+    // Update the appointment status
+    const updatedAppointment = await appointmentsRepo.updateAppointment(tx, appointmentId, {
+      status: newStatus as any,
+    });
+
+    // Release the old slot only if within cutoff window
+    if (slotStatus === 'open') {
+      await tx.availabilitySlot.updateMany({
+        where: { id: currentSlotId, status: 'booked' },
+        data: { status: 'open' },
+      });
+    }
+
+    await auditService.record(tx, actor, {
+      entityType: 'Appointment',
+      entityId: updatedAppointment.id,
+      action: 'appointment.cancelled',
+      fromState: existingAppointment.status,
+      toState: newStatus,
+      metadata: {
+        reason,
+        slotId: currentSlotId,
+      },
+    });
+
+    return updatedAppointment;
+  });
+}
+
+/**
+ * Waitlist management (Phase 2, issue #57):
+ - Patient joins waitlist for a doctor/specialty with a time window
+ - Patient leaves waitlist
+ - Patient lists their waitlist entries
+ - System offers slots to waitlist entries when slots become open
+ - Patient accepts offer, which converts the hold to a booking in one transaction
+ */
+
+export async function joinWaitlist(
+  actor: auditService.AuditActor,
+  patientProfileId: string,
+  doctorProfileId: string | undefined,
+  specialtyId: string | undefined,
+  earliestAcceptable: Date | undefined,
+  latestAcceptable: Date | undefined,
+  holdDurationMinutes: number | undefined,
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+
+  return prisma.$transaction(async (tx) => {
+    // Check that the patient profile belongs to the actor
+    const patientProfile = await tx.patientProfile.findUnique({
+      where: { id: patientProfileId },
+    });
+    if (!patientProfile) {
+      throw new HttpError(404, 'Patient profile not found.');
+    }
+
+    // Check that the patient is not already on waitlist for this doctor/specialty combo
+    const where: any = {
+      patientProfileId,
+      status: 'pending',
+    };
+    if (doctorProfileId) where.doctorProfileId = doctorProfileId;
+    if (specialtyId) where.specialtyId = specialtyId;
+
+    const existingEntry = await tx.waitlistEntry.findFirst({
+      where,
+    });
+
+    if (existingEntry) {
+      throw new HttpError(409, 'You are already on the waitlist for this doctor/specialty.');
+    }
+
+    // Create the waitlist entry
+    const entry = await tx.waitlistEntry.create({
+      data: {
+        patientProfileId,
+        doctorProfileId,
+        specialtyId,
+        status: 'pending',
+        earliestAcceptable: earliestAcceptable ?? new Date(),
+        latestAcceptable: latestAcceptable ?? new Date(),
+        holdDurationMinutes: holdDurationMinutes ?? 30, // default 30 min hold
+      },
+    });
+
+    return entry;
+  });
+}
+
+/**
+ * Patient leaves the waitlist
+ */
+export async function leaveWaitlist(
+  actor: auditService.AuditActor,
+  entryId: string,
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+
+  const entry = await prisma.waitlistEntry.findUnique({
+    where: { id: entryId },
+  });
+  if (!entry) {
+    throw new HttpError(404, 'Waitlist entry not found.');
+  }
+
+  // Verify the entry belongs to this patient
+  if (entry.patientProfileId !== actor.userId) {
+    throw new HttpError(403, 'This waitlist entry does not belong to you.');
+  }
+
+  await prisma.waitlistEntry.update({
+    where: { id: entryId },
+    data: { status: 'expired' },
+  });
+
+  return { cancelled: true };
+}
+
+/**
+ * List all waitlist entries for a patient
+ */
+export async function listWaitlistEntries(
+  patientProfileId: string,
+) {
+  return prisma.waitlistEntry.findMany({
+    where: { patientProfileId },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+/**
+ * Accept a waitlist offer: converts the hold to a booking in one transaction
+ */
+export async function acceptWaitlistOffer(
+  actor: auditService.AuditActor,
+  entryId: string,
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+
+  return prisma.$transaction(async (tx) => {
+    const entry = await prisma.waitlistEntry.findUnique({
+      where: { id: entryId },
+    });
+    if (!entry) {
+      throw new HttpError(404, 'Waitlist entry not found.');
+    }
+    if (entry.status !== 'pending') {
+      throw new HttpError(409, 'This waitlist entry is no longer active.');
+    }
+
+    // Get open slots for the doctor directly (no need to find first)
+    if (!entry.doctorProfileId) {
+      throw new HttpError(404, 'No doctor profile specified for waitlist entry.');
+    }
+
+    const openSlots = await availabilityService.listOpenSlots(entry.doctorProfileId);
+    if (!openSlots.length) {
+      throw new HttpError(404, 'No open slots available for this doctor.');
+    }
+
+    // Claim the first open slot
+    const claimed = await availabilityService.claimOpenSlot(tx, openSlots[0].id);
+    if (!claimed) {
+      throw new HttpError(409, 'The slot was taken before we could claim it.');
+    }
+
+    // Create the appointment
+    const patientProfile = await tx.patientProfile.findUnique({
+      where: { id: entry.patientProfileId },
+    });
+
+    if (!patientProfile) {
+      throw new HttpError(404, 'Patient profile not found.');
+    }
+
+    const appointment = await appointmentsRepo.createAppointment(tx, {
+      patientProfileId: patientProfile.id,
+      doctorProfileId: entry.doctorProfileId,
+      availabilitySlotId: openSlots[0].id,
+    });
+
+    // Mark the waitlist entry as accepted
+    await tx.waitlistEntry.update({
+      where: { id: entryId },
+      data: { status: 'accepted' },
+    });
+
+    await auditService.record(tx, actor, {
+      entityType: 'Appointment',
+      entityId: appointment.id,
+      action: 'appointment.booked',
+      fromState: null,
+      toState: appointment.status,
+      metadata: {
+        waitlistEntryId: entry.id,
+        wasWaitlist: true,
+        doctorProfileId: entry.doctorProfileId,
+      },
+    });
+
+    return appointment;
+  });
+}
+
+/**
  * Cross-module entry point for the consultations module: return the
  * appointment a doctor may act on, or null if the appointment doesn't exist
  * or isn't theirs. The consultations module never queries `Appointment`

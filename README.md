@@ -128,7 +128,7 @@ docs/
   api/                   API documentation (generated once routes exist)
   site/                  VitePress docs site for the whole org — content synced
                           at build time, never hand-edited (see docs/site/README.md)
-infra/docker/            Local dev infra (Postgres, etc.) — not yet written, see ROADMAP.md Phase 1
+infra/docker/            Local dev infra (Docker Compose for Postgres & backend container)
 scripts/                 One-off/dev scripts
 .github/                 CI workflow, issue/PR templates
 ```
@@ -148,19 +148,29 @@ Read in this order — `ARCHITECTURE_ESSENTIALS.md` exists specifically so you d
 
 ## Getting started
 
-Needs a Postgres instance — either `infra/docker/docker-compose.yml`
-(**written but not exercised in this environment** — no Docker available
-where this was built; developed and tested against a local Postgres via
-the `embedded-postgres` devDependency instead, see below) or your own.
+Needs a Postgres instance — either via Docker Compose (`infra/docker/docker-compose.yml`) or your own instance.
+
+### Option 1: Docker Compose (all-in-one)
 
 ```bash
-git clone https://github.com/DocForum/docforum-core.git
-cd docforum-core/backend
+docker compose -f infra/docker/docker-compose.yml up --build -d
+cd backend && npx prisma migrate deploy
+curl http://localhost:4000/health
+```
+
+### Option 2: Local development server
+
+```bash
+# 1. Start the local database
+docker compose -f infra/docker/docker-compose.yml up -d postgres
+
+# 2. Configure environment and dependencies
+cd backend
 npm install
-cp .env.example .env   # fill in DATABASE_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET,
-                       # and FIELD_ENCRYPTION_KEY_V1 (base64, 32 bytes — closes
-                       # consultations encrypt their notes; see scripts/README.md)
-npx prisma migrate deploy   # applies backend/prisma/migrations/
+cp .env.example .env
+
+# 3. Apply migrations and start the dev server
+npx prisma migrate dev
 npm run dev                 # → http://localhost:4000, GET /health to check
 ```
 

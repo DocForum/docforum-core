@@ -5,7 +5,7 @@ export async function createOrderFixture(
   input: { patientProfileId: string; facilityProfileId: string; kind: 'prescription' | 'lab_order'; amountStroops: bigint; tag: string },
 ) {
   const doctorUser = await prisma.user.create({ data: { email: `order-doctor-${input.tag}@example.com`, passwordHash: 'unused', role: 'doctor' } });
-  const doctor = await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: 'Order Test Doctor', verificationStatus: 'verified' } });
+  const doctor = await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: 'Order Test Doctor', timeZone: 'UTC', verificationStatus: 'verified' } });
   const startTime = new Date(Date.now() + 60 * 60 * 1000);
   const slot = await prisma.availabilitySlot.create({ data: {
     doctorProfileId: doctor.id, startTime, endTime: new Date(startTime.getTime() + 30 * 60 * 1000),

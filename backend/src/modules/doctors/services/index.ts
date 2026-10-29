@@ -1,4 +1,5 @@
 import { HttpError } from '../../../http-error';
+import { versionConflict } from '../../../middleware/optimistic-concurrency';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
 import * as doctorsRepo from '../repositories';
@@ -7,6 +8,13 @@ import type { VerificationStatus } from '@prisma/client';
 export async function getMyDoctorProfile(userId: string) {
   const profile = await doctorsRepo.findDoctorProfileByUserId(userId);
   if (!profile) throw new HttpError(404, 'No doctor profile for this account.');
+  return profile;
+}
+
+export async function updateMyDoctorProfile(userId: string, version: number, fullName: string) {
+  const current = await getMyDoctorProfile(userId);
+  const profile = await doctorsRepo.updateDoctorProfile(current.id, version, fullName);
+  if (!profile) throw versionConflict();
   return profile;
 }
 
@@ -173,4 +181,25 @@ export async function doctorVerificationQueueCounts() {
     ? Math.max(0, Math.floor((Date.now() - stats.oldestCreatedAt.getTime()) / 1000))
     : null;
   return { count: stats.count, oldestAgeSeconds };
+}
+
+export async function setDoctorSpecialtyVerification(
+  doctorProfileId: string,
+  specialtyId: string,
+  status: VerificationStatus,
+  reviewer: string,
+  rejectionReason?: string,
+) {
+  const assignment = await doctorsRepo.findDoctorSpecialtyByDoctorAndSpecialty(doctorProfileId, specialtyId);
+  if (!assignment) {
+    throw new HttpError(404, 'Doctor does not have this specialty assigned.');
+  }
+  return doctorsRepo.updateDoctorSpecialtyVerification(
+    prisma,
+    doctorProfileId,
+    specialtyId,
+    status,
+    reviewer,
+    status === 'rejected' ? (rejectionReason ?? null) : null,
+  );
 }

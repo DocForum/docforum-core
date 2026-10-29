@@ -16,6 +16,9 @@ export default defineConfig({
     // so its hook also seeds the full actor set and needs headroom.
     hookTimeout: 120_000,
     env: {
+      // Legacy integration fixtures run as the explicit maintenance role
+      // unless a test supplies a request identity with runWithRlsContext.
+      RLS_TEST_BYPASS: '1',
       JWT_ACCESS_SECRET: 'test-access-secret',
       JWT_REFRESH_SECRET: 'test-refresh-secret',
       // SEP-10 (issue #77) — a throwaway keypair used ONLY by the test
@@ -29,6 +32,9 @@ export default defineConfig({
       // without touching the real key, which only production/dev envs hold.
       FIELD_ENCRYPTION_KEY_V1: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
       FIELD_ENCRYPTION_ACTIVE_VERSION: 'v1',
+      // Lab result files (issue #16) go to an in-process store in tests; the
+      // S3 driver is the deployed one (docs/adr/0014).
+      OBJECT_STORAGE_DRIVER: 'memory',
       // Port 5433, not 5432 — tests/integration/booking.test.mts spins up
       // its own throwaway Postgres cluster on this port so the suite is
       // self-contained (no pre-existing DB required). A distinct port
