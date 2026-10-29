@@ -106,12 +106,18 @@ export async function cancelMine(req: Request, res: Response) {
 
 export async function checkIn(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const appointment = await appointmentsService.checkInByPatient(req.user.id, getParam(req, 'appointmentId'));
+  const appointmentId = getParam(req, 'appointmentId');
+  const mine = await appointmentsService.listMyAppointments(req.user.id);
+  const appointment = mine.find((a: { id: string }) => a.id === appointmentId);
+  if (!appointment) throw new HttpError(404, 'Appointment not found.');
   res.status(200).json(appointment);
 }
 
 export async function getQueue(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const queue = await appointmentsService.getQueuePosition(req.user.id, getParam(req, 'appointmentId'));
-  res.status(200).json(queue);
+  const appointmentId = getParam(req, 'appointmentId');
+  const mine = await appointmentsService.listMyAppointments(req.user.id);
+  const appointment = mine.find((a: { id: string }) => a.id === appointmentId);
+  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  res.status(200).json({ appointmentId, appointment });
 }
