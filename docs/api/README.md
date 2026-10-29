@@ -185,6 +185,44 @@ against `tokenVersion` on every `POST /auth/refresh`.
 | `GET /appointments/doctor/today` | doctor | — | Caller's scheduled appointments for the current server-local calendar day, ordered by slot start time. |
 | `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'\|'cancelled'\|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
 | `PATCH /appointments/:appointmentId/cancel` | patient (own appointment) | — | Patient-side cancellation, `scheduled` only. Same slot-release + cascade behaviour as above. |
+| `PATCH /appointments/:appointmentId/reschedule` | patient (own appointment) | `{ availabilitySlotId }` | Moves a `scheduled` appointment to a different open slot in one transaction (old slot released, new slot claimed). `409` if the new slot is taken. Emits an `appointment_rescheduled` notification to the doctor. |
+
+## Notifications (`/notifications`) — `backend/src/modules/notifications`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `GET /notifications/me` | authenticated | — | Caller's own notifications, most recent first. Respects the caller's notification preferences (no-op default until preferences exist). |
+| `PATCH /notifications/:notificationId/read` | authenticated (owner) | — | Marks a notification as read. `404` if it doesn't belong to the caller. |
+
+### Appointment notifications (Phase 6, issues #17 and #18)
+
+Appointment notifications are emitted through the transactional outbox in the
+same database transaction as the booking / status change, so a committed
+booking always produces its notifications and a rolled-back booking never
+does.
+
+Triggers (FR-15 / FR-16):
+
+| Event | Recipient | When |
+|---|---|---|
+| `booking_confirmed` | patient | `POST /appointments` commits |
+| `new_booking` | doctor | `POST /appointments` commits |
+| `appointment_cancelled` | the other party | `PATCH .../status` or `PATCH .../cancel` commits |
+| `appointment_rescheduled` | the other party | `PATCH .../reschedule` commits |
+| `appointment_reminder_24h` | patient and doctor | reminder job, 24h before start |
+| `appointment_reminder_2h` | patient and doctor | reminder job, 2h before start |
+
+The reminder job (`backend/src/jobs/appointment-reminders.ts`) is idempotent
+per `(appointmentId, reminderType)`: a unique constraint on the outbox row
+means running it twice in the same window never double-sends. At send time it
+re-reads the appointment and skips cancelled / rescheduled / completed ones, so a
+reminder for a slot that was given up is never delivered. Reminder copy
+uses the recipient's time zone when known, falling back to the appointment
+slot's zone otherwise.
+
+Each user's notification preferences are checked before dispatch; with no
+preferences stored the default is to send (no-op default), so existing
+accounts begin receiving notifications as soon as this lands.
 
 ## Consultations (`/consultations` + `/appointments`) — `backend/src/modules/consultations`
 

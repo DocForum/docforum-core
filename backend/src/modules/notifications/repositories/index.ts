@@ -1,10 +1,49 @@
-// notifications repositories — placeholder. Data access only. Not to be
-// imported by other modules directly — go through services/ instead.
-//
-// No persistence yet on purpose: the `Notification` model in schema.prisma
-// is still the Phase 0 placeholder (no userId column, ARCHITECTURE.md §4.8),
-// and the in-app notification feed is Phase 6 — which is blocked on the
-// trigger points in Phases 3/4 (ROADMAP.md). Outbound *delivery* (including
-// the password reset link, #33) does not need that model, so it goes
-// through services/ without a DB row rather than inventing one here.
-export {};
+import type { Prisma } from '@prisma/client';
+import { prisma } from '../../../db/prisma-client';
+
+/**
+ * Data access for the notifications module. Other modules must not
+ * import from here — go through services/ instead (AGENTS.md).
+ */
+
+export interface EnqueueInput {
+  userId: string;
+  kind: string;
+  channel: string;
+  dedupeKey: string;
+  payload: Prisma.InputJsonObject;
+  scheduledAt: Date;
+}
+
+export async function enqueue(db: Prisma.TransactionClient, input: EnqueueInput) {
+  // Idempotent enqueue: if a notification with the same dedupeKey already
+  // exists, return it unchanged instead of creating a duplicate.
+  const existing = await db.notification.findFirst({
+    where: { dedupeKey: input.dedupeKey },
+  });
+  if (existing) {
+    return existing;
+  }
+  return db.notification.create({
+    data: {
+      userId: input.userId,
+      kind: input.kind,
+      channel: input.channel,
+      dedupeKey: input.dedupeKey,
+      payload: input.payload,
+      scheduledAt: input.scheduledAt,
+      status: 'pending',
+    },
+  });
+}
+
+export async function findPreference(
+  db: Prisma.TransactionClient | typeof prisma,
+  userId: string,
+  kind: string,
+  channel: string,
+) {
+  return db.notificationPreference.findUnique({
+    where: { userId_kind_channel: { userId, kind, channel } },
+  });
+}
