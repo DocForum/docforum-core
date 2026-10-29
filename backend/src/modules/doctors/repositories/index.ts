@@ -22,7 +22,13 @@ export async function replaceDoctorSpecialties(
 ) {
   await tx.doctorSpecialty.deleteMany({ where: { doctorProfileId } });
   if (specialtyIds.length > 0) {
-    await tx.doctorSpecialty.createMany({ data: specialtyIds.map((specialtyId) => ({ doctorProfileId, specialtyId })) });
+    await tx.doctorSpecialty.createMany({
+      data: specialtyIds.map((specialtyId) => ({
+        doctorProfileId,
+        specialtyId,
+        verificationStatus: 'pending',
+      })),
+    });
   }
 }
 
@@ -122,6 +128,15 @@ export function findDoctorProfileById(id: string, db: DbClient = prisma) {
   return db.doctorProfile.findUnique({ where: { id } });
 }
 
+export function updateDoctorProfile(id: string, version: number, fullName: string) {
+  return prisma.doctorProfile
+    .updateManyAndReturn({
+      where: { id, version },
+      data: { fullName, version: { increment: 1 } },
+    })
+    .then((rows) => rows[0] ?? null);
+}
+
 export function findDoctorSummariesByIds(ids: string[]) {
   return prisma.doctorProfile.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true } });
 }
@@ -140,7 +155,7 @@ export async function lockVerificationStatus(
 }
 
 export function updateVerificationStatus(db: DbClient, id: string, status: VerificationStatus) {
-  return db.doctorProfile.update({ where: { id }, data: { verificationStatus: status } });
+  return db.doctorProfile.update({ where: { id }, data: { verificationStatus: status, version: { increment: 1 } } });
 }
 
 /**
@@ -158,6 +173,33 @@ export function findEligibleDoctorsForSpecialty(specialtyId: string, excludeDoct
     },
     select: { doctorProfileId: true },
     orderBy: { doctorProfileId: 'asc' },
+  });
+}
+
+export function findDoctorSpecialtyByDoctorAndSpecialty(doctorProfileId: string, specialtyId: string, db: DbClient = prisma) {
+  return db.doctorSpecialty.findUnique({
+    where: { doctorProfileId_specialtyId: { doctorProfileId, specialtyId } },
+    include: { specialty: true },
+  });
+}
+
+export async function updateDoctorSpecialtyVerification(
+  db: DbClient,
+  doctorProfileId: string,
+  specialtyId: string,
+  status: VerificationStatus,
+  reviewer: string,
+  rejectionReason?: string | null,
+) {
+  return db.doctorSpecialty.update({
+    where: { doctorProfileId_specialtyId: { doctorProfileId, specialtyId } },
+    data: {
+      verificationStatus: status,
+      reviewer,
+      reviewDate: new Date(),
+      rejectionReason: rejectionReason ?? null,
+    },
+    include: { specialty: true },
   });
 }
 

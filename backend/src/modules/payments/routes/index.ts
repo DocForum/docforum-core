@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
+import { idempotency } from '../../../middleware/idempotency';
 import * as paymentsController from '../controllers';
 
 export const paymentsRouter = Router();
@@ -41,6 +42,7 @@ paymentsRouter.post(
   authenticate,
   requireRole('admin'),
   requireVerifiedEmail,
+  idempotency(),
   paymentsController.fundIntent,
 );
 paymentsRouter.post(
@@ -48,6 +50,7 @@ paymentsRouter.post(
   authenticate,
   requireRole('admin'),
   requireVerifiedEmail,
+  idempotency(),
   paymentsController.releaseIntent,
 );
 paymentsRouter.post(
@@ -55,6 +58,7 @@ paymentsRouter.post(
   authenticate,
   requireRole('admin'),
   requireVerifiedEmail,
+  idempotency(),
   paymentsController.refundIntent,
 );
 
