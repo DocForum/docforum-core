@@ -387,8 +387,16 @@ One table rather than a `PrescriptionFulfillment`/`LabOrderFulfillment` pair: th
 ### 4.8 Notifications
 ```
 Notification
-  id, user_id, type, payload (jsonb), read_at (nullable), created_at
+  id, user_id (FK -> User), type (typed catalogue), payload (jsonb),
+  channel (in_app|email|sms), read_at (nullable), created_at
 ```
+The in-app inbox is owner-scoped and keyset-paginated by `(created_at, id)`.
+Payload schemas contain opaque entity identifiers only; clinical details,
+intake, consultation notes, and results must never be copied into a notification
+payload. `notify()` persists the in-app row before calling registered channel
+adapters, and adapter failures are isolated from that write. Email/SMS providers
+remain undecided until issue #17; adapters are registered behind the module's
+service interface.
 
 ### 4.9 Auth hardening state (Phase 8)
 ```
