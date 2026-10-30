@@ -437,10 +437,13 @@ async function commitTransition(
   actor: auditService.AuditActor,
   // PaymentIntent row shape from prisma operations; use 'as' since Prisma 7
   // client types may not match the expected exports.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Prisma 7 client transaction/model typing divergence
   intent: any,
   action: string,
   to: PaymentIntentStatus,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic transaction client parameter
   write: (tx: any) => Promise<any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic transaction return type
 ): Promise<any> {
   if (transitionPaymentIntentStatus(intent.status, to) !== to) {
     throw new HttpError(409, `PaymentIntent cannot transition from '${intent.status}' to '${to}'.`);
