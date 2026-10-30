@@ -41,6 +41,51 @@ export interface CreateReferralInput extends ReferralTargetInput {
   sourceConsultationId: string;
 }
 
+/** Create the referral atomically with the consultation outcome. */
+export async function createReferralFromConsultation(
+  tx: Prisma.TransactionClient,
+  input: { consultationId: string; referringDoctorId: string; targetSpecialtyId: string; targetDoctorId?: string },
+) {
+  const consultation = await loadConsultationForReferringDoctor(tx, input.consultationId);
+  if (!consultation.appointment || consultation.appointment.doctorProfileId !== input.referringDoctorId) {
+    throw new HttpError(403, 'You can only refer from your own consultation.');
+  }
+  if (consultation.outcome !== 'referred') {
+    throw new HttpError(409, 'A referral can only be created for a referred consultation.');
+  }
+
+  const verifiedDoctorIds = await doctorsService.listVerifiedDoctorIdsInSpecialty(input.targetSpecialtyId);
+  const snapshotNotes = consultation.notes ?? '';
+  const common = {
+    patientProfileId: consultation.appointment.patientProfileId,
+    sourceConsultationId: consultation.id,
+    referringDoctorId: input.referringDoctorId,
+    targetSpecialtyId: input.targetSpecialtyId,
+    snapshotNotes,
+    parentReferralId: (await referralsRepo.findParentReferralForConsultation(tx, consultation.id)) ?? undefined,
+  };
+
+  if (verifiedDoctorIds.length === 0) {
+    if (input.targetDoctorId) throw new HttpError(422, 'No verified doctor practices this specialty.');
+    return referralsRepo.createReferral(tx, { ...common, status: 'waiting_for_specialist' });
+  }
+  if (!input.targetDoctorId) {
+    throw new HttpError(422, 'Select a verified doctor in the target specialty.');
+  }
+  if (!verifiedDoctorIds.includes(input.targetDoctorId)) {
+    throw new HttpError(422, 'Target doctor is not verified in the target specialty.');
+  }
+
+  const prepared = await prepareReferralTarget(
+    tx,
+    consultation,
+    input.referringDoctorId,
+    { targetDoctorId: input.targetDoctorId, targetSpecialtyId: input.targetSpecialtyId, snapshotNotes },
+    [],
+  );
+  return referralsRepo.createReferral(tx, prepared);
+}
+
 interface PreparedReferral {
   patientProfileId: string;
   sourceConsultationId: string;
@@ -305,6 +350,9 @@ export async function acceptReferral(
     if (referral.status !== 'pending') {
       throw new HttpError(409, 'Only a pending referral can be accepted.');
     }
+    if (!referral.targetDoctorId) {
+      throw new HttpError(409, 'This referral is waiting for a verified specialist.');
+    }
 
     // Conditional pending → accepted FIRST: if two accepts race, exactly
     // one matches, same shape as claimOpenSlot (hard rule 2's philosophy,
@@ -548,6 +596,7 @@ function deriveQueueReason(row: {
 }): string {
   if (row.loopFlaggedAt) return row.loopFlagReason ?? 'loop-flagged';
   if (row.noShowCount > 0) return `previous no-shows (${row.noShowCount})`;
+  if (row.status === 'waiting_for_specialist') return 'no verified doctor in target specialty';
   if (row.status === 'pending') return 'awaiting patient acceptance';
   return 'stuck';
 }

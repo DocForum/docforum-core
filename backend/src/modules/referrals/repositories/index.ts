@@ -9,9 +9,10 @@ export interface CreateReferralData {
   patientProfileId: string;
   sourceConsultationId: string;
   referringDoctorId: string;
-  targetDoctorId: string;
+  targetDoctorId?: string | null;
   targetSpecialtyId?: string;
   snapshotNotes: string;
+  status?: ReferralStatus;
   parentReferralId?: string;
   loopFlaggedAt?: Date;
   loopFlagReason?: string;
@@ -167,7 +168,7 @@ export async function findReferralAncestors(
     {
       id: string;
       referringDoctorId: string;
-      targetDoctorId: string;
+      targetDoctorId: string | null;
       targetSpecialtyId: string | null;
       parentReferralId: string | null;
       depth: number;

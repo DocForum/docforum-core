@@ -183,7 +183,7 @@ export async function createConsultation(
   app: App,
   doctor: { accessToken: string },
   appointmentId: string,
-  outcome: 'resolved' | 'referred' | 'follow_up_needed' = 'referred',
+  outcome: 'resolved' | 'referred' | 'follow_up_needed' = 'resolved',
 ): Promise<{ id: string }> {
   const res = await request(app)
     .post('/consultations')

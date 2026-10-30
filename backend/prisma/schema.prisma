@@ -77,6 +77,7 @@ enum ReferralStatus {
   // (the cascade gave up after repeated no-shows) and `declined` (the
   // patient said no) so audit/metrics can tell the three exits apart.
   cancelled
+  waiting_for_specialist
 }
 
 // Why a referral reached the terminal `expired` state. Kept separate from
@@ -779,8 +780,9 @@ model Consultation {
 }
 
 // Phase 3 (issues #5/#65/#66/#67/#68). Snapshot rule (FR-7/FR-8, hard
-// rule 3): `snapshotNotes` is a copy taken at creation, never a live
-// reference — reassign/cancel/cascade never touch it.
+// rule 3): `snapshotNotes` is a copy taken from the consultation when the
+// referred outcome is saved, never a live reference. IntakeForm has no
+// intake fields yet, so its data cannot be copied until issue #1 lands.
 model Referral {
   id                        String                @id @default(uuid())
   status                    ReferralStatus        @default(pending)
