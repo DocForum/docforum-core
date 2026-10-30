@@ -25,6 +25,7 @@ import { referralsRouter } from './modules/referrals/routes';
 import { notificationsRouter } from './modules/notifications/routes';
 import { adminFlagsRouter, meFlagsRouter } from './modules/flags/routes';
 import { registerRetentionHolds } from './retention-holds';
+import { notificationsRouter } from './modules/notifications/routes';
 import { getReadiness } from './health/readiness';
 import { runWithRlsContext } from './db/prisma-client';
 
@@ -84,6 +85,7 @@ export function createApp() {
   app.use('/payments', paymentsRouter);
   app.use('/patients', patientsRouter);
   app.use('/facilities', facilitiesRouter);
+  app.use('/notifications', notificationsRouter);
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);

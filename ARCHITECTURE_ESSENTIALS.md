@@ -73,6 +73,10 @@ Mutable records above (plus `Appointment` and `PaymentIntent`) carry a `version`
 - Frontend: `frontend/src/{pages,components,features,hooks,services,store,types}`
 - Roadmap / status: `ROADMAP.md` — **must be updated on every contribution that changes scope or completes work**.
 
+## Notification delivery decision (ADR 0007)
+
+Email uses Resend and SMS uses Twilio behind the notifications module interfaces. The console provider is used locally and in tests. Templates accept only a login URL and never include clinical detail; SMS requires E.164 consent, processes STOP/START callbacks, and enforces a daily cap.
+
 
 ## Escrow event monitoring (issue #86)
 - EscrowEventCursor stores one pagination cursor per contract deployment; configure each historical deployment as ESCROW_CONTRACTS=CONTRACT_ID@START_LEDGER,...

@@ -1,3 +1,8 @@
+import { Router } from 'express';
+import * as controller from '../controllers';
+
+export const notificationsRouter = Router();
+notificationsRouter.post('/webhooks/:channel', controller.webhook);
 // notifications routes. Mounted at `/notifications` in app.ts.
 import { Router } from 'express';
 import { authenticate } from '../../../middleware/auth';
