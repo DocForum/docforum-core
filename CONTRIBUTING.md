@@ -7,6 +7,8 @@ architecture rules this file doesn't repeat).
 
 ## 1. Set up locally
 
+<!-- wating for 80 -->
+
 ```bash
 git clone https://github.com/DocForum/docforum-core.git
 cd docforum-core/backend
