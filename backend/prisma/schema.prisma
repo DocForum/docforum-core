@@ -26,6 +26,19 @@ enum Role {
   admin
 }
 
+enum NotificationChannel {
+  in_app
+  email
+  sms
+}
+
+enum OutboxEventStatus {
+  pending
+  processing
+  processed
+  dead
+}
+
 enum VerificationStatus {
   pending
   verified
@@ -184,6 +197,7 @@ model User {
   // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
   // Opposite of AccessLog.accessedByUser.
   accessLogs              AccessLog[]
+  notifications           Notification[]
   // Phase 8 (issue #42, docs/adr/0011): dependents this user is guardian of.
   guardianships           Guardianship[]
   sep10Challenges         Sep10Challenge[]
@@ -1027,12 +1041,36 @@ model RateLimitRecord {
 }
 
 model Notification {
-  id        String    @id @default(uuid())
-  type      String
-  payload   Json
-  readAt    DateTime?
-  createdAt DateTime  @default(now())
-  // TODO: userId
+  id            String              @id @default(uuid())
+  userId        String
+  sourceEventId String?             @unique
+  type          String
+  payload       Json
+  channel       NotificationChannel @default(in_app)
+  readAt        DateTime?
+  createdAt     DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt, id])
+  @@index([userId, readAt, createdAt, id])
+}
+
+model OutboxEvent {
+  id             String            @id @default(uuid())
+  type           String
+  payload        Json
+  status         OutboxEventStatus @default(pending)
+  createdAt      DateTime          @default(now())
+  processedAt    DateTime?
+  attempts       Int               @default(0)
+  lastError      String?
+  availableAt    DateTime          @default(now())
+  lockedAt       DateTime?
+  deadLetteredAt DateTime?
+
+  @@index([status, availableAt, createdAt, id])
+  @@index([status, lockedAt])
 }
 
 // --- Stellar payments (docforum-org split) -------------------------------

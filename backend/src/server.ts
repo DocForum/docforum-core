@@ -6,6 +6,8 @@ import { pruneOldAccessLogs } from './modules/audit/services';
 import { startPatientExportJobs } from './jobs/patient-exports';
 import { startEscrowEventPoller } from './jobs/escrow-events';
 import { validatePlatformSigners } from './modules/payments/services/platform-signers';
+import { verifyPaymentsNetwork } from './modules/payments/services';
+import { startOutboxEventJobs } from './jobs/outbox-events';
 import { validateSep10Config, validateWalletLinkConfig, verifyPaymentsNetwork } from './modules/payments/services';
 import { startAccountPurgeJob } from './jobs/account-purge';
 import { startPaymentIntentJobs } from './jobs/payment-intents';
@@ -128,6 +130,22 @@ const pruneTimer = setInterval(() => {
     });
 }, config.loginThrottle.pruneIntervalSeconds * 1000);
 pruneTimer.unref();
+
+// Patient data export worker + expiry cleanup (Phase 8, issue #40).
+startPatientExportJobs();
+startEscrowEventPoller();
+startOutboxEventJobs();
+// Deleted-account tombstone purge (Phase 8, issue #41, docs/adr/0010).
+startAccountPurgeJob();
+// Prepared-transaction expiry (Phase 5.5, issue #80): an unsigned
+// create_escrow transaction that outlives its window moves the intent back
+// to `created` so the patient can prepare again.
+startPaymentIntentJobs();
+// Referral expiry (Phase 3, issue #8): pending referrals nobody acted on
+// within REFERRAL_PENDING_TTL_DAYS become `expired`.
+startReferralExpiryJob();
+// Unconfirmed order expiry job (auto-confirm when window elapses with no dispute).
+startOrderExpiryJob();
 
 // Lab orders still unfulfilled past their expiresAt move to `expired`.
 const orderExpiryTimer = setInterval(() => { void expireUnfulfilledOrders().catch((err) => console.error("[jobs] order expiry failed:", err)); }, 60 * 60 * 1000);

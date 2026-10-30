@@ -387,8 +387,17 @@ One table rather than a `PrescriptionFulfillment`/`LabOrderFulfillment` pair: th
 ### 4.8 Notifications
 ```
 Notification
-  id, user_id, type, payload (jsonb), read_at (nullable), created_at
+  id, user_id (FK -> User), source_event_id (nullable unique, idempotency key),
+  type (typed catalogue), payload (jsonb),
+  channel (in_app|email|sms), read_at (nullable), created_at
 ```
+The in-app inbox is owner-scoped and keyset-paginated by `(created_at, id)`.
+Payload schemas contain opaque entity identifiers only; clinical details,
+intake, consultation notes, and results must never be copied into a notification
+payload. `notify()` persists the in-app row before calling registered channel
+adapters, and adapter failures are isolated from that write. Email/SMS providers
+remain undecided until issue #17; adapters are registered behind the module's
+service interface.
 
 ### 4.9 Auth hardening state (Phase 8)
 ```
@@ -491,9 +500,6 @@ Bundle format (schemaVersion 1): `{ format: "docforum.patient-export",
 schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }`
 — see §3.1 for where sections come from.
 
-### 4.12 Escrow chain event observations (issue #86)
-
-EscrowEventCursor has one row per deployed escrow contract and persists the Soroban RPC pagination cursor and retention error. EscrowChainEvent is uniquely keyed by (contractId, eventId) and records the contract event, ledger, transaction hash, escrow id, match state, and alert timestamp. These are observations, not a source of payment state: matching checks the locally owned PaymentIntent; the poller never mutates a payment transition.
 ### 4.11 PHI read-access log (Phase 8, issue #45)
 ```
 AccessLog
@@ -526,6 +532,24 @@ to the caller's own profile (resolved from the authenticated user, never
 from the request) and strips all viewer PII to a role — a deleted viewer
 surfaces as `deleted_user`.
 
+### 4.12 Escrow chain event observations (issue #86)
+
+EscrowEventCursor has one row per deployed escrow contract and persists the Soroban RPC pagination cursor and retention error. EscrowChainEvent is uniquely keyed by (contractId, eventId) and records the contract event, ledger, transaction hash, escrow id, match state, and alert timestamp. These are observations, not a source of payment state: matching checks the locally owned PaymentIntent; the poller never mutates a payment transition.
+
+### 4.13 Transactional outbox (Phase 6, issue #94)
+```
+OutboxEvent
+  id, type, payload (jsonb), status (pending|processing|processed|dead)
+  created_at, processed_at (nullable), attempts, last_error (nullable)
+  available_at, locked_at (nullable), dead_lettered_at (nullable)
+  # Published inside the domain change's Prisma transaction. Event exists
+  # iff that change commits; external effects run only after commit.
+  # Dispatcher claims with FOR UPDATE SKIP LOCKED and leases processing rows.
+  # Delivery is at least once. Handlers must be idempotent; the booking
+  # notification uses Notification.source_event_id as its unique key.
+  # Retry errors are stable codes only, never exception messages or payloads.
+  # After five attempts, status=dead; admin reads expose metadata, not payload.
+```
 ### 4.14 Feature flags (Phase 8, issue #132)
 
 ```
@@ -598,7 +622,10 @@ T5, enforced as a curated config policy.
 ### 5.1 Booking (concurrency-safe)
 1. Client requests open slots for a doctor.
 2. Client attempts to book a specific `AvailabilitySlot` → backend runs this inside a DB transaction with a row-level lock / conditional update (`UPDATE ... WHERE status = 'open'`), so a second concurrent booking attempt on the same slot fails atomically instead of racing.
-3. On success, `Appointment` is created referencing the now-`booked` slot.
+3. On success, `Appointment` is created referencing the now-`booked` slot, and
+  `appointment.booked` is inserted into the outbox in that same transaction.
+4. The outbox worker delivers the event after commit; booking confirmation
+  notification handling is at least once and idempotent by source event id.
 
 ### 5.2 Referral (Phase 3 — issues #5/#7/#65–#68)
 1. Doctor records a `Consultation` against their own **completed** appointment, then creates one or more `Referral`s from it (`POST /referrals`, or the atomic batch `POST /referrals/from-consultation/:id` / `POST /consultations/:id/referrals`) — each target gets its own `snapshot_notes` copy. Multi-referral is a deliberate decision recorded in `docs/adr/0006-multiple-referrals-per-consultation.md`: independent lifecycles born in one transaction, grouped only for presentation. A target is a **named verified doctor** *or* **a specialty**, and a specialty-only target is routed to a concrete doctor at creation (`docs/adr/0008`): least-loaded among eligible doctors — verified, holds the specialty, not the referring doctor, active account — where load counts that doctor's `pending` + `accepted` referrals; ties break on doctor id. Zero eligible doctors is a `422 REFERRAL_NO_ELIGIBLE_TARGET` and writes nothing, so an unassigned referral cannot exist.
