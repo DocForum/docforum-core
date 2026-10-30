@@ -1,7 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { config } from '../config';
-import { AsyncLocalStorage } from 'node:async_hooks';
 
 export type RlsRequestContext = { userId: string; role: string };
 const rlsContext = new AsyncLocalStorage<RlsRequestContext>();
@@ -57,8 +57,35 @@ const adapter = new PrismaPg({
 // cannot retain a previous request's identity.
 // Single shared client for the whole process — Prisma's own guidance for
 // a long-running server (as opposed to a new client per request/lambda).
-const extendedClient = new PrismaClient({ adapter });
+//
+// Phase 9, issue #48: query budget tests need to count queries *per request*.
+// Prisma's `$on('query')` is process-global, so parallel supertest requests
+// would otherwise pollute each other's counts. We expose a tiny per-request
+// counter that the test helper can scope to a single request via
+// `runWithQueryCounter` (AsyncLocalStorage), keeping the count isolated even
+// when tests run concurrently. Production behaviour is unchanged: when no
+// counter is active, the listener is a no-op.
+const extendedClient = new PrismaClient({
+  adapter,
+  log: [{ emit: 'event', level: 'query' }],
+} as ConstructorParameters<typeof PrismaClient>[0]);
 const protectedDelegates = new Set<PropertyKey>(['appointment', 'paymentIntent', 'consultation']);
+
+export interface QueryCounter {
+  count: number;
+}
+
+const queryCounterStorage = new AsyncLocalStorage<QueryCounter>();
+
+// Attach a single process-wide listener that increments the counter active
+// for the current async context, if any. Registering once avoids leaking
+// listeners across tests.
+(extendedClient as unknown as {
+  $on(event: 'query', cb: () => void): void;
+}).$on('query', () => {
+  const counter = queryCounterStorage.getStore();
+  if (counter) counter.count += 1;
+});
 
 async function installRlsContext(
   tx: Prisma.TransactionClient,
@@ -110,3 +137,16 @@ export const prisma = new Proxy(extendedClient, {
     };
   },
 }) as unknown as PrismaClient;
+
+/**
+ * Run `fn` with a fresh per-request query counter. The counter is scoped to
+ * the async context of `fn`, so concurrent requests each get their own count.
+ * Returns the result of `fn` alongside the number of Prisma queries executed.
+ */
+export async function runWithQueryCounter<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; queryCount: number }> {
+  const counter: QueryCounter = { count: 0 };
+  const result = await queryCounterStorage.run(counter, fn);
+  return { result, queryCount: counter.count };
+}
