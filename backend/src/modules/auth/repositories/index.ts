@@ -59,6 +59,22 @@ export function revokeRefreshSessionsForUser(input: { userId: string; exceptSess
   });
 }
 
+/** Invalidates every refresh token issued before this call by bumping the
+ * user's `tokenVersion` (issue #18). Cheaper than per-token revocation: a
+ * refresh token carries the version it was minted with, and verification
+ * rejects any token whose version no longer matches. */
+export function bumpUserTokenVersion(userId: string, db: DbClient = prisma) {
+  return db.user.update({
+    where: { id: userId },
+    data: { tokenVersion: { increment: 1 } },
+    select: { id: true, tokenVersion: true },
+  });
+}
+
+export function findUserTokenVersion(userId: string, db: DbClient = prisma) {
+  return db.user.findUnique({ where: { id: userId }, select: { tokenVersion: true } });
+}
+
 export interface CreateSelfServeUserInput {
   email: string;
   phone?: string;
@@ -293,39 +309,3 @@ export function consumePasswordResetToken(input: {
 // here takes the caller's transaction client.
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
-
-/** Anonymises the User row in place. Conditional on `deletedAt IS NULL`, so
- * of two concurrent deletions exactly one does the work; returns whether
- * this call did. */
-export async function anonymizeUser(
-  db: DbClient,
-  userId: string,
-  data: { tombstoneEmail: string; unusablePasswordHash: string; deletedAt: Date },
-): Promise<boolean> {
-  const result = await db.user.updateMany({
-    where: { id: userId, deletedAt: null },
-    data: {
-      email: data.tombstoneEmail,
-      phone: null,
-      passwordHash: data.unusablePasswordHash,
-      emailVerifiedAt: null,
-      deletedAt: data.deletedAt,
-    },
-  });
-  return result.count === 1;
-}
-
-export function deleteVerificationTokensForUser(db: DbClient, userId: string) {
-  return db.emailVerificationToken.deleteMany({ where: { userId } }).then((result) => result.count);
-}
-
-export function deleteLoginAttemptBucket(db: DbClient, scope: 'email' | 'ip', key: string) {
-  return db.loginAttempt.deleteMany({ where: { scope, key } }).then((result) => result.count);
-}
-
-/** Hard-deletes an already-anonymised User (tombstone purge). Conditional
- * on `deletedAt` being set, so a live account can never be removed here. */
-export async function deleteAnonymizedUser(db: DbClient, userId: string): Promise<boolean> {
-  const result = await db.user.deleteMany({ where: { id: userId, deletedAt: { not: null } } });
-  return result.count === 1;
-}
