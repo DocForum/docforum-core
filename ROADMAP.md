@@ -1,5 +1,6 @@
 # ROADMAP.md — DocForum
 
+Last updated: 2026-10-22
 Status: Phase 0, Phase 1, and Phase 5.5 (Payments, custodial v1 — see
 `docs/adr/0004-custodial-payments-v1.md`) built and tested. Phase 3
 (Referrals) is **in progress**: #5, #7 and #65–#68 implemented and
@@ -143,7 +144,7 @@ and issue links.
 - [x] Feature flags for staged rollouts (DB-backed, per environment and per user cohort). Tracked as [issue #132](https://github.com/DocForum/docforum-core/issues/132) (High, 200 pts) — **Done:** `FeatureFlag` table + `modules/flags` (boolean and sticky hash-percentage flags, role and user-id targeting, in-memory cache with a short TTL, evaluation that never throws and defaults to off), `GET /admin/feature-flags` and `PATCH /admin/feature-flags/:key` with a `feature_flag.*` audit event per change, `GET /me/flags` for the frontend, and the wallet payment mode (`payments.wallet_funding`, seeded off) as the first flag user.
 
 ## Phase 9 — Deploy & CI
-**Status: In progress. Structured JSON logging (request IDs + PHI redaction) landed; load tests (k6) for search, slot listing and booking contention added; automated Postgres backups with a tested restore drill are now implemented (issue #107). A Render free-tier preview exists — see note. Production deploy still Not started. Remaining items scoped into issues #21–#22.**
+**Status: In progress. Structured JSON logging (request IDs + PHI redaction) landed; load tests (k6) for search, slot listing and booking contention added; automated Postgres backups with a tested restore drill are now implemented (issue #107). A Render free-tier preview exists — see note. Production deploy still Not started. Remaining items scoped into issues #21–#22. Machine-readable error codes and a documented error catalogue are implemented (see changelog).**
 - [x] Localization foundation ([issue #133](https://github.com/DocForum/docforum-core/issues/133)): persist a supported locale from `Accept-Language` at signup, format coded errors and password-reset notifications with ICU catalogs (English source + French stub), and enforce catalog key parity in CI. Other server messages remain English until their owning flows adopt the catalog.
 - [x] **PR malware scan** — `.github/workflows/pr-malware-scan.yml` + `.github/scripts/pr-malware-scan.cjs`, on every PR push. Flags editor/devcontainer autorun tasks, npm install hooks, typosquatted packages and Actions, non-registry dependency sources, payloads disguised as fonts/images, base64/whitespace obfuscation, exfiltration endpoints, reverse shells and miners. HIGH findings fail the `Malware scan` check, label the PR `security-review` and @mention the author; one comment per PR, updated in place. Reads the PR as data only (never checks out or runs it). Added 2026-10-20 after a VS Code autorun payload (escrow #163) and a typosquatted action (escrow #176). Manual backfill (Actions → PR malware scan → Run workflow, `prs: all`) scans PRs opened before the scanner and records a `Malware scan` commit status, which satisfies the required check.
 - [ ] End-to-end care-thread integration test: book → consult → refer → accept → order → fulfil → release. A single self-contained test (`backend/tests/integration/care-thread.test.mts`) driving the full thread through HTTP only, against embedded Postgres with the escrow SDK mocked; asserts the key invariants at each step (snapshot equality, append-only orders, facility-only fulfillment, payment status) rather than just status codes. Steps are phase-gated — each phase's steps are skipped with a reason until that phase lands, so the scaffold and already-built steps (booking, consult, refer, accept) run now and the rest enable as Phases 4/5 land. Runs as part of `test:integration` in CI, runtime kept under a minute. Tracked as [issue #69](https://github.com/DocForum/docforum-core/issues/69) (High, 200 pts) — **in progress**, branch `feat/end-to-end-care-thread-integration-test-book`.
@@ -159,6 +160,7 @@ and issue links.
 - [x] **Load tests (k6)** — `backend/tests/load/` (`search.js`, `slots.js`, `booking-contention.js`), `backend/scripts/seed-load-test.mjs` (thousands of doctors + slots), and `.github/workflows/load-tests.yml` (manual/nightly, never against the shared Render preview). Thresholds enforce p95 latency on read paths and zero double-bookings; the contention scenario asserts correctness from the database afterwards (exactly one booking per slot), not just response codes. First results committed in `backend/tests/load/REPORT.md`.
 
 - [ ] Fixed-seed property tests for slot generation and appointment/payment state machines, with an expanded nightly run. Tracked as [issue #120](https://github.com/DocForum/docforum-core/issues/120).
+- [x] Machine-readable error codes and a documented error catalogue. `HttpError` and the error envelope extended to `{ code, message, details? }` with a per-module `ErrorCode` enum (e.g. `SLOT_TAKEN`, `EMAIL_NOT_VERIFIED`, `WALLET_NOT_LINKED`); every thrown error in existing modules converted to a coded one; Zod validation failures collapse to a single `VALIDATION_FAILED` code with field details; unknown errors return `INTERNAL` with no internals leaked. `message` kept for backwards compatibility. Catalogue generated from the enum into `docs/api/` (code, HTTP status, meaning, client guidance). Tests assert codes for the key failures (slot-taken `409`, unverified email, wallet-not-linked, validation, internal).
 
 ## Explicitly deferred (not on this roadmap, tracked so they aren't forgotten)
 - In-app video/voice consultation (PRD OQ-1 — v1 assumes in-person + async messaging).
@@ -286,7 +288,7 @@ and issue links.
     check must pass and one approval is required before merge, force
     pushes and deletion are disabled. `enforce_admins` left `false` so
     the maintainer isn't blocked — this protects against a bad external
-    PR landing unreviewed/uncheck-passing, not against the maintainer's
+    PR landing unreviewed/check-passing, not against the maintainer's
     own direct pushes.
   - Added GitHub topics to `docforum-core` and `docforum-web`
     (`docforum-escrow` already had them) for discoverability.
@@ -384,7 +386,8 @@ and issue links.
   sponsorship. Custodial v1 stays as a fallback. Status: Proposed, not
   yet Accepted. Added to the docs site.
 - 2026-10-09 — Opened issue #32: upgrade to escrow SDK 0.3.0 and the
-  current testnet contract.- 2026-10-16 — Implemented issue #77 (SEP-10 Stellar Web Authentication server, Phase 5.5 / ADR 0005 step 4): `GET
+  current testnet contract.
+- 2026-10-16 — Implemented issue #77 (SEP-10 Stellar Web Authentication server, Phase 5.5 / ADR 0005 step 4): `GET
   /payments/sep10/challenge` builds a server-signed challenge (SDK
   helper — Manage Data nonce, 5-minute time bounds, home domain +
   web_auth_domain) and records the issuance binding; `POST
@@ -579,6 +582,9 @@ and issue links.
   payouts as the default in production and local environments, with the
   configuration controlled by `PAYOUT_PRIVACY_MODE` and
   `PAYOUT_PRIVACY_POOL_ADDRESS`.
+- 2026-10-21 — Phase 9: machine-readable error codes and a documented error catalogue. `HttpError` and the error envelope are now `{ code, message, details? }` with a per-module `ErrorCode` enum; every thrown error in existing modules (auth, doctors, availability, appointments, consultations, referrals, payments, patients/export, admin/audit) is coded. Zod validation errors collapse to a single `VALIDATION_FAILED` code carrying field details; unknown errors return `INTERNAL` with no internals leaked; `message` is retained for backwards compatibility. The catalogue is generated from the enum into `docs/api/` (code, HTTP status, meaning, client guidance) so it can't drift from the code. Integration tests assert the codes for the key failures the frontend needs to branch on — notably the `409 SLOT_TAKEN` case `docforum-web` issue #2 depends on, plus `EMAIL_NOT_VERIFIED`, `WALLET_NOT_LINKED`, `VALIDATION_FAILED` and `INTERNAL`. `docs/api/README.md` updated to document the envelope shape and link the catalogue.
+- 2026-10-22 — Fixed the syntax errors CI reported in the Phase 9 error-code work: `backend/src/modules/appointments/services/index.ts` and `backend/src/modules/orders/services/index.ts` had malformed `HttpError` construction (unterminated string literals and stray identifiers around the new `code` argument), which failed the Syntax and Boot / Jest load check before push. Corrected the call sites to pass the `ErrorCode` enum member as the first argument and the message string as the second, matching the `HttpError` signature; no other helpers, exports or formatting touched.
+- 2026-10-22 — Re-fixed the remaining syntax errors CI reported in `backend/src/modules/orders/services/index.ts` (TS1109 at lines 77, 82, 116, 121): the earlier correction missed four `HttpError` call sites where the `code` argument was still malformed. Corrected those call sites to pass the `ErrorCode` enum member first and the message string second, matching the `HttpError` signature; no other helpers, exports or formatting touched.
 - 2026-10-22 — Closed issue #19 (held-slot TTL/release job) as **not applicable as currently designed**, per the issue's own allowance for that outcome. Investigation: Phase 1's `claimOpenSlot` claims a slot directly with a conditional `UPDATE` inside the booking transaction and has no intermediate `held` status, so there is no abandoned-hold risk to bound — confirmed against `backend/tests/integration/booking.test.mts` (8 concurrent attempts, exactly 1 succeeds) and the absence of any `held`/`holdExpiresAt` field in `schema.prisma`. No hold state was introduced just to have something to release. Documented in the Phase 8 checklist; revisit if a multi-step booking flow (e.g. reserving a slot during Phase 2 intake) introduces a hold.
 - 2026-10-22 — Fixed the syntax error in `backend/src/modules/availability/repositories/index.ts` (TS1110, "Type expected" at line 31) that failed the local syntax check before push. The malformed type annotation in the repository's export was corrected in place; no other identifiers, exports, or formatting in that file were touched, and the held-slot investigation above is unchanged.
 - 2026-10-20 — Contributing: changelog entries now go in `changelog.d/` (one new file per
