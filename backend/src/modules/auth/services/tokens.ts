@@ -80,6 +80,14 @@ export function signRefreshToken(payload: RefreshTokenPayload): string {
   return signWithKeyring(config.jwt.refreshKeys, payload, config.jwt.refreshTtl);
 }
 
+/** Issued in place of a session when the password step passes but the TOTP
+ * step hasn't happened yet. Short-lived and single-purpose on purpose. */
+export function signMfaPendingToken(payload: AccessTokenPayload): string {
+  return jwt.sign({ ...payload, scope: 'mfa_pending' }, config.jwt.accessSecret, {
+    expiresIn: config.twoFactor.mfaPendingTtl,
+  });
+}
+
 export function verifyAccessToken(token: string): AccessTokenPayload {
   return verifyWithKeyring<AccessTokenPayload>(config.jwt.accessKeys, token);
 }
