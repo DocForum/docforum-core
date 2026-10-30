@@ -5,7 +5,7 @@
 // roadmap,repos}/ and is gitignored: the deployed site is always built
 // fresh from whatever's actually on `main` in each repo right now,
 // there is no second copy to let drift.
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +56,28 @@ async function fetchRemote(repo, filePath, to) {
 
 async function main() {
   console.log('Syncing docs-site content from source-of-truth files...\n');
+
+  // The interactive reference must always describe the API that ships with
+  // this commit. Do not silently publish a stale, absent, or malformed spec.
+  const specSource = path.join(CORE_ROOT, 'backend/openapi.json');
+  const specDestination = path.join(SITE_ROOT, 'api/openapi.json');
+  if (!existsSync(specSource)) {
+    throw new Error(
+      'Missing backend/openapi.json. Generate it with `node scripts/gen-openapi.mjs` in backend/ (issue #112) before building the docs site.',
+    );
+  }
+  let spec;
+  try {
+    spec = JSON.parse(await readFile(specSource, 'utf8'));
+  } catch (error) {
+    throw new Error(`Invalid backend/openapi.json: ${error.message}`);
+  }
+  if (!/^3\.\d+\.\d+$/.test(spec.openapi ?? '') || !spec.paths || typeof spec.paths !== 'object') {
+    throw new Error('Invalid backend/openapi.json: expected an OpenAPI 3.x document with a paths object.');
+  }
+  await mkdir(path.dirname(specDestination), { recursive: true });
+  await copyFile(specSource, specDestination);
+  console.log('  synced (local)  backend/openapi.json -> docs/site/api/openapi.json');
 
   console.log('docforum-core (local — this repo):');
   await copyLocal('PRD.md', 'product/prd.md');
