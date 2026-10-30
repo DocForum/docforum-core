@@ -44,3 +44,9 @@ export const createFacilitySchema = z.object({
   type: z.enum(['lab', 'pharmacy']),
   capabilities: z.array(facilityCapabilitySchema).min(1).max(20),
 }).strict();
+
+export const updateFulfillmentStatusSchema = z.object({
+  status: z.enum(['in_progress', 'fulfilled', 'rejected']),
+}).strict();
+
+export type UpdateFulfillmentStatusBody = z.infer<typeof updateFulfillmentStatusSchema>;
