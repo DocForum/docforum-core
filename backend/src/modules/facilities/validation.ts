@@ -1,5 +1,18 @@
 import { z } from 'zod';
 
+/** `?near=lat,lng` — a patient-supplied point. Used in-memory as query
+ * parameters only: never persisted, never logged (issue #74 hard
+ * constraint). */
+const nearSchema = z
+  .string()
+  .regex(/^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$/, 'near must be "lat,lng", e.g. "6.5244,3.3792".')
+  .transform((value) => {
+    const [lat, lng] = value.split(',').map(Number);
+    return { lat, lng };
+  })
+  .refine((point) => point.lat >= -90 && point.lat <= 90, 'near latitude must be between -90 and 90.')
+  .refine((point) => point.lng >= -180 && point.lng <= 180, 'near longitude must be between -180 and 180.');
+
 /** `effectiveFrom` accepts any ISO-8601 string the Date constructor parses;
  * the service rejects garbage so the error is a 400, not a 500. */
 export const createPriceVersionSchema = z.object({
@@ -16,12 +29,37 @@ export const priceFiltersSchema = z.object({
   asset: z.string().min(1).max(120).optional(),
 });
 
-export const eligibleFacilitiesQuerySchema = z.object({
-  type: z.enum(['lab', 'pharmacy']),
-  catalogItemCode: z.string().min(1).max(100).optional(),
-  asset: z.string().min(1).max(120).optional(),
-  at: z.string().min(1).optional(),
-});
+/**
+ * GET /facilities/eligible — the one patient-facing discovery query.
+ *
+ * Two families of filter, both qualification (issue #14 fails closed: at
+ * least one of `type` / `capabilityType` is required, so an unqualified
+ * directory can never be listed) plus the optional distance sort of issue
+ * #74. `type` is the facility kind; `capabilityType` is narrower and
+ * carries an optional exact `detail`.
+ */
+export const eligibleFacilitiesQuerySchema = z
+  .object({
+    type: z.enum(['lab', 'pharmacy']).optional(),
+    catalogItemCode: z.string().min(1).max(100).optional(),
+    asset: z.string().min(1).max(120).optional(),
+    at: z.string().min(1).optional(),
+    capabilityType: z.enum(['lab_test', 'medication_dispense']).optional(),
+    detail: z.string().min(1).max(200).optional(),
+    near: nearSchema.optional(),
+    radiusKm: z.coerce.number().positive().max(20000).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+  })
+  .refine((query) => query.type !== undefined || query.capabilityType !== undefined, {
+    message: 'type or capabilityType is required.',
+    path: ['type'],
+  })
+  .refine((query) => query.radiusKm === undefined || query.near !== undefined, {
+    message: 'radiusKm requires near=lat,lng.',
+    path: ['radiusKm'],
+  });
+
+export type EligibleFacilitiesQuery = z.infer<typeof eligibleFacilitiesQuerySchema>;
 
 export type CreatePriceVersionBody = z.infer<typeof createPriceVersionSchema>;
 

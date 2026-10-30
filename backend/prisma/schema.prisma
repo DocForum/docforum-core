@@ -91,6 +91,12 @@ enum ReferralExpiryReason {
 
 enum OrderStatus {
   issued
+  // Phase 5 (issue #73): order-level status is DERIVED from item-level
+  // fulfillment rows, so a partially dispensed multi-item prescription
+  // doesn't have to lie ('fulfilled') or refuse the whole order. Written
+  // only by this order's own module service after a fulfillment item
+  // changes — never by a facility directly (hard rule 5).
+  partially_fulfilled
   fulfilled
   expired
   superseded
@@ -109,7 +115,14 @@ enum DisputeStatus {
 enum FulfillmentStatus {
   pending
   in_progress
+  // Phase 5 (issue #73): every item under this record was dispensed.
   fulfilled
+  // Every item under this record reached a terminal state, at least one
+  // was dispensed, and at least one could not be dispensed. The order as
+  // a whole may still reach `fulfilled` if the patient routes the
+  // remaining items to a second facility.
+  partially_fulfilled
+  // Facility rejected the whole record without dispensing anything.
   rejected
 }
 
@@ -496,6 +509,14 @@ model FacilityProfile {
   userId    String       @unique
   name      String
   type      FacilityType
+  // Phase 5 (issue #74): physical location so patients can find the
+  // nearest qualified facility (PRD FR-13). All three nullable on
+  // purpose — a facility that hasn't filled them in still appears in
+  // eligible-facility queries, just sorted last (see
+  // facilities/repositories).
+  address   String?
+  latitude  Float?
+  longitude Float?
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
@@ -514,6 +535,13 @@ model FacilityProfile {
   prices            FacilityPrice[]
   orders            Order[]
   fulfillmentProofs FulfillmentProof[]
+
+  // Composite b-tree index backing the "indexed bounding box" prefilter
+  // of the distance query (issue #74). Chosen over PostGIS: no extension
+  // dependency on every deployment (incl. the Render free-tier preview),
+  // and a bounding box + haversine is exact for the ORDER BY once the box
+  // is a superset of the radius. See ARCHITECTURE.md §5.4.
+  @@index([latitude, longitude])
 }
 
 model FacilityCapability {
@@ -876,7 +904,9 @@ model Prescription {
   correctedBy       Prescription?      @relation("PrescriptionCorrections")
   items             PrescriptionItem[]
   paymentIntent     PaymentIntent?
-  fulfillment       FulfillmentRecord?
+  // One order → many fulfillment records (issue #73 split routing: one per
+  // facility the patient routes items to).
+  fulfillments      FulfillmentRecord[]
 
   @@unique([supersedesPrescriptionId])
   @@index([patientProfileId, createdAt])
@@ -919,7 +949,7 @@ model LabOrder {
   correctedBy     LabOrder?          @relation("LabOrderCorrections")
   result          LabResult?
   paymentIntent   PaymentIntent?
-  fulfillment     FulfillmentRecord?
+  fulfillments    FulfillmentRecord[]
 
   @@unique([supersedesLabOrderId])
   @@index([patientProfileId, createdAt])
@@ -963,8 +993,8 @@ model LabResult {
 /// facility writes.
 model FulfillmentRecord {
   id             String            @id @default(uuid())
-  prescriptionId String?           @unique
-  labOrderId     String?           @unique
+  prescriptionId String?
+  labOrderId     String?
   facilityId     String
   status         FulfillmentStatus @default(pending)
   createdAt      DateTime          @default(now())
@@ -973,7 +1003,19 @@ model FulfillmentRecord {
   prescription Prescription?   @relation(fields: [prescriptionId], references: [id], onDelete: Restrict)
   labOrder     LabOrder?       @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
   facility     FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Restrict)
+  // Phase 5 (issue #73): one row per routed order item (issue #73).
+  items        FulfillmentItem[]
 
+  // ADR 0012 required at most one record per order (a UNIQUE on each order
+  // FK). Issue #73's split routing — patient routes the items one facility
+  // couldn't dispense to a *second* facility — needs several records for
+  // one order, so the uniqueness moved down one level: at most one record
+  // per (order, facility), which is what actually prevents a duplicated
+  // routing. NULLs don't collide in Postgres, so each index only constrains
+  // the rows whose order FK it covers — same mechanism ADR 0012 relied on.
+  // See docs/adr/0012 amendment, 2026-10-26.
+  @@unique([prescriptionId, facilityId])
+  @@unique([labOrderId, facilityId])
   @@index([facilityId, status])
 }
 
