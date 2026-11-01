@@ -246,7 +246,7 @@ are carried as `BigInt` end to end. A facility with no published price is
 
 | Method & path | Auth | Body / query | Notes |
 |---|---|---|---|
-| `GET /facilities/eligible` | none | query: `type` (`lab`\|`pharmacy`, required), `catalogItemCode?`, `asset?` (default `native`), `at?` (ISO-8601) | Facilities of that type, each with the price in force at `at` (default now) for `catalogItemCode`. Shape: `{ facilities: [{ facilityId, name, type, priceOnRequest, price: { amountStroops, effectiveFrom } \| null }] }`. `price: null` + `priceOnRequest: true` is the documented "price on request" state. Public: patients compare prices before signing in. Capability matching (issue #14, PRD FR-13): only facilities of that type that *hold* the matching `FacilityCapability` (`lab` ↔ `lab_test`, `pharmacy` ↔ `medication_dispense`) are listed — **fail closed**, a facility with missing or wrong-type capability data shows for nothing. |
+| `GET /facilities/eligible` | none | query: `type` (`lab`\|`pharmacy`) **or** `capabilityType` (`lab_test`\|`medication_dispense`) — one of the two required; plus `detail?`, `near=lat,lng`, `radiusKm?`, `limit?` (1–200, default 50), `catalogItemCode?`, `asset?` (default `native`), `at?` (ISO-8601) | Qualified facilities, each with the price in force at `at` (default now) for `catalogItemCode`, optionally sorted ascending by straight-line distance from `near` (Phase 5 issue #74 — indexed bounding box + in-SQL haversine, default radius 50 km when `near` is given without `radiusKm`). Shape: `{ facilities: [{ facilityId, name, type, address, distanceKm, priceOnRequest, price: { amountStroops, effectiveFrom } \| null }] }`. `price: null` + `priceOnRequest: true` is the documented "price on request" state; `distanceKm` is null when no `near` was given or the facility registered no coordinates — such facilities are **never dropped**, they sort last. Public: patients compare prices before signing in. Capability matching (issue #14, PRD FR-13) is unchanged and still **fail closed** — only facilities of `type` holding the matching `FacilityCapability` are listed, and a query with neither `type` nor `capabilityType` is a `400` (no unqualified directory). `radiusKm` without `near` → 400. **The patient's `near` point is never stored or logged** — it reaches SQL only as a bind parameter, and the response carries per-facility distances, never the query point. |
 | `GET /facilities/:facilityId/prices` | none | query: `catalogItemCode?`, `asset?` | The facility's full price history, newest first: `{ prices: [{ id, facilityId, catalogItemCode, asset, amountStroops, effectiveFrom, createdAt }] }`. Public. |
 | `GET /facilities/me/prices` | facility | query: `catalogItemCode?`, `asset?` | Same shape, scoped to the caller's own facility profile (resolved from the access token, so there is no client-supplied id to forge). |
 | `POST /facilities/me/prices` | facility (verified email) | `{ catalogItemCode, amount, asset?, effectiveFrom? }` | Publishes a new version. `amount` is a positive integer string of smallest units (decimals/exponents rejected); `asset` defaults to `native`; `effectiveFrom` defaults to now and may be in the future to schedule a price. `201` with the created version. `409` if that item/asset already has a version with the exact same `effectiveFrom`; `403` for a facility that isn't the caller's. Writes a `FacilityPrice` audit event (`facility_price.created`) in the same transaction. |
@@ -426,6 +426,24 @@ the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZ
 `PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
 `backend/src/jobs/README.md`.
 
+## Pharmacy orders (`/pharmacy-orders`) — `backend/src/modules/pharmacy-orders`
+
+Item-level (partial) fulfillment — Phase 5 issue #73, see
+`ARCHITECTURE.md` §5.3.
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /pharmacy-orders/fulfillments` | patient or admin (verified email) | `{ orderType, orderId, facilityId, orderItemIds? }` | Routes items to a facility: one `FulfillmentRecord` + one `FulfillmentItem` per item. Omit `orderItemIds` to route every item; pass only the remaining items to split a partially dispensed order across a second facility. `409` if any requested item was already dispensed elsewhere, `400` if an item doesn't belong to the order. |
+| `GET /pharmacy-orders/fulfillments/:id` | owning facility or admin | — | Record + item rows. Patients are excluded until Phase 4 links `PatientProfile` to orders (known gap, `ARCHITECTURE.md` §6.2). |
+| `PATCH /pharmacy-orders/fulfillments/:id` | owning facility (verified email) | `{ status: 'in_progress'\|'rejected' }` | `fulfilled` is **not settable** — it is derived from the record's dispensed items. Hard rule 5: a facility may only ever write records it owns (`403` otherwise). |
+| `PATCH /pharmacy-orders/fulfillments/:id/items/:itemId` | owning facility (verified email) | `{ status: 'dispensed'\|'unfulfilled', quantityDispensed? }` | The only path to `dispensed`. One-shot (`409` on replay) and race-safe: the `(orderType, dispensedKey)` unique index makes a second facility's dispense of the same item a `409`, even under concurrency (`backend/tests/integration/fulfillment.test.mts`). After each item change the record status and the order-level status are re-derived. |
+| `GET /pharmacy-orders/orders/:orderId/fulfillment-status?orderType=` | any signed-in user | — | Derived order state: `{ totalItems, dispensedItems, status: 'issued'\|'partially_fulfilled'\|'fulfilled' }`. Computed from item rows — never a hand-set flag. |
+
+Payment release rule (documented in `ARCHITECTURE.md` §5.3): partial
+fulfillment never releases escrow — release eligibility requires the
+order to derive `fulfilled`. Release itself is still admin-triggered
+(ADR 0004 v1).
+
 ### Account deletion (Phase 8, issue #41)
 
 | Method & path | Auth | Body | Notes |
@@ -480,9 +498,8 @@ Evaluation: off if `enabled` is false; on if the user id is in `allowUserIds`; o
 
 ## Not yet implemented
 
-`patients`, `prescriptions`, `pharmacy-orders` and `notifications` have no
-routes yet — Phase 2 (intake), 4 (orders), 5 (facilities) and 6
-(notifications), see `ROADMAP.md`. Facility price lists themselves shipped
+`patients`, `prescriptions` and `notifications` have no routes yet — Phase 2
+(intake), 4 (orders) and 6 (notifications), see `ROADMAP.md`. Facility price lists themselves shipped
 with issue #127 (`/facilities`, above); the remaining facility-admin surface
 is still pending.
 
