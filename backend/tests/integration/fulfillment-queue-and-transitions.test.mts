@@ -160,8 +160,8 @@ describe('issue #15: fulfillment queue + transitions', () => {
     });
 
     const createdPrescription = await ordersService.issuePrescription(
-      { userId: patientUser.id, role: 'patient', requestId: null },
-      { consultationId: consultation.id, facilityProfileId: labFacilityId, items: [{ drugName: 'Test Drug', dosage: '1mg', frequency: 'once', duration: '1 day' }] },
+      { userId: doctorUser.id, role: 'doctor', requestId: null },
+      { consultationId: consultation.id, facilityProfileId: prescriptionFacilityId, items: [{ drugName: 'Test Drug', dosage: '1mg', frequency: 'once', duration: '1 day' }] },
     );
     expect(createdPrescription.paymentIntent).toBeDefined();
 
