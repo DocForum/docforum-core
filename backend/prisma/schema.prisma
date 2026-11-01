@@ -126,6 +126,16 @@ enum FulfillmentStatus {
   rejected
 }
 
+/// Phase 5 (issue #73): terminal-per-item state under a FulfillmentRecord.
+/// `pending` is the only non-terminal value, which is what makes the
+/// dispense/unfulfil transition a one-shot `UPDATE ... WHERE status =
+/// 'pending'` (repositories/claimPendingItem).
+enum FulfillmentItemStatus {
+  pending
+  dispensed
+  unfulfilled
+}
+
 enum WaitlistStatus {
   pending
   on_hold
@@ -1017,6 +1027,54 @@ model FulfillmentRecord {
   @@unique([prescriptionId, facilityId])
   @@unique([labOrderId, facilityId])
   @@index([facilityId, status])
+}
+
+/// Item-level (partial) fulfillment — Phase 5, issue #73.
+///
+/// One row per order item routed to the record's facility, so a pharmacy that
+/// can only dispense 2 of 3 items records that truthfully instead of lying
+/// (`fulfilled`) or refusing the whole order. `FulfillmentRecord.status` is
+/// derived from these rows (services/deriveRecordStatus), and the order's own
+/// status is derived across every facility's rows (ARCHITECTURE.md §5.3).
+///
+/// Polymorphic on purpose, unlike its parent: `orderType` + `orderItemId`
+/// address an item inside the record's OWN order — PrescriptionItem.id, or
+/// LabOrder.id itself because a lab order is a single-item order — which is a
+/// discriminator within one already-typed order, not a second cross-table
+/// reference that could dangle (contrast ADR 0012).
+model FulfillmentItem {
+  id                  String                @id @default(uuid())
+  fulfillmentRecordId String
+  // 'prescription' | 'lab_order' — matches the parent record's order FK.
+  // Free text rather than an enum so a third order kind doesn't need a
+  // migration of every existing row.
+  orderType           String
+  orderItemId         String
+  // Null = "not tracked", never a fake zero: the Phase 4 item models carry
+  // no quantity column yet (ARCHITECTURE.md §4.7).
+  quantityOrdered     Int?
+  quantityDispensed   Int                   @default(0)
+  status              FulfillmentItemStatus @default(pending)
+  // Equals orderItemId exactly when status = 'dispensed', NULL otherwise.
+  // This is how "one item can never be dispensed by two facilities" becomes
+  // a plain unique index instead of a partial one Prisma can't represent:
+  // NULLs don't collide in Postgres, so two non-NULL dispenses of the same
+  // order item violate `@@unique([orderType, dispensedKey])` at the DB level
+  // (the P2002 the service maps to 409).
+  dispensedKey        String?
+  dispensedAt         DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  fulfillmentRecord FulfillmentRecord @relation(fields: [fulfillmentRecordId], references: [id], onDelete: Cascade)
+
+  // The order's item universe is counted across ALL facilities' records
+  // (services/applyOrderStatus), hence the unscoped lookup index.
+  @@index([orderType, orderItemId])
+  // The same order item can't be routed twice under one record.
+  @@unique([fulfillmentRecordId, orderType, orderItemId])
+  // Cross-facility double-dispense guard — see dispensedKey above.
+  @@unique([orderType, dispensedKey])
 }
 
 model WaitlistEntry {

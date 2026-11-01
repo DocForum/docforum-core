@@ -92,7 +92,7 @@ async function createOrderContext(): Promise<{ consultationId: string; doctorPro
     },
   });
   const doctor = await prisma.doctorProfile.create({
-    data: { userId: user.id, fullName: 'Fulfillment Fixture Doctor', verificationStatus: 'verified' },
+    data: { userId: user.id, fullName: 'Fulfillment Fixture Doctor', timeZone: 'UTC', verificationStatus: 'verified' },
   });
   const startTime = new Date(Date.now() + contextSeq * 60 * 60 * 1000);
   const slot = await prisma.availabilitySlot.create({
