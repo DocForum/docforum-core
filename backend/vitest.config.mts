@@ -8,7 +8,7 @@ export default defineConfig({
         // Every integration file connects as a non-superuser owner, like a
         // managed host's account. A superuser would skip RLS (docs/adr/0014).
         find: /^embedded-postgres$/,
-        replacement: fileURLToPath(new URL('./tests/helpers/restricted-embedded-postgres.ts', import.meta.url)),
+        replacement: fileURLToPath(new URL('./tests/helpers/restricted-embedded-postgres.mts', import.meta.url)),
       },
     ],
   },

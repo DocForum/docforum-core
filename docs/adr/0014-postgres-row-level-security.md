@@ -24,7 +24,7 @@ The migration creates the `NOLOGIN` role `docforum_rls_bypass` for trusted maint
 - Direct protected queries add a short transaction for context setup. Queries inside existing interactive transactions reuse that transaction and set context once. The booking integration test exercises both context isolation and the existing concurrency guarantee; timing is recorded during verification because laptop and CI database timings vary.
 - Trusted jobs that query protected tables must explicitly use `withRlsBypass`; request code must not call it.
 - `docforum_rls_bypass` does not have the `BYPASSRLS` attribute, because only a role that already has it can grant it and managed hosts such as Render do not give it to the database owner. Each protected table has an explicit `USING (true)` policy for this role instead, so a new protected table must add one in the same migration.
-- The test suite connects as a `NOSUPERUSER NOBYPASSRLS` database owner (`tests/helpers/restricted-embedded-postgres.ts`), because a superuser ignores RLS and hid this difference from CI.
+- The test suite connects as a `NOSUPERUSER NOBYPASSRLS` database owner (`tests/helpers/restricted-embedded-postgres.mts`), because a superuser ignores RLS and hid this difference from CI.
 
 ## Alternatives considered
 
