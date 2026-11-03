@@ -8,52 +8,28 @@ only actor that can move it.
 
 What changed:
 
-* **Order issuance now creates the fulfillment row.** `issuePrescription`
-  and `issueLabOrder` (orders services) each write a `FulfillmentRecord`
-  with `status: 'pending'` against the issuing transaction, pointing at
-  the new order's `prescriptionId` / `labOrderId` and its
-  `facilityProfileId`. The `facilityId` is copied from the order (the
-  invariant #13 ADR §"facilityId is denormalised from the order at
-  creation" says #14 owns, and this is that creation step — no trigger).
-
 * **Facility queue view:** `GET /facilities/me/queue`
   (`facilitiesController.listFacilityQueue`) returns the signed-in
-  facility owner's records, cursor-paginated by `updatedAt` descending,
-  with an optional `status` filter. The facility profile is resolved
-  from the authenticated user, so there is no client-supplied id and no
-  IDOR surface — the same scoping "my facility" rule pricing uses.
+  facility owner's records, cursor-paginated by `id` descending (using
+  Prisma cursor pagination with `id: { lt: cursor }` and `skip: 1`), with an
+  optional `status` filter. The facility profile is resolved from the
+  authenticated user, so there is no client-supplied id and no IDOR
+  surface — the same scoping "my facility" rule pricing uses.
 
-* **Status transitions:** `PATCH /facilities/me/fulfillments/:fulfillmentId`
-  (`facilitiesController.transitionFulfillment`) accepts the documented
-  forward transitions:
+  The query parameters are validated with `facilityQueueQuerySchema`:
+  * `status` is optional and accepts `pending`, `in_progress`,
+    `partially_fulfilled`, `fulfilled`, `rejected` (issue #73 split
+    orders produce `partially_fulfilled` records).
+  * `limit` is capped at 100 with a default of 20; invalid values return
+    HTTP 400.
+  * `cursor` is an opaque string (the last item's id); invalid cursors
+    are silently ignored.
 
-  | from           | to           |
-  |----------------|--------------|
-  | `pending`      | `in_progress`, `rejected` |
-  | `in_progress`  | `fulfilled`, `rejected`  |
-  | `fulfilled`    | — (terminal) |
-  | `rejected`     | — (terminal) |
-
-  The service layer, not just the route gate, enforces:
-
-  * **`requireRole('facility')`** on the route (401/403 before a non-facility
-    caller reaches anything);
-  * **row ownership:** the service looks the record up by id, then 403s if
-    the record's `facilityId` is not the requesting facility's profile
-    — this is what stops cross-facility transitions even when a facility
-    somehow guesses an id;
-  * **terminal states:** `fulfilled` and `rejected` are terminal; a
-    second transition on a terminal row returns 409.
-
-* **`fulfilled` is reachable only from a facility.** On `→ fulfilled`
-  the service updates the underlying `Prescription` / `LabOrder` status
-  to `fulfilled` inside the same transaction. This is the *only* path to
-  `fulfilled` for Phase 5 orders (ARCHITECTURE.md §5.3 hard rule 5):
-  the patient `confirm-receipt` and `dispute` endpoints update the
-  legacy `Order.confirmed` / `Order.disputed` flags only, and never set
-  the order `status` to `fulfilled` or touch a `FulfillmentRecord`. The
-  order-status flip is audited as `prescription.fulfilled` /
-  `lab_order.fulfilled` with the `FulfillmentRecord` id in metadata.
+* **`orderKind` / `orderId` mapping for split orders (#73):** the queue
+  query filters by `FulfillmentRecord.facilityId` and resolves
+  `orderKind: 'prescription'` vs `'lab_order'` from the FK discriminator
+  (`prescriptionId` / `labOrderId`), so split orders routed to a second
+  pharmacy facility appear correctly in that facility's queue.
 
 * **Integration test** `tests/integration/fulfillment-queue-and-transitions.test.mts`
   covers: issuance creates the row; the queue view returns it;

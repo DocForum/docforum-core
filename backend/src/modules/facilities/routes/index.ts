@@ -31,13 +31,6 @@ facilitiesRouter.post(
 facilitiesRouter.get('/eligible', facilitiesController.eligibleFacilities);
 facilitiesRouter.get('/:facilityId/prices', facilitiesController.listFacilityPrices);
 
-// Fulfillment queue + status transitions (issue #15). Scoped to the
-// signed-in facility owner: the queue is filtered by the authenticated
-// facility profile, and transitions require ownership of the row.
+// Fulfillment queue (issue #15). Scoped to the signed-in facility owner:
+// the queue is filtered by the authenticated facility profile.
 facilitiesRouter.get('/me/queue', authenticate, requireRole('facility'), facilitiesController.listFacilityQueue);
-facilitiesRouter.patch(
-  '/me/fulfillments/:fulfillmentId',
-  authenticate,
-  requireRole('facility'),
-  facilitiesController.transitionFulfillment,
-);

@@ -281,7 +281,7 @@ export function findFulfillmentRecordById(fulfillmentId: string, db: Db = prisma
  * (issue #15). `status` optionally narrows to one state (pending|in_progress|fulfilled|rejected). */
 export function listFacilityFulfillments(
   facilityId: string,
-  input: { status?: 'pending' | 'in_progress' | 'fulfilled' | 'rejected'; limit?: number; cursor?: string },
+  input: { status?: 'pending' | 'in_progress' | 'partially_fulfilled' | 'fulfilled' | 'rejected'; limit?: number; cursor?: string },
   db: Db = prisma,
 ) {
   return db.fulfillmentRecord.findMany({
@@ -291,7 +291,7 @@ export function listFacilityFulfillments(
       ...(input.cursor ? { id: { lt: input.cursor } } : {}),
     },
     take: (input.limit ?? 20) + 1,
-    orderBy: { updatedAt: 'desc' },
+    orderBy: { updatedAt: 'desc', id: 'desc' },
     select: { id: true, prescriptionId: true, labOrderId: true, status: true, createdAt: true, updatedAt: true },
   });
 }
