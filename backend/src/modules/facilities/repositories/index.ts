@@ -288,8 +288,9 @@ export function listFacilityFulfillments(
     where: {
       facilityId,
       ...(input.status ? { status: input.status } : {}),
-      ...(input.cursor ? { id: { lt: input.cursor } } : {}),
     },
+    cursor: input.cursor ? { id: input.cursor } : undefined,
+    skip: input.cursor ? 1 : 0,
     take: (input.limit ?? 20) + 1,
     orderBy: { updatedAt: 'desc', id: 'desc' },
     select: { id: true, prescriptionId: true, labOrderId: true, status: true, createdAt: true, updatedAt: true },

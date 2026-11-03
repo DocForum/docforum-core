@@ -84,7 +84,7 @@ export const createFacilitySchema = z.object({
 }).strict();
 
 export const facilityQueueQuerySchema = z.object({
-  status: z.enum(['pending', 'in_progress', 'fulfilled', 'rejected']).optional(),
+  status: z.enum(['pending', 'in_progress', 'partially_fulfilled', 'fulfilled', 'rejected']).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   cursor: z.string().min(1).optional(),
 }).strict();
