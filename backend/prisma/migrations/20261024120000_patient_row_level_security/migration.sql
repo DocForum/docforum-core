@@ -6,7 +6,10 @@ BEGIN
     CREATE ROLE docforum_app NOLOGIN NOBYPASSRLS;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'docforum_rls_bypass') THEN
-    CREATE ROLE docforum_rls_bypass NOLOGIN BYPASSRLS;
+    -- Not BYPASSRLS: only a role that already has that attribute can grant it,
+    -- and managed hosts such as Render do not give it to the database owner.
+    -- The explicit policies at the end of this file admit this role instead.
+    CREATE ROLE docforum_rls_bypass NOLOGIN;
   END IF;
 END
 $$;
@@ -17,8 +20,8 @@ GRANT docforum_rls_bypass TO CURRENT_USER;
 -- runtime table privileges; policies narrow only the protected tables.
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO docforum_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO docforum_app;
--- BYPASSRLS is not a privilege grant: trusted jobs and test harnesses still
--- need ordinary SQL privileges on tables created by the migration owner.
+-- Trusted jobs and test harnesses need ordinary SQL privileges on tables
+-- created by the migration owner.
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO docforum_rls_bypass;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO docforum_rls_bypass;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
@@ -32,8 +35,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 -- Force policies for table owners too. The policy allows patient requests
 -- only their own/guardian-owned rows; non-patient application roles retain
--- their service-authorized access. Jobs and migrations use the explicit
--- BYPASSRLS role.
+-- their service-authorized access. Trusted jobs use docforum_rls_bypass, which
+-- each table's policy below admits explicitly.
 ALTER TABLE "Appointment" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "Appointment" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "appointment_patient_scope_select" ON "Appointment" FOR SELECT
@@ -214,3 +217,12 @@ CREATE POLICY "consultation_patient_scope_insert" ON "Consultation" FOR INSERT
   WITH CHECK (
     current_setting('app.current_role', true) IN ('doctor', 'admin')
   );
+
+-- Trusted maintenance role (docs/adr/0014). Permissive policies are OR-ed with
+-- the patient-scope policies, and only docforum_rls_bypass matches these.
+CREATE POLICY "appointment_rls_bypass" ON "Appointment"
+  TO docforum_rls_bypass USING (true) WITH CHECK (true);
+CREATE POLICY "payment_intent_rls_bypass" ON "PaymentIntent"
+  TO docforum_rls_bypass USING (true) WITH CHECK (true);
+CREATE POLICY "consultation_rls_bypass" ON "Consultation"
+  TO docforum_rls_bypass USING (true) WITH CHECK (true);
