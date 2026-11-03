@@ -10,7 +10,7 @@
 //   * rejected terminal states are enforced (re-transitioning throws 409);
 //   * cross-facility isolation: a facility cannot transition another facility's record.
 //
-// Self-contained embedded Postgres on its own port (5457), same pattern as the
+// Self-contained embedded Postgres on its own port (5470), same pattern as the
 // other files in this directory.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -22,7 +22,7 @@ import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5457; // unique per integration file
+const PORT = 5470; // unique per integration file
 const runId = Date.now();
 const PASSWORD = 'longenough123';
 
@@ -143,32 +143,74 @@ describe('issue #15: fulfillment queue + transitions', () => {
     return { profileId: res.body.id, userId: res.body.userId };
   }
 
-  it('every issued order creates a FulfillmentRecord with status pending', async () => {
-    // Seed a consultation + appointment + patient via direct Prisma calls so
-    // we don't depend on the appointments/consultations machinery for this
-    // focused file. We need a valid DoctorProfile too for issuePrescription.
-    const doctorUser = await prisma.user.create({ data: { email: `doc-seed-${runId}@example.com`, passwordHash: 'x', role: 'doctor' } });
-    const doctorProfile = await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: 'Test Doctor', verificationStatus: 'verified', timeZone: 'UTC' } });
+  // ---------------------------------------------------------------------------
+  // Helpers: seed a fresh consultation context + issue a prescription or lab
+  // order, returning the order and its fulfillment record.  Each test that
+  // mutates fulfillment state calls one of these so it operates on its own
+  // isolated row — no implicit dependency on earlier tests.
+  // ---------------------------------------------------------------------------
+  let seedSeq = 0;
 
-    const patientUser = await prisma.user.create({ data: { email: `pat-seed-${runId}@example.com`, passwordHash: 'x', role: 'patient' } });
-    const patientProfile = await prisma.patientProfile.create({ data: { userId: patientUser.id, fullName: 'Test Patient' } });
+  async function seedConsultation() {
+    seedSeq += 1;
+    const doctorUser = await prisma.user.create({ data: { email: `doc-seed-${runId}-${seedSeq}@example.com`, passwordHash: 'x', role: 'doctor' } });
+    const doctorProfile = await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: `Test Doctor ${seedSeq}`, verificationStatus: 'verified', timeZone: 'UTC' } });
+    const patientUser = await prisma.user.create({ data: { email: `pat-seed-${runId}-${seedSeq}@example.com`, passwordHash: 'x', role: 'patient' } });
+    const patientProfile = await prisma.patientProfile.create({ data: { userId: patientUser.id, fullName: `Test Patient ${seedSeq}` } });
     const appointment = await prisma.appointment.create({
       data: { patientProfileId: patientProfile.id, doctorProfileId: doctorProfile.id, status: 'completed' },
     });
     const consultation = await prisma.consultation.create({ data: { appointmentId: appointment.id } });
+    return { doctorUser, doctorProfile, patientUser, patientProfile, appointment, consultation };
+  }
 
-    const createdPrescription = await ordersService.issuePrescription(
-      { userId: doctorUser.id, role: 'doctor', requestId: null },
-      { consultationId: consultation.id, facilityProfileId: prescriptionFacilityId, items: [{ drugName: 'Test Drug', dosage: '1mg', frequency: 'once', duration: '1 day' }] },
+  async function seedPrescription(facilityId: string) {
+    const ctx = await seedConsultation();
+    const order = await ordersService.issuePrescription(
+      { userId: ctx.doctorUser.id, role: 'doctor', requestId: null },
+      {
+        consultationId: ctx.consultation.id,
+        facilityProfileId: facilityId,
+        amountStroops: 1000n,
+        items: [{ drugName: 'Test Drug', dosage: '1mg', frequency: 'once', duration: '1 day' }],
+      },
     );
-    expect(createdPrescription.paymentIntent).toBeDefined();
-
-    const fulfills = await prisma.fulfillmentRecord.findMany({
-      where: { prescriptionId: createdPrescription.id },
-      select: { id: true, status: true },
+    const [fulfillment] = await prisma.fulfillmentRecord.findMany({
+      where: { prescriptionId: order.id },
     });
-    expect(fulfills).toHaveLength(1);
-    expect(fulfills[0].status).toBe('pending');
+    return { order, fulfillment, ...ctx };
+  }
+
+  async function seedLabOrder(facilityId: string) {
+    const ctx = await seedConsultation();
+    const order = await ordersService.issueLabOrder(
+      { userId: ctx.doctorUser.id, role: 'doctor', requestId: null },
+      {
+        consultationId: ctx.consultation.id,
+        facilityProfileId: facilityId,
+        amountStroops: 1000n,
+        testType: 'blood_panel',
+        urgency: 'routine',
+      },
+    );
+    const [fulfillment] = await prisma.fulfillmentRecord.findMany({
+      where: { labOrderId: order.id },
+    });
+    return { order, fulfillment, ...ctx };
+  }
+
+  it('every issued order creates a FulfillmentRecord with status pending', async () => {
+    // Prescription → prescriptionFacilityId (pharmacy)
+    const { order: createdPrescription, fulfillment: rxFulfill } = await seedPrescription(prescriptionFacilityId);
+    expect(createdPrescription.paymentIntent).toBeDefined();
+    expect(rxFulfill).toBeDefined();
+    expect(rxFulfill.status).toBe('pending');
+
+    // Lab order → labFacilityId (lab)
+    const { order: createdLabOrder, fulfillment: labFulfill } = await seedLabOrder(labFacilityId);
+    expect(createdLabOrder.paymentIntent).toBeDefined();
+    expect(labFulfill).toBeDefined();
+    expect(labFulfill.status).toBe('pending');
   });
 
   it('GET /facilities/me/queue returns the facility owner fulfillment records', async () => {
@@ -183,16 +225,11 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('only the assigned facility can transition — patient gets 403, the wrong facility gets 403', async () => {
-    // Get the first pending fulfillment for labFacilityId directly from Prisma
-    // to use its exact id, then try it with prescriptionFacilityToken (wrong facility).
-    const pendingRecords = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, status: 'pending' },
-      select: { id: true, status: true },
-    });
-    expect(pendingRecords.length).toBeGreaterThan(0);
-    const targetId = pendingRecords[0].id;
+    // Seed a dedicated lab order so there is always a pending record under labFacilityId.
+    const { fulfillment } = await seedLabOrder(labFacilityId);
+    const targetId = fulfillment.id;
 
-    // Wrong facility: patient token → 403 (the route rejects before service call).
+    // Wrong facility: prescriptionFacilityToken → 403.
     const badFacility = await request(app)
       .patch(`/facilities/me/fulfillments/${targetId}`)
       .set('Authorization', `Bearer ${prescriptionFacilityToken}`)
@@ -211,42 +248,34 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('in_progress → fulfilled propagates to the underlying Prescription', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, prescriptionId: { not: null } },
-      select: { id: true, prescriptionId: true, status: true },
-    });
-    const target = records.find((r) => r.prescriptionId && r.status === 'pending')!;
-    expect(target).toBeDefined();
+    // Seed a dedicated prescription under prescriptionFacilityId.
+    const { order, fulfillment: target } = await seedPrescription(prescriptionFacilityId);
 
     const updated = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
-      .set('Authorization', `Bearer ${labFacilityToken}`)
+      .set('Authorization', `Bearer ${prescriptionFacilityToken}`)
       .send({ status: 'fulfilled' });
     expect(updated.status).toBe(200);
     expect(updated.body.status).toBe('fulfilled');
     expect(updated.body.orderKind).toBe('prescription');
-    expect(updated.body.orderId).toBe(target.prescriptionId);
+    expect(updated.body.orderId).toBe(order.id);
 
     // The underlying prescription was flipped to fulfilled — the only path
     // (ARCHITECTURE §5.3 hard rule 5).
-    const prescUpdated = await prisma.prescription.findUniqueOrThrow({ where: { id: target.prescriptionId! } });
+    const prescUpdated = await prisma.prescription.findUniqueOrThrow({ where: { id: order.id } });
     expect(prescUpdated.status).toBe('fulfilled');
 
     // Terminal states can't re-transition.
     const alreadyDone = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
-      .set('Authorization', `Bearer ${labFacilityToken}`)
+      .set('Authorization', `Bearer ${prescriptionFacilityToken}`)
       .send({ status: 'in_progress' });
     expect(alreadyDone.status).toBe(409);
   });
 
   it('in_progress → fulfilled propagates to an underlying LabOrder', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, labOrderId: { not: null } },
-      select: { id: true, labOrderId: true, status: true },
-    });
-    const target = records.find((r) => r.labOrderId && r.status === 'pending')!;
-    expect(target).toBeDefined();
+    // Seed a dedicated lab order under labFacilityId.
+    const { order, fulfillment: target } = await seedLabOrder(labFacilityId);
 
     const updated = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
@@ -255,16 +284,14 @@ describe('issue #15: fulfillment queue + transitions', () => {
     expect(updated.status).toBe(200);
     expect(updated.body.orderKind).toBe('lab_order');
 
-    const labUpdated = await prisma.labOrder.findUniqueOrThrow({ where: { id: target.labOrderId! } });
+    const labUpdated = await prisma.labOrder.findUniqueOrThrow({ where: { id: order.id } });
     expect(labUpdated.status).toBe('fulfilled');
   });
 
   it('rejected terminal state cannot re-transition', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, labOrderId: { not: null } },
-      select: { id: true, labOrderId: true, status: true },
-    });
-    const target = records.find((r) => r.labOrderId && r.status === 'pending')!;
+    // Seed a dedicated lab order so this test doesn't depend on leftover records.
+    const { fulfillment: target } = await seedLabOrder(labFacilityId);
+
     // First transition to rejected.
     const rejected = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
@@ -288,6 +315,10 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('cross-facility isolation: each facility only sees its own records', async () => {
+    // Seed one prescription for the pharmacy and one lab order for the lab.
+    await seedPrescription(prescriptionFacilityId);
+    await seedLabOrder(labFacilityId);
+
     const owned = await request(app)
       .get('/facilities/me/queue')
       .set('Authorization', `Bearer ${prescriptionFacilityToken}`)
@@ -299,20 +330,19 @@ describe('issue #15: fulfillment queue + transitions', () => {
       expect(specific.facilityId).toBe(prescriptionFacilityId);
     }
 
-    const labOnly = await request(app)
+    const labOwned = await request(app)
       .get('/facilities/me/queue')
       .set('Authorization', `Bearer ${labFacilityToken}`)
       .query({ status: 'pending' });
-    expect(labOnly.status).toBe(200);
-    expect(labOnly.body.items).toHaveLength(0);
+    expect(labOwned.status).toBe(200);
+    for (const item of labOwned.body.items) {
+      const specific = await prisma.fulfillmentRecord.findUniqueOrThrow({ where: { id: item.id } });
+      expect(specific.facilityId).toBe(labFacilityId);
+    }
   });
 
   it('invalid status payload is rejected by validation', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, labOrderId: { not: null } },
-      select: { id: true, status: true, labOrderId: true },
-    });
-    const target = records.find((r) => r.labOrderId && r.status === 'pending')!;
+    const { fulfillment: target } = await seedLabOrder(labFacilityId);
     const invalid = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
       .set('Authorization', `Bearer ${labFacilityToken}`)
@@ -321,12 +351,7 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('patient cannot set fulfillment status to fulfilled', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, status: 'pending' },
-      select: { id: true, status: true, prescriptionId: true, labOrderId: true },
-    });
-    expect(records.length).toBeGreaterThan(0);
-    const target = records[0];
+    const { fulfillment: target } = await seedLabOrder(labFacilityId);
 
     const asPatient = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
@@ -339,12 +364,7 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('doctor cannot set fulfillment status to fulfilled', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, status: 'pending' },
-      select: { id: true, status: true, prescriptionId: true, labOrderId: true },
-    });
-    expect(records.length).toBeGreaterThan(0);
-    const target = records[0];
+    const { fulfillment: target } = await seedLabOrder(labFacilityId);
 
     const asDoctor = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
@@ -357,12 +377,7 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('patient cannot set fulfillment status to in_progress', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, status: 'pending' },
-      select: { id: true, status: true },
-    });
-    expect(records.length).toBeGreaterThan(0);
-    const target = records[0];
+    const { fulfillment: target } = await seedLabOrder(labFacilityId);
 
     const asPatient = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
@@ -375,12 +390,7 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('doctor cannot set fulfillment status to in_progress', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, status: 'pending' },
-      select: { id: true, status: true },
-    });
-    expect(records.length).toBeGreaterThan(0);
-    const target = records[0];
+    const { fulfillment: target } = await seedLabOrder(labFacilityId);
 
     const asDoctor = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
@@ -393,12 +403,7 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('patient cannot set fulfillment status to rejected', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, status: 'pending' },
-      select: { id: true, status: true },
-    });
-    expect(records.length).toBeGreaterThan(0);
-    const target = records[0];
+    const { fulfillment: target } = await seedLabOrder(labFacilityId);
 
     const asPatient = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
@@ -411,12 +416,7 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('doctor cannot set fulfillment status to rejected', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, status: 'pending' },
-      select: { id: true, status: true },
-    });
-    expect(records.length).toBeGreaterThan(0);
-    const target = records[0];
+    const { fulfillment: target } = await seedLabOrder(labFacilityId);
 
     const asDoctor = await request(app)
       .patch(`/facilities/me/fulfillments/${target.id}`)
@@ -429,6 +429,11 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('queue pagination: cursor returns next page with correct ordering', async () => {
+    // Seed enough lab orders so there's something to paginate.
+    await seedLabOrder(labFacilityId);
+    await seedLabOrder(labFacilityId);
+    await seedLabOrder(labFacilityId);
+
     const labQueue = await request(app)
       .get('/facilities/me/queue')
       .set('Authorization', `Bearer ${labFacilityToken}`)
@@ -452,6 +457,21 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('queue status filter works for fulfilled and rejected', async () => {
+    // Seed and transition orders so all three statuses exist under labFacilityId.
+    const { fulfillment: toFulfill } = await seedLabOrder(labFacilityId);
+    await request(app)
+      .patch(`/facilities/me/fulfillments/${toFulfill.id}`)
+      .set('Authorization', `Bearer ${labFacilityToken}`)
+      .send({ status: 'fulfilled' });
+
+    const { fulfillment: toReject } = await seedLabOrder(labFacilityId);
+    await request(app)
+      .patch(`/facilities/me/fulfillments/${toReject.id}`)
+      .set('Authorization', `Bearer ${labFacilityToken}`)
+      .send({ status: 'rejected' });
+
+    await seedLabOrder(labFacilityId); // leaves one pending
+
     const labQueuePending = await request(app)
       .get('/facilities/me/queue')
       .set('Authorization', `Bearer ${labFacilityToken}`)
@@ -481,35 +501,25 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('fulfillment record orderKind is correctly determined from prescriptionId vs labOrderId', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId },
-      select: { id: true, prescriptionId: true, labOrderId: true, status: true },
-    });
+    // Seed both a prescription and a lab order under labFacilityId so both kinds exist.
+    const { order: rxOrder, fulfillment: rxFulfill } = await seedPrescription(labFacilityId);
+    const { order: labOrder, fulfillment: labFulfill } = await seedLabOrder(labFacilityId);
 
-    const prescRecords = records.filter((r) => r.prescriptionId && !r.labOrderId);
-    const labRecords = records.filter((r) => r.labOrderId && !r.prescriptionId);
+    const queueRes = await request(app)
+      .get('/facilities/me/queue')
+      .set('Authorization', `Bearer ${labFacilityToken}`)
+      .query({ limit: 100 });
+    expect(queueRes.status).toBe(200);
 
-    for (const rec of prescRecords) {
-      const queueItem = await request(app)
-        .get('/facilities/me/queue')
-        .set('Authorization', `Bearer ${labFacilityToken}`)
-        .query({ limit: 100 });
-      const found = queueItem.body.items.find((i: any) => i.id === rec.id);
-      expect(found).toBeDefined();
-      expect(found.orderKind).toBe('prescription');
-      expect(found.orderId).toBe(rec.prescriptionId);
-    }
+    const rxItem = queueRes.body.items.find((i: any) => i.id === rxFulfill.id);
+    expect(rxItem).toBeDefined();
+    expect(rxItem.orderKind).toBe('prescription');
+    expect(rxItem.orderId).toBe(rxOrder.id);
 
-    for (const rec of labRecords) {
-      const queueItem = await request(app)
-        .get('/facilities/me/queue')
-        .set('Authorization', `Bearer ${labFacilityToken}`)
-        .query({ limit: 100 });
-      const found = queueItem.body.items.find((i: any) => i.id === rec.id);
-      expect(found).toBeDefined();
-      expect(found.orderKind).toBe('lab_order');
-      expect(found.orderId).toBe(rec.labOrderId);
-    }
+    const labItem = queueRes.body.items.find((i: any) => i.id === labFulfill.id);
+    expect(labItem).toBeDefined();
+    expect(labItem.orderKind).toBe('lab_order');
+    expect(labItem.orderId).toBe(labOrder.id);
   });
 
   it('unauthenticated request to queue returns 401', async () => {
@@ -518,13 +528,9 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('unauthenticated request to transition returns 401', async () => {
-    const records = await prisma.fulfillmentRecord.findMany({
-      where: { facilityId: labFacilityId, status: 'pending' },
-      select: { id: true },
-    });
-    expect(records.length).toBeGreaterThan(0);
+    const { fulfillment } = await seedLabOrder(labFacilityId);
     const res = await request(app)
-      .patch(`/facilities/me/fulfillments/${records[0].id}`)
+      .patch(`/facilities/me/fulfillments/${fulfillment.id}`)
       .send({ status: 'fulfilled' });
     expect(res.status).toBe(401);
   });
