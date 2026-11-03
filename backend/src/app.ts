@@ -10,11 +10,12 @@ import { appointmentsRouter } from './modules/appointments/routes';
 import { appointmentConsultationsRouter, consultationsRouter } from './modules/consultations/routes';
 import { ordersRouter } from './modules/orders/routes';
 import { adminOrdersRouter } from './modules/orders/routes/admin';
+import { metricsRouter } from './modules/metrics/routes';
 import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
 import { labOrdersRouter } from './modules/lab-orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
-import { patientsRouter } from './modules/patients/routes';
 import { facilitiesRouter } from './modules/facilities/routes';
+import { patientsRouter } from './modules/patients/routes';
 import { adminRouter } from './modules/users/routes';
 import { registerPatientExportSections } from './export-sections';
 import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
@@ -22,8 +23,10 @@ import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
 import { notificationsRouter } from './modules/notifications/routes';
+import { adminFlagsRouter, meFlagsRouter } from './modules/flags/routes';
 import { registerRetentionHolds } from './retention-holds';
 import { getReadiness } from './health/readiness';
+import { runWithRlsContext } from './db/prisma-client';
 
 export function createApp() {
   const app = express();
@@ -49,6 +52,9 @@ export function createApp() {
   app.use(cors({ origin: config.corsOrigins, credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
+  // Unauthenticated requests must not inherit a previous patient's identity.
+  // Authenticated routes replace this with the verified JWT context.
+  app.use((_req, _res, next) => runWithRlsContext({ userId: '', role: 'anonymous' }, next));
 
   app.get('/health/live', (_req, res) => res.status(200).json({ status: 'live' }));
   app.get('/health/ready', async (_req, res) => {
@@ -74,9 +80,12 @@ export function createApp() {
   app.use('/pharmacy-orders', pharmacyOrdersRouter);
   app.use('/lab-orders', labOrdersRouter);
   app.use('/admin', adminOrdersRouter);
+  app.use('/admin', metricsRouter);
   app.use('/payments', paymentsRouter);
-  app.use('/patients', patientsRouter);
+  // Phase 5 (issues #73/#74): /facilities and /pharmacy-orders mounts
+  // (/pharmacy-orders is mounted above, with the order routes).
   app.use('/facilities', facilitiesRouter);
+  app.use('/patients', patientsRouter);
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);
@@ -89,6 +98,9 @@ export function createApp() {
   app.use('/patients', patientAuditRouter);
   app.use('/referrals', referralsRouter);
   app.use('/notifications', notificationsRouter);
+  // Feature flags (Phase 8, issue #132).
+  app.use('/me', meFlagsRouter);
+  app.use('/admin', adminFlagsRouter);
   app.use('/consultations', consultationsRouter);
 
   // Must be registered last — Express only routes errors here once every

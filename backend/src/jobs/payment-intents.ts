@@ -10,13 +10,14 @@
 // normal case: the patient simply prepares again.
 import { config } from '../config';
 import { expireStalePreparedIntents } from '../modules/payments/services';
+import { runWithRlsBypassContext } from '../db/prisma-client';
 
 export function startPaymentIntentJobs(): () => void {
   let running = false;
   const sweep = () => {
     if (running) return;
     running = true;
-    void expireStalePreparedIntents()
+    void runWithRlsBypassContext(() => expireStalePreparedIntents())
       .then(({ expired }) => {
         if (expired > 0) {
           // eslint-disable-next-line no-console

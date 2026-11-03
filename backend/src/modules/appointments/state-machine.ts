@@ -1,9 +1,10 @@
 import type { AppointmentStatus } from '@prisma/client';
 
 const transitions: Record<AppointmentStatus, readonly AppointmentStatus[]> = {
-  scheduled: ['completed', 'cancelled', 'no_show'],
+  scheduled: ['completed', 'cancelled', 'late_cancelled', 'no_show'],
   completed: [],
   cancelled: [],
+  late_cancelled: [],
   no_show: [],
 };
 

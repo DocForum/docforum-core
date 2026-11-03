@@ -24,6 +24,10 @@ export const doctorProfileFactory = (
   fullName: `Test Doctor ${next()}`,
   verificationStatus: 'pending',
   ...overrides,
+  // `timeZone` is required (NOT NULL, no default) — match the app's
+  // registration default (see auth repository) so Partial overrides can't
+  // drop it to undefined.
+  timeZone: overrides.timeZone ?? 'UTC',
 });
 
 export const facilityProfileFactory = (

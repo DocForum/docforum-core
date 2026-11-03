@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { assertActiveSession, assertEmailVerified, verifyAccessToken } from '../modules/auth/services';
 import { HttpError } from '../http-error';
 import type { Role } from '@prisma/client';
+import { runWithRlsContext } from '../db/prisma-client';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -36,7 +37,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
 
   await assertActiveSession(payload.sub, payload.iat);
   req.user = { id: payload.sub, role: payload.role, locale: payload.locale };
-  next();
+  runWithRlsContext({ userId: payload.sub, role: payload.role }, next);
 }
 
 /** Must run after `authenticate`. Rejects with `403 EMAIL_NOT_VERIFIED`

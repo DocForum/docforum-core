@@ -71,6 +71,7 @@ const KNOWN_ROUTES = [
   'POST /orders/:id/dispute',
   'GET /orders/:id',
   'GET /admin/orders/disputes',
+  'GET /admin/metrics',
   'POST /admin/orders/disputes/:id/resolve',
   'GET /payments/intents/:id',
   'POST /payments/intents/:id/fund',
@@ -148,6 +149,7 @@ const ACCESS_MATRIX: MatrixRow[] = [
 
   // Admin Order Disputes — admin-only
   { method: 'GET', path: '/admin/orders/disputes', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 200 } },
+  { method: 'GET', path: '/admin/metrics', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 400 } }, // admin passes authorization; required UTC range is missing
   { method: 'POST', path: '/admin/orders/disputes/:id/resolve', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
 
   // Payments — admin-triggered in v1; wallet-link is patient and facility (issue #78)

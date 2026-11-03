@@ -1,12 +1,13 @@
 import { config } from '../config';
 import { pollEscrowContractEvents } from '../modules/payments/services/escrow-events';
+import { runWithRlsBypassContext } from '../db/prisma-client';
 
 export function startEscrowEventPoller(): () => void {
   let running = false;
   const poll = () => {
     if (running) return;
     running = true;
-    void pollEscrowContractEvents()
+    void runWithRlsBypassContext(() => pollEscrowContractEvents())
       .catch((error) => {
         console.error('[jobs] escrow event poll failed', error instanceof Error ? error.name : typeof error);
       })
