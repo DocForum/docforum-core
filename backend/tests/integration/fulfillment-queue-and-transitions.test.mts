@@ -360,26 +360,34 @@ describe('issue #15: fulfillment queue + transitions', () => {
   });
 
   it('fulfillment record orderKind is correctly determined from prescriptionId vs labOrderId', async () => {
-    // Seed both a prescription and a lab order under labFacilityId (so both kinds exist in lab's queue).
+    // Seed a prescription for the pharmacy facility and a lab order for the lab facility.
     // This tests the discriminator logic: orderKind derived from prescriptionId vs labOrderId.
-    const { order: rxOrder } = await seedPrescription(labFacilityId);
-    const rxFulfill = await createFulfillmentRecord(labFacilityId, { id: rxOrder.id, kind: 'prescription' }, 'pending');
+    const { order: rxOrder } = await seedPrescription(prescriptionFacilityId);
+    const rxFulfill = await createFulfillmentRecord(prescriptionFacilityId, { id: rxOrder.id, kind: 'prescription' }, 'pending');
 
     const { order: labOrder } = await seedLabOrder(labFacilityId);
     const labFulfill = await createFulfillmentRecord(labFacilityId, { id: labOrder.id, kind: 'lab_order' }, 'pending');
 
-    const queueRes = await request(app)
+    // Query the pharmacy queue for the prescription.
+    const rxQueue = await request(app)
       .get('/facilities/me/queue')
-      .set('Authorization', `Bearer ${labFacilityToken}`)
+      .set('Authorization', `Bearer ${prescriptionFacilityToken}`)
       .query({ limit: 100 });
-    expect(queueRes.status).toBe(200);
+    expect(rxQueue.status).toBe(200);
 
-    const rxItem = queueRes.body.items.find((i: any) => i.id === rxFulfill.id);
+    const rxItem = rxQueue.body.items.find((i: any) => i.id === rxFulfill.id);
     expect(rxItem).toBeDefined();
     expect(rxItem.orderKind).toBe('prescription');
     expect(rxItem.orderId).toBe(rxOrder.id);
 
-    const labItem = queueRes.body.items.find((i: any) => i.id === labFulfill.id);
+    // Query the lab queue for the lab order.
+    const labQueue = await request(app)
+      .get('/facilities/me/queue')
+      .set('Authorization', `Bearer ${labFacilityToken}`)
+      .query({ limit: 100 });
+    expect(labQueue.status).toBe(200);
+
+    const labItem = labQueue.body.items.find((i: any) => i.id === labFulfill.id);
     expect(labItem).toBeDefined();
     expect(labItem.orderKind).toBe('lab_order');
     expect(labItem.orderId).toBe(labOrder.id);
