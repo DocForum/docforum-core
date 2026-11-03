@@ -14,7 +14,7 @@ The first protected tables are `Appointment`, `PaymentIntent`, and `Consultation
 
 The Prisma client extension sets `app.current_user_id` and `app.current_role` using `set_config(..., true)` in the same database transaction as each protected operation. It first switches the transaction to `docforum_app`, a non-login, non-bypass role, so a privileged or table-owner connection cannot silently skip the policies. Authenticated interactive transactions set the context once at transaction start, so booking's slot claim and appointment insert remain in their existing atomic transaction. An unauthenticated request receives the `anonymous` role context and cannot see patient rows. Patient policies permit only the owner or an active guardian; doctor, facility, and admin application roles retain existing service-authorized access.
 
-The migration creates the `NOLOGIN BYPASSRLS` role `docforum_rls_bypass` for trusted maintenance operations and grants membership to the migration connection role. It is not selected by request handlers. RLS is forced on the protected tables so table ownership alone does not silently disable policy checks. Migrations continue to run as the configured migration connection role.
+The migration creates the `NOLOGIN` role `docforum_rls_bypass` for trusted maintenance operations and grants membership to the migration connection role. It is not selected by request handlers. RLS is forced on the protected tables so table ownership alone does not silently disable policy checks. Migrations continue to run as the configured migration connection role.
 
 ## Consequences
 
@@ -23,6 +23,8 @@ The migration creates the `NOLOGIN BYPASSRLS` role `docforum_rls_bypass` for tru
 - A future patient-owned intake model must first establish a real patient ownership relation; no field is invented for the current placeholder.
 - Direct protected queries add a short transaction for context setup. Queries inside existing interactive transactions reuse that transaction and set context once. The booking integration test exercises both context isolation and the existing concurrency guarantee; timing is recorded during verification because laptop and CI database timings vary.
 - Trusted jobs that query protected tables must explicitly use `withRlsBypass`; request code must not call it.
+- `docforum_rls_bypass` does not have the `BYPASSRLS` attribute, because only a role that already has it can grant it and managed hosts such as Render do not give it to the database owner. Each protected table has an explicit `USING (true)` policy for this role instead, so a new protected table must add one in the same migration.
+- The test suite connects as a `NOSUPERUSER NOBYPASSRLS` database owner (`tests/helpers/restricted-embedded-postgres.mts`), because a superuser ignores RLS and hid this difference from CI.
 
 ## Alternatives considered
 

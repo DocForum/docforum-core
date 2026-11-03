@@ -10,7 +10,9 @@ export type MetricAggregate = {
 };
 
 export async function getSuccessMetrics(from: Date, to: Date) {
-  const [aggregate] = await prisma.$queryRaw<MetricAggregate[]>`
+  // Run in a transaction so the caller's RLS context is set: outside one, a
+  // raw query has no context and the view returns no rows (docs/adr/0014).
+  const [aggregate] = await prisma.$transaction((tx) => tx.$queryRaw<MetricAggregate[]>`
     SELECT
       COUNT(*) FILTER (WHERE "status" IN ('completed', 'no_show')) AS "eligibleCount",
       COUNT(*) FILTER (WHERE "status" = 'no_show') AS "noShowCount",
@@ -19,7 +21,7 @@ export async function getSuccessMetrics(from: Date, to: Date) {
       COUNT(*) FILTER (WHERE "status" IN ('completed', 'no_show')) AS "leadTimeCount"
     FROM "SuccessMetricAppointment"
     WHERE "appointmentAt" >= ${from} AND "appointmentAt" < ${to}
-  `;
+  `);
 
   return formatMetrics(aggregate, from, to);
 }
