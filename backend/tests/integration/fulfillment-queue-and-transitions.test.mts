@@ -153,11 +153,9 @@ describe('issue #15: fulfillment queue + transitions', () => {
     const patientUser = await prisma.user.create({ data: { email: `pat-seed-${runId}@example.com`, passwordHash: 'x', role: 'patient' } });
     const patientProfile = await prisma.patientProfile.create({ data: { userId: patientUser.id, fullName: 'Test Patient' } });
     const appointment = await prisma.appointment.create({
-      data: { patientProfileId: patientProfile.id, doctorProfileId: doctorProfile.id, status: 'scheduled' },
+      data: { patientProfileId: patientProfile.id, doctorProfileId: doctorProfile.id, status: 'completed' },
     });
-    const consultation = await prisma.consultation.create({
-      data: { appointmentId: appointment.id, outcome: 'resolved', notes: null },
-    });
+    const consultation = await prisma.consultation.create({ data: { appointmentId: appointment.id } });
 
     const createdPrescription = await ordersService.issuePrescription(
       { userId: doctorUser.id, role: 'doctor', requestId: null },
