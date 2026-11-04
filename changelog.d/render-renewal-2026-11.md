@@ -1,0 +1,1 @@
+Renewed the Render preview database (now expires 2026-12-04) and deployed current `main`. ADR 0003's renewal guide now covers the settings the service needs at startup, `/health/ready`, and creating the admin with `create-admin.mjs`.
