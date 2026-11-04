@@ -133,7 +133,8 @@ backend is down between steps 2 and 4.
    hasn't signed up. A new admin's `emailVerifiedAt` is null, and no email
    provider is integrated yet (issue #17), so endpoints behind
    `requireVerifiedEmail` reject it with `403 EMAIL_NOT_VERIFIED`.
-7. Update the expiry date at the top of this section.
+7. Update the expiry date at the top of this section (and in
+   `ROADMAP.md` Phase 9).
 
 ### Required web service settings
 
@@ -146,9 +147,9 @@ encrypted notes unreadable. These live on the web service, so renewing the
 database only changes `DATABASE_URL`. Setting `ESCROW_CONTRACT_ID` also
 requires `ESCROW_HEALTHCHECK_ID`.
 
-Keep **Auto-Deploy** on: it was found off-track on 2026-11-03, with no deploy
-since 2026-10-07. That also left migrations untested on Render until the
-renewal, so it's worth checking the **Events** tab now and then.
+Keep **Auto-Deploy** on, and check the **Events** tab now and then: the service
+had no deploy between 2026-10-07 and 2026-11-03 despite merges to `main`, which
+left 34 migrations untested on Render until this renewal.
 
 ### Restore synthetic demo data
 
