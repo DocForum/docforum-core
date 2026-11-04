@@ -92,7 +92,7 @@ GitHub Pages UI preview has a real backend to call, nothing more.
 ## Renewing the free database
 
 The free Postgres expires 30 days after creation. **Current instance
-expires 2026-11-06** (renewed 2026-10-07) — update this date each time you renew. The data
+expires 2026-12-04** (renewed 2026-11-04) — update this date each time you renew. The data
 is disposable preview data (see above), so renewing means starting from
 an empty database, not migrating rows.
 
@@ -111,23 +111,44 @@ backend is down between steps 2 and 4.
    service, so the internal URL works). Once it's available, copy its
    **Internal Database URL**.
 4. Web service → **Environment** → replace `DATABASE_URL` with that URL →
-   save. Render redeploys; `prisma migrate deploy` runs on start.
-5. Check the deploy log shows the migrations applied, then sign up a
-   test user through the `docforum-web` Pages preview to confirm the
-   round trip (including the refresh cookie).
-6. Re-create the admin/demo accounts from step 1. `POST /auth/signup`
-   refuses `role: 'admin'`, so sign up as a patient, then promote it
-   with the database's **External Database URL**:
-   `psql "<external-url>" -c "UPDATE \"User\" SET role = 'admin' WHERE email = '<email>';"`
-   A promoted account is still `emailVerifiedAt = null` (Phase 8, issue
-   #34), which the payments endpoints now reject with `403
-   EMAIL_NOT_VERIFIED`. Since no email provider is integrated yet (issue
-   #17), mark it verified out-of-band:
-   `node backend/scripts/mark-email-verified.mjs <email>` (see
-   `scripts/README.md`). This whole step is superseded by the admin
-   bootstrap CLI added in issue #39 — replace it once that lands.
-7. Update the expiry date at the top of this section (and in
-   `ROADMAP.md` Phase 9).
+   save. If the deploy that starts is not on the latest `main` commit, use
+   **Manual Deploy** → **Deploy latest commit**. `prisma migrate deploy`
+   runs on start.
+5. Check that `GET /health/ready` reports `ready` with `database` and
+   `migrations` as `ok`, then sign up a test user through the
+   `docforum-web` Pages preview to confirm the round trip (including the
+   refresh cookie).
+6. Re-create the admin account from a checkout's `backend/` directory, using
+   the database's **External Database URL** with `?sslmode=require` added.
+   Read it with `read -rs` so it stays out of shell history:
+
+   ```sh
+   read -rs 'DATABASE_URL?Paste the External URL: '
+   export DATABASE_URL="${DATABASE_URL}?sslmode=require"
+   node scripts/create-admin.mjs --email=<email>
+   unset DATABASE_URL
+   ```
+
+   The script refuses an email that already has an account, so use one that
+   hasn't signed up. A new admin's `emailVerifiedAt` is null, and no email
+   provider is integrated yet (issue #17), so endpoints behind
+   `requireVerifiedEmail` reject it with `403 EMAIL_NOT_VERIFIED`.
+7. Update the expiry date at the top of this section.
+
+### Required web service settings
+
+The service won't start without `DATABASE_URL`, `JWT_ACCESS_SECRET`,
+`JWT_REFRESH_SECRET`, `SEP10_SIGNING_SECRET` (a Stellar secret key),
+`SEP10_HOME_DOMAIN` and `SEP10_WEB_AUTH_DOMAIN` (both
+`docforum-core-api.onrender.com` here). Closing a consultation also needs
+`FIELD_ENCRYPTION_KEY_V1` (32 bytes, base64); changing it makes existing
+encrypted notes unreadable. These live on the web service, so renewing the
+database only changes `DATABASE_URL`. Setting `ESCROW_CONTRACT_ID` also
+requires `ESCROW_HEALTHCHECK_ID`.
+
+Keep **Auto-Deploy** on: it was found off-track on 2026-11-03, with no deploy
+since 2026-10-07. That also left migrations untested on Render until the
+renewal, so it's worth checking the **Events** tab now and then.
 
 ### Restore synthetic demo data
 
