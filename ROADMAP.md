@@ -952,3 +952,5 @@ and issue links.
     and `20261022090000_fulfillment_record_typed_order_fks` own those columns,
     and a second definition made `prisma migrate deploy` fail (42701) in every
     integration test.
+- 2026-11-03 — Issue #116 follow-up: migration `20261024120000_patient_row_level_security` failed on Render with `permission denied to create role`, because only a role that already has `BYPASSRLS` can grant it. `docforum_rls_bypass` no longer has that attribute; explicit policies admit it on `Appointment`, `PaymentIntent` and `Consultation`. The test suite now connects as a non-superuser owner, which is what exposed the gap. This edits an already-merged migration, so a local database that applied the old version keeps working, but `prisma migrate dev` will ask to reset it. Admin success metrics now run in a transaction, because without the RLS context they would count no appointments on such a host.
+- 2026-11-04 — Renewed the Render preview database (now expires 2026-12-04) and deployed current `main`. ADR 0003's renewal guide now covers the settings the service needs at startup, `/health/ready`, and creating the admin with `create-admin.mjs`.

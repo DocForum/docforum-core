@@ -17,7 +17,7 @@ only** — this does not resolve ARCHITECTURE.md §8. It exists so the
 GitHub Pages UI preview has a real backend to call, nothing more.
 
 - Web service: Node, free plan, root dir `backend/`, auto-deploys on push
-  to `main`, build: `npm install && npx prisma generate && npm run build`,
+  to `main`, build: `npm install --include=dev && npx prisma generate && npm run build`,
   start: `npx prisma migrate deploy && npm start`, health check path:
   `/health/ready`. Render must use readiness, not the liveness endpoint, so
   it does not send traffic to a process whose database migrations are pending.
