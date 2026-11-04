@@ -1,4 +1,4 @@
-// Issue #15: facility fulfillment queue + status transitions —
+// Issue #15: facility fulfillment queue —
 // integration coverage against real Postgres and the full HTTP stack,
 // proving:
 //   * GET /facilities/me/queue returns facility's FulfillmentRecords (cursor-paginated, newest first);
