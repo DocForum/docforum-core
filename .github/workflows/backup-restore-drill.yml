@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 env:
-  PGCLIENT_VERSION: '16'
+  # Keep this and the service image below on the Render database's major version.
+  PGCLIENT_VERSION: '18'
 
 jobs:
   backup-and-restore:
@@ -18,7 +19,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_USER: drill
           POSTGRES_PASSWORD: drill
@@ -48,9 +49,8 @@ jobs:
       - name: Install Postgres clients
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-client
-          pg_dump --version
-          psql --version
+          sudo apt-get install -y "postgresql-client-${PGCLIENT_VERSION}"
+          echo "/usr/lib/postgresql/${PGCLIENT_VERSION}/bin" >> "$GITHUB_PATH"
 
       - name: Wait for Postgres
         run: |
@@ -58,6 +58,18 @@ jobs:
             pg_isready -h 127.0.0.1 -U drill -d app && break
             sleep 1
           done
+
+      # A newer pg_dump can write settings an older server rejects on restore.
+      - name: Check client and server versions match
+        run: |
+          pg_dump --version
+          psql --version
+          server_major="$(psql "$DATABASE_URL" -tAX -c 'SHOW server_version_num' | cut -c1-2)"
+          client_major="$(pg_dump --version | grep -oE '[0-9]+' | head -1)"
+          if [ "$client_major" != "$PGCLIENT_VERSION" ] || [ "$server_major" != "$PGCLIENT_VERSION" ]; then
+            echo "::error::Expected Postgres $PGCLIENT_VERSION, got client $client_major and server $server_major."
+            exit 1
+          fi
 
       - name: Seed source database
         run: |
