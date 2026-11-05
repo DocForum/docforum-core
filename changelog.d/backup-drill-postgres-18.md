@@ -1,0 +1,1 @@
+Fixed the backup restore drill, which had failed since GitHub's `ubuntu-latest` runners moved to Postgres 18 client tools while the drill's server stayed on 16. The drill now runs Postgres 18, matching the Render database, installs the client version it declares, and stops with a clear error if the versions differ.
