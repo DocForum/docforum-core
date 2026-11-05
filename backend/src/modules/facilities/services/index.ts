@@ -492,11 +492,38 @@ export async function createFacilityAccount(
       };
     });
   } catch (error) {
-    if (isUniqueViolation(error)) {
+if (isUniqueViolation(error)) {
       throw new HttpError(409, 'An account with this email already exists.');
     }
     throw error;
   }
+}
+
+/**
+ * Issue #15: fulfillment queue + status transitions.
+ * — `getFacilityQueue(facilityUserId, opts)`: the signed-in facility owner's
+ *   queue, cursor-paginated, newest first.
+ */
+export async function getFacilityQueue(
+  facilityUserId: string,
+  opts: { status?: 'pending' | 'in_progress' | 'partially_fulfilled' | 'fulfilled' | 'rejected'; limit?: number; cursor?: string },
+): Promise<{ items: Array<{ id: string; orderKind: 'prescription' | 'lab_order'; orderId: string; status: string; createdAt: Date; updatedAt: Date }>; nextCursor?: string }> {
+  const facility = await facilitiesRepo.findFacilityProfileByUserId(facilityUserId);
+  if (!facility) throw new HttpError(403, 'No facility profile is linked to this account.');
+  const raw = await facilitiesRepo.listFacilityFulfillments(facility.id, opts);
+  const hasMore = raw.length > (opts.limit ?? 20);
+  const items = hasMore ? raw.slice(0, -1) : raw;
+  return {
+    items: items.map((row) => ({
+      id: row.id,
+      orderKind: row.prescriptionId ? 'prescription' : 'lab_order',
+      orderId: row.prescriptionId ?? row.labOrderId!,
+      status: row.status,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    })),
+    ...(hasMore ? { nextCursor: items[items.length - 1]?.id } : {}),
+  };
 }
 
 function isUniqueViolation(error: unknown): boolean {
