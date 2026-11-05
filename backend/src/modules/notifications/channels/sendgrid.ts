@@ -12,10 +12,10 @@ const defaultConfig: SendGridConfig = {
 export const sendgridNotificationChannel: NotificationChannel = {
   async send(_message, _channel = 'email') {
     await sendGrid.send({
-      to: _message.to as any,
-      from: process.env.SENDGRID_FROM_EMAIL || defaultConfig.fromEmail,
+      to: _message.to,
+      from: process.env.SENDGRID_FROM_EMAIL || defaultConfig.fromEmail || 'noreply@docforum.local',
       subject: _message.subject,
       text: _message.body,
-    } as any);
+    });
   },
 };
