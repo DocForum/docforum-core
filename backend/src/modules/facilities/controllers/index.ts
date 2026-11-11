@@ -8,6 +8,7 @@ import {
   createPriceVersionSchema,
   eligibleFacilitiesQuerySchema,
   priceFiltersSchema,
+  facilityQueueQuerySchema,
 } from '../validation';
 
 /** BigInt does not serialize through JSON.stringify — every price response
@@ -97,4 +98,17 @@ export async function createFacility(req: Request, res: Response) {
   const body = createFacilitySchema.parse(req.body);
   const facility = await facilitiesService.createFacilityAccount(auditActor(req), body);
   res.status(201).json(facility);
+}
+
+/** GET /facilities/me/queue — the signed-in facility owner's fulfillment queue. */
+export async function listFacilityQueue(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const query = facilityQueueQuerySchema.parse(req.query);
+  const opts = {
+    status: query.status,
+    limit: query.limit,
+    cursor: query.cursor,
+  };
+  const queue = await facilitiesService.getFacilityQueue(req.user.id, opts);
+  res.status(200).json(queue);
 }

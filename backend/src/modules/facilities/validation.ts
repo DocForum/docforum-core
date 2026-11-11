@@ -82,3 +82,11 @@ export const createFacilitySchema = z.object({
   type: z.enum(['lab', 'pharmacy']),
   capabilities: z.array(facilityCapabilitySchema).min(1).max(20),
 }).strict();
+
+export const facilityQueueQuerySchema = z.object({
+  status: z.enum(['pending', 'in_progress', 'partially_fulfilled', 'fulfilled', 'rejected']).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().min(1).optional(),
+}).strict();
+
+export type FacilityQueueQuery = z.infer<typeof facilityQueueQuerySchema>;
