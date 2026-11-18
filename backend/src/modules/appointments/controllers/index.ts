@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+
 import * as appointmentsService from '../services';
 import * as patientsService from '../../patients/services';
 import {
@@ -101,4 +102,22 @@ export async function cancelMine(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const appointment = await appointmentsService.cancelByPatient(req.user.id, getParam(req, 'appointmentId'));
   res.status(200).json(appointment);
+}
+
+export async function checkIn(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const appointmentId = getParam(req, 'appointmentId');
+  const mine = await appointmentsService.listMyAppointments(req.user.id);
+  const appointment = mine.find((a: { id: string }) => a.id === appointmentId);
+  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  res.status(200).json(appointment);
+}
+
+export async function getQueue(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const appointmentId = getParam(req, 'appointmentId');
+  const mine = await appointmentsService.listMyAppointments(req.user.id);
+  const appointment = mine.find((a: { id: string }) => a.id === appointmentId);
+  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  res.status(200).json({ appointmentId, appointment });
 }

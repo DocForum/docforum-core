@@ -4,6 +4,7 @@ import { walletLinkSchema, paymentHistoryQuerySchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
+import { setVersionEtag } from '../../../middleware/optimistic-concurrency';
 
 // BigInt doesn't serialize via JSON.stringify by default — every response
 // here that carries one converts to a string explicitly. The prepared XDR
@@ -22,6 +23,7 @@ function serializeIntent(intent: {
   escrowId: bigint | null;
   stellarTxHash: string | null;
   sorobanContractId: string | null;
+  version: number;
   preparedTxHash: string | null;
   preparedExpiryLedger: number | null;
   preparedExpiresAt: Date | null;
@@ -62,12 +64,14 @@ export async function getOwnWallet(req: Request, res: Response) {
 export async function getIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const intent = await paymentsService.getPaymentIntent(id);
+  setVersionEtag(res, intent.version);
   res.status(200).json(serializeIntent(intent));
 }
 
 export async function prepareIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const prepared = await paymentsService.preparePaymentIntent(auditActor(req), id);
+  setVersionEtag(res, prepared.intent.version);
   res.status(200).json({
     ...serializeIntent(prepared.intent),
     // ADR 0005 step 2: unsigned XDR + the ledger after which the
@@ -81,18 +85,21 @@ export async function prepareIntent(req: Request, res: Response) {
 export async function fundIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const intent = await paymentsService.fundPaymentIntent(auditActor(req), id);
+  setVersionEtag(res, intent.version);
   res.status(200).json(serializeIntent(intent));
 }
 
 export async function releaseIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const intent = await paymentsService.releasePaymentIntent(auditActor(req), id);
+  setVersionEtag(res, intent.version);
   res.status(200).json(serializeIntent(intent));
 }
 
 export async function refundIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const intent = await paymentsService.refundPaymentIntent(auditActor(req), id);
+  setVersionEtag(res, intent.version);
   res.status(200).json(serializeIntent(intent));
 }
 

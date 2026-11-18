@@ -277,7 +277,7 @@ describe('patient data export', () => {
     expect(bundle.schemaVersion).toBe(1);
     expect(bundle.exportId).toBe(exportId);
     expect(new Date(bundle.generatedAt).toISOString()).toBe(bundle.generatedAt);
-    expect(Object.keys(bundle.sections)).toEqual(['account', 'appointments', 'lab_orders', 'payments', 'prescriptions', 'profile']);
+    expect(Object.keys(bundle.sections)).toEqual(['account', 'appointments', 'intake', 'lab_orders', 'payments', 'prescriptions', 'profile']);
 
     expect(bundle.sections.account.items).toEqual([
       expect.objectContaining({ id: alice.userId, email: alice.email, role: 'patient' }),

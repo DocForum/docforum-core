@@ -1,2 +1,0 @@
-Phase 8: PostgreSQL row-level security for patient-scoped reads
-([issue #116](https://github.com/DocForum/docforum-core/issues/116)). Adds transaction-local request identity for policies on appointments, payment intents, and consultations, a trusted maintenance bypass role, and denial coverage for unfiltered reads. `IntakeForm` remains deferred until its schema establishes patient ownership. See ADR 0014.

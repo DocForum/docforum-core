@@ -143,7 +143,7 @@ export async function consumeVerificationToken(tokenId: string, consumedAt: Date
 }
 
 export function markUserEmailVerified(userId: string, verifiedAt: Date) {
-  return prisma.user.update({ where: { id: userId }, data: { emailVerifiedAt: verifiedAt } });
+  return prisma.user.update({ where: { id: userId }, data: { emailVerifiedAt: verifiedAt, version: { increment: 1 } } });
 }
 
 // --- Login throttling (Phase 8, issue #35) -------------------------------

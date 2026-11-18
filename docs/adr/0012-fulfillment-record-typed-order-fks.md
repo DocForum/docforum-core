@@ -172,7 +172,9 @@ Rejected alternatives:
   stored label. No `OrderType` enum returns — there was an `OrderTypeForPayment`
   enum in the payments sketch, dropped in #85, and nothing here needs it back.
 - **One fulfillment per order, permanently, in v1.** The `UNIQUE` on each
-  column is the guarantee. Consequence, not papered over: a facility that
+  column is the guarantee. *(Relaxed 2026-10-26 for issue #73 — see the
+  amendment at the end of this ADR: the UNIQUE now covers each
+  `(order FK, facility)` pair, so an order gains one record per facility.)* Consequence, not papered over: a facility that
   `reject`s an order cannot be swapped for another facility by creating a
   second row — re-routing after rejection needs a partial unique index
   (`WHERE status NOT IN ('fulfilled','rejected')`), which Prisma cannot declare
@@ -220,3 +222,37 @@ Rejected alternatives:
   what was built), §6.1.3 and §6.3.1 marked resolved, ARCHITECTURE_ESSENTIALS.md's
   data-model map and "Known unresolved design gaps", ROADMAP.md Phase 5's
   prerequisite item.
+
+## Amendment — 2026-10-26 (issue #73, item-level partial fulfillment)
+
+**The `UNIQUE` on each order FK is replaced by a `UNIQUE` on each
+`(order FK, facilityId)` pair.** Everything else in this ADR stands: the table
+stays single, the FKs stay typed and `RESTRICT`, the CHECK still requires
+exactly one order FK, and no clinical row is written by a facility.
+
+- **Why.** Issue #73 requires the patient to route the items one facility
+  could not dispense to a *second* facility — "a new fulfillment record for
+  those items only" — so one order legitimately owns several records at once.
+  A `UNIQUE` on `prescription_id` alone makes that impossible: the second
+  routing is a constraint violation, which is exactly what this branch's
+  `fulfillment.test.mts` split scenario hit (`P2002` → 500/409 on what the
+  issue says must be a `201`).
+- **What the original UNIQUE was buying, preserved.** "At most one fulfillment
+  row per order" existed to stop a *duplicated* routing — two records for the
+  same order doing the same job, with no way to tell which one is live. The
+  composite unique keeps that for the case that matters (same order, same
+  facility) while permitting the split flow. NULLs still don't collide, so
+  each index only constrains the rows its own FK covers — the same mechanism
+  this ADR already relied on.
+- **Consequences, not papered over:** (1) `record.facilityId` is no longer
+  guaranteed to equal the order's `facilityProfileId` — it is the facility the
+  patient routed *to*, and hard rule 5's ownership check now reads it against
+  the writing facility, not against the order. (2) A `rejected` record is
+  terminal for *that facility's* attempt on the order, not for the order: the
+  patient may route the remaining items elsewhere, which is issue #73's
+  intended behaviour rather than the re-routing gap this ADR deferred. (3) The
+  deferred partial-index idea is still not needed: the terminal-state rule
+  lives in `pharmacy-orders/services`' conditional update.
+- **Migration:** `20261026000000_fulfillment_record_per_order_facility` drops
+  the two per-column indexes and creates the two composite ones. ARCHITECTURE.md
+  §4.7 and ARCHITECTURE_ESSENTIALS.md's data map were updated with it.
