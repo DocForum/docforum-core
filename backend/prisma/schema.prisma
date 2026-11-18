@@ -499,6 +499,8 @@ model DoctorProfile {
   // they ultimately see the patient or not).
   referringReferrals Referral[]         @relation("ReferralReferringDoctor")
   targetedReferrals  Referral[]         @relation("ReferralTargetDoctor")
+  // Issue #64: addenda this doctor authored on signed consultations.
+  consultationAddenda ConsultationAddendum[]
 
   @@index([verificationStatus])
 }
@@ -654,6 +656,11 @@ model Appointment {
   // several appointments over its life (re-booking after a cancellation).
   // Referral.resultingAppointmentId is the unique "current" pointer.
   referralId         String?
+  // Issue #64: when the treating doctor marked the visit completed. The
+  // consultation auto-sign-off sweep measures its delay from this instant
+  // (never from `updatedAt`, which later unrelated writes move). Null for
+  // appointments that never reached `completed`.
+  completedAt        DateTime?
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
@@ -825,6 +832,12 @@ model Consultation {
   // Clinical free text: stored as an AES-256-GCM envelope by
   // consultations/services (issue #46 — ARCHITECTURE.md §4.3), never plaintext.
   notes         String?
+  // Issue #64: set once, when the treating doctor signs the note off (or the
+  // auto sign-off sweep does). Null means the note is still editable. After
+  // this timestamp notes are immutable — corrections are ConsultationAddendum
+  // rows, never an in-place edit. Enforced by a DB trigger in the
+  // consultation_sign_off migration, not just here.
+  signedAt      DateTime?
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
 
@@ -837,6 +850,31 @@ model Consultation {
   // Phase 3: the referrals that grew out of this consultation (the
   // opposite side of Referral.sourceConsultationId).
   referrals     Referral[]
+  // Issue #64: post-sign-off corrections, append-only.
+  addenda       ConsultationAddendum[]
+
+  // The auto sign-off sweep scans unsigned rows joined to appointments.
+  @@index([signedAt])
+}
+
+// Issue #64: a correction/addendum to a signed consultation note. Append-only
+// (DB trigger refuses UPDATE/DELETE) and never rewrites `Consultation.notes` —
+// that is the whole point of sign-off: the legal original stays intact and
+// the reader sees the correction as a later, attributed entry. `body` is
+// clinical free text and is encrypted exactly like `Consultation.notes`.
+model ConsultationAddendum {
+  id             String   @id @default(uuid())
+  consultationId String
+  // Only the consultation's authoring doctor may add one (service rule).
+  authorDoctorId String
+  body           String
+  createdAt      DateTime @default(now())
+
+  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Restrict)
+  authorDoctor DoctorProfile @relation(fields: [authorDoctorId], references: [id], onDelete: Restrict)
+
+  @@index([consultationId, createdAt])
+  @@index([authorDoctorId])
 }
 
 // Phase 3 (issues #5/#65/#66/#67/#68). Snapshot rule (FR-7/FR-8, hard

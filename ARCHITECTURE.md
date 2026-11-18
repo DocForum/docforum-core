@@ -215,6 +215,8 @@ Appointment
   intake_id (FK -> IntakeForm — still not a column, Phase 2 issue #1/#2)
   status (enum: scheduled|completed|cancelled|no_show)
   origin (enum: direct_booking|referral), referral_id (nullable FK -> Referral)
+  completed_at (nullable — set when the status transition to `completed`
+    commits; issue #64's consultation auto sign-off measures from it)
   version (int, default 1 — issue #49, §5.4; no If-Match-guarded route exists
     for appointments yet, but every future status write must move it)
   created_at, updated_at
@@ -252,10 +254,22 @@ Consultation
   notes [ENCRYPTED — Phase 8 issue #46, see §2 field-level encryption row]
   outcome (enum: resolved|referred|follow_up_needed, nullable in the schema —
     the close routes require it, so a closed record has one; see below)
+  signed_at (nullable — null = notes still editable; set once at sign-off)
   created_at, updated_at
   referrals: Referral[]   # children — the lineage loop detection walks
+  addenda: ConsultationAddendum[]   # post-sign-off corrections, append-only
+
+ConsultationAddendum
+  id, consultation_id (FK -> Consultation, RESTRICT)
+  author_doctor_id (FK -> DoctorProfile, RESTRICT — only the authoring doctor)
+  body [ENCRYPTED — same envelope as Consultation.notes]
+  created_at
 ```
-**Implemented 2026-10-20 (Phase 2, issue #4):** `appointment_id UNIQUE` is what makes a consultation closable **once** — a second concurrent close loses at the INSERT, not at an app-level check (see docs/adr/0009). There is no amendment/edit path in v1. `notes` is encrypted on write via `encryptField()` (requires `FIELD_ENCRYPTION_KEY_V1`), so the first writer to a clinical free-text column honours the rule below rather than starting a plaintext precedent; reads decrypt in the consultations service.
+**Implemented 2026-10-20 (Phase 2, issue #4):** `appointment_id UNIQUE` is what makes a consultation creatable **once** — a second concurrent close loses at the INSERT, not at an app-level check (see docs/adr/0009). `notes` is encrypted on write via `encryptField()` (requires `FIELD_ENCRYPTION_KEY_V1`), so the first writer to a clinical free-text column honours the rule below rather than starting a plaintext precedent; reads decrypt in the consultations service.
+
+**Sign-off and addenda (Phase 2, issue #64, migration `20261118090000_consultation_sign_off`):** a created consultation starts **unsigned** (`signed_at` null) and its notes are editable through `PATCH /consultations/:id/notes` until the authoring doctor calls `POST /consultations/:id/sign-off` (audited as `consultation.signed_off`). `signed_at` is set once; after that the database itself refuses any change to `notes`, `outcome` or `signed_at` (a `BEFORE UPDATE` trigger raises `check_violation`), so a direct Prisma update cannot rewrite a legal record. Corrections after sign-off are `POST /consultations/:id/addenda`: append-only rows (`BEFORE UPDATE OR DELETE`/`TRUNCATE` triggers refuse mutation), attributed to the authoring doctor, body encrypted like the note. `GET /consultations/:id` returns the note plus `addenda` ordered oldest-first, so a reader can always tell the original from the correction. Notes may not stay editable forever: the `consultation-sign-off.ts` interval sweep signs unsigned consultations `CONSULTATION_AUTO_SIGN_OFF_HOURS` (default 24) after `Appointment.completedAt`, which the status transition now records. Addenda follow the same RLS scope as their consultation (`docs/adr/0014`).
+
+**Referral-before-sign-off decision (issue #64):** referrals may be created from an unsigned consultation. `Referral.snapshot_notes` is a copy taken in the creation transaction (hard rule 3), so a later note edit or addendum never rewrites what the specialist saw; requiring sign-off first would block the Phase 3 referral flow for no safety gain. The snapshotted copy remains the record of the note at referral time.
 
 The row has exactly one writer — `consultationsService.createConsultation` — reachable from three addresses so that no path can bypass the uniqueness, encryption or audit rules: `POST /consultations` (appointment in the body; Phase 3's referral slice, `outcome` optional so a record can exist before sign-off), `POST /appointments/:id/consultation` (Phase 2's close route, `outcome` + `notes` required), and the orders flow's consultation step (which adds its own verified-doctor gate and then delegates). All of them require the appointment to be `completed` and to belong to the calling doctor, and all of them write the same `consultation.closed` audit event in the same transaction.
 
@@ -263,10 +277,8 @@ The row has exactly one writer — `consultationsService.createConsultation` —
 
 Readable (`GET /consultations/:id`) only by the treating doctor and the
 patient of the underlying appointment; anyone else gets `403`, and the
-stored ciphertext never leaves the module. What is still open is issue
-#4's fuller workflow — sign-off, addenda, a doctor editing notes after the
-fact — which is exactly why the referral snapshot (§4.4) exists rather
-than referrals reading this row live.
+stored ciphertext never leaves the module. That is also why the referral
+snapshot (§4.4) exists rather than referrals reading this row live.
 
 ### 4.4 Referral
 ```

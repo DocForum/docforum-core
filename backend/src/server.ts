@@ -12,6 +12,7 @@ import { startAccountPurgeJob } from './jobs/account-purge';
 import { startPaymentIntentJobs } from './jobs/payment-intents';
 import { startReferralExpiryJob } from './jobs/referral-expiry';
 import { startOrderExpiryJob } from './jobs/order-expiry';
+import { startConsultationSignOffJob } from './jobs/consultation-sign-off';
 import { expireUnfulfilledOrders } from './jobs/lab-order-expiry';
 import { prisma } from './db/prisma-client';
 
@@ -34,6 +35,9 @@ const stopPaymentIntentJobs = startPaymentIntentJobs();
 const stopReferralExpiry = startReferralExpiryJob();
 // Unconfirmed order expiry job (auto-confirm when window elapses with no dispute).
 const stopOrderExpiry = startOrderExpiryJob();
+// Consultation auto sign-off (Phase 2, issue #64): unsigned notes stop being
+// editable CONSULTATION_AUTO_SIGN_OFF_HOURS after the appointment completed.
+const stopConsultationSignOff = startConsultationSignOffJob();
 
 async function startServer() {
   await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork(), validateSep10Config()]);
@@ -64,6 +68,7 @@ async function shutdown(signal: string) {
   stopPaymentIntentJobs();
   stopReferralExpiry();
   stopOrderExpiry();
+  stopConsultationSignOff();
   if (server) {
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => server?.closeAllConnections(), 10_000);

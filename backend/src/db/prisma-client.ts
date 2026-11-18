@@ -58,7 +58,13 @@ const adapter = new PrismaPg({
 // Single shared client for the whole process — Prisma's own guidance for
 // a long-running server (as opposed to a new client per request/lambda).
 const extendedClient = new PrismaClient({ adapter });
-const protectedDelegates = new Set<PropertyKey>(['appointment', 'paymentIntent', 'consultation']);
+const protectedDelegates = new Set<PropertyKey>([
+  'appointment',
+  'paymentIntent',
+  'consultation',
+  // Issue #64: addenda carry clinical text and follow the same RLS scope.
+  'consultationAddendum',
+]);
 
 async function installRlsContext(
   tx: Prisma.TransactionClient,

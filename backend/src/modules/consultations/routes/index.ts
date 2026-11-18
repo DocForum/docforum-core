@@ -36,6 +36,30 @@ consultationsRouter.post(
   consultationsController.create,
 );
 consultationsRouter.get('/:consultationId', authenticate, consultationsController.getOne);
+// Issue #64: note sign-off workflow. Editable until sign-off, immutable
+// after; corrections after that are append-only addenda. Doctor-only and
+// restricted to the authoring doctor at the service layer.
+consultationsRouter.patch(
+  '/:consultationId/notes',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  consultationsController.updateNotes,
+);
+consultationsRouter.post(
+  '/:consultationId/sign-off',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  consultationsController.signOff,
+);
+consultationsRouter.post(
+  '/:consultationId/addenda',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  consultationsController.addAddendum,
+);
 // Issue #66 (PRD §8.2.4): multiple simultaneous referrals from one
 // consultation, atomic all-or-none, each with its own snapshot copy.
 consultationsRouter.post(

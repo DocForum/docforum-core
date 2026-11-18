@@ -18,3 +18,13 @@ export const createConsultationSchema = z.object({
 export const createReferralsSchema = z.object({
   targets: z.array(referralTargetSchema).min(1),
 });
+
+/** Issue #64: edit the note while it is unsigned. */
+export const updateConsultationNotesSchema = z.object({
+  notes: z.string().trim().min(1).max(20000),
+});
+
+/** Issue #64: append-only correction on a signed consultation. */
+export const addConsultationAddendumSchema = z.object({
+  body: z.string().trim().min(1).max(20000),
+});

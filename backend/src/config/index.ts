@@ -314,6 +314,14 @@ export const config = {
     pendingTtlDays: positiveNumber(process.env.REFERRAL_PENDING_TTL_DAYS, 14),
     expirySweepIntervalSeconds: positiveNumber(process.env.REFERRAL_EXPIRY_SWEEP_INTERVAL_SECONDS, 60 * 60),
   },
+  // Consultation auto sign-off (Phase 2, issue #64). Notes stop being
+  // editable this many hours after the appointment was completed; the sweep
+  // (src/jobs/consultation-sign-off.ts) applies it. A v1 default, not a
+  // tuned value.
+  consultations: {
+    autoSignOffHours: positiveNumber(process.env.CONSULTATION_AUTO_SIGN_OFF_HOURS, 24),
+    autoSignOffSweepIntervalSeconds: positiveNumber(process.env.CONSULTATION_AUTO_SIGN_OFF_SWEEP_INTERVAL_SECONDS, 5 * 60),
+  },
   // Feature flags (Phase 8, issue #132). Flags are cached in memory this
   // long; an admin change takes effect immediately in the process that
   // handled it and within this many seconds in the others.

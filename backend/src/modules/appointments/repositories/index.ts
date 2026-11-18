@@ -89,7 +89,12 @@ export function findAppointmentDoctorContext(id: string) {
  * real transition, without relying on app-level checks.
  */
 export function updateStatusIfScheduled(db: DbClient, id: string, status: AppointmentStatus) {
-  return db.appointment.updateMany({ where: { id, status: 'scheduled' }, data: { status } });
+  return db.appointment.updateMany({
+    where: { id, status: 'scheduled' },
+    // Issue #64: completedAt is the instant the visit became `completed`. The
+    // consultation auto sign-off sweep measures its delay from it.
+    data: { status, ...(status === 'completed' ? { completedAt: new Date() } : {}) },
+  });
 }
 
 /**

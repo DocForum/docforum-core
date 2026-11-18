@@ -21,7 +21,7 @@ const pg = new EmbeddedPostgres({
   initdbFlags: ['--encoding=UTF8'],
 });
 const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_test`;
-const PROTECTED_TABLES = ['Appointment', 'PaymentIntent', 'Consultation'];
+const PROTECTED_TABLES = ['Appointment', 'PaymentIntent', 'Consultation', 'ConsultationAddendum'];
 const SEEDED_APPOINTMENTS = 5;
 
 describe('migrations as a restricted database owner', () => {

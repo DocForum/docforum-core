@@ -1,6 +1,12 @@
 import type { Request, Response } from 'express';
 import * as consultationsService from '../services';
-import { closeConsultationSchema, createConsultationSchema, createReferralsSchema } from '../validation';
+import {
+  addConsultationAddendumSchema,
+  closeConsultationSchema,
+  createConsultationSchema,
+  createReferralsSchema,
+  updateConsultationNotesSchema,
+} from '../validation';
 import { HttpError } from '../../../http-error';
 import { auditActor } from '../../../middleware/request-id';
 import { getParam } from '../../../request-params';
@@ -34,6 +40,40 @@ export async function getOne(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const consultation = await consultationsService.getConsultation(req.user.id, getParam(req, 'consultationId'));
   res.status(200).json(consultation);
+}
+
+/** PATCH /consultations/:consultationId/notes — edit while unsigned. */
+export async function updateNotes(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const { notes } = updateConsultationNotesSchema.parse(req.body);
+  const consultation = await consultationsService.updateConsultationNotes(
+    auditActor(req),
+    getParam(req, 'consultationId'),
+    notes,
+  );
+  res.status(200).json(consultation);
+}
+
+/** POST /consultations/:consultationId/sign-off — freeze the note. */
+export async function signOff(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const consultation = await consultationsService.signOffConsultation(
+    auditActor(req),
+    getParam(req, 'consultationId'),
+  );
+  res.status(200).json(consultation);
+}
+
+/** POST /consultations/:consultationId/addenda — post-sign-off correction. */
+export async function addAddendum(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const { body } = addConsultationAddendumSchema.parse(req.body);
+  const addendum = await consultationsService.addConsultationAddendum(
+    auditActor(req),
+    getParam(req, 'consultationId'),
+    body,
+  );
+  res.status(201).json(addendum);
 }
 
 export async function createReferrals(req: Request, res: Response) {

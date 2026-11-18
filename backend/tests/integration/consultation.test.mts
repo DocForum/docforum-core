@@ -265,4 +265,128 @@ describe('consultation close-once guarantee', () => {
 
     expect(res.status).toBe(400);
   });
+
+  // --- Issue #64: sign-off, immutability, append-only addenda -------------
+
+  async function consultationId() {
+    return (await prisma.consultation.findUniqueOrThrow({ where: { appointmentId } })).id;
+  }
+
+  it('lets the authoring doctor edit notes before sign-off', async () => {
+    const id = await consultationId();
+    const res = await request(app)
+      .patch(`/consultations/${id}/notes`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ notes: 'Reviewed results; corrected a typo.' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.notes).toBe('Reviewed results; corrected a typo.');
+    expect(res.body.signedAt).toBeNull();
+
+    const stored = await prisma.consultation.findUniqueOrThrow({ where: { id } });
+    // Still stored encrypted, never plaintext.
+    expect(stored.notes).toMatch(/^v1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/);
+  });
+
+  it('refuses note edits from a doctor who is not the author', async () => {
+    const id = await consultationId();
+    const res = await request(app)
+      .patch(`/consultations/${id}/notes`)
+      .set('Authorization', `Bearer ${otherDoctorToken}`)
+      .send({ notes: 'Not my note.' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('signs the note off exactly once', async () => {
+    const id = await consultationId();
+    const res = await request(app)
+      .post(`/consultations/${id}/sign-off`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`);
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.signedAt).toEqual(expect.any(String));
+    expect(res.body.notes).toBe('Reviewed results; corrected a typo.');
+
+    const again = await request(app)
+      .post(`/consultations/${id}/sign-off`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`);
+    expect(again.status).toBe(409);
+  });
+
+  it('refuses to edit notes after sign-off', async () => {
+    const id = await consultationId();
+    const res = await request(app)
+      .patch(`/consultations/${id}/notes`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ notes: 'Post-sign-off rewrite attempt.' });
+
+    expect(res.status).toBe(409);
+    const stored = await prisma.consultation.findUniqueOrThrow({ where: { id } });
+    expect(stored.notes).not.toContain('rewrite');
+  });
+
+  it('refuses a direct Prisma UPDATE of a signed note at the DB level', async () => {
+    const id = await consultationId();
+    await expect(
+      prisma.consultation.update({ where: { id }, data: { notes: 'direct write' } }),
+    ).rejects.toThrow(/immutable after sign-off/);
+  });
+
+  it('only the authoring doctor can add an addendum, and only after sign-off', async () => {
+    const id = await consultationId();
+
+    const other = await request(app)
+      .post(`/consultations/${id}/addenda`)
+      .set('Authorization', `Bearer ${otherDoctorToken}`)
+      .send({ body: 'Not mine to add.' });
+    expect(other.status).toBe(403);
+
+    const patient = await request(app)
+      .post(`/consultations/${id}/addenda`)
+      .set('Authorization', `Bearer ${patientToken}`)
+      .send({ body: 'Patient attempt.' });
+    expect(patient.status).toBe(403);
+  });
+
+  it('returns the note plus addenda in order, clearly separated', async () => {
+    const id = await consultationId();
+
+    for (const body of ['Correction: dosage was 5mg, not 50mg.', 'Second addendum.']) {
+      const created = await request(app)
+        .post(`/consultations/${id}/addenda`)
+        .set('Authorization', `Bearer ${owningDoctorToken}`)
+        .send({ body });
+      expect(created.status, JSON.stringify(created.body)).toBe(201);
+      expect(created.body.body).toBe(body);
+    }
+
+    const read = await request(app)
+      .get(`/consultations/${id}`)
+      .set('Authorization', `Bearer ${patientToken}`);
+    expect(read.status).toBe(200);
+    expect(read.body.notes).toBe('Reviewed results; corrected a typo.');
+    expect(read.body.addenda.map((a: { body: string }) => a.body)).toEqual([
+      'Correction: dosage was 5mg, not 50mg.',
+      'Second addendum.',
+    ]);
+    expect(read.body.addenda[0].authorDoctorId).toBe(read.body.appointment.doctorProfileId);
+
+    // Stored encrypted, never plaintext.
+    const stored = await prisma.consultationAddendum.findMany({ where: { consultationId: id } });
+    expect(stored).toHaveLength(2);
+    for (const row of stored) expect(row.body).toMatch(/^v1:/);
+  });
+
+  it('refuses direct UPDATE/DELETE of an addendum at the DB level', async () => {
+    const id = await consultationId();
+    const addendum = await prisma.consultationAddendum.findFirstOrThrow({ where: { consultationId: id } });
+
+    await expect(
+      prisma.consultationAddendum.update({ where: { id: addendum.id }, data: { body: 'rewritten' } }),
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      prisma.consultationAddendum.delete({ where: { id: addendum.id } }),
+    ).rejects.toThrow(/append-only/);
+  });
 });

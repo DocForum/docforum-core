@@ -205,13 +205,23 @@ of the address.
 |---|---|---|---|
 | `POST /appointments/:appointmentId/consultation` | doctor (own **completed** appointment, verified email) | `{ outcome: 'resolved' \| 'referred' \| 'follow_up_needed', notes }` | Closes the appointment's consultation. `201` returns `{ consultation, appointment }`; `404` if the appointment doesn't exist **or isn't the caller's** (no existence leak); `409` if the appointment isn't `completed` or its consultation was already closed; `400` on an unknown outcome or empty/over-20k notes. |
 | `POST /consultations` | doctor (own completed appointment, verified email) | `{ appointmentId, outcome?, notes? }` | The same write with the appointment in the body — Phase 3's address for it. `201` returns the consultation. `outcome` is optional here so a record can exist before sign-off; the close route above requires it. |
-| `GET /consultations/:consultationId` | doctor (treating) or patient (own visit) | — | Anyone else gets `403`; unknown id `404`. `notes` comes back decrypted. |
+| `GET /consultations/:consultationId` | doctor (treating) or patient (own visit) | — | Anyone else gets `403`; unknown id `404`. `notes` comes back decrypted, plus `addenda` oldest-first (each with decrypted `body`, `authorDoctorId`, `createdAt`), so the original note and later corrections are clearly separated. |
+| `PATCH /consultations/:consultationId/notes` | doctor (authoring, verified email) | `{ notes }` | Issue #64 — edits the note while it is unsigned. `200` returns the consultation with decrypted notes. `409` once signed off (add an addendum instead); `403` for any other doctor. |
+| `POST /consultations/:consultationId/sign-off` | doctor (authoring, verified email) | — | Issue #64 — freezes `notes` and `outcome`; `signedAt` is set once. `200` returns the signed consultation. `409` if already signed or if the consultation has no notes. After this, note edits fail at the API **and** at the database trigger. |
+| `POST /consultations/:consultationId/addenda` | doctor (authoring, verified email) | `{ body }` | Issue #64 — append-only correction on a signed consultation, body encrypted at rest. `201` returns `{ id, consultationId, authorDoctorId, body, createdAt }`. `409` before sign-off (edit the note instead); `403` for any other doctor. |
 | `POST /consultations/:consultationId/referrals` | doctor (treating, verified email) | `{ targets: [{ targetDoctorId?, targetSpecialtyId?, snapshotNotes }] }` | Issue #66 — atomic all-or-none multi-referral. Equivalent to `POST /referrals/from-consultation/:consultationId` below; both live on the referrals service, so a specialty-only target is routed at creation exactly as that row describes (issue #6). |
 
 Once-only is a database guarantee, not an app-level check:
 `Consultation.appointmentId` is `UNIQUE`, so two concurrent closes can't both
-commit — the loser gets `409`. There is no amendment/edit path in v1 (an
-explicit open question, not an assumption).
+commit — the loser gets `409`. Notes are editable until the authoring doctor
+signs the consultation off (`signedAt`); after that the database refuses
+in-place edits and corrections are append-only addenda. Unsigned notes are
+auto-signed `CONSULTATION_AUTO_SIGN_OFF_HOURS` (default 24) after the
+appointment completed.
+
+Referrals may be created from an unsigned consultation: `snapshotNotes` is a
+copy taken at creation, so later note edits or addenda never rewrite what the
+specialist saw.
 
 `notes` is clinical free text and is stored **encrypted** (AES-256-GCM
 envelope, `v1:<iv>:<tag>:<data>` — ARCHITECTURE.md §4.3, issue #46); it is
