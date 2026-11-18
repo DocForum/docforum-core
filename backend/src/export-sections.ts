@@ -13,10 +13,12 @@ import { appointmentsExportSection } from './modules/appointments/services';
 import { paymentsExportSection } from './modules/payments/services';
 import { profileExportSection, registerExportSection } from './modules/patients/services';
 import { prescriptionsExportSection, labOrdersExportSection } from './modules/orders/services';
+import { intakeExportSection } from './modules/intake/services';
 
 export const PATIENT_EXPORT_SECTIONS = [
   accountExportSection,
   profileExportSection,
+  intakeExportSection,
   appointmentsExportSection,
   paymentsExportSection,
   prescriptionsExportSection,

@@ -1,0 +1,1 @@
+Phase 2: added patient-owned structured symptom intake records, self-only create/history endpoints, and the intake patient-export section ([issue #1](https://github.com/DocForum/docforum-core/issues/1)). Appointment linkage and requiring intake before booking remain issue #2.
