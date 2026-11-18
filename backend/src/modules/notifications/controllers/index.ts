@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import * as notificationsService from '../services';
+import { verifyAccessToken } from '../../auth/services';
+import { notificationHub, tokenExpiredFrame } from '../services/stream';
 
 const listQuerySchema = z.object({
 	unread: z.enum(['true', 'false']).default('false'),
@@ -38,11 +40,9 @@ export async function markRead(req: Request, res: Response) {
 export async function markAllRead(req: Request, res: Response) {
 	const result = await notificationsService.markAllMyNotificationsRead(getUserId(req));
 	res.status(200).json({ updated: result.count });
-// notifications controllers — the SSE stream endpoint (issue #97).
-import type { Request, Response } from 'express';
-import { HttpError } from '../../../http-error';
-import { verifyAccessToken } from '../../auth/services';
-import { notificationHub, tokenExpiredFrame } from '../services/stream';
+}
+
+// SSE stream endpoint (issue #97).
 
 /** Heartbeat comment interval. Keeps proxies from closing an idle stream. */
 const HEARTBEAT_MS = 15_000;

@@ -10,6 +10,9 @@
 //      (issue #14, PRD OQ-2 / FR-13): facilities are curated, never
 //      self-serve, and a patient only ever sees facilities qualified for
 //      their order type.
+//   4. the eligible list can be distance-sorted from a patient-supplied
+//      point (issue #74) — the point is a bind parameter and nothing else:
+//      never stored, never logged, never echoed back.
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import * as auditService from '../../audit/services';
@@ -31,6 +34,12 @@ const MAX_CAPABILITY_DETAIL_LENGTH = 100;
 /** Mirrors auth signup's minimum — an admin-set initial password must not
  * be weaker than a self-chosen one. */
 const MIN_FACILITY_PASSWORD_LENGTH = 8;
+/** Default search radius when `near` is given but `radiusKm` isn't — a
+ * city-scale default rather than "sort everything in the country"
+ * (issue #74). Only applies when a point was given at all. */
+export const DEFAULT_RADIUS_KM = 50;
+/** Row cap for the eligible query when the caller doesn't pick one. */
+const DEFAULT_LIMIT = 50;
 
 export const DEFAULT_PRICE_ASSET = NATIVE_PRICE_ASSET;
 
@@ -191,6 +200,14 @@ export interface EligibleFacility {
   facilityId: string;
   name: string;
   type: 'lab' | 'pharmacy';
+  /** Registered street address, or null when the facility hasn't set one
+   * (issue #74 — it still appears in the list). */
+  address: string | null;
+  /** Straight-line km from the caller's `near` point, or null when no
+   * point was given or the facility registered no coordinates. Those rows
+   * still appear, sorted last (issue #74 edge case). The patient's own
+   * point is never part of the response — only per-facility distances. */
+  distanceKm: number | null;
   /** Current price in smallest units, or null → "price on request". */
   price: { amount: bigint; effectiveFrom: Date } | null;
   priceOnRequest: boolean;
@@ -262,26 +279,60 @@ export async function requireFacilityForOrderKind(db: Db, facilityProfileId: str
  * concern PRD §8.1.6 names; hiding an under-documented one is merely an
  * operator fix.
  */
+/**
+ * Facilities qualified for a query — capability matching (issue #14, PRD
+ * FR-13), optionally distance-sorted from the patient's point (issue #74),
+ * each with the price in force at `at` for the optional `catalogItemCode`
+ * (issue #127).
+ *
+ * Fail closed (PRD §8.1.6): a facility appears only if it matches the
+ * qualification filter — of `type` *and* holding that type's capability, or
+ * of the explicitly asked `capabilityType`. A facility with no capability
+ * rows, or only rows of the wrong capability type (malformed data), shows
+ * for nothing: hiding an under-documented facility is an operator fix,
+ * showing an unqualified one is the fraud risk the PRD names.
+ *
+ * Privacy (issue #74): `near` lives on this call stack and nothing else.
+ * It is never persisted, never written to a log line, and never echoed
+ * back — the response carries per-facility `distanceKm` only.
+ */
 export async function listEligibleFacilities(input: {
-  type: 'lab' | 'pharmacy';
+  type?: 'lab' | 'pharmacy';
+  capabilityType?: CapabilityType;
+  detail?: string;
+  near?: { lat: number; lng: number };
+  radiusKm?: number;
+  limit?: number;
   catalogItemCode?: string;
   asset?: string;
   at?: Date;
 }): Promise<EligibleFacility[]> {
   const at = input.at ?? new Date();
-  const facilities = await facilitiesRepo.listQualifiedFacilityProfiles(
-    input.type,
-    capabilityForFacilityType(input.type),
-  );
-  if (!input.catalogItemCode) {
-    return facilities.map((facility) => ({
-      facilityId: facility.id,
-      name: facility.name,
-      type: facility.type,
-      price: null,
-      priceOnRequest: true,
-    }));
-  }
+  // A caller that names only the facility type gets the capability that
+  // type exists to provide — one map, so creation and matching can't drift.
+  const capabilityType =
+    input.capabilityType ?? (input.type ? capabilityForFacilityType(input.type) : undefined);
+
+  const facilities = await facilitiesRepo.listEligibleFacilityProfiles({
+    type: input.type,
+    capabilityType,
+    detail: input.detail,
+    near: input.near,
+    radiusKm: input.near ? (input.radiusKm ?? DEFAULT_RADIUS_KM) : undefined,
+    limit: input.limit ?? DEFAULT_LIMIT,
+  });
+
+  const located = facilities.map((facility) => ({
+    facilityId: facility.id,
+    name: facility.name,
+    type: facility.type,
+    address: facility.address,
+    distanceKm: facility.distanceKm === null ? null : Number(facility.distanceKm.toFixed(2)),
+    price: null as { amount: bigint; effectiveFrom: Date } | null,
+    priceOnRequest: true,
+  }));
+
+  if (!input.catalogItemCode) return located;
 
   const catalogItemCode = assertCatalogItemCode(input.catalogItemCode);
   const asset = assertAsset(input.asset);
@@ -297,18 +348,16 @@ export async function listEligibleFacilities(input: {
     if (!byFacility.has(row.facilityId)) byFacility.set(row.facilityId, row);
   }
 
-  return facilities.map((facility) => {
-    const row = byFacility.get(facility.id);
+  return located.map((facility) => {
+    const row = byFacility.get(facility.facilityId);
+    if (!row) return facility;
     return {
-      facilityId: facility.id,
-      name: facility.name,
-      type: facility.type,
-      price: row ? { amount: row.amount, effectiveFrom: row.effectiveFrom } : null,
-      priceOnRequest: !row,
+      ...facility,
+      price: { amount: row.amount, effectiveFrom: row.effectiveFrom },
+      priceOnRequest: false,
     };
   });
 }
-
 /**
  * The matching query in the issue's terms: *given an order's kind*, return
  * only the facilities qualified to fulfill it (PRD FR-13). Cross-module

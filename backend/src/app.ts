@@ -14,14 +14,13 @@ import { metricsRouter } from './modules/metrics/routes';
 import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
 import { labOrdersRouter } from './modules/lab-orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
-import { patientsRouter } from './modules/patients/routes';
 import { facilitiesRouter } from './modules/facilities/routes';
+import { patientsRouter } from './modules/patients/routes';
 import { adminRouter } from './modules/users/routes';
 import { registerPatientExportSections } from './export-sections';
 import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
 import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
-import { notificationsRouter } from './modules/notifications/routes';
 import { referralsRouter } from './modules/referrals/routes';
 import { outboxAdminRouter } from './events/routes';
 import { notificationsRouter } from './modules/notifications/routes';
@@ -84,13 +83,14 @@ export function createApp() {
   app.use('/admin', adminOrdersRouter);
   app.use('/admin', metricsRouter);
   app.use('/payments', paymentsRouter);
-  app.use('/patients', patientsRouter);
+  // Phase 5 (issues #73/#74): /facilities and /pharmacy-orders mounts
+  // (/pharmacy-orders is mounted above, with the order routes).
   app.use('/facilities', facilitiesRouter);
+  app.use('/patients', patientsRouter);
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);
   app.use('/admin/outbox', outboxAdminRouter);
-  app.use('/notifications', notificationsRouter);
   app.use('/admin', auditRouter);
   app.use('/admin/payments', escrowEventsRouter);
 

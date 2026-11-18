@@ -1,8 +1,6 @@
 // notifications services — the only exported surface other modules may
 // call. Other modules must only import from here, never from
 // repositories/ directly. See AGENTS.md "Non-negotiable rules".
-import type { Prisma } from '@prisma/client';
-import { z } from 'zod';
 //
 // Provider-agnostic by design (ARCHITECTURE.md §1.5 / §2, PRD OQ / issue
 // #17): outbound delivery goes through a `NotificationChannel` interface,
@@ -10,6 +8,8 @@ import { z } from 'zod';
 // provider is decided in docs/adr/ (see ADR for the email/SMS provider
 // decision). Wiring that provider in is a new adapter behind this same
 // interface — only the adapter changes, feature code does not.
+import type { Prisma } from '@prisma/client';
+import { z } from 'zod';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import { formatMessage, resolveLocale } from '../../../i18n';

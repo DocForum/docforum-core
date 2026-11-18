@@ -37,6 +37,10 @@ function serializeEligible(facility: facilitiesService.EligibleFacility) {
     facilityId: facility.facilityId,
     name: facility.name,
     type: facility.type,
+    // Issue #74: address + per-facility distance. The patient's query
+    // point is never part of this payload.
+    address: facility.address,
+    distanceKm: facility.distanceKm,
     priceOnRequest: facility.priceOnRequest,
     price: facility.price
       ? {
