@@ -72,7 +72,7 @@ describe('transactional outbox', () => {
     const doctorUser = await prisma.user.create({
       data: { email: `outbox-doctor-${runId}@example.com`, passwordHash: 'unused', role: 'doctor' },
     });
-    doctorProfileId = (await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: 'Outbox Doctor' } })).id;
+    doctorProfileId = (await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: 'Outbox Doctor', timeZone: 'UTC' } })).id;
 
     const admin = await prisma.user.create({
       data: { email: `outbox-admin-${runId}@example.com`, passwordHash: 'unused', role: 'admin' },
