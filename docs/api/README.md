@@ -185,6 +185,13 @@ against `tokenVersion` on every `POST /auth/refresh`.
 | `PATCH /appointments/:appointmentId/complete` | doctor (treating doctor only) | — | Marks the appointment as `completed` and records `completedAt`; same referral cascade as the status transition above. `409` unless `in_progress`. |
 | `GET /appointments/:appointmentId/queue` | patient (own appointment) or treating doctor | — | Returns `{ position, estimatedWaitMinutes, checkedInAt, startedAt }` for the caller's own appointment only — never other patients' details. Position is the count of earlier same-day appointments for that doctor still not completed; the estimate is a simple running-average delay (actual start minus scheduled start) applied to the remaining appointments ahead in the queue. |
 
+## Intake (`/intake`) — `backend/src/modules/intake`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /intake` | patient | `{ symptoms: [{ symptom, duration, severity }], freeTextNotes? }` | Creates a structured intake record for the caller's own patient profile. Severity is `mild`, `moderate` or `severe`. |
+| `GET /intake/mine` | patient | — | Returns only the caller's intake history and records the read in the PHI access log. |
+
 ## Consultations (`/consultations` + `/appointments`) — `backend/src/modules/consultations`
 
 Phase 2, issue #4 (close-once) and Phase 3's referral slice. The module owns
