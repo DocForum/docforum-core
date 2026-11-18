@@ -31,6 +31,26 @@ export function createLabOrder(db: DbClient, input: {
   return db.labOrder.create({ data: input });
 }
 
+/** A lab order with what result attachment needs: the result row (if any)
+ * and whether a correction superseded it. */
+export function findLabOrderWithResult(id: string, db: DbClient = prisma) {
+  return db.labOrder.findUnique({
+    where: { id },
+    select: {
+      id: true, patientProfileId: true, orderingDoctorId: true, facilityProfileId: true,
+      correctedBy: { select: { id: true } },
+      result: true,
+    },
+  });
+}
+
+export function createLabResult(db: DbClient, input: {
+  labOrderId: string; fulfillingFacilityId: string;
+  resultObjectKey: string; resultContentType: string; resultByteSize: number;
+}) {
+  return db.labResult.create({ data: input });
+}
+
 export function findPrescriptionExportPage(patientProfileId: string, cursor: string | undefined, take: number) {
   return prisma.prescription.findMany({
     where: { patientProfileId }, orderBy: [{ id: 'asc' }], take,

@@ -1,6 +1,17 @@
 import { defineConfig } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
+  resolve: {
+    alias: [
+      {
+        // Every integration file connects as a non-superuser owner, like a
+        // managed host's account. A superuser would skip RLS (docs/adr/0014).
+        find: /^embedded-postgres$/,
+        replacement: fileURLToPath(new URL('./tests/helpers/restricted-embedded-postgres.mts', import.meta.url)),
+      },
+    ],
+  },
   test: {
     environment: 'node',
     globals: true,
@@ -32,6 +43,9 @@ export default defineConfig({
       // without touching the real key, which only production/dev envs hold.
       FIELD_ENCRYPTION_KEY_V1: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
       FIELD_ENCRYPTION_ACTIVE_VERSION: 'v1',
+      // Lab result files (issue #16) go to an in-process store in tests; the
+      // S3 driver is the deployed one (docs/adr/0014).
+      OBJECT_STORAGE_DRIVER: 'memory',
       // Port 5433, not 5432 — tests/integration/booking.test.mts spins up
       // its own throwaway Postgres cluster on this port so the suite is
       // self-contained (no pre-existing DB required). A distinct port

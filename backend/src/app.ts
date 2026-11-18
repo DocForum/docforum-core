@@ -14,19 +14,21 @@ import { metricsRouter } from './modules/metrics/routes';
 import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
 import { labOrdersRouter } from './modules/lab-orders/routes';
 import { paymentsRouter } from './modules/payments/routes';
-import { patientsRouter } from './modules/patients/routes';
 import { facilitiesRouter } from './modules/facilities/routes';
+import { patientsRouter } from './modules/patients/routes';
 import { adminRouter } from './modules/users/routes';
 import { registerPatientExportSections } from './export-sections';
 import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
 import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
 import { referralsRouter } from './modules/referrals/routes';
+import { outboxAdminRouter } from './events/routes';
 import { notificationsRouter } from './modules/notifications/routes';
 import { adminFlagsRouter, meFlagsRouter } from './modules/flags/routes';
 import { registerRetentionHolds } from './retention-holds';
 import { getReadiness } from './health/readiness';
 import { runWithRlsContext } from './db/prisma-client';
+import { intakeRouter } from './modules/intake/routes';
 
 export function createApp() {
   const app = express();
@@ -76,17 +78,21 @@ export function createApp() {
   // (POST /appointments/:appointmentId/consultation) as well as from
   // /consultations below — same service, one write path.
   app.use('/appointments', appointmentConsultationsRouter);
+  app.use('/intake', intakeRouter);
   app.use('/orders', ordersRouter);
   app.use('/pharmacy-orders', pharmacyOrdersRouter);
   app.use('/lab-orders', labOrdersRouter);
   app.use('/admin', adminOrdersRouter);
   app.use('/admin', metricsRouter);
   app.use('/payments', paymentsRouter);
-  app.use('/patients', patientsRouter);
+  // Phase 5 (issues #73/#74): /facilities and /pharmacy-orders mounts
+  // (/pharmacy-orders is mounted above, with the order routes).
   app.use('/facilities', facilitiesRouter);
+  app.use('/patients', patientsRouter);
   // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
   // reactivate) alongside the audit read path. Different paths, no overlap.
   app.use('/admin', adminRouter);
+  app.use('/admin/outbox', outboxAdminRouter);
   app.use('/admin', auditRouter);
   app.use('/admin/payments', escrowEventsRouter);
 
