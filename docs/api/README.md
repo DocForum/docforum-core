@@ -433,6 +433,34 @@ the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZ
 `PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
 `backend/src/jobs/README.md`.
 
+## Notifications (`/notifications`) — `backend/src/modules/notifications`
+
+All endpoints require an access token. Notification queries and mutations are
+scoped to the authenticated user; another user's notification id returns `404`.
+
+| Method & path | Auth | Query/body | Notes |
+|---|---|---|---|
+| `GET /notifications` | any authenticated user | `unread=true|false`, `limit` (1–100, default 50), `cursor` | Newest first, keyset-paginated by `(createdAt, id)`. Returns `{ items, nextCursor }`; malformed cursors return `400 INVALID_CURSOR`. |
+| `GET /notifications/unread-count` | any authenticated user | — | Returns `{ count }`. |
+| `POST /notifications/:id/read` | any authenticated user | — | Marks the caller's notification read; repeating the request is idempotent. |
+| `POST /notifications/read-all` | any authenticated user | — | Marks all caller-owned unread notifications read; returns `{ updated }`. |
+
+Notification payloads are validated against the typed catalogue and contain
+opaque entity identifiers only, never clinical details. Registered email/SMS
+adapter failures do not fail the persisted in-app notification. Provider
+integration and callbacks remain pending the provider decision in issue #17.
+
+## Outbox administration (`/admin/outbox`) — `backend/src/events`
+
+| Method & path | Auth | Query | Notes |
+|---|---|---|---|
+| `GET /admin/outbox/dead-letters` | admin | `limit` (1–100, default 50) | Returns dead-letter metadata only: id, type, attempts, stable error code, creation and dead-letter timestamps. Event payloads are never exposed. |
+
+Outbox events are published within the transaction for the domain change and
+delivered after commit. Delivery is at least once; handlers must be idempotent.
+Booking confirmation is the first producer. Failed events retry with bounded
+exponential backoff and are dead-lettered after five attempts.
+
 ## Pharmacy orders (`/pharmacy-orders`) — `backend/src/modules/pharmacy-orders`
 
 Item-level (partial) fulfillment — Phase 5 issue #73, see
@@ -505,8 +533,8 @@ Evaluation: off if `enabled` is false; on if the user id is in `allowUserIds`; o
 
 ## Not yet implemented
 
-`patients`, `prescriptions` and `notifications` have no routes yet — Phase 2
-(intake), 4 (orders) and 6 (notifications), see `ROADMAP.md`. Facility price lists themselves shipped
+`patients` and `prescriptions` have no routes yet — Phase 2
+(intake) and 4 (orders), see `ROADMAP.md`. Facility price lists themselves shipped
 with issue #127 (`/facilities`, above); the remaining facility-admin surface
 is still pending.
 
