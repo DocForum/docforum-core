@@ -1,0 +1,15 @@
+// Patient intake (backend/src/modules/intake).
+
+model IntakeForm {
+  id               String   @id @default(uuid())
+  patientProfileId String
+  // JSON is validated at the module boundary as an array of structured
+  // symptom records; keeping it flexible avoids a premature symptom catalog.
+  symptoms         Json
+  freeTextNotes    String?
+  createdAt        DateTime @default(now())
+
+  patientProfile PatientProfile @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+
+  @@index([patientProfileId, createdAt])
+}

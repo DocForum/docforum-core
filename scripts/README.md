@@ -46,7 +46,7 @@ as before.
 
 ## `backend/scripts/check-migration-drift.mjs`
 
-Proves the committed migrations and `prisma/schema.prisma` still agree —
+Proves the committed migrations and the schema (`prisma/schema/`) still agree —
 applies the migrations to a throwaway embedded Postgres with
 `prisma migrate deploy` (the same command Render's start command runs), then
 diffs that database against the schema with `--exit-code`. Exits non-zero if

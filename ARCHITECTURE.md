@@ -114,7 +114,7 @@ a hold.
 
 ## 4. Data models
 
-Canonical source of truth: `backend/prisma/schema.prisma`. This section is the human-readable mirror — if they drift, the schema file wins and this doc should be corrected in the same PR.
+Canonical source of truth: `backend/prisma/schema/` (one `.prisma` file per module). This section is the human-readable mirror — if they drift, the schema file wins and this doc should be corrected in the same PR.
 
 **Phase 1 models are real** (User, PatientProfile, DoctorProfile, Specialty, DoctorSpecialty, FacilityProfile, FacilityCapability, AvailabilitySlot, Appointment) — migrated via `backend/prisma/migrations/20260914110638_init/`. **Phase 2 adds the real `IntakeForm` and structured symptom records** (issue #1), extended from the original placeholder by `20261022120000_intake_forms/`. **Phase 3 added the real `Referral` and the `Consultation`↔appointment link** — migrated via `backend/prisma/migrations/20261016214929_referral_phase3/`; §4.3 and §4.4 describe what actually shipped, not a sketch. The audit trail (`AuditEvent`, §4.10) is the Phase 8 one (issue #43, `20261017212335_add_audit_event`) — the referral admin actions live in it rather than in a second table. Everything else below (§4.5 onward) is still the Phase 0 structural placeholder.
 
@@ -412,7 +412,7 @@ FulfillmentItem  (Phase 5, issue #73 — item-level / partial fulfillment)
     # (order_type, dispensed_key): NULLs don't collide in Postgres, two
     # non-NULL dispenses of the same item violate the index. A real
     # `WHERE status = 'dispensed'` partial index would be equivalent SQL
-    # but Prisma cannot represent it in schema.prisma and `migrate diff`
+    # but Prisma cannot represent it in the schema and `migrate diff`
     # would try to drop one it finds in the database.
   dispensed_at (nullable), created_at, updated_at
   uniqueness: (fulfillment_record_id, order_type, order_item_id) — the

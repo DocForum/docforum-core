@@ -1,4 +1,4 @@
-// Proves the committed migrations and prisma/schema.prisma have not drifted.
+// Proves the committed migrations and the schema (prisma/schema/) have not drifted.
 //
 // Phase 8, issue #47 — added alongside the Prisma 6 -> 7 upgrade, which is the
 // kind of change that can silently invalidate a migration history (a
@@ -44,13 +44,13 @@ try {
   console.log('Applying committed migrations with `prisma migrate deploy`…');
   process.stdout.write(execFileSync('npx', ['prisma', 'migrate', 'deploy'], { env, encoding: 'utf-8' }));
 
-  console.log('Diffing the migrated database against prisma/schema.prisma…');
+  console.log('Diffing the migrated database against prisma/schema/…');
   let diffOutput = '';
   let exitCode = 0;
   try {
     diffOutput = execFileSync(
       'npx',
-      ['prisma', 'migrate', 'diff', '--from-config-datasource', '--to-schema', 'prisma/schema.prisma', '--exit-code'],
+      ['prisma', 'migrate', 'diff', '--from-config-datasource', '--to-schema', 'prisma/schema', '--exit-code'],
       { env, encoding: 'utf-8' },
     );
   } catch (error) {
@@ -65,7 +65,7 @@ try {
   if (exitCode === 0) {
     console.log('\nOK — no drift: the migrations reproduce the schema exactly.');
   } else {
-    console.error('\nFAILED — the migrated database differs from prisma/schema.prisma.');
+    console.error('\nFAILED — the migrated database differs from prisma/schema/.');
     console.error('A schema change is missing its migration. Run `node scripts/gen-migration.mjs <name>` and commit the result.');
     process.exitCode = 1;
   }

@@ -1,0 +1,115 @@
+// Pharmacy and lab fulfillment records (backend/src/modules/pharmacy-orders).
+
+enum FulfillmentStatus {
+  pending
+  in_progress
+  // Phase 5 (issue #73): every item under this record was dispensed.
+  fulfilled
+  // Every item under this record reached a terminal state, at least one
+  // was dispensed, and at least one could not be dispensed. The order as
+  // a whole may still reach `fulfilled` if the patient routes the
+  // remaining items to a second facility.
+  partially_fulfilled
+  // Facility rejected the whole record without dispensing anything.
+  rejected
+}
+
+/// Phase 5 (issue #73): terminal-per-item state under a FulfillmentRecord.
+/// `pending` is the only non-terminal value, which is what makes the
+/// dispense/unfulfil transition a one-shot `UPDATE ... WHERE status =
+/// 'pending'` (repositories/claimPendingItem).
+enum FulfillmentItemStatus {
+  pending
+  dispensed
+  unfulfilled
+}
+
+/// Facility-side fulfillment state for one issued order. Kept separate from
+/// the order so a facility never needs write access to the clinical record
+/// (ARCHITECTURE.md §4.7, hard rule 5).
+///
+/// Issue #13 / docs/adr/0012: the Phase 0 sketch here was polymorphic
+/// (`orderType` + `orderId` TEXT). Both are replaced by real FKs — exactly one
+/// of them is set, required by a PostgreSQL CHECK, and the UNIQUE on each
+/// means an order can have at most one fulfillment row. Same discriminator
+/// mechanism `PaymentIntent` adopted in issue #85.
+///
+/// `facilityId` is copied from the order's own facility at creation (the
+/// creating service in Phase 5 issue #14 owns that rule) so the facility's
+/// queue is indexable on this table and ownership lives on the row the
+/// facility writes.
+model FulfillmentRecord {
+  id             String            @id @default(uuid())
+  prescriptionId String?
+  labOrderId     String?
+  facilityId     String
+  status         FulfillmentStatus @default(pending)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  prescription Prescription?   @relation(fields: [prescriptionId], references: [id], onDelete: Restrict)
+  labOrder     LabOrder?       @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
+  facility     FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Restrict)
+  // Phase 5 (issue #73): one row per routed order item (issue #73).
+  items        FulfillmentItem[]
+
+  // ADR 0012 required at most one record per order (a UNIQUE on each order
+  // FK). Issue #73's split routing — patient routes the items one facility
+  // couldn't dispense to a *second* facility — needs several records for
+  // one order, so the uniqueness moved down one level: at most one record
+  // per (order, facility), which is what actually prevents a duplicated
+  // routing. NULLs don't collide in Postgres, so each index only constrains
+  // the rows whose order FK it covers — same mechanism ADR 0012 relied on.
+  // See docs/adr/0012 amendment, 2026-10-26.
+  @@unique([prescriptionId, facilityId])
+  @@unique([labOrderId, facilityId])
+  @@index([facilityId, status])
+}
+
+/// Item-level (partial) fulfillment — Phase 5, issue #73.
+///
+/// One row per order item routed to the record's facility, so a pharmacy that
+/// can only dispense 2 of 3 items records that truthfully instead of lying
+/// (`fulfilled`) or refusing the whole order. `FulfillmentRecord.status` is
+/// derived from these rows (services/deriveRecordStatus), and the order's own
+/// status is derived across every facility's rows (ARCHITECTURE.md §5.3).
+///
+/// Polymorphic on purpose, unlike its parent: `orderType` + `orderItemId`
+/// address an item inside the record's OWN order — PrescriptionItem.id, or
+/// LabOrder.id itself because a lab order is a single-item order — which is a
+/// discriminator within one already-typed order, not a second cross-table
+/// reference that could dangle (contrast ADR 0012).
+model FulfillmentItem {
+  id                  String                @id @default(uuid())
+  fulfillmentRecordId String
+  // 'prescription' | 'lab_order' — matches the parent record's order FK.
+  // Free text rather than an enum so a third order kind doesn't need a
+  // migration of every existing row.
+  orderType           String
+  orderItemId         String
+  // Null = "not tracked", never a fake zero: the Phase 4 item models carry
+  // no quantity column yet (ARCHITECTURE.md §4.7).
+  quantityOrdered     Int?
+  quantityDispensed   Int                   @default(0)
+  status              FulfillmentItemStatus @default(pending)
+  // Equals orderItemId exactly when status = 'dispensed', NULL otherwise.
+  // This is how "one item can never be dispensed by two facilities" becomes
+  // a plain unique index instead of a partial one Prisma can't represent:
+  // NULLs don't collide in Postgres, so two non-NULL dispenses of the same
+  // order item violate `@@unique([orderType, dispensedKey])` at the DB level
+  // (the P2002 the service maps to 409).
+  dispensedKey        String?
+  dispensedAt         DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  fulfillmentRecord FulfillmentRecord @relation(fields: [fulfillmentRecordId], references: [id], onDelete: Cascade)
+
+  // The order's item universe is counted across ALL facilities' records
+  // (services/applyOrderStatus), hence the unscoped lookup index.
+  @@index([orderType, orderItemId])
+  // The same order item can't be routed twice under one record.
+  @@unique([fulfillmentRecordId, orderType, orderItemId])
+  // Cross-facility double-dispense guard — see dispensedKey above.
+  @@unique([orderType, dispensedKey])
+}

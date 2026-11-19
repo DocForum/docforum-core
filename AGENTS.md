@@ -16,7 +16,7 @@ Instructions for any coding agent (human-directed or autonomous) working in this
 
 ## Non-negotiable rules
 - Follow the **Hard rules** section in `ARCHITECTURE_ESSENTIALS.md` exactly. These are not style preferences — violating them (e.g., mutating a `Prescription` after issuance, app-level slot booking checks instead of DB-level) reintroduces the exact bug classes the architecture was designed to prevent.
-- **Never invent a data model field or table that isn't in `backend/prisma/schema.prisma`.** If a task needs a new field/table, propose the schema change explicitly in the PR description and update `ARCHITECTURE.md` §4 in the same PR.
+- **Never invent a data model field or table that isn't in the schema (`backend/prisma/schema/`, one file per module).** If a task needs a new field/table, propose the schema change explicitly in the PR description and update `ARCHITECTURE.md` §4 in the same PR.
 - **Never cross a module boundary directly.** If module A needs data from module B, call B's exported service — do not import B's repository or query B's tables directly from A.
 - Keep the module folder shape consistent: `routes/ controllers/ services/ repositories/`. If a module doesn't need one of these yet, leave the folder with a placeholder file rather than deleting it — folder structure is intentional scope-marking (see scaffold rationale in ROADMAP.md intro).
 

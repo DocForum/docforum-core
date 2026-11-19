@@ -50,7 +50,7 @@ try {
       '--from-migrations',
       'prisma/migrations',
       '--to-schema',
-      'prisma/schema.prisma',
+      'prisma/schema',
       '--script',
     ],
     { encoding: 'utf-8', env: { ...process.env, SHADOW_DATABASE_URL: shadowUrl } },

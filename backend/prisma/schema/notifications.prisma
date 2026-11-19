@@ -1,0 +1,47 @@
+// Notifications and the transactional outbox (backend/src/modules/notifications).
+
+enum NotificationChannel {
+  in_app
+  email
+  sms
+}
+
+enum OutboxEventStatus {
+  pending
+  processing
+  processed
+  dead
+}
+
+model Notification {
+  id            String              @id @default(uuid())
+  userId        String
+  sourceEventId String?             @unique
+  type          String
+  payload       Json
+  channel       NotificationChannel @default(in_app)
+  readAt        DateTime?
+  createdAt     DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt, id])
+  @@index([userId, readAt, createdAt, id])
+}
+
+model OutboxEvent {
+  id             String            @id @default(uuid())
+  type           String
+  payload        Json
+  status         OutboxEventStatus @default(pending)
+  createdAt      DateTime          @default(now())
+  processedAt    DateTime?
+  attempts       Int               @default(0)
+  lastError      String?
+  availableAt    DateTime          @default(now())
+  lockedAt       DateTime?
+  deadLetteredAt DateTime?
+
+  @@index([status, availableAt, createdAt, id])
+  @@index([status, lockedAt])
+}

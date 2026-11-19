@@ -1,0 +1,267 @@
+// Payments, wallet links and escrow chain events (backend/src/modules/payments).
+
+// --- Stellar payments (docforum-org split) -------------------------------
+// These two models hold relational metadata ONLY — amounts, status, tx
+// hashes, public keys. No clinical/PHI field ever belongs here. The actual
+// escrow contract logic lives in the sibling docforum-escrow repo and is
+// called via the @docforum/escrow-sdk package from
+// backend/src/modules/payments/services — never modeled or reimplemented
+// in this schema. See docs/adr/0002-stellar-escrow-for-fulfillment-payout.md
+// and docs/adr/0004-custodial-payments-v1.md.
+//
+// One of prescriptionId/labOrderId is required by a PostgreSQL check
+// constraint. Amount and recipient are snapshotted from the issued order.
+
+enum PaymentIntentStatus {
+  created
+  // ADR 0005 steps 2-4: a prepared (unsigned) create_escrow transaction
+  // exists, then is being submitted with the patient's signature. The
+  // submit half is not built yet (issue #80 only covers prepare), so
+  // `submitting` is reserved by the state machine but not written today.
+  awaiting_signature
+  submitting
+  escrowed
+  released
+  refunded
+  failed
+}
+
+model PaymentIntent {
+  id             String              @id @default(uuid())
+  version     Int      @default(1)
+  prescriptionId String?             @unique
+  labOrderId     String?             @unique
+  status         PaymentIntentStatus @default(created)
+
+  prescription Prescription? @relation(fields: [prescriptionId], references: [id])
+  labOrder     LabOrder?     @relation(fields: [labOrderId], references: [id])
+
+  patientProfileId String
+  // Explicit RESTRICT (was the Prisma default — same SQL): a payment record
+  // must outlive any account deletion (ADR 0010).
+  patientProfile   PatientProfile  @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
+  facilityId       String
+  facility         FacilityProfile @relation(fields: [facilityId], references: [id])
+
+  // Amount in the smallest unit of `assetCode` (stroops for XLM, 7-decimal
+  // units for USDC) — matches @docforum/escrow-sdk's `amount: bigint`
+  // exactly. Renamed from `amountStroops` by issue #79; the migration is a
+  // plain column rename, so existing rows keep their value. This module
+  // never scales or converts amounts, so it never assumes an asset's
+  // decimals (the allowlist carries them for clients only).
+  amount          BigInt
+  // The asset this intent is denominated in — `XLM` or `USDC` in the
+  // default testnet allowlist. Assets are identified on-chain by the SAC
+  // contract id, not by the code, so a new intent must name an allowlisted
+  // asset (see config.payments.assets and issue #79).
+  assetCode       String
+  // The Stellar Asset Contract address the escrow pulls from. Nullable only
+  // for rows created before issue #79: those were funded against
+  // `ESCROW_TOKEN_ID` (native XLM), which the service falls back to when it
+  // sees a null here. New rows always store it.
+  tokenContractId String?
+
+  // ADR 0005 step 2 (issue #80). `preparedTxHash` is the hash of the
+  // unsigned create_escrow transaction the patient must sign;
+  // `preparedXdr` lets a retry return exactly the same transaction instead
+  // of building a second one. Both are cleared when the preparation
+  // expires back to `created`.
+  preparedTxHash       String?
+  preparedXdr          String?
+  preparedExpiryLedger Int?
+  preparedExpiresAt    DateTime?
+  // ADR 0005: escrow refund deadline = order expiry + grace. Orders don't
+  // exist as real records yet (Phase 4), so the service uses the intent's
+  // createdAt as the order-expiry anchor — see
+  // config.payments.orderExpiryHours / refundGraceHours.
+  refundAfter          DateTime?
+
+  // Which facility price list entry priced this intent (issue #127). The
+  // amount above is the snapshot; this code records *which* item it was for,
+  // so a later price change can be explained without re-deriving it. Null for
+  // intents priced from an admin-supplied amount.
+  catalogItemCode String?
+
+  // Set once funded (create_escrow succeeds) — needed to later call
+  // release/refund against the right on-chain escrow.
+  escrowId          BigInt?
+  stellarTxHash     String?
+  // Snapshot of the payee address this intent was actually funded to
+  // (issue #78). Set at funding time from the facility's then-ACTIVE
+  // wallet link and never changed afterwards — so re-linking a
+  // different address later cannot rewrite which wallet an already-
+  // funded escrow paid, and the escrow keeps referencing its link even
+  // after that link is replaced. Append-only-in-spirit: written exactly
+  // once, with the funding transition.
+  fundedWalletAddress String?
+  // Which deployed contract this intent was funded against — this repo
+  // has already had two testnet contract IDs (Phase E1 vs. E2), so this
+  // isn't hypothetical.
+  sorobanContractId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([facilityId])
+  @@index([status])
+  @@index([status, preparedExpiresAt])
+}
+
+// ADR 0005 step 1: a patient's verified Stellar address, used as the payer
+// of a non-custodial escrow. Verification is SEP-10 (a signed challenge),
+// not the type-the-address form used for facilities — but the SEP-10
+// endpoints are not built yet, so nothing in this repo creates these rows
+// today. Prepare (issue #80) requires one and returns 409 WALLET_NOT_LINKED
+// otherwise. Deliberately a separate model from WalletLink: that one is
+// the facility payee (unique per facility), this one is the patient payer
+// (unique per patient), and conflating the two would make a facility's
+// payout address eligible as a patient payer.
+model PatientWalletLink {
+  id               String   @id @default(uuid())
+  patientProfileId String   @unique
+  stellarPublicKey String
+  verifiedAt       DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  patientProfile PatientProfile @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+}
+
+// SEP-10 (Stellar Web Authentication) challenge issuance ledger —
+// one row per issued challenge, created by GET /payments/sep10/challenge
+// and redeemed exactly once by POST /payments/sep10/verify (issue #77,
+// ADR 0005 step 4: proving the caller controls a Stellar address before
+// it is ever trusted as payer or payee).
+//
+// The nonce is the random 64-byte value embedded in the challenge
+// transaction's `"<home domain> auth"` Manage Data operation. Storing it
+// (unique) is what makes a challenge single-use: verify consumes the row
+// with ONE conditional UPDATE (`consumedAt IS NULL AND expiresAt > now`),
+// so two concurrent replays can't both win — the same DB-level pattern
+// as booking's conditional slot update (ARCHITECTURE.md §5.1).
+//
+// Deliberately no other fields: no XDR, no signature, no PHI. The
+// challenge itself is re-derivable from the submitted XDR at verify
+// time; this table only proves "we issued this nonce to this user for
+// this account, it hasn't been used, and it hasn't expired."
+model Sep10Challenge {
+  id         String    @id @default(uuid())
+  userId     String
+  account    String // the G... (or M...) account the challenge was issued for
+  nonce      String    @unique // hex/utf8 nonce from the challenge's Manage Data op
+  expiresAt  DateTime // matches the challenge's timebounds maxTime (+ record TTL)
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Pruning and the "is this row still redeemable" check both scan by
+  // expiry — same reason LoginAttempt indexes its window. Lookups at
+  // verify time go through the unique `nonce` index.
+  @@index([expiresAt])
+}
+
+// Verified wallet links (issue #78, ADR 0005). Generalized from the
+// facility-only, typed-in-address shape: an owner is a PatientProfile or
+// a FacilityProfile (polymorphic ownerType+ownerId — deliberately no FK
+// relation, same shape as FulfillmentRecord's polymorphic order ref),
+// and every link carries HOW it was verified.
+//
+// A link row is immutable except for `replacedAt`/`activeOwnerKey`:
+// re-linking deactivates the old row and inserts a new one, so history
+// (including the address escrows were actually funded to — see
+// PaymentIntent.fundedWalletAddress) is preserved rather than mutated.
+//
+// `verificationMethod`:
+//   - `sep10` — created ONLY by the POST /payments/wallet-link
+//     verification flow (services/wallet-link.ts), inside the same
+//     transaction that consumes the SEP-10 nonce. No seed, script, admin
+//     route or internal service method may create a `sep10` row — the
+//     constructor for it is private to that flow.
+//   - `unverified_legacy` — backfilled by the add_verified_wallet_links
+//     migration for pre-existing facility rows (typed-in addresses).
+//     Usable for funding only until
+//     WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF passes.
+//
+// One ACTIVE link per owner, enforced at the DB level via
+// `activeOwnerKey`: it holds "<ownerType>:<ownerId>" while active and
+// NULL once replaced. A plain unique constraint on it gives exactly the
+// "at most one unreplaced row per owner" guarantee — Prisma's schema DSL
+// cannot express a partial unique index (`WHERE replacedAt IS NULL`),
+// and a raw-SQL index would be silently dropped by the next
+// `prisma migrate dev` as schema drift. Postgres treats NULLs as
+// distinct, so any number of replaced rows can coexist.
+enum WalletLinkOwnerType {
+  patient
+  facility
+}
+
+enum WalletLinkVerificationMethod {
+  sep10
+  unverified_legacy
+}
+
+model WalletLink {
+  id         String               @id @default(uuid())
+  ownerType  WalletLinkOwnerType
+  // PatientProfile.id or FacilityProfile.id. Polymorphic — no FK on
+  // purpose (see note above); existence + caller ownership are checked
+  // in services/wallet-link.ts before any write.
+  ownerId    String
+  // G… address. NEVER accepted from a client-supplied field: derived
+  // server-side from the account the SEP-10 challenge was issued for and
+  // successfully verified.
+  stellarPublicKey       String
+  verificationMethod     WalletLinkVerificationMethod
+  // Set iff verificationMethod = 'sep10' (time the challenge passed).
+  verifiedAt DateTime?
+  // Set when a newer link superseded this one. Only these two fields
+  // ever change on a row; stellarPublicKey/verificationMethod are
+  // write-once.
+  replacedAt DateTime?
+  // "<ownerType>:<ownerId>" while this is the owner's active link, NULL
+  // once replaced. The unique index on this column IS the one-active-
+  // link-per-owner DB guarantee.
+  activeOwnerKey String?  @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Lookups by owner (active-link read path, deactivation sweep).
+  @@index([ownerType, ownerId])
+}
+
+// Soroban event ingestion (issue #86). Cursors are per contract deployment;
+// persisted events are immutable observations used for reconciliation/alerts.
+enum EscrowChainEventState {
+  pending
+  matched
+  unmatched
+}
+
+model EscrowEventCursor {
+  contractId   String   @id
+  startLedger  Int
+  cursor       String?
+  lastLedger   Int?
+  catchupError String?
+  updatedAt    DateTime @updatedAt
+}
+
+model EscrowChainEvent {
+  id              String                @id @default(uuid())
+  eventId         String
+  contractId      String
+  ledger          Int
+  txHash          String?
+  escrowId        BigInt?
+  eventType       String
+  state           EscrowChainEventState @default(pending)
+  paymentIntentId String?
+  payload         Json?
+  detectedAt      DateTime              @default(now())
+  alertedAt       DateTime?
+
+  @@unique([contractId, eventId])
+  @@index([state, detectedAt])
+  @@index([contractId, ledger])
+}

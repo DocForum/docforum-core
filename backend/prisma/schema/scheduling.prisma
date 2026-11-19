@@ -1,0 +1,130 @@
+// Availability, appointments and the waitlist (backend/src/modules/availability, appointments).
+
+enum SlotStatus {
+  open
+  held
+  booked
+}
+
+enum AppointmentStatus {
+  scheduled
+  completed
+  cancelled
+  late_cancelled
+  no_show
+}
+
+enum AppointmentOrigin {
+  direct_booking
+  referral
+}
+
+model AvailabilitySlot {
+  id              String          @id @default(uuid())
+  waitlistEntries WaitlistEntry[]
+  doctorProfileId String
+  status          SlotStatus      @default(open)
+  startTime       DateTime
+  endTime         DateTime
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  appointment   Appointment?
+
+  // Prevents two slot ROWS for the same doctor/time range (duplicate
+  // generation). This is NOT what prevents double-BOOKING of one slot by
+  // two patients — that's the conditional `UPDATE ... WHERE status =
+  // 'open'` in availability/services, inside a transaction. See
+  // ARCHITECTURE.md §5.1 and the integration test in
+  // backend/tests/integration/booking.test.ts.
+  @@unique([doctorProfileId, startTime, endTime])
+  @@index([doctorProfileId, status])
+}
+
+model Appointment {
+  id                 String            @id @default(uuid())
+  version     Int      @default(1)
+  patientProfileId   String
+  doctorProfileId    String
+  // Nullable because a CANCELLED appointment releases its slot back to
+  // `open` (referral cascade / patient cancel) — the appointment keeps its
+  // history row but must stop holding the unique claim on the slot, or
+  // re-booking the freed slot would violate the unique constraint.
+  // The booking guarantee itself is unchanged: claimOpenSlot's
+  // conditional UPDATE on SlotStatus is what prevents double-booking.
+  availabilitySlotId String?           @unique
+  status             AppointmentStatus @default(scheduled)
+  origin             AppointmentOrigin @default(direct_booking)
+  // Set when this appointment was produced by accepting a Referral (issue
+  // #7). The cascade rules (#67 / PRD §8.2.3) react to status transitions
+  // on exactly these appointments. NOT unique: one referral can produce
+  // several appointments over its life (re-booking after a cancellation).
+  // Referral.resultingAppointmentId is the unique "current" pointer.
+  referralId         String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  // Explicit RESTRICT (was the Prisma default — same SQL): an appointment is
+  // a clinical record and must outlive any account deletion (ADR 0010).
+  patientProfile   PatientProfile    @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
+  doctorProfile    DoctorProfile     @relation(fields: [doctorProfileId], references: [id])
+  availabilitySlot AvailabilitySlot? @relation(fields: [availabilitySlotId], references: [id])
+  referral         Referral?         @relation("ReferralOriginatedAppointments", fields: [referralId], references: [id])
+  // Non-owning side of Referral.resultingAppointmentId (the FK lives on
+  // Referral) — which referral currently points at this appointment as
+  // the one it produced.
+  referralResultOf Referral?         @relation("ReferralResultingAppointment")
+  // Phase 2 (issue #4): the appointment's consultation. 1:1 — the uniqueness
+  // is Consultation.appointmentId UNIQUE (docs/adr/0009), so this side is a
+  // plain back-relation.
+  consultation     Consultation?
+
+  // TODO Phase 2: intakeId (FK -> IntakeForm). PRD FR-5 requires intake
+  // before confirmation, not enforced yet — booking works without it in
+  // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
+  // existing. Flagged, not silently dropped.
+}
+
+enum WaitlistStatus {
+  pending
+  on_hold
+  accepted
+  expired
+}
+
+model WaitlistEntry {
+  id                  String   @id @default(uuid())
+  patientProfileId    String
+  doctorProfileId     String?
+  specialtyId         String?
+  status              String // pending | on_hold | accepted | expired
+  // Time window during which the patient is willing to accept a slot
+  earliestAcceptable  DateTime
+  latestAcceptable    DateTime
+  // Time-boxed hold: when a slot is offered, it's held for this duration
+  holdDurationMinutes Int
+  // Audit trail
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  patientProfile       PatientProfile      @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+  doctorProfile        DoctorProfile?      @relation(fields: [doctorProfileId], references: [id], onDelete: SetNull)
+  specialty            Specialty?          @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
+  facilityCapability   FacilityCapability? @relation(fields: [facilityCapabilityId], references: [id])
+  facilityCapabilityId String?
+  availabilitySlot     AvailabilitySlot?   @relation(fields: [availabilitySlotId], references: [id])
+  availabilitySlotId   String?
+
+  @@unique([patientProfileId, doctorProfileId, specialtyId])
+  @@index([status])
+  @@index([patientProfileId, status])
+}
+
+model WindowTime {
+  id    String   @id @default(uuid())
+  start DateTime
+  end   DateTime
+
+  @@unique([start, end])
+}
