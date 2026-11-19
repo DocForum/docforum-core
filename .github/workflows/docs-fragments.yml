@@ -1,0 +1,37 @@
+name: Docs fragments
+
+# New lines for the shared docs go in docs.d/ fragments (docs.d/README.md).
+# This fails a PR that adds lines to a shared doc directly, or whose fragments
+# wouldn't fold cleanly. Org members' PRs (fold PRs, maintainer edits) skip
+# the first rule but still have their fragments validated.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-fragments:
+    name: Docs fragments
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check shared docs and fragments
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          flag=""
+          case "$AUTHOR_ASSOCIATION" in
+            OWNER|MEMBER) flag="--maintainer" ;;
+          esac
+          node scripts/docs-fragments.mjs check "origin/$BASE_REF" $flag

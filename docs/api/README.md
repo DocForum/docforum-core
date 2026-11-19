@@ -3,8 +3,9 @@
 Endpoints are grouped by module below. Which phases are built is tracked
 in `ROADMAP.md`, not here. Keep this file in sync with
 `backend/src/modules/*/routes` (AGENTS.md doc-update rule): when you add or
-change an endpoint, add or edit its row in that module's table, and leave
-the rest of the file alone.
+change an endpoint, edit its row in place, or add new rows through a
+`docs.d/` fragment under that module's heading (`docs.d/README.md`), and
+leave the rest of the file alone.
 
 Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
 

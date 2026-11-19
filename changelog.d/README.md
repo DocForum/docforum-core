@@ -33,7 +33,9 @@ integrity checks. No schema or endpoint changes.
   line. Maintainers update those when they fold entries in.
 
 Do tick your own item's checkbox (`- [ ]` → `- [x]`) and edit your own item's
-line. That line is yours, so it doesn't conflict with other PRs.
+line. That line is yours, so it doesn't conflict with other PRs. A new roadmap
+item or other new lines go in a fragment under `docs.d/` (see
+`docs.d/README.md`).
 
 ## Folding entries in (maintainers)
 
