@@ -21,13 +21,13 @@ Instructions for any coding agent (human-directed or autonomous) working in this
 - Keep the module folder shape consistent: `routes/ controllers/ services/ repositories/`. If a module doesn't need one of these yet, leave the folder with a placeholder file rather than deleting it — folder structure is intentional scope-marking (see scaffold rationale in ROADMAP.md intro).
 
 ## Documentation is part of the contribution — not optional
-Every PR/commit that does any of the following **must** update the relevant doc in the same change:
+Every PR/commit that does any of the following **must** update the relevant doc in the same change. Edit existing lines in place; new lines go in a `docs.d/` fragment (see "Shared docs" below):
 | Change | Update |
 |---|---|
 | Adds/changes a data model or table | `ARCHITECTURE.md` §4 + `ARCHITECTURE_ESSENTIALS.md` data model map if it affects the summary |
 | Adds/removes a module or changes a module boundary | `ARCHITECTURE.md` §3 + `ARCHITECTURE_ESSENTIALS.md` |
 | Changes tech stack / adds a dependency that's architecturally significant (new infra, new provider) | `ARCHITECTURE.md` §2, and add an ADR in `docs/adr/` if it reverses or overrides a prior stack decision |
-| Completes, starts, or blocks a roadmap item | **`ROADMAP.md` — always.** Tick or update *your own item's* line (checkbox, status, a one-line note if you discovered new scope), and add your changelog entry as a new file in `changelog.d/` — not at the end of `ROADMAP.md`. See "Shared docs" below. This is required for every PR that touches roadmap-tracked work, no exceptions. |
+| Completes, starts, or blocks a roadmap item | **`ROADMAP.md` — always.** Tick or update *your own item's* line (checkbox, status, a one-line note if you discovered new scope), put any new roadmap lines in a `docs.d/` fragment, and add your changelog entry as a new file in `changelog.d/` — not at the end of `ROADMAP.md`. See "Shared docs" below. This is required for every PR that touches roadmap-tracked work, no exceptions. |
 | Resolves or discovers a "hard question" / edge case / overengineering flag in PRD.md §8 or ARCHITECTURE.md §6 | Update that section — mark resolved with a short note, or add the newly discovered item. Do not silently drop these. |
 
 **If you're not sure whether a change is "significant enough" to need a doc update: update the doc.** A stale doc is worse than a slightly over-documented one in this repo, because other agents/contributors treat these files as ground truth before reading code.
@@ -37,8 +37,13 @@ Every PR/commit that does any of the following **must** update the relevant doc 
 Many PRs are open at the same time and most of them touch the same docs.
 Edits to shared lines are what put PRs into merge conflict with each other.
 
-- Add your own line or table row. Don't rewrite, reorder or re-wrap
-  paragraphs you don't need to change.
+- **Don't add lines to the shared docs** (`ROADMAP.md`, `ARCHITECTURE.md`, `ARCHITECTURE_ESSENTIALS.md`, `PRD.md`,
+  `README.md`, `docs/api/README.md`). New lines, rows, items
+  and sections go in a fragment under `docs.d/` that says where they belong;
+  a maintainer folds them in. Changing existing lines in place (ticking a
+  checkbox, fixing a line) is fine. CI (`Docs fragments`) enforces this. See
+  `docs.d/README.md`.
+- Don't rewrite, reorder or re-wrap paragraphs you don't need to change.
 - Changelog entries go in a new file under `changelog.d/`, never at the end
   of `ROADMAP.md` (see `changelog.d/README.md`). Leave the status summary at
   the top of `ROADMAP.md` and each phase's `**Status:**` line to maintainers.
@@ -46,8 +51,8 @@ Edits to shared lines are what put PRs into merge conflict with each other.
   git history already record them, and every PR would have to change them.
 - Commit docs as plain text and change only the lines you mean to. Never
   commit a file as base64, or regenerate a whole doc to make a small change.
-- In `docs/api/README.md`, add rows for your endpoints to that module's
-  table. The intro deliberately doesn't say which phases are built;
+- For `docs/api/README.md`, add a `docs.d/` fragment with your endpoints'
+  rows under that module's heading. The intro deliberately doesn't say which phases are built;
   `ROADMAP.md` does.
 
 ## Working style

@@ -1,0 +1,10 @@
+{
+  "protected": [
+    "ROADMAP.md",
+    "ARCHITECTURE.md",
+    "ARCHITECTURE_ESSENTIALS.md",
+    "PRD.md",
+    "README.md",
+    "docs/api/README.md"
+  ]
+}

@@ -1,0 +1,44 @@
+name: Docs fragments
+
+# New lines for the shared docs go in docs.d/ fragments (docs.d/README.md).
+# This fails a PR that adds lines to a shared doc directly, or whose fragments
+# wouldn't fold cleanly. Maintainer PRs (fold PRs, maintainer edits) skip
+# the first rule but still have their fragments validated. A PR counts as a
+# maintainer's when its branch lives in this repo rather than a fork (only
+# people with write access can push one), or its author is an org owner or
+# public member; private org members show up as CONTRIBUTOR in the event.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-fragments:
+    name: Docs fragments
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check shared docs and fragments
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          flag=""
+          case "$AUTHOR_ASSOCIATION" in
+            OWNER|MEMBER) flag="--maintainer" ;;
+          esac
+          if [ "$HEAD_REPO" = "$BASE_REPO" ]; then flag="--maintainer"; fi
+          echo "author: $AUTHOR_ASSOCIATION, head repo: $HEAD_REPO, mode: ${flag:-contributor}"
+          node scripts/docs-fragments.mjs check "origin/$BASE_REF" $flag

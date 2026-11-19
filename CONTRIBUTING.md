@@ -52,8 +52,13 @@ what depends on what, and what's deliberately not yet scoped (and why).
   `changelog.d/README.md`.
   A PR that finishes an issue but doesn't update the roadmap is
   incomplete.
-- Keep doc edits to your own lines: add rows and lines, don't rewrite
-  other people's paragraphs. See `AGENTS.md` → "Shared docs".
+- Don't add new lines to `ROADMAP.md`, `ARCHITECTURE.md`,
+  `ARCHITECTURE_ESSENTIALS.md`, `PRD.md`, `README.md` or `docs/api/README.md`. Put new items, rows, paragraphs and
+  sections in a fragment under `docs.d/` that names the doc and the heading
+  (or line) they go under; a maintainer folds them in. Editing existing
+  lines in place is fine. CI enforces this. See `docs.d/README.md`.
+- Keep doc edits to your own lines: new lines go in `docs.d/`, and don't
+  rewrite other people's paragraphs. See `AGENTS.md` → "Shared docs".
 - Run `npm run typecheck && npm run test:all && npm run build` locally —
   this is exactly what CI checks.
 
