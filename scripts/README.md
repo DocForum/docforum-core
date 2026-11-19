@@ -57,9 +57,9 @@ CLI or the schema without a matching migration is exactly what this catches.
 node backend/scripts/check-migration-drift.mjs
 ```
 
-Self-contained: no local dev DB, no Docker. Deliberately not wired into CI
-(it spins its own Postgres cluster, and CI already runs the integration
-suite's) — run it before merging a schema or Prisma change.
+Self-contained: no local dev DB, no Docker. CI runs it after the
+integration suite ("Migrations reproduce the schema"); run it locally before
+pushing a schema or Prisma change.
 
 ## `backend/scripts/audit-gate.mjs`
 
