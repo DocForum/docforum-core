@@ -13,9 +13,9 @@
 // diff's emptiness machine-checkable: 0 = no drift, 2 = drift.
 //
 // Self-contained (no local dev DB, no Docker), same embedded-postgres pattern
-// as tests/integration/*.test.mts and gen-migration.mjs. Not wired into CI:
-// it spins its own Postgres cluster, and CI already runs the integration
-// suite's clusters. Run it manually before/with a schema or Prisma upgrade:
+// as tests/integration/*.test.mts and gen-migration.mjs. CI runs it after the
+// integration suite (the clusters never run at the same time). Run it locally
+// before pushing a schema or Prisma change:
 //
 //   node scripts/check-migration-drift.mjs
 import { execFileSync } from 'node:child_process';
@@ -40,6 +40,7 @@ await pg.createDatabase('docforum_drift');
 
 const env = { ...process.env, DATABASE_URL: `postgresql://docforum:docforum@localhost:${PORT}/docforum_drift` };
 
+let drifted = true;
 try {
   console.log('Applying committed migrations with `prisma migrate deploy`…');
   process.stdout.write(execFileSync('npx', ['prisma', 'migrate', 'deploy'], { env, encoding: 'utf-8' }));
@@ -63,12 +64,15 @@ try {
   console.log(diffOutput.trim() || '(no diff output)');
 
   if (exitCode === 0) {
+    drifted = false;
     console.log('\nOK — no drift: the migrations reproduce the schema exactly.');
   } else {
     console.error('\nFAILED — the migrated database differs from prisma/schema/.');
     console.error('A schema change is missing its migration. Run `node scripts/gen-migration.mjs <name>` and commit the result.');
-    process.exitCode = 1;
   }
 } finally {
   await pg.stop();
 }
+// Exit explicitly. Setting `process.exitCode` in the failure branch was not
+// enough: the script printed FAILED and still exited 0.
+process.exit(drifted ? 1 : 0);

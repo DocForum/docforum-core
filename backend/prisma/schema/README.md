@@ -34,5 +34,6 @@ file.
   module gets a new file; don't add to `base.prisma`.
 - An enum lives next to the model that uses it.
 - Every schema change still needs a migration:
-  `node scripts/gen-migration.mjs <name>` (from `backend/`), and
-  `node scripts/check-migration-drift.mjs` checks the two still agree.
+  `node scripts/gen-migration.mjs <name>` (from `backend/`). CI's
+  "Migrations reproduce the schema" step (`scripts/check-migration-drift.mjs`)
+  fails when the schema and the migrations disagree.

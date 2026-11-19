@@ -45,4 +45,9 @@ jobs:
       - name: Integration tests (self-contained embedded Postgres — double-booking guarantee + end-to-end care-thread)
         run: npm run test:integration
 
+      # Fails when a schema change has no matching migration (or a migration
+      # doesn't produce what the schema declares).
+      - name: Migrations reproduce the schema (no drift)
+        run: node scripts/check-migration-drift.mjs
+
       - run: npm run build

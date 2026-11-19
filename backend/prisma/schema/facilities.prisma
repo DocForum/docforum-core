@@ -88,7 +88,9 @@ model FacilityPrice {
   createdAt       DateTime        @default(now())
 
   // Two versions of the same item/asset cannot share an effective instant.
-  @@unique([facilityId, catalogItemCode, asset, effectiveFrom])
-  @@index([facilityId, catalogItemCode, asset, effectiveFrom])
+  // The generated names exceed Postgres's 63-byte limit, so the database
+  // truncated them; `map` records the names that actually exist.
+  @@unique([facilityId, catalogItemCode, asset, effectiveFrom], map: "FacilityPrice_facilityId_catalogItemCode_asset_effectiveFrom_ke")
+  @@index([facilityId, catalogItemCode, asset, effectiveFrom], map: "FacilityPrice_facilityId_catalogItemCode_asset_effectiveFrom_id")
   @@index([catalogItemCode, asset, effectiveFrom])
 }
