@@ -120,7 +120,7 @@ backend/
   prisma/schema/         Data model — source of truth, one .prisma file per module
   src/modules/<name>/    routes/ controllers/ services/ repositories/ per module
   src/middleware/        auth, error handling
-  src/config/            environment/config loading
+  src/config/            environment/config loading, one file per section in sections/
   tests/unit/            per-module unit tests
   tests/integration/     booking/referral/order-issuance flows (correctness-critical)
 docs/

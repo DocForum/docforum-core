@@ -3,32 +3,12 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
-import { adminAuthRouter, authRouter } from './modules/auth/routes';
-import { doctorsRouter, specialtiesRouter } from './modules/doctors/routes';
-import { availabilityRouter } from './modules/availability/routes';
-import { appointmentsRouter } from './modules/appointments/routes';
-import { appointmentConsultationsRouter, consultationsRouter } from './modules/consultations/routes';
-import { ordersRouter } from './modules/orders/routes';
-import { adminOrdersRouter } from './modules/orders/routes/admin';
-import { metricsRouter } from './modules/metrics/routes';
-import { pharmacyOrdersRouter } from './modules/pharmacy-orders/routes';
-import { labOrdersRouter } from './modules/lab-orders/routes';
-import { paymentsRouter } from './modules/payments/routes';
-import { facilitiesRouter } from './modules/facilities/routes';
-import { patientsRouter } from './modules/patients/routes';
-import { adminRouter } from './modules/users/routes';
 import { registerPatientExportSections } from './export-sections';
-import { auditRouter, adminAuditRouter, patientAuditRouter } from './modules/audit/routes';
-import { escrowEventsRouter } from './modules/payments/routes/escrow-events';
 import { requestId } from './middleware/request-id';
-import { referralsRouter } from './modules/referrals/routes';
-import { outboxAdminRouter } from './events/routes';
-import { notificationsRouter } from './modules/notifications/routes';
-import { adminFlagsRouter, meFlagsRouter } from './modules/flags/routes';
+import * as moduleMounts from './mounts';
 import { registerRetentionHolds } from './retention-holds';
 import { getReadiness } from './health/readiness';
 import { runWithRlsContext } from './db/prisma-client';
-import { intakeRouter } from './modules/intake/routes';
 
 export function createApp() {
   const app = express();
@@ -66,46 +46,8 @@ export function createApp() {
   // Keep the original liveness path for existing monitors and clients.
   app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 
-  app.use('/auth', authRouter);
-  // Admin surface. Currently only the auth module's session administration
-  // (Phase 8 #38) — other modules' admin routes can hang off the same mount.
-  app.use('/admin', adminAuthRouter);
-  app.use('/doctors', doctorsRouter);
-  app.use('/specialties', specialtiesRouter);
-  app.use('/availability', availabilityRouter);
-  app.use('/appointments', appointmentsRouter);
-  // Closing a consultation is addressable from the appointment it belongs to
-  // (POST /appointments/:appointmentId/consultation) as well as from
-  // /consultations below — same service, one write path.
-  app.use('/appointments', appointmentConsultationsRouter);
-  app.use('/intake', intakeRouter);
-  app.use('/orders', ordersRouter);
-  app.use('/pharmacy-orders', pharmacyOrdersRouter);
-  app.use('/lab-orders', labOrdersRouter);
-  app.use('/admin', adminOrdersRouter);
-  app.use('/admin', metricsRouter);
-  app.use('/payments', paymentsRouter);
-  // Phase 5 (issues #73/#74): /facilities and /pharmacy-orders mounts
-  // (/pharmacy-orders is mounted above, with the order routes).
-  app.use('/facilities', facilitiesRouter);
-  app.use('/patients', patientsRouter);
-  // Phase 8, issue #39 — admin account lifecycle (invites, deactivate/
-  // reactivate) alongside the audit read path. Different paths, no overlap.
-  app.use('/admin', adminRouter);
-  app.use('/admin/outbox', outboxAdminRouter);
-  app.use('/admin', auditRouter);
-  app.use('/admin/payments', escrowEventsRouter);
-
-  // PHI read-access logging (Phase 8, issue #45). Mounted at root so the
-  // paths match the issue's spec exactly: /admin/access-logs, /patients/me/access-log.
-  app.use('/admin', adminAuditRouter);
-  app.use('/patients', patientAuditRouter);
-  app.use('/referrals', referralsRouter);
-  app.use('/notifications', notificationsRouter);
-  // Feature flags (Phase 8, issue #132).
-  app.use('/me', meFlagsRouter);
-  app.use('/admin', adminFlagsRouter);
-  app.use('/consultations', consultationsRouter);
+  // Each module mounts its own routes (src/mounts.ts, one line per module).
+  for (const mount of Object.values(moduleMounts)) mount(app);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.
