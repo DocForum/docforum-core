@@ -1,0 +1,49 @@
+// Access and audit logs (backend/src/modules/audit).
+
+model AccessLog {
+  id               String   @id @default(uuid())
+  // Who viewed. SetNull on user delete keeps the log row (timestamp +
+  // entity remain) while removing the PII pointer.
+  accessedBy       String?
+  // Which patient's records were viewed (the record owner, not the viewer).
+  patientProfileId String?
+  // Entity that was read: 'IntakeForm' | 'Consultation' | 'Prescription' |
+  // 'LabOrder' | 'LabResult' | 'Referral' | 'PaymentIntent' | 'PatientProfile'
+  entityType       String
+  entityId         String
+  // The HTTP route that returned the payload (for correlating with access logs).
+  route            String?
+  // Free-text detail — no PHI here, just context like "GET /appointments/mine".
+  detail           String?
+  accessedAt       DateTime @default(now())
+
+  accessedByUser User?           @relation(fields: [accessedBy], references: [id], onDelete: SetNull)
+  patientProfile PatientProfile? @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+
+  @@index([accessedAt])
+  @@index([accessedBy])
+  @@index([patientProfileId, accessedAt])
+  @@index([entityType, entityId])
+}
+
+model AuditEvent {
+  id          String   @id @default(uuid())
+  // Null only for system-initiated transitions (none exist yet).
+  actorUserId String?
+  actorRole   Role?
+  // e.g. 'Appointment', 'DoctorProfile', 'PaymentIntent'.
+  entityType  String
+  entityId    String
+  // e.g. 'appointment.booked', 'payment_intent.released'.
+  action      String
+  fromState   String?
+  toState     String?
+  // X-Request-Id of the HTTP request that caused it (src/middleware/request-id.ts).
+  requestId   String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([createdAt, id])
+}

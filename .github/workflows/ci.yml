@@ -45,4 +45,15 @@ jobs:
       - name: Integration tests (self-contained embedded Postgres — double-booking guarantee + end-to-end care-thread)
         run: npm run test:integration
 
+      - name: Migrations reproduce the schema (no drift)
+        run: node scripts/check-migration-drift.mjs
+
+      # TEMPORARY (remove before merge): proves the schema folder is the same
+      # schema as main's single schema.prisma.
+      - name: Schema split is a no-op against main
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          git show origin/main:backend/prisma/schema.prisma > /tmp/main-schema.prisma
+          npx prisma migrate diff --from-schema /tmp/main-schema.prisma --to-schema prisma/schema --exit-code
+
       - run: npm run build

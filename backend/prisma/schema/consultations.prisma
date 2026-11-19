@@ -1,0 +1,38 @@
+// Consultations (backend/src/modules/consultations).
+
+enum ConsultationOutcome {
+  resolved
+  referred
+  follow_up_needed
+}
+
+// Phase 3 (issue #5 minimal + lineage for #65): a Consultation is the
+// record of a doctor having seen the patient at a specific appointment.
+// `appointmentId` is the lineage seam — Referral.parentReferralId is
+// derived through it (consultation → appointment → referral), which is
+// what loop detection walks. Full consultation-note workflow (append-only
+// addenda, sign-off) stays issue #4/#64's scope.
+model Consultation {
+  id            String               @id @default(uuid())
+  // unique = "a consultation is closed once per appointment", enforced by the
+  // database rather than by a read-then-write check (docs/adr/0009).
+  appointmentId String               @unique
+  // Nullable so a consultation can exist before sign-off (Phase 3's referral
+  // slice); the close routes require it, so a closed record always has one.
+  outcome       ConsultationOutcome?
+  // Clinical free text: stored as an AES-256-GCM envelope by
+  // consultations/services (issue #46 — ARCHITECTURE.md §4.3), never plaintext.
+  notes         String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  // RESTRICT (Prisma's default for a required relation) is what the existing
+  // migration created: a clinical record must not disappear because an
+  // appointment row was deleted.
+  appointment   Appointment    @relation(fields: [appointmentId], references: [id])
+  prescriptions Prescription[]
+  labOrders     LabOrder[]
+  // Phase 3: the referrals that grew out of this consultation (the
+  // opposite side of Referral.sourceConsultationId).
+  referrals     Referral[]
+}

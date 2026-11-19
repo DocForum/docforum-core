@@ -1,0 +1,58 @@
+// Doctor profiles, verification and specialties (backend/src/modules/doctors).
+
+enum VerificationStatus {
+  pending
+  verified
+  rejected
+}
+
+model DoctorProfile {
+  id                 String             @id @default(uuid())
+  version     Int      @default(1)
+  userId             String             @unique
+  fullName           String
+  verificationStatus VerificationStatus @default(pending)
+  timeZone           String // IANA time zone identifier, e.g. "Europe/London", "America/New_York"
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialties        DoctorSpecialty[]
+  availabilitySlots  AvailabilitySlot[]
+  appointments       Appointment[]
+  prescriptions      Prescription[]
+  labOrders          LabOrder[]
+  waitlistEntries    WaitlistEntry[]
+  // Referral sides a doctor can sit on: `referringReferrals` are ones
+  // they created; `targetedReferrals` are ones aimed at them (whether
+  // they ultimately see the patient or not).
+  referringReferrals Referral[]         @relation("ReferralReferringDoctor")
+  targetedReferrals  Referral[]         @relation("ReferralTargetDoctor")
+
+  @@index([verificationStatus])
+}
+
+model Specialty {
+  id   String @id @default(uuid())
+  name String @unique
+  slug String @unique
+
+  doctors         DoctorSpecialty[]
+  waitlistEntries WaitlistEntry[]
+}
+
+model DoctorSpecialty {
+  id                 String             @id @default(uuid())
+  doctorProfileId    String
+  specialtyId        String
+  verificationStatus VerificationStatus @default(pending)
+  reviewer           String?
+  reviewDate         DateTime?
+  rejectionReason    String?
+
+  doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  specialty     Specialty     @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorProfileId, specialtyId])
+  @@index([verificationStatus])
+}

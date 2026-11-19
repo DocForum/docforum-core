@@ -46,7 +46,7 @@ as before.
 
 ## `backend/scripts/check-migration-drift.mjs`
 
-Proves the committed migrations and `prisma/schema.prisma` still agree —
+Proves the committed migrations and the schema (`prisma/schema/`) still agree —
 applies the migrations to a throwaway embedded Postgres with
 `prisma migrate deploy` (the same command Render's start command runs), then
 diffs that database against the schema with `--exit-code`. Exits non-zero if
@@ -57,9 +57,9 @@ CLI or the schema without a matching migration is exactly what this catches.
 node backend/scripts/check-migration-drift.mjs
 ```
 
-Self-contained: no local dev DB, no Docker. Deliberately not wired into CI
-(it spins its own Postgres cluster, and CI already runs the integration
-suite's) — run it before merging a schema or Prisma change.
+Self-contained: no local dev DB, no Docker. CI runs it after the
+integration suite ("Migrations reproduce the schema"); run it locally before
+pushing a schema or Prisma change.
 
 ## `backend/scripts/audit-gate.mjs`
 

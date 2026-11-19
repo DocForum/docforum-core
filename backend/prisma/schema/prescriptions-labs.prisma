@@ -1,0 +1,104 @@
+// Append-only prescriptions and lab orders (backend/src/modules/prescriptions, lab-orders).
+
+enum Urgency {
+  routine
+  urgent
+}
+
+// Issue #68: who did what to a referral, when, and why. Deliberately NOT a
+// second audit table: the append-only `AuditEvent` in this schema (Phase 8,
+// issue #43) is the one audit trail, so referral admin actions are recorded
+// as `entityType: 'Referral'` rows through the audit module
+// (`auditService.record`) — same table, same triggers, same writer.
+
+model Prescription {
+  id                       String      @id @default(uuid())
+  consultationId           String
+  patientProfileId         String
+  prescribingDoctorId      String
+  facilityProfileId        String
+  amountStroops            BigInt
+  status                   OrderStatus @default(issued)
+  supersedesPrescriptionId String?
+  createdAt                DateTime    @default(now())
+
+  consultation      Consultation       @relation(fields: [consultationId], references: [id])
+  patientProfile    PatientProfile     @relation(fields: [patientProfileId], references: [id])
+  prescribingDoctor DoctorProfile      @relation(fields: [prescribingDoctorId], references: [id])
+  facilityProfile   FacilityProfile    @relation(fields: [facilityProfileId], references: [id])
+  supersedes        Prescription?      @relation("PrescriptionCorrections", fields: [supersedesPrescriptionId], references: [id])
+  correctedBy       Prescription?      @relation("PrescriptionCorrections")
+  items             PrescriptionItem[]
+  paymentIntent     PaymentIntent?
+  // One order → many fulfillment records (issue #73 split routing: one per
+  // facility the patient routes items to).
+  fulfillments      FulfillmentRecord[]
+
+  @@unique([supersedesPrescriptionId])
+  @@index([patientProfileId, createdAt])
+  @@index([consultationId])
+}
+
+model PrescriptionItem {
+  id             String @id @default(uuid())
+  prescriptionId String
+  drugName       String
+  dosage         String
+  frequency      String
+  duration       String
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id])
+
+  @@index([prescriptionId])
+}
+
+model LabOrder {
+  id                   String      @id @default(uuid())
+  consultationId       String
+  patientProfileId     String
+  orderingDoctorId     String
+  facilityProfileId    String
+  amountStroops        BigInt
+  testType             String
+  urgency              Urgency     @default(routine)
+  notes                String?
+  status               OrderStatus @default(issued)
+  supersedesLabOrderId String?
+  createdAt            DateTime    @default(now())
+  expiresAt            DateTime?
+
+  consultation    Consultation       @relation(fields: [consultationId], references: [id])
+  patientProfile  PatientProfile     @relation(fields: [patientProfileId], references: [id])
+  orderingDoctor  DoctorProfile      @relation(fields: [orderingDoctorId], references: [id])
+  facilityProfile FacilityProfile    @relation(fields: [facilityProfileId], references: [id])
+  supersedes      LabOrder?          @relation("LabOrderCorrections", fields: [supersedesLabOrderId], references: [id])
+  correctedBy     LabOrder?          @relation("LabOrderCorrections")
+  result          LabResult?
+  paymentIntent   PaymentIntent?
+  fulfillments    FulfillmentRecord[]
+
+  @@unique([supersedesLabOrderId])
+  @@index([patientProfileId, createdAt])
+  @@index([consultationId])
+  @@index([status, expiresAt])
+}
+
+model LabResult {
+  id                   String   @id @default(uuid())
+  labOrderId           String   @unique
+  fulfillingFacilityId String
+  // Never written: a result file is not addressed by URL (issue #16).
+  resultFileUrl        String?
+  // Issue #16 (docs/adr/0014): the file lives in a private object-storage
+  // bucket under this opaque, server-generated key — not a URL, never sent
+  // to a client. It is read back only through
+  // GET /orders/lab-orders/:labOrderId/result, which re-checks access.
+  resultObjectKey      String?  @unique
+  resultContentType    String?
+  resultByteSize       Int?
+  summary              String?
+  createdAt            DateTime @default(now())
+
+  labOrder           LabOrder        @relation(fields: [labOrderId], references: [id])
+  fulfillingFacility FacilityProfile @relation(fields: [fulfillingFacilityId], references: [id])
+}

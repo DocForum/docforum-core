@@ -1,0 +1,94 @@
+// Facilities, capabilities and prices (backend/src/modules/facilities).
+
+enum FacilityType {
+  lab
+  pharmacy
+}
+
+enum CapabilityType {
+  lab_test
+  medication_dispense
+}
+
+model FacilityProfile {
+  id        String       @id @default(uuid())
+  version     Int      @default(1)
+  userId    String       @unique
+  name      String
+  type      FacilityType
+  // Phase 5 (issue #74): physical location so patients can find the
+  // nearest qualified facility (PRD FR-13). All three nullable on
+  // purpose — a facility that hasn't filled them in still appears in
+  // eligible-facility queries, just sorted last (see
+  // facilities/repositories).
+  address   String?
+  latitude  Float?
+  longitude Float?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  capabilities      FacilityCapability[]
+  prescriptions     Prescription[]
+  labOrders         LabOrder[]
+  labResults        LabResult[]
+  paymentIntents    PaymentIntent[]
+  fulfillments      FulfillmentRecord[]
+  // NOTE: no `walletLink` relation anymore — WalletLink is generalized to
+  // a polymorphic owner (patient | facility) as of issue #78, so it
+  // carries no FK relation to either profile (same shape as
+  // FulfillmentRecord's polymorphic order ref, §6.1.3). Ownership is
+  // validated in the payments service, not by the schema.
+  prices            FacilityPrice[]
+  orders            Order[]
+  fulfillmentProofs FulfillmentProof[]
+
+  // Composite b-tree index backing the "indexed bounding box" prefilter
+  // of the distance query (issue #74). Chosen over PostGIS: no extension
+  // dependency on every deployment (incl. the Render free-tier preview),
+  // and a bounding box + haversine is exact for the ORDER BY once the box
+  // is a superset of the radius. See ARCHITECTURE.md §5.4.
+  @@index([latitude, longitude])
+}
+
+model FacilityCapability {
+  waitlistEntries   WaitlistEntry[]
+  id                String          @id @default(uuid())
+  version     Int      @default(1)
+  facilityProfileId String
+  capabilityType    CapabilityType
+  // e.g. a lab test category, or a medication class — free text on purpose,
+  // no controlled vocabulary decided yet (out of Phase 1 scope).
+  detail            String?
+
+  facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([facilityProfileId, capabilityType, detail])
+}
+
+/// Versioned facility price list (issue #127). Rows are append-only: changing
+/// a price inserts a new row with a later `effectiveFrom`, so history is kept
+/// and an intent priced earlier keeps resolving against what was in force at
+/// its selection time. Amounts are stroops (BigInt) like PaymentIntent.
+///
+/// `catalogItemCode` is deliberately an open vocabulary (a lab test or
+/// medication code the facility publishes), matching FacilityCapability.detail
+/// — no controlled vocabulary has been decided yet.
+model FacilityPrice {
+  id              String          @id @default(uuid())
+  facilityId      String
+  facility        FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  catalogItemCode String
+  // Stellar asset the price is denominated in. v1 quotes native XLM
+  // ('native'); the column exists so a price list can add assets without a
+  // schema change when multi-asset payments land.
+  asset           String
+  amount          BigInt
+  effectiveFrom   DateTime
+  createdAt       DateTime        @default(now())
+
+  // Two versions of the same item/asset cannot share an effective instant.
+  @@unique([facilityId, catalogItemCode, asset, effectiveFrom])
+  @@index([facilityId, catalogItemCode, asset, effectiveFrom])
+  @@index([catalogItemCode, asset, effectiveFrom])
+}

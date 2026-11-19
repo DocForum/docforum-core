@@ -1,0 +1,15 @@
+// DocForum canonical data model, one file per module (see README.md in this
+// folder). SOURCE OF TRUTH: if these files and ARCHITECTURE.md §4 disagree,
+// fix ARCHITECTURE.md to match (or vice versa) in the same PR — see AGENTS.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Phase 8, issue #47: Prisma 7 no longer accepts `url` in the datasource
+// block — the connection is configured in prisma.config.ts (for the CLI:
+// migrate/generate/diff) and passed to PrismaClient as a driver adapter at
+// runtime (see src/db/prisma-client.ts).
+datasource db {
+  provider = "postgresql"
+}

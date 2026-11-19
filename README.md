@@ -75,7 +75,7 @@ microservices" (`ARCHITECTURE.md` §1): see
 | Runtime / language | Node.js + TypeScript |
 | API framework | Express (or Fastify) |
 | Database | PostgreSQL |
-| ORM / schema | Prisma (`backend/prisma/schema.prisma` is the source of truth) |
+| ORM / schema | Prisma (`backend/prisma/schema/` is the source of truth, one file per module) |
 | Auth | JWT access + refresh tokens, role claims (`patient` \| `doctor` \| `facility` \| `admin`) |
 | Jobs | Simple cron/interval — no queue until a real job needs one |
 | Payments | Stellar escrow via `@docforum/escrow-sdk` (see `docforum-escrow`), never custom payment rails |
@@ -97,7 +97,7 @@ FulfillmentRecord (facility-owned) references an order but never mutates it
 PaymentIntent / WalletLink — relational metadata only; contract logic lives in docforum-escrow
 ```
 
-Full field-level schema: [`ARCHITECTURE.md` §4](ARCHITECTURE.md#4-data-models) and [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma) (the two must never drift — schema wins if they do).
+Full field-level schema: [`ARCHITECTURE.md` §4](ARCHITECTURE.md#4-data-models) and [`backend/prisma/schema/`](backend/prisma/schema/) (the two must never drift — schema wins if they do).
 
 **Non-negotiable invariants**, enforced at the architecture level, not just by convention:
 - A `Prescription` or `LabOrder` is never mutated after issuance — corrections create a new row via `supersedes_*_id`.
@@ -117,7 +117,7 @@ Each module owns its own `routes/ controllers/ services/ repositories/` and is o
 
 ```
 backend/
-  prisma/schema.prisma   Data model — source of truth
+  prisma/schema/         Data model — source of truth, one .prisma file per module
   src/modules/<name>/    routes/ controllers/ services/ repositories/ per module
   src/middleware/        auth, error handling
   src/config/            environment/config loading

@@ -1,0 +1,105 @@
+// Orders, fulfillment proofs and disputes (backend/src/modules/orders).
+
+enum OrderStatus {
+  issued
+  // Phase 5 (issue #73): order-level status is DERIVED from item-level
+  // fulfillment rows, so a partially dispensed multi-item prescription
+  // doesn't have to lie ('fulfilled') or refuse the whole order. Written
+  // only by this order's own module service after a fulfillment item
+  // changes — never by a facility directly (hard rule 5).
+  partially_fulfilled
+  fulfilled
+  expired
+  superseded
+}
+
+enum OrderType {
+  pharmacy
+  lab
+}
+
+enum DisputeStatus {
+  pending
+  resolved
+}
+
+model Order {
+  id                  String      @id @default(uuid())
+  orderType           OrderType
+  patientProfileId    String
+  facilityProfileId   String?
+  prescribingDoctorId String?
+  details             String?
+  status              OrderStatus @default(issued)
+
+  fulfilledAt DateTime?
+
+  confirmed          Boolean   @default(false)
+  confirmationSource String? // 'patient' | 'timeout'
+  confirmedAt        DateTime?
+
+  disputed   Boolean   @default(false)
+  disputedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patientProfile  PatientProfile   @relation(fields: [patientProfileId], references: [id])
+  facilityProfile FacilityProfile? @relation(fields: [facilityProfileId], references: [id])
+
+  fulfillmentProofs FulfillmentProof[]
+  disputes          OrderDispute[]
+
+  @@index([patientProfileId, status])
+  @@index([facilityProfileId, status])
+  @@index([status, confirmed, disputed])
+}
+
+model FulfillmentProof {
+  id                String   @id @default(uuid())
+  orderId           String
+  facilityProfileId String
+  referenceNumber   String
+  attachmentUrl     String?
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  order           Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id])
+
+  @@index([orderId])
+  @@index([facilityProfileId])
+}
+
+model OrderDispute {
+  id               String        @id @default(uuid())
+  orderId          String
+  patientProfileId String
+  reason           String
+  status           DisputeStatus @default(pending)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  order          Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  patientProfile PatientProfile           @relation(fields: [patientProfileId], references: [id])
+  resolutions    OrderDisputeResolution[]
+
+  @@index([orderId])
+  @@index([patientProfileId])
+  @@index([status])
+}
+
+model OrderDisputeResolution {
+  id              String   @id @default(uuid())
+  disputeId       String
+  adminUserId     String
+  resolutionNotes String
+  outcome         String // e.g. 'upheld' | 'rejected' | 'refunded'
+  createdAt       DateTime @default(now())
+
+  dispute   OrderDispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  adminUser User         @relation(fields: [adminUserId], references: [id])
+
+  @@index([disputeId])
+  @@index([adminUserId])
+}
