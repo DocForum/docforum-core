@@ -96,4 +96,5 @@ node scripts/docs-fragments.mjs fold             # apply and delete the fragment
 
 Commit the result in its own PR, together with the `changelog.d/` fold if one
 is due. Maintainer PRs skip the "no new lines" rule (CI passes `--maintainer`
-for org members), but fragments are still validated.
+when the PR's branch is in this repo rather than a fork, or its author is an
+org owner or public member), but fragments are still validated.
