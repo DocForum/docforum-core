@@ -7,7 +7,7 @@ import { config } from '../../src/config';
 const KEYS = [
   'accessLog', 'accountPurge', 'adminInvites', 'appBaseUrl', 'auth', 'cookie', 'corsOrigins',
   'databaseUrl', 'featureFlags', 'idempotency', 'jwt', 'labResults', 'log', 'loginThrottle',
-  'orders', 'passwordReset', 'patientExport', 'patients', 'payments', 'port', 'rateLimit',
+  'objectStorage', 'orders', 'passwordReset', 'patientExport', 'patients', 'payments', 'port', 'rateLimit',
   'referrals', 'sep10', 'trustProxy',
 ];
 
