@@ -139,7 +139,7 @@ revocation list yet (see `ARCHITECTURE_ESSENTIALS.md` known gaps —
 JWT refresh rotation without a revocation list). Refresh tokens: httpOnly
 cookie, 30-day TTL, `SameSite=None; Secure` in production and
 `Lax`/insecure locally — the attributes live in `config.cookie`
-`backend/src/config/index.ts`) so the refresh and CSRF cookies can never
+`backend/src/config/sections/cookie.ts`) so the refresh and CSRF cookies can never
 drift apart. See `docs/adr/0003` for why production needs `SameSite=None`.
 
 Every token carries a `tv` claim (the user's `tokenVersion` at issue time).
@@ -431,7 +431,7 @@ Exports stay downloadable for `PATIENT_EXPORT_TTL_HOURS` (default 24), then
 the cleanup job deletes the stored bundle. Other knobs: `PATIENT_EXPORT_PAGE_SIZE`,
 `PATIENT_EXPORT_CHUNK_BYTES`, `PATIENT_EXPORT_WORKER_INTERVAL_SECONDS`,
 `PATIENT_EXPORT_CLEANUP_INTERVAL_SECONDS`, `PATIENT_EXPORT_STALE_AFTER_SECONDS`,
-`PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/index.ts` and
+`PATIENT_EXPORT_MAX_ATTEMPTS` — see `backend/src/config/sections/patientExport.ts` and
 `backend/src/jobs/README.md`.
 
 ## Notifications (`/notifications`) — `backend/src/modules/notifications`
