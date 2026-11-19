@@ -30,6 +30,9 @@ model DoctorProfile {
   targetedReferrals  Referral[]         @relation("ReferralTargetDoctor")
 
   @@index([verificationStatus])
+  // Trigram index for doctor search (similarity() in doctors/repositories);
+  // created by migration 20261021090000_doctor_discovery_trigram_search.
+  @@index([fullName(ops: raw("gin_trgm_ops"))], type: Gin, map: "DoctorProfile_fullName_trgm_idx")
 }
 
 model Specialty {
@@ -39,6 +42,9 @@ model Specialty {
 
   doctors         DoctorSpecialty[]
   waitlistEntries WaitlistEntry[]
+
+  // Trigram index for doctor search by specialty name (see DoctorProfile).
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "Specialty_name_trgm_idx")
 }
 
 model DoctorSpecialty {
