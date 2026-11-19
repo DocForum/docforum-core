@@ -13,9 +13,9 @@
 // diff's emptiness machine-checkable: 0 = no drift, 2 = drift.
 //
 // Self-contained (no local dev DB, no Docker), same embedded-postgres pattern
-// as tests/integration/*.test.mts and gen-migration.mjs. CI runs it after the
-// integration suite (it uses its own port, so the clusters never overlap).
-// Run it locally before/with a schema or Prisma upgrade:
+// as tests/integration/*.test.mts and gen-migration.mjs. Not wired into CI:
+// it spins its own Postgres cluster, and CI already runs the integration
+// suite's clusters. Run it manually before/with a schema or Prisma upgrade:
 //
 //   node scripts/check-migration-drift.mjs
 import { execFileSync } from 'node:child_process';
