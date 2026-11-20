@@ -1,5 +1,5 @@
-import http from 'kf6/http';
-import { check, sleep } from 'kf6';
+import http from 'k6/http';
+import { check, sleep } from 'k6';
 
 const BASE_URL = __ENV.BASE_URL;
 if (!BASE_URL) {
@@ -31,7 +31,7 @@ export const options = {
 };
 
 function pickTerm() {
-  return SEARCH_TERMS[__VU_ITER % SEARCH_TERMS.length];
+  return SEARCH_TERMS[__ITER % SEARCH_TERMS.length];
 }
 
 export default function () {
