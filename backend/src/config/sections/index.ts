@@ -25,3 +25,4 @@ export * from './referrals';
 export * from './sep10';
 export * from './server';
 export * from './trustProxy';
+export * from './twoFactor';

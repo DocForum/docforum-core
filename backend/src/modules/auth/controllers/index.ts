@@ -7,7 +7,9 @@ import {
   passwordResetRequestSchema,
   signupSchema,
   signupWithInviteSchema,
+  totpCodeSchema,
   verifyEmailSchema,
+  verifyTwoFactorSchema,
 } from '../validation';
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
@@ -70,8 +72,19 @@ export async function login(req: Request, res: Response) {
     // Express's `req.ip` honours the `trust proxy` setting (app.ts) — it is
     // the whole reason the throttle keys on the IP the client believes it
     // is, rather than Render's proxy address (see config.trustProxy).
-    const session = await authService.login({ ...input, ip: req.ip }, sessionContext(req));
-    sessionResponse(res, session);
+    const outcome = await authService.login({ ...input, ip: req.ip }, sessionContext(req));
+    // Phase 8, issue #36: an enrolled user gets a half-authenticated token
+    // here, not a session; an admin who must enrol gets the narrow
+    // enrolment token. Neither is a cookie-bearing login.
+    if ('mfaRequired' in outcome) {
+      res.status(200).json(outcome);
+      return;
+    }
+    if ('enrollmentRequired' in outcome) {
+      res.status(200).json(outcome);
+      return;
+    }
+    sessionResponse(res, outcome);
   } catch (err) {
     // Phase 8, issue #35: a throttled attempt must tell the client how long
     // to wait, both as a header and in the message (see LoginThrottledError).
@@ -171,6 +184,43 @@ export async function confirmPasswordReset(req: Request, res: Response) {
   // still holds the old one isn't left sending a dead token.
   res.clearCookie(REFRESH_COOKIE, config.cookie);
   res.status(200).json({ message: 'Password updated. Please sign in with your new password.' });
+}
+
+// --- TOTP two-factor authentication (Phase 8, issue #36) ----------------
+
+/** `POST /auth/2fa/setup` — returns the otpauth URI and the secret once. */
+export async function setupTwoFactor(req: Request, res: Response) {
+  const setup = await authService.startTwoFactorSetup(requireUserId(req));
+  res.status(200).json(setup);
+}
+
+/** `POST /auth/2fa/enable` — confirms with the first code and returns the
+ * ten single-use recovery codes (the only time they're visible). */
+export async function enableTwoFactor(req: Request, res: Response) {
+  const { code } = totpCodeSchema.parse(req.body);
+  const enrolment = await authService.enableTwoFactor(requireUserId(req), code);
+  res.status(200).json(enrolment);
+}
+
+/** `POST /auth/2fa/verify` — the second login step: half-token + code in,
+ * real session out. Unauthenticated by design; the half-token is the
+ * credential, and it can be used here and nowhere else. */
+export async function verifyTwoFactor(req: Request, res: Response) {
+  const { mfaToken, code } = verifyTwoFactorSchema.parse(req.body);
+  const session = await authService.verifySecondFactorLogin(mfaToken, code, sessionContext(req));
+  sessionResponse(res, session);
+}
+
+export async function twoFactorStatus(req: Request, res: Response) {
+  const status = await authService.getTwoFactorStatus(requireUserId(req));
+  res.status(200).json(status);
+}
+
+/** `POST /auth/2fa/disable` — requires a current code or recovery code. */
+export async function disableTwoFactor(req: Request, res: Response) {
+  const { code } = totpCodeSchema.parse(req.body);
+  await authService.disableTwoFactor(requireUserId(req), code);
+  res.status(204).send();
 }
 
 // --- Session management (Phase 8 #38) -----------------------------------

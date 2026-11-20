@@ -5,6 +5,7 @@ import * as appointmentsService from '../../appointments/services';
 import * as consultationsService from '../../consultations/services';
 import * as paymentsService from '../../payments/services';
 import * as facilitiesService from '../../facilities/services';
+import * as medicationsService from '../../medications/services';
 import * as auditService from '../../audit/services';
 import { encryptField, decryptField } from '../../../utils/field-encryption';
 import * as ordersRepo from '../repositories';
@@ -82,10 +83,69 @@ async function createOrderPayment(tx: Prisma.TransactionClient, input: {
   return paymentsService.createIntentForIssuedOrder(tx, input);
 }
 
+/** A prescription item after the controlled-vocabulary step: the display
+ * name is a snapshot, and an unlisted medication carries the review flag. */
+interface ResolvedPrescriptionItem {
+  drugName: string;
+  dosage: string;
+  frequency: string;
+  duration: string;
+  medicationId: string | null;
+  flaggedForPharmacistReview: boolean;
+}
+
+/**
+ * Turns the request's items into rows for `PrescriptionItem` (issue #69),
+ * inside the issuance transaction.
+ *
+ * - `medicationId` → the catalog row is looked up through the medications
+ *   module's service (never its tables — hard rule 4), and its display name
+ *   is snapshotted into `drugName`. The snapshot is what makes a catalog
+ *   edit or re-import unable to rewrite an already-issued prescription.
+ * - no `medicationId` → the explicit unlisted-medication path: the
+ *   prescriber's free text is kept verbatim and flagged for pharmacist
+ *   review, so a pharmacy can see the drug wasn't validated against the
+ *   vocabulary.
+ *
+ * An unknown `medicationId` is a 400, before any row is written.
+ */
+async function resolvePrescriptionItems(
+  tx: Prisma.TransactionClient,
+  items: Array<{ medicationId?: string; drugName?: string; dosage: string; frequency: string; duration: string }>,
+): Promise<ResolvedPrescriptionItem[]> {
+  const catalogIds = items
+    .map((item) => item.medicationId)
+    .filter((id): id is string => typeof id === 'string');
+  const catalog = await medicationsService.getMedicationsByIds(tx, catalogIds);
+
+  return items.map((item) => {
+    const medication = item.medicationId ? catalog.get(item.medicationId) : undefined;
+    if (medication) {
+      return {
+        drugName: medicationsService.displayName(medication),
+        dosage: item.dosage,
+        frequency: item.frequency,
+        duration: item.duration,
+        medicationId: medication.id,
+        flaggedForPharmacistReview: false,
+      };
+    }
+    return {
+      // Validation guarantees drugName is present when medicationId isn't.
+      drugName: item.drugName!,
+      dosage: item.dosage,
+      frequency: item.frequency,
+      duration: item.duration,
+      medicationId: null,
+      flaggedForPharmacistReview: true,
+    };
+  });
+}
+
 export async function issuePrescription(actor: auditService.AuditActor, input: {
   consultationId: string; facilityProfileId: string; amountStroops?: bigint; catalogItemCode?: string;
   supersedesPrescriptionId?: string;
-  items: Array<{ drugName: string; dosage: string; frequency: string; duration: string }>;
+  items: Array<{ medicationId?: string; drugName?: string; dosage: string; frequency: string; duration: string }>;
 }) {
   const { consultation, appointment } = await consultationContext(actor, input.consultationId);
   let predecessor = null;
@@ -99,10 +159,13 @@ export async function issuePrescription(actor: auditService.AuditActor, input: {
     return await prisma.$transaction(async (tx) => {
       await facilitiesService.requireFacilityForOrderKind(tx, input.facilityProfileId, 'prescription');
       const pricing = await resolveOrderAmount(tx, input);
+      // Issue #69: link/snapshot the controlled vocabulary before the
+      // append-only row is written, in the same transaction.
+      const items = await resolvePrescriptionItems(tx, input.items);
       const order = await ordersRepo.createPrescription(tx, {
         consultationId: consultation.id, patientProfileId: appointment.patientProfileId,
         prescribingDoctorId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
-        amountStroops: pricing.amountStroops, supersedesPrescriptionId: predecessor?.id ?? null, items: input.items,
+        amountStroops: pricing.amountStroops, supersedesPrescriptionId: predecessor?.id ?? null, items,
       });
       const paymentIntent = await createOrderPayment(tx, {
         kind: 'prescription', orderId: order.id, patientProfileId: appointment.patientProfileId,

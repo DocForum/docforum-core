@@ -50,6 +50,17 @@ model User {
   // refused once set. Distinct from admin deactivation (#39), which is
   // reversible.
   deletedAt             DateTime?
+  // --- TOTP two-factor authentication (Phase 8, issue #36) ---------------
+  // The shared secret, encrypted at rest with the field-encryption key
+  // (issue #46; AES-256-GCM). Never logged, never returned by the API.
+  // Present from `POST /auth/2fa/setup`, but 2FA only counts as *enabled*
+  // once `totpEnabledAt` is set by a first successful code.
+  totpSecret            String?
+  totpEnabledAt         DateTime?
+  // Replay guard: the last time step whose code was accepted. A code can be
+  // used exactly once per step, so accepting the ±1-step skew window does
+  // not let a sniffed code be replayed within it.
+  totpLastUsedStep      Int?
 
   patientProfile  PatientProfile?
   doctorProfile   DoctorProfile?
@@ -70,8 +81,23 @@ model User {
   guardianships           Guardianship[]
   sep10Challenges         Sep10Challenge[]
   orderDisputeResolutions OrderDisputeResolution[]
+  twoFactorRecoveryCodes  TwoFactorRecoveryCode[]
 
   @@index([role])
+}
+
+/// One-time recovery codes for TOTP (Phase 8, issue #36). Only a SHA-256 hash
+/// is stored, ten are issued per enrolment, and each is single-use via a
+/// conditional `usedAt` update. Regenerating the set replaces the old one.
+model TwoFactorRecoveryCode {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
 // Phase 8 (issue #34): hashed, single-use, expiring email-verification

@@ -53,7 +53,7 @@ async function seed() {
     { email: 'doctor.dermatology@docforum.example.test', name: 'Synthetic Dermatology Doctor', specialty: specialties[1] },
     { email: 'doctor.family@docforum.example.test', name: 'Synthetic Family Doctor', specialty: specialties[2] },
   ];
-  for (const [index, entry] of doctors.entries()) {
+  for (const entry of doctors) {
     const user = await upsertUser(entry.email, 'doctor');
     const doctor = await prisma.doctorProfile.upsert({
       where: { userId: user.id },

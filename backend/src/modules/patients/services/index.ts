@@ -371,7 +371,7 @@ export function listRetentionHolds(): RetentionHold[] {
 export function isForeignKeyRefusal(err: unknown): boolean {
   if (err instanceof Prisma.PrismaClientKnownRequestError) return err.code === 'P2003';
   if (err instanceof Prisma.PrismaClientUnknownRequestError) {
-    return /23001|violates RESTRICT setting of foreign key constraint/.test(err.message);
+    return /\b23001\b|violates RESTRICT setting of foreign key constraint/.test(err.message);
   }
   return false;
 }

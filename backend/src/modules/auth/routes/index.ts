@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requireRole } from '../../../middleware/auth';
+import { authenticate, authenticateMfaEnrollmentOrAccess, requireRole } from '../../../middleware/auth';
 import { requireAllowedOrigin } from '../../../middleware/csrf';
 import * as authController from '../controllers';
 
@@ -10,6 +10,17 @@ authRouter.post('/signup', authController.signup);
 // issued by `POST /admin/invites` in the users module).
 authRouter.post('/signup-with-invite', authController.signupWithInvite);
 authRouter.post('/login', authController.login);
+
+// Phase 8, issue #36 — TOTP two-factor authentication.
+// `/verify` is the second login step (the half-token is its credential).
+// `/setup` + `/enable` accept a full access token OR the narrow
+// `mfa_enrollment` token an admin gets when the config flag makes 2FA
+// mandatory. `/status` + `/disable` need a real session.
+authRouter.post('/2fa/setup', authenticateMfaEnrollmentOrAccess, authController.setupTwoFactor);
+authRouter.post('/2fa/enable', authenticateMfaEnrollmentOrAccess, authController.enableTwoFactor);
+authRouter.post('/2fa/verify', authController.verifyTwoFactor);
+authRouter.get('/2fa/status', authenticate, authController.twoFactorStatus);
+authRouter.post('/2fa/disable', authenticate, authController.disableTwoFactor);
 
 // Phase 8, issue #34 — email verification.
 authRouter.post('/verify-email', authController.verifyEmail);
