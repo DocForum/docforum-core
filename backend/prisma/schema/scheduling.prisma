@@ -89,6 +89,9 @@ model Appointment {
   // before confirmation, not enforced yet — booking works without it in
   // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
   // existing. Flagged, not silently dropped.
+
+  @@index([patientProfileId, createdAt])
+  @@index([doctorProfileId, status])
 }
 
 enum WaitlistStatus {

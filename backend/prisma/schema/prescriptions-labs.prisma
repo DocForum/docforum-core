@@ -37,6 +37,8 @@ model Prescription {
   @@unique([supersedesPrescriptionId])
   @@index([patientProfileId, createdAt])
   @@index([consultationId])
+  @@index([prescribingDoctorId])
+  @@index([facilityProfileId])
 }
 
 model PrescriptionItem {
@@ -96,6 +98,7 @@ model LabOrder {
   @@index([patientProfileId, createdAt])
   @@index([consultationId])
   @@index([status, expiresAt])
+  @@index([facilityProfileId])
 }
 
 // Issue #72 (PRD §8.2.7): how serious the facility judged a result to be.
@@ -129,6 +132,8 @@ model LabResult {
   labOrder           LabOrder        @relation(fields: [labOrderId], references: [id])
   fulfillingFacility FacilityProfile @relation(fields: [fulfillingFacilityId], references: [id])
   acknowledgement    LabResultAcknowledgement?
+
+  @@index([fulfillingFacilityId])
 }
 
 /// Issue #72: the "did anyone look at this?" record for an abnormal or
