@@ -18,3 +18,9 @@ export const createConsultationSchema = z.object({
 export const createReferralsSchema = z.object({
   targets: z.array(referralTargetSchema).min(1),
 });
+
+export const listConsultationsQuerySchema = z.object({
+  patientProfileId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().optional(),
+});

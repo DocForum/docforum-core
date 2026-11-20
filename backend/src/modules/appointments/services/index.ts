@@ -90,6 +90,32 @@ export async function listMyAppointments(userId: string, patientProfileId?: stri
   return appointmentsRepo.findAppointmentsForPatient(patientProfile.id);
 }
 
+export async function getAppointmentContextsForPatient(userId: string, patientProfileId?: string) {
+  const patientProfile = await patientsService.resolveActingProfile(userId, patientProfileId);
+  const appointments = await appointmentsRepo.findAppointmentsForPatient(patientProfile.id);
+  const map = new Map<string, { doctorProfileId: string; date: Date }>();
+  for (const appt of appointments) {
+    map.set(appt.id, {
+      doctorProfileId: appt.doctorProfileId,
+      date: appt.availabilitySlot?.startTime ?? appt.createdAt,
+    });
+  }
+  return map;
+}
+
+export async function getAppointmentContextsForDoctor(userId: string) {
+  const doctorProfile = await doctorsService.getMyDoctorProfile(userId);
+  const appointments = await appointmentsRepo.findAppointmentsForDoctor(doctorProfile.id);
+  const map = new Map<string, { patientProfileId: string; date: Date }>();
+  for (const appt of appointments) {
+    map.set(appt.id, {
+      patientProfileId: appt.patientProfileId,
+      date: appt.availabilitySlot?.startTime ?? appt.createdAt,
+    });
+  }
+  return map;
+}
+
 /**
  * Reschedules an appointment atomically: in one transaction, claims the new
  * slot and releases the old one. The new slot must belong to the same

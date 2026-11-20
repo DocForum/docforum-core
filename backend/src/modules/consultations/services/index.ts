@@ -154,6 +154,107 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
   return { consultation: { ...consultation, notes: returnNotes }, appointment };
 }
 
+function encodeConsultationCursor(consultation: { createdAt: Date; id: string }): string {
+  return Buffer.from(`${consultation.createdAt.toISOString()}|${consultation.id}`, 'utf8').toString('base64url');
+}
+
+function decodeConsultationCursor(cursor: string): { createdAt: Date; id: string } {
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const separator = raw.indexOf('|');
+  const createdAt = new Date(raw.slice(0, separator));
+  const id = raw.slice(separator + 1);
+  if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
+    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+  }
+  return { createdAt, id };
+}
+
+export interface ListConsultationsFilters {
+  patientProfileId?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export async function listMyConsultations(userId: string, filters: ListConsultationsFilters) {
+  const limit = filters.limit ?? 20;
+  const appointmentMap = await appointmentsService.getAppointmentContextsForPatient(userId, filters.patientProfileId);
+  const appointmentIds = [...appointmentMap.keys()];
+  if (appointmentIds.length === 0) {
+    return { items: [], nextCursor: null };
+  }
+
+  const before = filters.cursor ? decodeConsultationCursor(filters.cursor) : undefined;
+  const rows = await consultationsRepo.findConsultationsPage(prisma, {
+    appointmentIds,
+    before,
+    take: limit + 1,
+  });
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+  const doctorIds = [...new Set(pageRows.map((r) => appointmentMap.get(r.appointmentId)!.doctorProfileId))];
+  const doctorSummaries = await doctorsService.getDoctorSummariesByIds(doctorIds);
+
+  const items = pageRows.map((row) => {
+    const ctx = appointmentMap.get(row.appointmentId)!;
+    return {
+      id: row.id,
+      appointmentId: row.appointmentId,
+      date: ctx.date.toISOString(),
+      doctorName: doctorSummaries.get(ctx.doctorProfileId)?.fullName ?? 'Unknown Doctor',
+      outcome: row.outcome,
+      createdAt: row.createdAt.toISOString(),
+    };
+  });
+
+  const last = pageRows.at(-1);
+  return {
+    items,
+    nextCursor: hasMore && last ? encodeConsultationCursor(last) : null,
+  };
+}
+
+export async function listDoctorConsultations(userId: string, filters: ListConsultationsFilters) {
+  const limit = filters.limit ?? 20;
+  const appointmentMap = await appointmentsService.getAppointmentContextsForDoctor(userId);
+  const appointmentIds = [...appointmentMap.keys()];
+  if (appointmentIds.length === 0) {
+    return { items: [], nextCursor: null };
+  }
+
+  const before = filters.cursor ? decodeConsultationCursor(filters.cursor) : undefined;
+  const rows = await consultationsRepo.findConsultationsPage(prisma, {
+    appointmentIds,
+    before,
+    take: limit + 1,
+  });
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+  const patientIds = [...new Set(pageRows.map((r) => appointmentMap.get(r.appointmentId)!.patientProfileId))];
+  const patientSummaries = await patientsService.getPatientSummariesByIds(patientIds);
+
+  const items = pageRows.map((row) => {
+    const ctx = appointmentMap.get(row.appointmentId)!;
+    return {
+      id: row.id,
+      appointmentId: row.appointmentId,
+      date: ctx.date.toISOString(),
+      patientName: patientSummaries.get(ctx.patientProfileId)?.fullName ?? 'Deleted patient',
+      outcome: row.outcome,
+      createdAt: row.createdAt.toISOString(),
+    };
+  });
+
+  const last = pageRows.at(-1);
+  return {
+    items,
+    nextCursor: hasMore && last ? encodeConsultationCursor(last) : null,
+  };
+}
+
 /** Service-to-service read for modules that hang records off a consultation
  * (orders: prescriptions, lab orders). Returns the stored row as-is — callers
  * outside this module never touch `Consultation` themselves (AGENTS.md hard

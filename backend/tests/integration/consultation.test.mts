@@ -384,4 +384,120 @@ describe('consultation close-once guarantee', () => {
       .send({ outcome: 'resolved' });
     expect(otherClose.status).toBe(404);
   });
+
+  it('lists consultations for the patient with pagination and no clinical notes', async () => {
+    const res = await request(app)
+      .get('/consultations/mine')
+      .query({ limit: 1 })
+      .set('Authorization', `Bearer ${patientToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    const item = res.body.items[0];
+    expect(item).toMatchObject({
+      id: expect.any(String),
+      appointmentId: expect.any(String),
+      date: expect.any(String),
+      doctorName: 'Owning Doctor',
+      createdAt: expect.any(String),
+    });
+    expect(item).not.toHaveProperty('notes');
+    expect(JSON.stringify(res.body)).not.toContain('Preliminary visit notes');
+    expect(JSON.stringify(res.body)).not.toContain('Reviewed results');
+    expect(res.body.nextCursor).toBeTruthy();
+
+    const nextRes = await request(app)
+      .get('/consultations/mine')
+      .query({ limit: 1, cursor: res.body.nextCursor })
+      .set('Authorization', `Bearer ${patientToken}`);
+
+    expect(nextRes.status).toBe(200);
+    expect(nextRes.body.items).toHaveLength(1);
+    expect(nextRes.body.items[0].id).not.toBe(item.id);
+  });
+
+  it('lists consultations for the treating doctor with pagination and displays anonymised patients', async () => {
+    const docRes = await request(app)
+      .get('/consultations/doctor')
+      .query({ limit: 1 })
+      .set('Authorization', `Bearer ${owningDoctorToken}`);
+
+    expect(docRes.status).toBe(200);
+    expect(docRes.body.items).toHaveLength(1);
+    expect(docRes.body.items[0].patientName).toBe('Test Patient');
+    expect(docRes.body.items[0]).not.toHaveProperty('notes');
+    expect(docRes.body.nextCursor).toBeTruthy();
+
+    // Test anonymised patient: create appointment, consultation, then anonymise profile
+    const anonPatientToken = await signupAndVerify(
+      app,
+      'patient',
+      `consult-anon-${runId}@example.com`,
+      'Anon Patient',
+    );
+    const anonProfile = await prisma.patientProfile.findFirstOrThrow({
+      where: { user: { email: `consult-anon-${runId}@example.com` } },
+    });
+
+    const slot = await prisma.availabilitySlot.create({
+      data: {
+        doctorProfileId,
+        startTime: new Date(Date.now() - 7200_000),
+        endTime: new Date(Date.now() - 5400_000),
+        status: 'open',
+      },
+    });
+    const book = await request(app)
+      .post('/appointments')
+      .set('Authorization', `Bearer ${anonPatientToken}`)
+      .send({ availabilitySlotId: slot.id });
+    expect(book.status).toBe(201);
+    const anonApptId = book.body.id as string;
+
+    await request(app)
+      .patch(`/appointments/${anonApptId}/status`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ status: 'completed' });
+
+    await request(app)
+      .post(`/appointments/${anonApptId}/consultation`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ outcome: 'resolved', notes: 'Secret visit notes for deleted patient' });
+
+    // Anonymise the patient
+    await prisma.patientProfile.update({
+      where: { id: anonProfile.id },
+      data: { anonymizedAt: new Date() },
+    });
+
+    const docList = await request(app)
+      .get('/consultations/doctor')
+      .query({ limit: 10 })
+      .set('Authorization', `Bearer ${owningDoctorToken}`);
+
+    expect(docList.status).toBe(200);
+    const deletedEntry = docList.body.items.find((entry: { appointmentId: string }) => entry.appointmentId === anonApptId);
+    expect(deletedEntry).toBeTruthy();
+    expect(deletedEntry.patientName).toBe('Deleted patient');
+    expect(deletedEntry).not.toHaveProperty('notes');
+    expect(JSON.stringify(docList.body)).not.toContain('Secret visit notes');
+  });
+
+  it('enforces role and ownership scoping on list endpoints', async () => {
+    const docAsPatient = await request(app)
+      .get('/consultations/mine')
+      .set('Authorization', `Bearer ${owningDoctorToken}`);
+    expect(docAsPatient.status).toBe(403);
+
+    const patientAsDoc = await request(app)
+      .get('/consultations/doctor')
+      .set('Authorization', `Bearer ${patientToken}`);
+    expect(patientAsDoc.status).toBe(403);
+
+    const otherDoctorList = await request(app)
+      .get('/consultations/doctor')
+      .set('Authorization', `Bearer ${otherDoctorToken}`);
+    expect(otherDoctorList.status).toBe(200);
+    expect(otherDoctorList.body.items).toHaveLength(0);
+  });
 });

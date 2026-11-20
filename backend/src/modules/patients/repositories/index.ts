@@ -193,6 +193,13 @@ export function deleteUnservableExportChunks(): Promise<number> {
 export function findPatientProfileById(id: string) {
   return prisma.patientProfile.findUnique({ where: { id } });
 }
+
+export function findPatientSummariesByIds(ids: string[]) {
+  return prisma.patientProfile.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, fullName: true, anonymizedAt: true },
+  });
+}
 /** One keyset page of anonymised profiles old enough to be purge
  * candidates. */
 export function findAnonymizedProfilesPage(anonymizedBefore: Date, cursor: string | undefined, take: number) {

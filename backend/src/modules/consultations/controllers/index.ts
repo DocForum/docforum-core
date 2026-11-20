@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import * as consultationsService from '../services';
-import { closeConsultationSchema, createConsultationSchema, createReferralsSchema } from '../validation';
+import { closeConsultationSchema, createConsultationSchema, createReferralsSchema, listConsultationsQuerySchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { auditActor } from '../../../middleware/request-id';
 import { getParam } from '../../../request-params';
@@ -34,6 +34,20 @@ export async function getOne(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const consultation = await consultationsService.getConsultation(req.user.id, getParam(req, 'consultationId'));
   res.status(200).json(consultation);
+}
+
+export async function listMine(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const query = listConsultationsQuerySchema.parse(req.query);
+  const result = await consultationsService.listMyConsultations(req.user.id, query);
+  res.status(200).json(result);
+}
+
+export async function listDoctor(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const query = listConsultationsQuerySchema.parse(req.query);
+  const result = await consultationsService.listDoctorConsultations(req.user.id, query);
+  res.status(200).json(result);
 }
 
 export async function createReferrals(req: Request, res: Response) {

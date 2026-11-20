@@ -26,6 +26,37 @@ export function findConsultationById(db: DbClient, id: string) {
   });
 }
 
+export function findConsultationsPage(
+  db: DbClient,
+  input: {
+    appointmentIds: string[];
+    before?: { createdAt: Date; id: string };
+    take: number;
+  },
+) {
+  return db.consultation.findMany({
+    where: {
+      appointmentId: { in: input.appointmentIds },
+      ...(input.before
+        ? {
+            OR: [
+              { createdAt: { lt: input.before.createdAt } },
+              { createdAt: input.before.createdAt, id: { lt: input.before.id } },
+            ],
+          }
+        : {}),
+    },
+    select: {
+      id: true,
+      appointmentId: true,
+      outcome: true,
+      createdAt: true,
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: input.take,
+  });
+}
+
 /**
  * Conditional update that closes an open consultation only if outcome IS NULL.
  * Returns the updated row or null if already closed.

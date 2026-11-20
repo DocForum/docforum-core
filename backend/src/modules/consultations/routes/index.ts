@@ -28,6 +28,19 @@ appointmentConsultationsRouter.post(
 /** Mounted at /consultations. */
 export const consultationsRouter = Router();
 
+consultationsRouter.get(
+  '/mine',
+  authenticate,
+  requireRole('patient'),
+  consultationsController.listMine,
+);
+consultationsRouter.get(
+  '/doctor',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  consultationsController.listDoctor,
+);
 consultationsRouter.post(
   '/',
   authenticate,
