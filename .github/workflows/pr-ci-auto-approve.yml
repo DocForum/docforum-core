@@ -1,0 +1,50 @@
+name: PR CI auto-approval
+
+# Approves a fork PR's pending CI runs once `PR malware scan` has passed and the
+# security checks in .github/scripts/pr-ci-auto-approve.cjs pass too. Anything
+# they can't clear is labelled `ci-needs-manual-approval` and left for a
+# maintainer, exactly as before this workflow existed.
+#
+# Why workflow_run: it starts after the scan finishes, runs this workflow
+# from `main`, and has a write token even for fork PRs. That is safe only
+# because this job never checks out, installs or executes anything from the
+# PR: the PR is read as data through the API. Never add a step that checks
+# out the PR head.
+
+on:
+  workflow_run:
+    workflows: [PR malware scan]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: pr-ci-auto-approve-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  approve:
+    name: Approve CI after security review
+    # Only scans of PR pushes (not manual backfills), and only ones that passed.
+    if: >-
+      github.event.workflow_run.event != 'workflow_dispatch' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The default checkout for workflow_run is `main`, never the PR.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Review and approve
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          retries: 3
+          script: |
+            await require('./.github/scripts/pr-ci-auto-approve.cjs')({ github, context, core });
