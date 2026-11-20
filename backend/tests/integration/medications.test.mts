@@ -15,7 +15,7 @@
 //      trigram index created by the `medication_catalog` migration.
 //
 // Self-contained like the other integration suites: its own embedded
-// Postgres on its own port (5470) with the committed migrations applied.
+// Postgres on its own port (5472) with the committed migrations applied.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,7 +26,7 @@ import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5470;
+const PORT = 5472;
 const runId = Date.now();
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-medications-pg-'));
