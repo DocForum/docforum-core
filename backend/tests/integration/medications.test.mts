@@ -122,6 +122,10 @@ describe('issue #69: medication catalog and structured prescription items', () =
     const slots = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
     const book = await request(app).post('/appointments').set('Authorization', `Bearer ${patientToken}`).send({ availabilitySlotId: slots.body[0].id });
     expect(book.status, JSON.stringify(book.body)).toBe(201);
+    await prisma.availabilitySlot.update({
+      where: { id: slots.body[0].id },
+      data: { startTime: new Date(Date.now() - 3600_000) },
+    });
     const done = await request(app)
       .patch(`/appointments/${book.body.id}/status`)
       .set('Authorization', `Bearer ${doctorToken}`)

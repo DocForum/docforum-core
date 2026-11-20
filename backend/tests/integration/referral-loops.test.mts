@@ -91,6 +91,13 @@ describe('referral loop detection', () => {
   ) {
     let consultationId: string;
     if (viaConsultationAppointmentId) {
+      const appt = await prisma.appointment.findUniqueOrThrow({ where: { id: viaConsultationAppointmentId } });
+      if (appt.availabilitySlotId) {
+        await prisma.availabilitySlot.update({
+          where: { id: appt.availabilitySlotId },
+          data: { startTime: new Date(Date.now() - 3600_000) },
+        });
+      }
       const completed = await setAppointmentStatus(app, from, viaConsultationAppointmentId, 'completed');
       expect(completed.status).toBe(200);
       const consult = await request(app)
