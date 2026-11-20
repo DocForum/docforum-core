@@ -455,6 +455,23 @@ export async function listDoctorAppointmentsToday(userId: string) {
   return appointmentsRepo.findAppointmentsForDoctorOnDay(doctor.id, start, end);
 }
 
+/**
+ * The participants of an appointment, for modules that own a per-visit
+ * record (consultations: the async thread, issue #61). Profile IDs only —
+ * the caller resolves user identity through the patients/doctors services,
+ * so this stays a service seam, not a repository export.
+ */
+export async function getAppointmentParticipants(appointmentId: string) {
+  const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
+  if (!appointment) return null;
+  return {
+    id: appointment.id,
+    patientProfileId: appointment.patientProfileId,
+    doctorProfileId: appointment.doctorProfileId,
+    status: appointment.status,
+  };
+}
+
 /** This module's contribution to the patient data export (issue #40).
  * Slot times and the doctor's name are fetched per page through the
  * availability and doctors services — never by joining their tables. */
@@ -555,6 +572,60 @@ export async function bookForReferral(
       doctorProfileId: input.doctorProfileId,
       origin: appointment.origin,
       referralId: input.referralId,
+    },
+  });
+
+  await publish(db, 'appointment.booked', {
+    appointmentId: appointment.id,
+    patientUserId: actor.userId,
+  });
+
+  return appointment;
+}
+
+/**
+ * Books the appointment behind a follow-up request (issue #63). Called by
+ * the consultations service from inside its own transaction, exactly like
+ * `bookForReferral`: the conditional slot claim is the same one a direct
+ * booking uses, so a follow-up can never shortcut the double-booking
+ * guarantee (ARCHITECTURE_ESSENTIALS hard rule 2).
+ */
+export async function bookForFollowUp(
+  db: Prisma.TransactionClient,
+  input: { patientProfileId: string; doctorProfileId: string; availabilitySlotId: string },
+  actor: auditService.AuditActor,
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const claimed = await availabilityService.claimOpenSlot(db, input.availabilitySlotId);
+  if (!claimed) {
+    throw new HttpError(409, 'This slot is no longer available.');
+  }
+
+  const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
+  if (!slot) {
+    throw new HttpError(404, 'Slot not found.');
+  }
+  if (slot.doctorProfileId !== input.doctorProfileId) {
+    throw new HttpError(409, 'That slot does not belong to the follow-up’s doctor.');
+  }
+
+  const appointment = await appointmentsRepo.createAppointment(db, {
+    patientProfileId: input.patientProfileId,
+    doctorProfileId: input.doctorProfileId,
+    availabilitySlotId: input.availabilitySlotId,
+    origin: 'follow_up',
+  });
+
+  await auditService.record(db, actor, {
+    entityType: 'Appointment',
+    entityId: appointment.id,
+    action: 'appointment.booked',
+    fromState: null,
+    toState: appointment.status,
+    metadata: {
+      availabilitySlotId: input.availabilitySlotId,
+      doctorProfileId: input.doctorProfileId,
+      origin: appointment.origin,
     },
   });
 

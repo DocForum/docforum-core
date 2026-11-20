@@ -14,6 +14,7 @@ import { paymentsExportSection } from './modules/payments/services';
 import { profileExportSection, registerExportSection } from './modules/patients/services';
 import { prescriptionsExportSection, labOrdersExportSection } from './modules/orders/services';
 import { intakeExportSection } from './modules/intake/services';
+import { consultationsExportSection } from './modules/consultations/services';
 
 export const PATIENT_EXPORT_SECTIONS = [
   accountExportSection,
@@ -23,6 +24,7 @@ export const PATIENT_EXPORT_SECTIONS = [
   paymentsExportSection,
   prescriptionsExportSection,
   labOrdersExportSection,
+  consultationsExportSection,
 ];
 
 export function registerPatientExportSections(): void {

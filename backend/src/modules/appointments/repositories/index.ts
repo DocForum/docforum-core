@@ -9,7 +9,7 @@ export function createAppointment(
     patientProfileId: string;
     doctorProfileId: string;
     availabilitySlotId: string;
-    origin?: 'direct_booking' | 'referral';
+    origin?: 'direct_booking' | 'referral' | 'follow_up';
     referralId?: string;
   },
 ) {
