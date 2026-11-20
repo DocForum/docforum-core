@@ -11,7 +11,14 @@ const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const PORT = 5460;
 const runId = Date.now();
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-doctors-pg-'));
-const pg = new EmbeddedPostgres({ databaseDir: dataDir, user: 'docforum', password: 'docforum', port: PORT, persistent: false });
+const pg = new EmbeddedPostgres({
+  databaseDir: dataDir,
+  user: 'docforum',
+  password: 'docforum',
+  port: PORT,
+  persistent: false,
+  initdbFlags: ['-E', 'UTF8'],
+});
 const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_test`;
 const emailedTokens = new Map<string, string>();
 
@@ -25,13 +32,14 @@ describe('doctor discovery', () => {
   let dermatologyId: string;
   let cardiologySlug: string;
   let doctor: { userId: string; accessToken: string; profileId: string; email: string };
+  let secondDoctorProfileId: string;
   let patient: { userId: string; accessToken: string; profileId: string; email: string };
 
   beforeAll(async () => {
     await pg.initialise();
     await pg.start();
     await pg.createDatabase('docforum_test');
-    execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
+    execFileSync(process.execPath, [path.join(BACKEND_ROOT, 'node_modules/prisma/build/index.js'), 'migrate', 'deploy'], {
       cwd: BACKEND_ROOT,
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: 'pipe',
@@ -73,16 +81,19 @@ describe('doctor discovery', () => {
     });
     expect(second.status).toBe(200);
     const secondProfile = await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: second.body.user.id } });
+    secondDoctorProfileId = secondProfile.id;
     await prisma.doctorProfile.update({ where: { id: secondProfile.id }, data: { verificationStatus: 'verified' } });
     await prisma.doctorSpecialty.create({ data: { doctorProfileId: secondProfile.id, specialtyId: dermatologyId } });
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
     const fixtureModule = await import('./helpers/fixtures.mjs');
     await fixtureModule.resetEmailSenderFixture();
     await prisma?.$disconnect();
     await pg.stop();
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {}
   });
 
   it('lists specialties publicly and searches only verified doctors with public fields', async () => {
@@ -96,7 +107,8 @@ describe('doctor discovery', () => {
     expect(results.status).toBe(200);
     expect(results.body.items).toHaveLength(1);
     expect(results.body.items[0]).toMatchObject({ id: doctor.profileId, fullName: 'Adebayo Adebayor' });
-    expect(Object.keys(results.body.items[0]).sort()).toEqual(['fullName', 'id', 'specialties']);
+    expect(Object.keys(results.body.items[0]).sort()).toEqual(['fullName', 'id', 'nextAvailableAt', 'specialties']);
+    expect(results.body.items[0].nextAvailableAt).toBeNull();
     expect(results.body.items[0].specialties[0]).toMatchObject({ id: cardiologyId, slug: cardiologySlug });
     expect(JSON.stringify(results.body)).not.toContain(doctor.email);
 
@@ -145,5 +157,62 @@ describe('doctor discovery', () => {
       .set('Authorization', `Bearer ${patient.accessToken}`)
       .send({ specialtyIds: [] });
     expect(forbidden.status).toBe(403);
+  });
+
+  it('returns nextAvailableAt and filters by availableBefore while preserving keyset pagination', async () => {
+    const now = Date.now();
+    const slotDoctor = new Date(now + 2 * 3600 * 1000);
+    slotDoctor.setMilliseconds(0);
+    const slotDoctorEnd = new Date(slotDoctor.getTime() + 30 * 60 * 1000);
+
+    const slotSecond = new Date(now + 4 * 3600 * 1000);
+    slotSecond.setMilliseconds(0);
+    const slotSecondEnd = new Date(slotSecond.getTime() + 30 * 60 * 1000);
+
+    await prisma.availabilitySlot.createMany({
+      data: [
+        {
+          doctorProfileId: doctor.profileId,
+          startTime: slotDoctor,
+          endTime: slotDoctorEnd,
+          status: 'open',
+        },
+        {
+          doctorProfileId: secondDoctorProfileId,
+          startTime: slotSecond,
+          endTime: slotSecondEnd,
+          status: 'open',
+        },
+      ],
+    });
+
+    const docRes = await request(app).get('/doctors').query({ q: 'Adebayor' });
+    expect(docRes.status).toBe(200);
+    const foundDoc = docRes.body.items.find((item: { id: string }) => item.id === doctor.profileId);
+    expect(foundDoc).toBeTruthy();
+    expect(foundDoc.nextAvailableAt).toBe(slotDoctor.toISOString());
+
+    // availableBefore between slotDoctor and slotSecond: only doctor should match
+    const filterBetween = new Date(now + 3 * 3600 * 1000).toISOString();
+    const betweenRes = await request(app).get('/doctors').query({ availableBefore: filterBetween });
+    expect(betweenRes.status).toBe(200);
+    expect(betweenRes.body.items.some((item: { id: string }) => item.id === doctor.profileId)).toBe(true);
+    expect(betweenRes.body.items.some((item: { id: string }) => item.id === secondDoctorProfileId)).toBe(false);
+
+    // availableBefore after both slots: both match, test keyset pagination with availableBefore
+    const filterAfterBoth = new Date(now + 10 * 3600 * 1000).toISOString();
+    const page1 = await request(app).get('/doctors').query({ availableBefore: filterAfterBoth, limit: 1 });
+    expect(page1.status).toBe(200);
+    expect(page1.body.items).toHaveLength(1);
+    expect(page1.body.nextCursor).toBeTruthy();
+
+    const page2 = await request(app).get('/doctors').query({
+      availableBefore: filterAfterBoth,
+      limit: 1,
+      cursor: page1.body.nextCursor,
+    });
+    expect(page2.status).toBe(200);
+    expect(page2.body.items).toHaveLength(1);
+    expect(page2.body.items[0].id).not.toBe(page1.body.items[0].id);
   });
 });

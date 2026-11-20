@@ -13,6 +13,7 @@ export const publicDoctorListQuerySchema = z.object({
   q: z.string().trim().min(1).max(100).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   cursor: z.string().uuid().optional(),
+  availableBefore: z.coerce.date().optional(),
 }).strict();
 
 export const updateDoctorProfileSchema = z.object({
