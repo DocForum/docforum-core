@@ -18,8 +18,8 @@ export async function updateMyDoctorProfile(userId: string, version: number, ful
   return profile;
 }
 
-export function listSpecialties() {
-  return doctorsRepo.findSpecialties();
+export function listSpecialties(options: { includeRetired?: boolean } = {}) {
+  return doctorsRepo.findSpecialties(options);
 }
 
 export async function listPublicDoctors(input: {
@@ -64,6 +64,25 @@ export async function setMySpecialties(userId: string, requestedIds: string[]) {
       throw new HttpError(400, 'One or more specialty ids are unknown.');
     }
 
+    // Check existing specialties for this doctor (issue #279, #282)
+    const existing = await tx.doctorSpecialty.findMany({
+      where: { doctorProfileId: profile.id },
+      select: { specialtyId: true },
+    });
+    const existingIds = new Set(existing.map((e) => e.specialtyId));
+
+    // Retired specialties cannot be newly assigned (issue #282).
+    // Pre-existing doctor links to retired specialties remain valid.
+    const newSpecialties = specialties.filter((s) => !existingIds.has(s.id));
+    const retiredNew = newSpecialties.find((s) => s.isRetired);
+    if (retiredNew) {
+      throw new HttpError(400, `Cannot assign retired specialty: ${retiredNew.name}.`);
+    }
+
+    // Note on pending referrals (issue #279):
+    // Removing a specialty that has pending referrals routed by it does not
+    // alter or reroute those referrals. They remain assigned to the doctor and
+    // must be handled or explicitly reassigned by an admin.
     await doctorsRepo.replaceDoctorSpecialties(tx, profile.id, specialtyIds);
     return { specialties: specialties.sort((a, b) => a.name.localeCompare(b.name)) };
   });
@@ -184,22 +203,281 @@ export async function doctorVerificationQueueCounts() {
 }
 
 export async function setDoctorSpecialtyVerification(
+  actor: auditService.AuditActor,
+  reviewerUserId: string,
   doctorProfileId: string,
   specialtyId: string,
   status: VerificationStatus,
-  reviewer: string,
   rejectionReason?: string,
 ) {
-  const assignment = await doctorsRepo.findDoctorSpecialtyByDoctorAndSpecialty(doctorProfileId, specialtyId);
-  if (!assignment) {
-    throw new HttpError(404, 'Doctor does not have this specialty assigned.');
+  return prisma.$transaction(async (tx) => {
+    const assignment = await tx.doctorSpecialty.findUnique({
+      where: { doctorProfileId_specialtyId: { doctorProfileId, specialtyId } },
+      include: { specialty: true },
+    });
+    if (!assignment) {
+      throw new HttpError(404, 'Doctor does not have this specialty assigned.');
+    }
+    // Same-status updates must be a no-op without an event, matching setVerificationStatus.
+    if (assignment.verificationStatus === status) {
+      return assignment;
+    }
+    const updated = await doctorsRepo.updateDoctorSpecialtyVerification(
+      tx,
+      doctorProfileId,
+      specialtyId,
+      status,
+      reviewerUserId,
+      status === 'rejected' ? (rejectionReason ?? null) : null,
+    );
+    await auditService.record(tx, actor, {
+      entityType: 'DoctorSpecialty',
+      entityId: assignment.id,
+      action: 'doctor_specialty.verification_changed',
+      fromState: assignment.verificationStatus,
+      toState: status,
+      metadata: {
+        doctorProfileId,
+        specialtyId,
+        ...(status === 'rejected' && rejectionReason ? { rejectionReason } : {}),
+      },
+    });
+    return updated;
+  });
+}
+
+export interface VerificationQueueFilters {
+  kind?: 'profile' | 'specialty';
+  specialty?: string;
+  limit: number;
+  cursor?: string;
+}
+
+export interface VerificationQueueItem {
+  id: string;
+  kind: 'profile' | 'specialty';
+  doctorProfileId: string;
+  doctorName: string;
+  name: string;
+  specialty?: { id: string; name: string; slug: string };
+  requestedSpecialties: Array<{ id: string; name: string; slug: string }>;
+  createdAt: string;
+  ageSeconds: number;
+  isDeactivated: boolean;
+  deactivated: boolean;
+}
+
+export function encodeQueueCursor(item: { createdAt: Date | string; id: string }): string {
+  const d = item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt);
+  return Buffer.from(`${d.toISOString()}|${item.id}`, 'utf8').toString('base64url');
+}
+
+export function decodeQueueCursor(cursor: string): { createdAt: Date; id: string } {
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const separator = raw.indexOf('|');
+  const createdAt = new Date(raw.slice(0, separator));
+  const id = raw.slice(separator + 1);
+  if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
+    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
   }
-  return doctorsRepo.updateDoctorSpecialtyVerification(
-    prisma,
-    doctorProfileId,
-    specialtyId,
-    status,
-    reviewer,
-    status === 'rejected' ? (rejectionReason ?? null) : null,
-  );
+  return { createdAt, id };
+}
+
+export async function getVerificationQueue(filters: VerificationQueueFilters) {
+  const after = filters.cursor ? decodeQueueCursor(filters.cursor) : undefined;
+  const take = filters.limit + 1;
+  const now = Date.now();
+
+  const profileItemsPromise =
+    filters.kind === 'specialty'
+      ? Promise.resolve([])
+      : doctorsRepo.findPendingDoctorProfilesForQueue({
+          specialty: filters.specialty,
+          after,
+          take,
+        });
+
+  const specialtyItemsPromise =
+    filters.kind === 'profile'
+      ? Promise.resolve([])
+      : doctorsRepo.findPendingDoctorSpecialtiesForQueue({
+          specialty: filters.specialty,
+          after,
+          take,
+        });
+
+  const [profiles, specialties] = await Promise.all([profileItemsPromise, specialtyItemsPromise]);
+
+  const mappedProfiles: Array<VerificationQueueItem & { _sortDate: Date }> = profiles.map((p) => {
+    const ageSeconds = Math.max(0, Math.floor((now - p.createdAt.getTime()) / 1000));
+    const isDeactivated = Boolean(p.user?.deactivatedAt);
+    return {
+      id: p.id,
+      kind: 'profile',
+      doctorProfileId: p.id,
+      doctorName: p.fullName,
+      name: p.fullName,
+      requestedSpecialties: p.specialties.map((s) => ({
+        id: s.specialty.id,
+        name: s.specialty.name,
+        slug: s.specialty.slug,
+      })),
+      createdAt: p.createdAt.toISOString(),
+      ageSeconds,
+      isDeactivated,
+      deactivated: isDeactivated,
+      _sortDate: p.createdAt,
+    };
+  });
+
+  const mappedSpecialties: Array<VerificationQueueItem & { _sortDate: Date }> = specialties.map((s) => {
+    const ageSeconds = Math.max(0, Math.floor((now - s.createdAt.getTime()) / 1000));
+    const isDeactivated = Boolean(s.doctorProfile.user?.deactivatedAt);
+    return {
+      id: s.id,
+      kind: 'specialty',
+      doctorProfileId: s.doctorProfileId,
+      doctorName: s.doctorProfile.fullName,
+      name: s.doctorProfile.fullName,
+      specialty: {
+        id: s.specialty.id,
+        name: s.specialty.name,
+        slug: s.specialty.slug,
+      },
+      requestedSpecialties: s.doctorProfile.specialties.map((ds) => ({
+        id: ds.specialty.id,
+        name: ds.specialty.name,
+        slug: ds.specialty.slug,
+      })),
+      createdAt: s.createdAt.toISOString(),
+      ageSeconds,
+      isDeactivated,
+      deactivated: isDeactivated,
+      _sortDate: s.createdAt,
+    };
+  });
+
+  const merged = [...mappedProfiles, ...mappedSpecialties].sort((a, b) => {
+    const timeDiff = a._sortDate.getTime() - b._sortDate.getTime();
+    if (timeDiff !== 0) return timeDiff;
+    return a.id.localeCompare(b.id);
+  });
+
+  const page = merged.slice(0, filters.limit);
+  const hasMore = merged.length > filters.limit;
+  const last = page[page.length - 1];
+
+  return {
+    items: page.map(({ _sortDate, ...item }) => item),
+    nextCursor: hasMore && last ? encodeQueueCursor({ createdAt: last.createdAt, id: last.id }) : null,
+  };
+}
+
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+export async function createSpecialty(
+  actor: auditService.AuditActor,
+  input: { name: string; slug?: string },
+) {
+  const name = input.name.trim();
+  const slug = input.slug?.trim() || slugify(name);
+  if (!slug) {
+    throw new HttpError(400, 'Invalid specialty name or slug.');
+  }
+
+  const existing = await doctorsRepo.findSpecialtyByNameOrSlug(name, slug);
+  if (existing) {
+    throw new HttpError(409, 'Specialty with this name or slug already exists.');
+  }
+
+  return prisma.$transaction(async (tx) => {
+    try {
+      const specialty = await doctorsRepo.createSpecialty({ name, slug }, tx);
+      await auditService.record(tx, actor, {
+        entityType: 'Specialty',
+        entityId: specialty.id,
+        action: 'specialty.created',
+        fromState: null,
+        toState: 'active',
+        metadata: { slug: specialty.slug },
+      });
+      return specialty;
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new HttpError(409, 'Specialty with this name or slug already exists.');
+      }
+      throw err;
+    }
+  });
+}
+
+export async function updateSpecialty(
+  actor: auditService.AuditActor,
+  id: string,
+  input: { name?: string; isRetired?: boolean },
+) {
+  return prisma.$transaction(async (tx) => {
+    const specialty = await doctorsRepo.findSpecialtyById(id, tx);
+    if (!specialty) {
+      throw new HttpError(404, 'Specialty not found.');
+    }
+
+    const trimmedName = input.name?.trim();
+    if (trimmedName && trimmedName !== specialty.name) {
+      const duplicate = await doctorsRepo.findSpecialtyByName(trimmedName, id, tx);
+      if (duplicate) {
+        throw new HttpError(409, 'Specialty with this name already exists.');
+      }
+    }
+
+    const willRename = Boolean(trimmedName && trimmedName !== specialty.name);
+    const willRetire = Boolean(input.isRetired !== undefined && input.isRetired !== specialty.isRetired);
+
+    if (!willRename && !willRetire) {
+      return specialty;
+    }
+
+    const updated = await doctorsRepo.updateSpecialty(
+      id,
+      {
+        ...(willRename ? { name: trimmedName } : {}),
+        ...(input.isRetired !== undefined ? { isRetired: input.isRetired } : {}),
+      },
+      tx,
+    );
+
+    if (willRename) {
+      await auditService.record(tx, actor, {
+        entityType: 'Specialty',
+        entityId: specialty.id,
+        action: 'specialty.renamed',
+        fromState: specialty.name,
+        toState: trimmedName!,
+        metadata: { slug: specialty.slug },
+      });
+    }
+
+    if (willRetire) {
+      await auditService.record(tx, actor, {
+        entityType: 'Specialty',
+        entityId: specialty.id,
+        action: input.isRetired ? 'specialty.retired' : 'specialty.unretired',
+        fromState: specialty.isRetired ? 'retired' : 'active',
+        toState: input.isRetired ? 'retired' : 'active',
+        metadata: { slug: specialty.slug },
+      });
+    }
+
+    return updated;
+  });
+}
+
+export async function retireSpecialty(actor: auditService.AuditActor, id: string) {
+  return updateSpecialty(actor, id, { isRetired: true });
 }
