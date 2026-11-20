@@ -13,7 +13,11 @@ export function findPrescriptionForCorrection(id: string, db: DbClient = prisma)
 export function createPrescription(db: DbClient, input: {
   consultationId: string; patientProfileId: string; prescribingDoctorId: string;
   facilityProfileId: string; amountStroops: bigint; supersedesPrescriptionId: string | null;
-  items: Array<{ drugName: string; dosage: string; frequency: string; duration: string }>;
+  items: Array<{
+    drugName: string; dosage: string; frequency: string; duration: string;
+    /* Issue #69: catalog link (null = unlisted) + its review flag. */
+    medicationId: string | null; flaggedForPharmacistReview: boolean;
+  }>;
 }) {
   const { items, ...data } = input;
   return db.prescription.create({ data: { ...data, items: { create: items } }, include: { items: true } });

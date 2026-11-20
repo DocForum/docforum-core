@@ -22,6 +22,7 @@ import { outboxAdminRouter } from '../../src/events/routes';
 import { notificationsRouter } from '../../src/modules/notifications/routes';
 import { adminFlagsRouter, meFlagsRouter } from '../../src/modules/flags/routes';
 import { intakeRouter } from '../../src/modules/intake/routes';
+import { medicationsRouter } from '../../src/modules/medications/routes';
 
 // Every (prefix, router) pair app.ts mounted before the module mounts
 // existed. A mount that goes missing, moves to another prefix or appears
@@ -36,6 +37,7 @@ const EXPECTED: Array<[string, unknown]> = [
   ['/appointments', appointmentConsultationsRouter],
   ['/intake', intakeRouter],
   ['/orders', ordersRouter],
+  ['/medications', medicationsRouter],
   ['/pharmacy-orders', pharmacyOrdersRouter],
   ['/lab-orders', labOrdersRouter],
   ['/admin', adminOrdersRouter],

@@ -2,7 +2,30 @@ import { z } from 'zod';
 
 const amountStroops = z.string().regex(/^[1-9][0-9]*$/, 'amountStroops must be a positive integer string.').transform(BigInt);
 const catalogItemCode = z.string().trim().min(1).max(100);
-const item = z.object({ drugName: z.string().trim().min(1).max(200), dosage: z.string().trim().min(1).max(200), frequency: z.string().trim().min(1).max(200), duration: z.string().trim().min(1).max(200) });
+/**
+ * One prescribed item (issue #69).
+ *
+ * Either a `medicationId` from the controlled vocabulary (`GET
+ * /medications`) or the explicit **unlisted medication** path — free-text
+ * `drugName`, which the service flags for pharmacist review. `dosage`,
+ * `frequency` and `duration` stay prescriber-entered either way: the catalog
+ * describes the drug, not the regimen.
+ *
+ * When both are supplied the catalog wins and `drugName` is ignored: the
+ * item's display snapshot is derived server-side from the catalog row, so a
+ * client cannot smuggle a mismatched name onto a linked medication.
+ */
+const item = z
+  .object({
+    medicationId: z.string().uuid().optional(),
+    drugName: z.string().trim().min(1).max(200).optional(),
+    dosage: z.string().trim().min(1).max(200),
+    frequency: z.string().trim().min(1).max(200),
+    duration: z.string().trim().min(1).max(200),
+  })
+  .refine((value) => value.medicationId !== undefined || value.drugName !== undefined, {
+    message: 'Each item needs medicationId (from GET /medications) or drugName (unlisted medication).',
+  });
 
 /** Either an explicit amount (legacy: the doctor types the price) or a
  * catalog item code priced from the facility's published list (issue #127).
