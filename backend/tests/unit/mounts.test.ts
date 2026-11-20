@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Express } from 'express';
 import * as moduleMounts from '../../src/mounts';
 import { adminAuthRouter, authRouter } from '../../src/modules/auth/routes';
-import { doctorsRouter, specialtiesRouter } from '../../src/modules/doctors/routes';
+import { adminDoctorsRouter, doctorsRouter, specialtiesRouter } from '../../src/modules/doctors/routes';
 import { availabilityRouter } from '../../src/modules/availability/routes';
 import { appointmentsRouter } from '../../src/modules/appointments/routes';
 import {
@@ -35,6 +35,7 @@ import { medicationsRouter } from '../../src/modules/medications/routes';
 const EXPECTED: Array<[string, unknown]> = [
   ['/auth', authRouter],
   ['/admin', adminAuthRouter],
+  ['/admin', adminDoctorsRouter],
   ['/doctors', doctorsRouter],
   ['/specialties', specialtiesRouter],
   ['/availability', availabilityRouter],

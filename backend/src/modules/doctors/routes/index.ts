@@ -25,3 +25,13 @@ doctorsRouter.patch(
 
 export const specialtiesRouter = Router();
 specialtiesRouter.get('/', doctorsController.listSpecialties);
+specialtiesRouter.post('/', authenticate, requireRole('admin'), doctorsController.createSpecialty);
+specialtiesRouter.patch('/:id', authenticate, requireRole('admin'), doctorsController.updateSpecialty);
+specialtiesRouter.post('/:id/retire', authenticate, requireRole('admin'), doctorsController.retireSpecialty);
+
+export const adminDoctorsRouter = Router();
+adminDoctorsRouter.get('/doctors/verification-queue', authenticate, requireRole('admin'), doctorsController.verificationQueue);
+adminDoctorsRouter.get('/specialties', authenticate, requireRole('admin'), doctorsController.listAdminSpecialties);
+adminDoctorsRouter.post('/specialties', authenticate, requireRole('admin'), doctorsController.createSpecialty);
+adminDoctorsRouter.patch('/specialties/:id', authenticate, requireRole('admin'), doctorsController.updateSpecialty);
+adminDoctorsRouter.post('/specialties/:id/retire', authenticate, requireRole('admin'), doctorsController.retireSpecialty);
