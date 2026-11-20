@@ -103,3 +103,10 @@ appointmentsRouter.patch(
   requireRole('patient'),
   appointmentsController.cancelMine,
 );
+
+// Role-scoped appointment detail (Phase 2, issue #296): patient, guardian, or treating doctor
+appointmentsRouter.get(
+  '/:id',
+  authenticate,
+  appointmentsController.getOne,
+);

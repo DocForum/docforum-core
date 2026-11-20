@@ -463,6 +463,60 @@ export async function getAppointmentForDoctor(doctorUserId: string, appointmentI
   return appointment;
 }
 
+/**
+ * Role-scoped appointment detail read (Phase 2, issue #296):
+ * - Patient (or active guardian of dependent minor) or treating doctor only.
+ * - Non-participants and admins get 404 (clinical privacy).
+ * - Returns appointment with slot times (`slot`), doctor summary (`doctor`), and origin.
+ * - Cancelled appointments with a released slot have no slot times (`slot: null`).
+ */
+export async function getAppointmentDetail(userId: string, appointmentId: string) {
+  const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
+  if (!appointment) {
+    throw new HttpError(404, 'Appointment not found.');
+  }
+
+  let authorized = false;
+
+  // Check if treating doctor
+  try {
+    const doctorProfile = await doctorsService.getDoctorProfileById(appointment.doctorProfileId);
+    if (doctorProfile.userId === userId) {
+      authorized = true;
+    }
+  } catch {
+    // Non-doctor or not found
+  }
+
+  // Check if patient or active guardian
+  if (!authorized) {
+    try {
+      const actingProfile = await patientsService.resolveActingProfile(userId, appointment.patientProfileId);
+      if (actingProfile.id === appointment.patientProfileId) {
+        authorized = true;
+      }
+    } catch {
+      // Non-participant or inactive guardianship
+    }
+  }
+
+  if (!authorized) {
+    throw new HttpError(404, 'Appointment not found.');
+  }
+
+  const slotTimes = appointment.availabilitySlotId
+    ? (await availabilityService.getSlotTimesByIds([appointment.availabilitySlotId])).get(appointment.availabilitySlotId) ?? null
+    : null;
+  const doctorSummaries = await doctorsService.getDoctorSummariesByIds([appointment.doctorProfileId]);
+  const doctor = doctorSummaries.get(appointment.doctorProfileId) ?? null;
+
+  return {
+    ...appointment,
+    slot: slotTimes ? { startTime: slotTimes.startTime, endTime: slotTimes.endTime } : null,
+    doctor,
+  };
+}
+
 /** Doctor's own scheduled appointments whose booked slot falls on the
  * current server-local calendar day. */
 export async function listDoctorAppointmentsToday(userId: string) {

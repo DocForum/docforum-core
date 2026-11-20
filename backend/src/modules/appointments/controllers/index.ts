@@ -12,6 +12,7 @@ import {
   waitlistJoinSchema,
 } from '../validation';
 import { HttpError } from '../../../http-error';
+import { setVersionEtag } from '../../../middleware/optimistic-concurrency';
 import { auditActor } from '../../../middleware/request-id';
 import { getParam } from '../../../request-params';
 
@@ -104,20 +105,24 @@ export async function cancelMine(req: Request, res: Response) {
   res.status(200).json(appointment);
 }
 
+export async function getOne(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const appointmentId = getParam(req, 'id');
+  const appointment = await appointmentsService.getAppointmentDetail(req.user.id, appointmentId);
+  setVersionEtag(res, appointment.version);
+  res.status(200).json(appointment);
+}
+
 export async function checkIn(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const appointmentId = getParam(req, 'appointmentId');
-  const mine = await appointmentsService.listMyAppointments(req.user.id);
-  const appointment = mine.find((a: { id: string }) => a.id === appointmentId);
-  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  const appointment = await appointmentsService.getAppointmentDetail(req.user.id, appointmentId);
   res.status(200).json(appointment);
 }
 
 export async function getQueue(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const appointmentId = getParam(req, 'appointmentId');
-  const mine = await appointmentsService.listMyAppointments(req.user.id);
-  const appointment = mine.find((a: { id: string }) => a.id === appointmentId);
-  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  const appointment = await appointmentsService.getAppointmentDetail(req.user.id, appointmentId);
   res.status(200).json({ appointmentId, appointment });
 }
