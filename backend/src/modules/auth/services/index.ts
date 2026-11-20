@@ -18,7 +18,7 @@ import {
   replaceVerificationToken,
 } from '../repositories';
 import { hashPassword, verifyPassword } from './password';
-import { signAccessToken, signRefreshToken, verifyRefreshToken } from './tokens';
+import { signAccessToken, signMfaToken, signRefreshToken, verifyMfaToken, verifyRefreshToken } from './tokens';
 import { assertSessionUsable, recordSessionUse, startSession, type SessionContext } from './sessions';
 import { generateVerificationToken, hashVerificationToken } from './verification-tokens';
 import { sendEmail } from './email-dispatcher';
@@ -35,14 +35,25 @@ import { redeemAdminInvite } from '../../users/services';
 import type { PatientExportSection } from '../../patients/services';
 import type { Locale } from '../../../i18n';
 import { formatMessage, resolveLocale } from '../../../i18n';
+import * as twoFactor from './two-factor';
 import { randomBytes } from 'node:crypto';
 import type { Prisma, Role } from '@prisma/client';
 
 // Re-exported so middleware/auth.ts (shared infra, not a peer module) can
 // verify tokens through this module's service surface rather than
 // reaching into services/tokens.ts directly.
-export { verifyAccessToken } from './tokens';
-export type { AccessTokenPayload } from './tokens';
+export { verifyAccessToken, verifyMfaToken } from './tokens';
+export type { AccessTokenPayload, MfaTokenPayload } from './tokens';
+
+// TOTP two-factor authentication (Phase 8, issue #36). The controllers and
+// tests go through this module's surface, not services/two-factor.ts.
+export {
+  disable as disableTwoFactor,
+  enable as enableTwoFactor,
+  getTwoFactorStatus,
+  startSetup as startTwoFactorSetup,
+} from './two-factor';
+export type { TwoFactorEnrolment, TwoFactorSetup, TwoFactorStatus } from './two-factor';
 
 // Password reset (Phase 8 #33) lives in its own file; re-exported here so
 // controllers keep calling a single service surface.
@@ -249,7 +260,21 @@ export interface LoginInput {
  * response body is identical. */
 const ABSENT_ACCOUNT_HASH = '$2b$12$z8J5gwFm9TiwC.YpeD6yguMkgakFPA8egT1KEKYiaeVkmb3CHRGXu';
 
-export async function login(input: LoginInput, context: SessionContext = {}): Promise<AuthSession> {
+/**
+ * What `POST /auth/login` returns (Phase 8, issue #36).
+ *
+ * A normal login is an {@link AuthSession}. A user with 2FA enabled gets a
+ * half-authenticated `mfa_pending` token instead; an admin for whom the
+ * config flag makes 2FA mandatory but who hasn't enrolled gets an
+ * `mfa_enrollment` token that can only reach the setup/enable endpoints.
+ * Neither half-token is accepted by `authenticate`.
+ */
+export type LoginOutcome =
+  | AuthSession
+  | { mfaRequired: true; mfaToken: string }
+  | { enrollmentRequired: true; enrollmentToken: string };
+
+export async function login(input: LoginInput, context: SessionContext = {}): Promise<LoginOutcome> {
   const throttleKeys = {
     emailKey: emailThrottleKey(input.email),
     ipKey: normalizeClientIp(input.ip),
@@ -287,6 +312,71 @@ export async function login(input: LoginInput, context: SessionContext = {}): Pr
   if (user.deactivatedAt) {
     throw new HttpError(403, 'This account has been deactivated. Contact an administrator.');
   }
+
+  // Phase 8, issue #36: a second factor replaces the session for this step.
+  // Checked after the password and the account-state gates, so an attacker
+  // without the password learns nothing about whether 2FA is on.
+  if (user.totpEnabledAt) {
+    return {
+      mfaRequired: true,
+      mfaToken: signMfaToken({
+        sub: user.id,
+        role: user.role,
+        tv: user.tokenVersion,
+        typ: 'mfa_pending',
+      }),
+    };
+  }
+  // Mandatory admin enrolment: no full session until an authenticator is set
+  // up. The token is deliberately narrow — only setup/enable accept it.
+  if (user.role === 'admin' && config.twoFactor.requireForAdmin) {
+    return {
+      enrollmentRequired: true,
+      enrollmentToken: signMfaToken({
+        sub: user.id,
+        role: user.role,
+        tv: user.tokenVersion,
+        typ: 'mfa_enrollment',
+      }),
+    };
+  }
+
+  const tokens = await issueNewSession(user, context);
+  return { user: toPublicUser(user), ...tokens };
+}
+
+/**
+ * The second login step for an enrolled user (Phase 8, issue #36): swaps the
+ * `mfa_pending` token plus a TOTP/recovery code for a real session.
+ *
+ * Every state check the password step made is repeated here — the half-token
+ * is a bearer credential for ~5 minutes, and between the two steps the
+ * account could have been deactivated, deleted or had its token version
+ * bumped by a password reset.
+ */
+export async function verifySecondFactorLogin(
+  mfaToken: string,
+  code: string,
+  context: SessionContext = {},
+): Promise<AuthSession> {
+  let payload;
+  try {
+    payload = verifyMfaToken(mfaToken, 'mfa_pending');
+  } catch {
+    throw new HttpError(401, 'Invalid or expired two-factor token. Sign in again.', 'INVALID_MFA_TOKEN');
+  }
+
+  await assertActiveSession(payload.sub, payload.iat);
+  const user = await findUserById(payload.sub);
+  if (!user || user.deletedAt) throw new HttpError(401, 'Invalid or expired two-factor token.', 'INVALID_MFA_TOKEN');
+  if ((payload.tv ?? 0) !== user.tokenVersion) {
+    throw new HttpError(401, 'Invalid or expired two-factor token. Sign in again.', 'INVALID_MFA_TOKEN');
+  }
+  if (!user.totpEnabledAt || !user.totpSecret) {
+    throw new HttpError(401, 'Two-factor authentication is not enabled for this account.', 'TWO_FACTOR_NOT_ENABLED');
+  }
+
+  await twoFactor.verifySecondFactor(user.id, code);
 
   const tokens = await issueNewSession(user, context);
   return { user: toPublicUser(user), ...tokens };

@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { assertActiveSession, assertEmailVerified, verifyAccessToken } from '../modules/auth/services';
+import { assertActiveSession, assertEmailVerified, verifyAccessToken, verifyMfaToken } from '../modules/auth/services';
 import { HttpError } from '../http-error';
 import type { Role } from '@prisma/client';
 import { runWithRlsContext } from '../db/prisma-client';
@@ -33,6 +33,36 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     payload = verifyAccessToken(header.slice('Bearer '.length));
   } catch {
     throw new HttpError(401, 'Invalid or expired access token.');
+  }
+
+  await assertActiveSession(payload.sub, payload.iat);
+  req.user = { id: payload.sub, role: payload.role, locale: payload.locale };
+  runWithRlsContext({ userId: payload.sub, role: payload.role }, next);
+}
+
+/**
+ * Accepts either a full access token or the short-lived `mfa_enrollment`
+ * token issued at login when an admin is required to enrol (Phase 8, issue
+ * #36). Used **only** by `POST /auth/2fa/setup` and `/enable`: the enrolment
+ * token can reach nothing else, and a normal `mfa_pending` token reaches
+ * nothing at all (it is a different `typ` and is refused here too).
+ */
+export async function authenticateMfaEnrollmentOrAccess(req: Request, _res: Response, next: NextFunction) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) {
+    throw new HttpError(401, 'Missing or malformed Authorization header.');
+  }
+  const token = header.slice('Bearer '.length);
+
+  let payload;
+  try {
+    try {
+      payload = verifyMfaToken(token, 'mfa_enrollment');
+    } catch {
+      payload = verifyAccessToken(token);
+    }
+  } catch {
+    throw new HttpError(401, 'Invalid or expired token.');
   }
 
   await assertActiveSession(payload.sub, payload.iat);
