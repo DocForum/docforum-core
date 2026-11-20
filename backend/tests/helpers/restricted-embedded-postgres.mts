@@ -60,6 +60,8 @@ export default class RestrictedEmbeddedPostgres extends RealEmbeddedPostgres {
   }
 
   override async createDatabase(name: string): Promise<void> {
-    await this.#asAdmin(`CREATE DATABASE ${quoteIdentifier(name)} OWNER ${quoteIdentifier(this.#ownerUser)}`);
+    await this.#asAdmin(
+      `CREATE DATABASE ${quoteIdentifier(name)} OWNER ${quoteIdentifier(this.#ownerUser)} TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'`,
+    );
   }
 }

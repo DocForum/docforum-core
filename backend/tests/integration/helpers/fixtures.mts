@@ -202,6 +202,11 @@ export async function consultationRitual(
   const slots = await generateSlots(app, doctor, 2);
   const slotId = slots[0];
   const appointment = await bookAppointment(app, patient, slotId);
+  const db = await import('../../../src/db/prisma-client.js');
+  await db.prisma.availabilitySlot.update({
+    where: { id: slotId },
+    data: { startTime: new Date(Date.now() - 3600_000) },
+  });
   const completed = await setAppointmentStatus(app, doctor, appointment.id, 'completed');
   if (completed.status !== 200) throw new Error(`complete failed: ${completed.status} ${completed.text}`);
   const consultation = await createConsultation(app, doctor, appointment.id);

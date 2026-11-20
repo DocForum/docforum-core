@@ -1,0 +1,2 @@
+Phase 2: prevent premature completed and no-show appointment transitions ([issue #299](https://github.com/DocForum/docforum-core/issues/299)).
+Doctors cannot mark appointments completed or no-show before the scheduled slot start time (plus a configurable `APPOINTMENT_COMPLETION_GRACE_SECONDS` window), returning a coded 409 `APPOINTMENT_NOT_STARTED` and protecting referrals from premature expiration.
