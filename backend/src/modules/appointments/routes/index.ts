@@ -25,6 +25,7 @@ appointmentsRouter.post(
 );
 appointmentsRouter.get('/mine', authenticate, requireRole('patient'), appointmentsController.listMine);
 appointmentsRouter.get('/doctor/today', authenticate, requireRole('doctor'), appointmentsController.listDoctorToday);
+appointmentsRouter.get('/doctor', authenticate, requireRole('doctor'), appointmentsController.listDoctorSchedule);
 
 // In-person check-in (Phase 2): the patient records arrival within a
 // window around the appointment start. Only the owning patient may check in.

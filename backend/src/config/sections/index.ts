@@ -5,6 +5,7 @@ export * from './accessLog';
 export * from './accountPurge';
 export * from './adminInvites';
 export * from './auth';
+export * from './availability';
 export * from './cookie';
 export * from './corsOrigins';
 export * from './featureFlags';

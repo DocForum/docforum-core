@@ -1,0 +1,2 @@
+Phase 2: doctor today view uses doctor's time zone ([issue #290](https://github.com/DocForum/docforum-core/issues/290)).
+`GET /appointments/doctor/today` calculates calendar day boundaries (`00:00:00` to midnight next day) in the doctor's profile `timeZone` rather than server-local time, resolving midnight shifts for doctors in UTC+1 (Lagos) and UTC-5 (New York). Validates stored IANA time zone strings (`INVALID_TIME_ZONE`) and handles DST transition days with 23 or 25 hours.

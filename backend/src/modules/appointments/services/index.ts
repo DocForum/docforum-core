@@ -9,6 +9,7 @@ import * as patientsService from '../../patients/services';
 import * as auditService from '../../audit/services';
 import * as referralsService from '../../referrals/services';
 import { publish } from '../../../events';
+import { getCalendarDayBounds, parseScheduleDateRange } from '../time-zones';
 
 /**
  * Books a slot for the calling patient. This is the correctness-critical
@@ -446,13 +447,55 @@ export async function getAppointmentForDoctor(doctorUserId: string, appointmentI
 }
 
 /** Doctor's own scheduled appointments whose booked slot falls on the
- * current server-local calendar day. */
+ * current local calendar day in the doctor's timeZone (issue #290). */
 export async function listDoctorAppointmentsToday(userId: string) {
   const doctor = await doctorsService.getMyDoctorProfile(userId);
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const { start, end } = getCalendarDayBounds(doctor.timeZone);
   return appointmentsRepo.findAppointmentsForDoctorOnDay(doctor.id, start, end);
+}
+
+/**
+ * Schedule endpoint for an arbitrary date range in the doctor's time zone (issue #291).
+ * Own appointments only; includes slot times and patient display name with zero clinical details.
+ */
+export async function listDoctorSchedule(
+  userId: string,
+  query: { from?: string; to?: string; status?: AppointmentStatus },
+) {
+  const doctor = await doctorsService.getMyDoctorProfile(userId);
+  const { start, end } = parseScheduleDateRange(doctor.timeZone, query.from, query.to);
+  const rows = await appointmentsRepo.findAppointmentsForDoctorSchedule(doctor.id, start, end, query.status);
+
+  const patientProfileIds = rows.map((r) => r.patientProfileId);
+  const patientMap = await patientsService.getPatientSummariesByIds(patientProfileIds);
+
+  const mapped = rows.map((appointment) => {
+    const patientSummary = patientMap.get(appointment.patientProfileId);
+    return {
+      id: appointment.id,
+      status: appointment.status,
+      origin: appointment.origin,
+      patient: {
+        id: appointment.patientProfileId,
+        fullName: patientSummary?.fullName ?? 'Unknown Patient',
+      },
+      slot: appointment.availabilitySlot
+        ? {
+            id: appointment.availabilitySlot.id,
+            startTime: appointment.availabilitySlot.startTime,
+            endTime: appointment.availabilitySlot.endTime,
+          }
+        : null,
+      createdAt: appointment.createdAt,
+      updatedAt: appointment.updatedAt,
+    };
+  });
+
+  return mapped.sort((a, b) => {
+    const timeA = a.slot ? new Date(a.slot.startTime).getTime() : new Date(a.updatedAt).getTime();
+    const timeB = b.slot ? new Date(b.slot.startTime).getTime() : new Date(b.updatedAt).getTime();
+    return timeA - timeB;
+  });
 }
 
 /** This module's contribution to the patient data export (issue #40).
