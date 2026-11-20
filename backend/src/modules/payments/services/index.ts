@@ -24,6 +24,7 @@ import { prisma } from '../../../db/prisma-client';
 import { parseStroopsAmount } from '../../../utils/stroops';
 import * as auditService from '../../audit/services';
 import * as flagsService from '../../flags/services';
+import * as notificationsService from '../../notifications/services';
 import type { Prisma } from '@prisma/client';
 import { transitionPaymentIntentStatus } from './state-machine';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
@@ -693,7 +694,9 @@ export async function preparePaymentIntent(
   };
 }
 
-/** Releases the escrow to the facility's linked wallet. v1: admin-triggered (see ADR 0004 "Consequences") — no automatic FulfillmentRecord trigger yet, since that model doesn't exist. */
+/** Manual admin override: releases the escrow to the facility's linked wallet.
+ * The primary path is automatic (`releaseEscrowForFulfilledOrder`, issue #83);
+ * this remains for operators and is audited the same way. */
 export async function releasePaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (transitionPaymentIntentStatus(intent.status, 'released') !== 'released' || intent.escrowId === null) {
@@ -710,7 +713,8 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
   );
 }
 
-/** Refunds the escrow back toward the platform payer. v1: admin-triggered, same reasoning as release. */
+/** Manual admin override: refunds the escrow back toward the platform payer.
+ * Automatic refunds come from `refundEscrowForUnfulfilledOrder` (issue #84). */
 export async function refundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (transitionPaymentIntentStatus(intent.status, 'refunded') !== 'refunded' || intent.escrowId === null) {
@@ -725,6 +729,160 @@ export async function refundPaymentIntent(actor: auditService.AuditActor, id: st
   return commitTransition(actor, intent, 'payment_intent.refunded', 'refunded', (tx) =>
     paymentsRepo.markStatus(tx, id, 'escrowed', 'refunded'),
   );
+}
+
+// --- Automatic settlement (Phase 5.5, issues #83 and #84) -----------------
+//
+// The durable task IS a transactional-outbox event: the fulfillment/expiry
+// transition inserts `order.fulfilled` / `order.rejected` / `order.expired`
+// in its own transaction, and `src/jobs/outbox-events.ts` claims it with
+// `FOR UPDATE SKIP LOCKED`, retries with bounded exponential backoff, and
+// resumes a crashed claim after its lease expires. No second queue table is
+// invented for the same guarantee (see src/events/README.md).
+//
+// These functions are therefore called OUTSIDE a domain transaction, from the
+// outbox handler, and are idempotent: a duplicate delivery sees a non-
+// `escrowed` intent and does nothing, and the status write is one conditional
+// UPDATE, so release and a timeout refund can never both commit locally.
+
+export type AutomaticSettlementKind = 'release' | 'refund';
+export type AutomaticSettlementOutcome =
+  | 'no_intent'
+  | 'not_escrowed'
+  | 'settled'
+  | 'raced'
+  | 'not_funded_on_chain';
+
+/**
+ * Recognises the contract's NotFunded failure. The SDK is not typed to
+ * expose an error class for this (0.2.0), so the check is deliberately
+ * narrow on a stable code/name/message token rather than on any error text.
+ * A different failure is rethrown and retried by the outbox.
+ */
+function isNotFundedError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const errorCode = (error as { code?: unknown }).code;
+  const errorName = (error as { name?: unknown }).name;
+  const message = (error as { message?: unknown }).message;
+  const identitySaysNotFunded = [errorCode, errorName].some(
+    (value) => typeof value === 'string' && /not[_-]?funded/i.test(value),
+  );
+  const messageSaysNotFunded =
+    typeof message === 'string' && /(escrow|contract).{0,40}not[ _-]?funded|not[ _-]?funded/i.test(message);
+  return identitySaysNotFunded || messageSaysNotFunded;
+}
+
+/** One audit record + conditional status write in the same transaction. A
+ * lost race (another settlement already moved the row) returns null and is
+ * a normal no-op, never an error — the outbox must not retry it. */
+async function commitAutomaticSettlement(
+  intent: PaymentIntent,
+  kind: AutomaticSettlementKind,
+): Promise<PaymentIntent | null> {
+  const to: PaymentIntentStatus = kind === 'release' ? 'released' : 'refunded';
+  return prisma.$transaction(async (tx) => {
+    const updated = await paymentsRepo.markStatus(tx, intent.id, 'escrowed', to);
+    if (!updated) return null;
+    await auditService.record(tx, auditService.SYSTEM_ACTOR, {
+      entityType: 'PaymentIntent',
+      entityId: intent.id,
+      action: kind === 'release' ? 'payment_intent.released' : 'payment_intent.refunded',
+      fromState: 'escrowed',
+      toState: to,
+      metadata: {
+        ...intentAuditMetadata(updated),
+        settlementSource: 'automatic',
+        settlementKind: kind,
+      },
+    });
+    return updated;
+  });
+}
+
+/** Terminal reconcile for NotFunded: the chain says there is nothing to
+ * release/refund, so retrying cannot help. Move the intent to `failed` with
+ * an audit record and stop — never crash the worker. */
+async function reconcileNotFunded(
+  intent: PaymentIntent,
+  kind: AutomaticSettlementKind,
+): Promise<PaymentIntent | null> {
+  return prisma.$transaction(async (tx) => {
+    const updated = await paymentsRepo.markStatus(tx, intent.id, 'escrowed', 'failed');
+    if (!updated) return null;
+    await auditService.record(tx, auditService.SYSTEM_ACTOR, {
+      entityType: 'PaymentIntent',
+      entityId: intent.id,
+      action: 'payment_intent.settlement_not_funded',
+      fromState: 'escrowed',
+      toState: 'failed',
+      metadata: { ...intentAuditMetadata(updated), settlementKind: kind },
+    });
+    return updated;
+  });
+}
+
+/** Best-effort: a missing notification must never fail a completed refund.
+ * The intent's own status/audit record is the durable evidence; the in-app
+ * message is a courtesy to the patient. */
+async function notifyRefundCompleted(intent: PaymentIntent): Promise<void> {
+  try {
+    const userId = await paymentsRepo.findPatientUserIdByProfileId(intent.patientProfileId);
+    if (!userId) return;
+    await notificationsService.notify(userId, 'payment_refunded', { paymentIntentId: intent.id });
+  } catch {
+    console.error('[payments] refund-completed notification failed');
+  }
+}
+
+async function settleEscrowForOrder(
+  orderType: 'prescription' | 'lab_order',
+  orderId: string,
+  kind: AutomaticSettlementKind,
+): Promise<AutomaticSettlementOutcome> {
+  const intent = await paymentsRepo.findPaymentIntentByOrder(orderType, orderId);
+  if (!intent) return 'no_intent';
+  // Already terminal or never funded: nothing to do. This is also the
+  // duplicate-delivery guard, and the reason a release and a refund racing
+  // each other cannot both commit locally.
+  if (intent.status !== 'escrowed' || intent.escrowId === null) return 'not_escrowed';
+
+  const { platformReleaser } = await requirePaymentsConfig();
+  const client = await escrowClient(requireRecordedContractId(intent));
+  const caller = platformReleaser as unknown as EscrowSdkKeypair;
+
+  try {
+    if (kind === 'release') {
+      await client.release({ escrowId: intent.escrowId, caller });
+    } else {
+      await client.refund({ escrowId: intent.escrowId, caller });
+    }
+  } catch (error) {
+    if (!isNotFundedError(error)) throw error;
+    const reconciled = await reconcileNotFunded(intent, kind);
+    return reconciled ? 'not_funded_on_chain' : 'raced';
+  }
+
+  const settled = await commitAutomaticSettlement(intent, kind);
+  if (!settled) return 'raced';
+  if (kind === 'refund') await notifyRefundCompleted(settled);
+  return 'settled';
+}
+
+/** Outbox handler: the whole order derives `fulfilled`. Release its escrow. */
+export function releaseEscrowForFulfilledOrder(input: {
+  orderType: 'prescription' | 'lab_order';
+  orderId: string;
+}): Promise<AutomaticSettlementOutcome> {
+  return settleEscrowForOrder(input.orderType, input.orderId, 'release');
+}
+
+/** Outbox handler: the order was rejected with nothing dispensed, or a lab
+ * order expired unfulfilled. Refund its escrow. */
+export function refundEscrowForUnfulfilledOrder(input: {
+  orderType: 'prescription' | 'lab_order';
+  orderId: string;
+}): Promise<AutomaticSettlementOutcome> {
+  return settleEscrowForOrder(input.orderType, input.orderId, 'refund');
 }
 
 /**

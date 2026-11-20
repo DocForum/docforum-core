@@ -83,6 +83,14 @@ model LabOrder {
   @@index([status, expiresAt])
 }
 
+// Issue #72 (PRD §8.2.7): how serious the facility judged a result to be.
+// Only the facility that attached the result sets it, at attach time.
+enum LabResultAbnormality {
+  normal
+  abnormal
+  critical
+}
+
 model LabResult {
   id                   String   @id @default(uuid())
   labOrderId           String   @unique
@@ -97,8 +105,47 @@ model LabResult {
   resultContentType    String?
   resultByteSize       Int?
   summary              String?
+  // Issue #72: abnormal/critical results require the ordering doctor's
+  // acknowledgement. `normal` is the default so a facility that has not
+  // judged the result is not silently treated as "abnormal".
+  abnormality          LabResultAbnormality @default(normal)
   createdAt            DateTime @default(now())
 
   labOrder           LabOrder        @relation(fields: [labOrderId], references: [id])
   fulfillingFacility FacilityProfile @relation(fields: [fulfillingFacilityId], references: [id])
+  acknowledgement    LabResultAcknowledgement?
+}
+
+/// Issue #72: the "did anyone look at this?" record for an abnormal or
+/// critical result. Created in the same transaction as the result; the
+/// ordering doctor acknowledges it ONCE (conditional UPDATE, append-only in
+/// spirit) and the escalation job stamps `escalatedAt` if the deadline
+/// passes first. The row is the admin queue as well: anything with
+/// `acknowledgedAt IS NULL` is visibly outstanding.
+///
+/// `escalationDueAt` is stored rather than derived from `createdAt` so the
+/// window is fixed at attach time (changing the config later must not move
+/// an existing deadline). Missing a job tick cannot skip escalation: the
+/// admin list treats `escalationDueAt <= now` as overdue even before the job
+/// has written `escalatedAt`, and the job drains the backlog on startup.
+model LabResultAcknowledgement {
+  id               String                @id @default(uuid())
+  labResultId      String                @unique
+  orderingDoctorId String
+  severity         LabResultAbnormality
+  escalationDueAt  DateTime
+  acknowledgedAt   DateTime?
+  // Which doctor actually acknowledged. Almost always the ordering doctor;
+  // kept separate from `orderingDoctorId` so a future hand-off is auditable.
+  acknowledgedByDoctorId String?
+  escalatedAt      DateTime?
+  createdAt        DateTime              @default(now())
+
+  labResult      LabResult     @relation(fields: [labResultId], references: [id], onDelete: Restrict)
+  orderingDoctor DoctorProfile @relation("LabResultAcknowledgementOrderingDoctor", fields: [orderingDoctorId], references: [id], onDelete: Restrict)
+
+  // The doctor's outstanding-results list and the admin escalation queue
+  // both scan the unacknowledged rows by deadline.
+  @@index([acknowledgedAt, escalationDueAt])
+  @@index([orderingDoctorId, acknowledgedAt])
 }

@@ -44,6 +44,11 @@
     "@opentelemetry/api": "^1.10.0",
     "@opentelemetry/sdk-node": "^0.300.0"
   },
+  "overrides": {
+    "@prisma/config": {
+      "effect": "^3.22.1"
+    }
+  },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/cookie-parser": "^1.4.10",

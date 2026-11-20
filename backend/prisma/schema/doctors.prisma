@@ -22,6 +22,8 @@ model DoctorProfile {
   appointments       Appointment[]
   prescriptions      Prescription[]
   labOrders          LabOrder[]
+  // Issue #72: abnormal/critical lab results waiting on this doctor.
+  labResultAcknowledgements LabResultAcknowledgement[] @relation("LabResultAcknowledgementOrderingDoctor")
   waitlistEntries    WaitlistEntry[]
   // Referral sides a doctor can sit on: `referringReferrals` are ones
   // they created; `targetedReferrals` are ones aimed at them (whether

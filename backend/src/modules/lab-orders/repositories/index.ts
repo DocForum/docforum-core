@@ -2,7 +2,9 @@
 // callers (pharmacy-orders) must go through ../services, never import
 // this file — see AGENTS.md hard rule 4.
 import { prisma } from '../../../db/prisma-client';
-import type { OrderStatus } from '@prisma/client';
+import type { OrderStatus, Prisma } from '@prisma/client';
+
+type DbClient = typeof prisma | Prisma.TransactionClient;
 
 export function findLabOrderById(id: string) {
   return prisma.labOrder.findUnique({ where: { id } });
@@ -19,8 +21,9 @@ export function applyOrderStatusIf(
   id: string,
   allowedFrom: OrderStatus[],
   to: OrderStatus,
+  db: DbClient = prisma,
 ): Promise<boolean> {
-  return prisma.labOrder
+  return db.labOrder
     .updateMany({ where: { id, status: { in: allowedFrom } }, data: { status: to } })
     .then((result) => result.count === 1);
 }
