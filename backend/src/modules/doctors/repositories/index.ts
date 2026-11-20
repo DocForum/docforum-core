@@ -7,23 +7,103 @@ export function findDoctorProfileByUserId(userId: string, db: DbClient = prisma)
   return db.doctorProfile.findUnique({ where: { userId } });
 }
 
-export function findSpecialties() {
-  return prisma.specialty.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, slug: true } });
+export function findSpecialties(options: { includeRetired?: boolean } = {}) {
+  return prisma.specialty.findMany({
+    where: options.includeRetired ? undefined : { isRetired: false },
+    orderBy: { name: 'asc' },
+    select: { id: true, name: true, slug: true, isRetired: true },
+  });
 }
 
 export function findSpecialtiesByIds(ids: string[], db: DbClient = prisma) {
-  return db.specialty.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, slug: true } });
+  return db.specialty.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, name: true, slug: true, isRetired: true },
+  });
 }
 
+export function findSpecialtyById(id: string, db: DbClient = prisma) {
+  return db.specialty.findUnique({ where: { id } });
+}
+
+export function findSpecialtyByNameOrSlug(name: string, slug: string, db: DbClient = prisma) {
+  return db.specialty.findFirst({
+    where: {
+      OR: [{ name }, { slug }],
+    },
+  });
+}
+
+export function findSpecialtyByName(name: string, excludeId?: string, db: DbClient = prisma) {
+  return db.specialty.findFirst({
+    where: {
+      name,
+      ...(excludeId ? { id: { not: excludeId } } : {}),
+    },
+  });
+}
+
+export function createSpecialty(data: { name: string; slug: string }, db: DbClient = prisma) {
+  return db.specialty.create({
+    data: {
+      name: data.name,
+      slug: data.slug,
+      isRetired: false,
+    },
+  });
+}
+
+export function updateSpecialty(
+  id: string,
+  data: { name?: string; isRetired?: boolean },
+  db: DbClient = prisma,
+) {
+  return db.specialty.update({
+    where: { id },
+    data,
+  });
+}
+
+/**
+ * Diffs requested specialties against existing doctor specialty rows:
+ * - Removed specialties are deleted.
+ * - Newly added specialties are inserted with verificationStatus = 'pending'.
+ * - Unchanged specialties are left intact, preserving their verificationStatus,
+ *   reviewer, reviewDate, and rejectionReason.
+ *
+ * Note on pending referrals: removing a specialty that has pending referrals
+ * routed by it does not alter or reroute those referrals. They remain assigned
+ * to the doctor and must be handled or explicitly reassigned by an admin.
+ */
 export async function replaceDoctorSpecialties(
   tx: Prisma.TransactionClient,
   doctorProfileId: string,
   specialtyIds: string[],
 ) {
-  await tx.doctorSpecialty.deleteMany({ where: { doctorProfileId } });
-  if (specialtyIds.length > 0) {
+  const existing = await tx.doctorSpecialty.findMany({
+    where: { doctorProfileId },
+    select: { specialtyId: true },
+  });
+  const existingSet = new Set(existing.map((e) => e.specialtyId));
+  const requestedSet = new Set(specialtyIds);
+
+  const toRemove = existing
+    .filter((e) => !requestedSet.has(e.specialtyId))
+    .map((e) => e.specialtyId);
+  const toAdd = specialtyIds.filter((id) => !existingSet.has(id));
+
+  if (toRemove.length > 0) {
+    await tx.doctorSpecialty.deleteMany({
+      where: {
+        doctorProfileId,
+        specialtyId: { in: toRemove },
+      },
+    });
+  }
+
+  if (toAdd.length > 0) {
     await tx.doctorSpecialty.createMany({
-      data: specialtyIds.map((specialtyId) => ({
+      data: toAdd.map((specialtyId) => ({
         doctorProfileId,
         specialtyId,
         verificationStatus: 'pending',
@@ -221,4 +301,92 @@ export async function findPendingVerificationStats(db: DbClient = prisma) {
     }),
   ]);
   return { count, oldestCreatedAt: oldest?.createdAt ?? null };
+}
+
+export interface QueueCursor {
+  createdAt: Date;
+  id: string;
+}
+
+export function findPendingDoctorProfilesForQueue(options: {
+  specialty?: string;
+  after?: QueueCursor;
+  take: number;
+}) {
+  const { specialty, after, take } = options;
+  return prisma.doctorProfile.findMany({
+    where: {
+      verificationStatus: 'pending',
+      ...(specialty
+        ? {
+            specialties: {
+              some: {
+                specialty: {
+                  OR: [{ id: specialty }, { slug: specialty }],
+                },
+              },
+            },
+          }
+        : {}),
+      ...(after
+        ? {
+            OR: [
+              { createdAt: { gt: after.createdAt } },
+              { createdAt: after.createdAt, id: { gt: after.id } },
+            ],
+          }
+        : {}),
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take,
+    include: {
+      user: { select: { deactivatedAt: true } },
+      specialties: {
+        include: { specialty: { select: { id: true, name: true, slug: true } } },
+        orderBy: { specialty: { name: 'asc' } },
+      },
+    },
+  });
+}
+
+export function findPendingDoctorSpecialtiesForQueue(options: {
+  specialty?: string;
+  after?: QueueCursor;
+  take: number;
+}) {
+  const { specialty, after, take } = options;
+  return prisma.doctorSpecialty.findMany({
+    where: {
+      verificationStatus: 'pending',
+      ...(specialty
+        ? {
+            specialty: {
+              OR: [{ id: specialty }, { slug: specialty }],
+            },
+          }
+        : {}),
+      ...(after
+        ? {
+            OR: [
+              { createdAt: { gt: after.createdAt } },
+              { createdAt: after.createdAt, id: { gt: after.id } },
+            ],
+          }
+        : {}),
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take,
+    include: {
+      specialty: { select: { id: true, name: true, slug: true } },
+      doctorProfile: {
+        include: {
+          user: { select: { deactivatedAt: true } },
+          specialties: {
+            include: { specialty: { select: { id: true, name: true, slug: true } } },
+            orderBy: { specialty: { name: 'asc' } },
+          },
+        },
+      },
+    },
+  });
 }

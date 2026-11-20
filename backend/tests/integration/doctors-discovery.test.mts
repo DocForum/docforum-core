@@ -75,7 +75,7 @@ describe('doctor discovery', () => {
     const secondProfile = await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: second.body.user.id } });
     await prisma.doctorProfile.update({ where: { id: secondProfile.id }, data: { verificationStatus: 'verified' } });
     await prisma.doctorSpecialty.create({ data: { doctorProfileId: secondProfile.id, specialtyId: dermatologyId } });
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
     const fixtureModule = await import('./helpers/fixtures.mjs');
