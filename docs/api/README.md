@@ -150,6 +150,25 @@ revocation, #18) is still open, so a bumped-away **access** token keeps
 working until its 15-minute TTL elapses. Refresh tokens are checked
 against `tokenVersion` on every `POST /auth/refresh`.
 
+### Two-factor authentication (Phase 8, issue #36)
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `POST /auth/2fa/setup` | access token, or an `mfa_enrollment` token when `TOTP_REQUIRE_FOR_ADMIN` applies to the account | — | Starts enrolment and returns `{ secret, otpauthUri }` (shown once; the secret is stored encrypted). Calling it again before `enable` replaces the pending secret. `409 TWO_FACTOR_ALREADY_ENABLED` once enrolled. |
+| `POST /auth/2fa/enable` | access token, or `mfa_enrollment` | `{ code }` | Confirms enrolment with one valid TOTP code and returns `{ recoveryCodes }` — ten single-use codes, visible only here (only their hashes are stored). A wrong/expired code is `400`. |
+| `POST /auth/2fa/verify` | `mfa_pending` token in the body (no access token) | `{ mfaToken, code }` | Second login step. `code` is a 6-digit TOTP code **or** a recovery code. Returns the same `{ user, accessToken, csrfToken }` as login and rotates the refresh cookie. Each TOTP time step and each recovery code is accepted **once**; a replay is `401 INVALID_TOTP_CODE`. An expired half-token is `401 INVALID_MFA_TOKEN`. |
+| `GET /auth/2fa/status` | access token | — | `{ enabled, unusedRecoveryCodes }`. |
+| `POST /auth/2fa/disable` | access token | `{ code }` (current TOTP or recovery code) | Turns 2FA off and deletes the secret and recovery codes. `204`. A wrong code is `401`. |
+
+`POST /auth/login` answers `200 { mfaRequired: true, mfaToken }` instead of an
+access token when the account has 2FA enabled. `mfaToken` is short-lived
+(`TOTP_MFA_TOKEN_TTL_MINUTES`, default 5) and is rejected by every route
+except `POST /auth/2fa/verify`. When `TOTP_REQUIRE_FOR_ADMIN=true` and an
+admin without 2FA logs in, the response instead carries
+`{ enrollmentRequired: true, enrollmentToken }`, and that token is accepted
+only by `2fa/setup` and `2fa/enable`. `TOTP_ISSUER` sets the issuer shown in
+the authenticator app (default `DocForum`).
+
 ## Doctors (`/doctors`) — `backend/src/modules/doctors`
 
 | Method & path | Auth | Notes |
@@ -290,6 +309,22 @@ moves stale prepared intents back to `created`. Against `@docforum/escrow-sdk`
 0.2.0 the real prepare call does not exist, so this returns
 `503 ESCROW_SDK_PREPARE_UNSUPPORTED` until issue #32 lands.
 
+Automatic settlement (issues #83/#84): when an order reaches the
+facility-derived `fulfilled` state, or is rejected with nothing dispensed, or
+a lab order expires unfulfilled, the order module publishes
+`order.fulfilled` / `order.rejected` / `order.expired` **in the transaction
+that performs the transition**. The transactional-outbox worker then settles
+the intent (SDK `release` or `refund`) with bounded retries and backoff, and
+writes `escrowed -> released|refunded` with an audit event
+(`settlementSource: automatic`). Delivery is at least once; the conditional
+intent update makes a duplicate delivery a no-op, and a release/refund race
+commits locally at most once. An SDK `NotFunded` response is terminal: the
+intent becomes `failed` with a `payment_intent.settlement_not_funded` audit
+row, for operator reconciliation, rather than retrying forever. Refund
+completion also creates an in-app `payment_refunded` notification for the
+patient. `POST /payments/intents/:id/{release,refund}` remains an audited
+admin override. No new endpoint is introduced by this path.
+
 ## Orders (`/orders`) — `backend/src/modules/orders`
 
 Verified doctors can create a consultation with `POST /orders/consultations` (`appointmentId`, optional `outcome` and `notes`) — the same write as `POST /consultations` plus the verified-doctor gate, so all of its one-per-appointment/encryption/audit rules apply. Issue a prescription with `POST /orders/consultations/:consultationId/prescriptions` (`facilityProfileId`, and `items`), or a lab order with `POST /orders/consultations/:consultationId/lab-orders` (`facilityProfileId`, `testType`, optional `urgency` and `notes`). Either route takes **exactly one** of a positive integer `amountStroops` (manual price) or a `catalogItemCode` (facility price list, issue #127) — the resolved amount and the code are snapshotted on the payment intent. Issuance creates its payment intent in the same transaction. Corrections create superseding immutable orders: a created intent moves to the correction; an escrowed intent remains linked to the original and is handled by the existing admin refund action.
@@ -300,6 +335,22 @@ Verified doctors can create a consultation with `POST /orders/consultations` (`a
 |---|---|---|---|
 | `POST /orders/lab-orders/:labOrderId/result` | facility (the order's own facility only) | the raw file, `Content-Type: application/pdf` \| `image/png` \| `image/jpeg` | Stores the file in private object storage and creates the order's `LabResult`. The bytes must match the declared type (`415 LAB_RESULT_UNSUPPORTED_TYPE` / `LAB_RESULT_CONTENT_MISMATCH`). Size limit `LAB_RESULT_MAX_BYTES`, default 10 MiB (`413 LAB_RESULT_TOO_LARGE`). Empty body: `400`. Create-once: `409 LAB_RESULT_ALREADY_ATTACHED`. A superseded order: `409 LAB_ORDER_SUPERSEDED` (attach to the correction). Any other facility gets `404`, the same as a missing order. `201` with `{ id, labOrderId, fulfillingFacilityId, contentType, byteSize, abnormality, acknowledgement, createdAt }`; `?abnormality=normal|abnormal|critical` (default `normal`, issue #72) is the facility's judgement, and abnormal/critical opens an acknowledgement task for the ordering doctor (see the `/lab-results` rows below). The storage key is never returned. Writes a `lab_result.attached` audit event. Does not change the order or its fulfillment status. No storage configured on the server: `503 OBJECT_STORAGE_NOT_CONFIGURED`. |
 | `GET /orders/lab-orders/:labOrderId/result` | patient (own order), ordering doctor, fulfilling facility | — | The file itself, as `Content-Disposition: attachment`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`. Anyone else, including admins: `404`, the same as a missing order. No result yet: `404 LAB_RESULT_NOT_FOUND`. Each read is recorded in the PHI access log (`entityType: 'LabResult'`). |
+| `POST /lab-results/:labResultId/acknowledge` | doctor (the ordering doctor only) | — | Acknowledges an `abnormal`/`critical` result once via a conditional UPDATE. `200` with the acknowledgement row; a repeat is `409`. Anyone else (including another doctor) gets the same `404` as a missing task. Writes a `lab_result.acknowledged` audit event. |
+| `GET /lab-results/unacknowledged` | doctor, admin | `limit` (1–100, default 50) | Doctors see their own outstanding tasks; admins see the escalation queue (everything escalated or past its deadline). Items carry `labResultId`, `labOrderId`, `orderingDoctorId`, `severity`, `escalationDueAt`, `escalatedAt`, `overdue` (derived from the deadline) and `createdAt`. |
+
+## Medications (`/medications`) — `backend/src/modules/medications`
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `GET /medications?q=` | access token, any role | — | Autocomplete over the controlled medication vocabulary (issue #69). `q` is 2–100 characters, `limit` defaults to 20 (max 50). `200 { medications: [{ id, displayName, genericName, strength, form, route, externalCode }] }`; `displayName` is exactly what an issued prescription item will snapshot. `400 MEDICATION_QUERY_TOO_SHORT` below two characters (the trigram index is not selective enough to be worth it). Authenticated but not role-restricted: the catalog is public reference data, not PHI. |
+
+Prescription items accept `medicationId` (from this endpoint) **or**
+`drugName` (an unlisted medication), never neither. With `medicationId` the
+catalog row's display name is snapshotted into the item and the item is not
+flagged; with `drugName` the text is kept verbatim and
+`flaggedForPharmacistReview` is set, so a pharmacy can tell an unlisted
+medicine from a catalog one. An unknown `medicationId` is a `400` before any
+row is written. The snapshot is never re-derived from the catalog afterwards.
 
 ## Admin success metrics (`/admin/metrics`) — `backend/src/modules/metrics`
 

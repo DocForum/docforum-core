@@ -40,7 +40,9 @@ export type AuditEntityType =
   | 'FacilityProfile'
   | 'Order'
   | 'OrderDispute'
-  | 'FeatureFlag';
+  | 'FeatureFlag'
+  | 'DoctorSpecialty'
+  | 'Specialty';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;

@@ -6,12 +6,27 @@ enum ConsultationOutcome {
   follow_up_needed
 }
 
+// Who wrote a message in a consultation thread (issue #61). The role is
+// recorded alongside the sender so a read view can label messages without
+// resolving the author's account, and so a later role change can't rewrite
+// history.
+enum ConsultationMessageSenderRole {
+  patient
+  doctor
+}
+
+enum FollowUpStatus {
+  open
+  booked
+  expired
+}
+
 // Phase 3 (issue #5 minimal + lineage for #65): a Consultation is the
 // record of a doctor having seen the patient at a specific appointment.
 // `appointmentId` is the lineage seam — Referral.parentReferralId is
 // derived through it (consultation → appointment → referral), which is
 // what loop detection walks. Full consultation-note workflow (append-only
-// addenda, sign-off) stays issue #4/#64's scope.
+// addenda, sign-off) stayed issue #4/#64's scope and now lives below.
 model Consultation {
   id            String               @id @default(uuid())
   // unique = "a consultation is closed once per appointment", enforced by the
@@ -23,6 +38,11 @@ model Consultation {
   // Clinical free text: stored as an AES-256-GCM envelope by
   // consultations/services (issue #46 — ARCHITECTURE.md §4.3), never plaintext.
   notes         String?
+  // Issue #64: set once, when the authoring doctor signs off (or the
+  // auto sign-off job does). From then on `notes` is immutable — enforced by
+  // a DB trigger as well as the repository's conditional UPDATE. Null = the
+  // note is still editable.
+  signedAt      DateTime?
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
 
@@ -35,4 +55,99 @@ model Consultation {
   // Phase 3: the referrals that grew out of this consultation (the
   // opposite side of Referral.sourceConsultationId).
   referrals     Referral[]
+  // Phase 2, issue #61: the async thread. Append-only.
+  messages      ConsultationMessage[]
+  // Phase 2, issue #64: post-sign-off additions, append-only.
+  addenda       ConsultationAddendum[]
+  // Phase 2, issue #63: at most one follow-up request per consultation.
+  followUp      FollowUpRequest?
+}
+
+// Issue #61: a plain, append-only message log per consultation
+// (ARCHITECTURE §8.3.5 — no receipts, no typing indicators). The text is
+// PHI and is stored as an AES-256-GCM envelope, never plaintext, and never
+// logged. Writers are the appointment's patient and its treating doctor;
+// the service resolves membership through the appointments module.
+model ConsultationMessage {
+  id             String                        @id @default(uuid())
+  consultationId String
+  senderUserId   String
+  senderRole     ConsultationMessageSenderRole
+  // AES-256-GCM envelope (utils/field-encryption).
+  body           String
+  createdAt      DateTime                      @default(now())
+
+  consultation Consultation              @relation(fields: [consultationId], references: [id], onDelete: Restrict)
+  sender       User                      @relation("ConsultationMessageSender", fields: [senderUserId], references: [id], onDelete: Restrict)
+  attachments  ConsultationMessageAttachment[]
+
+  // Keyset pagination order: (createdAt, id).
+  @@index([consultationId, createdAt, id])
+  @@index([senderUserId])
+}
+
+// Issue #62: one attachment per row, stored through utils/object-storage.
+// The object key is opaque and server-generated; it is never returned to a
+// client. A download is authorised against the thread and answered with a
+// short-lived signed URL, not a public/presigned storage URL.
+model ConsultationMessageAttachment {
+  id          String   @id @default(uuid())
+  messageId   String
+  objectKey   String   @unique
+  fileName    String
+  contentType String
+  sizeBytes   Int
+  createdAt   DateTime @default(now())
+
+  message ConsultationMessage @relation(fields: [messageId], references: [id], onDelete: Restrict)
+
+  @@index([messageId])
+}
+
+// Issue #64: after sign-off, corrections are new rows here — never an edit
+// to `notes`. Append-only (DB trigger rejects UPDATE/DELETE).
+model ConsultationAddendum {
+  id             String   @id @default(uuid())
+  consultationId String
+  authorUserId   String
+  // AES-256-GCM envelope, same rule as the consultation note.
+  body           String
+  createdAt      DateTime @default(now())
+
+  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Restrict)
+  author       User         @relation("ConsultationAddendumAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
+
+  @@index([consultationId, createdAt, id])
+}
+
+// Issue #63: a lightweight internal referral back to the same doctor when a
+// consultation closes as `follow_up_needed`. The notes and intake are
+// snapshots (copies), never live pointers — same rule as Referral.
+model FollowUpRequest {
+  id               String         @id @default(uuid())
+  // One follow-up per consultation: the close route creates it at most once.
+  consultationId   String         @unique
+  doctorProfileId  String
+  patientProfileId String
+  // Encrypted copy of the consultation note at creation time.
+  notesSnapshot    String?
+  // Best-effort link to the patient's latest intake at creation. Appointment
+  // has no intake FK yet (issue #2), so this is where the link is carried.
+  intakeFormId     String?
+  // The window in which the patient is expected to book.
+  windowStart      DateTime
+  windowEnd        DateTime
+  status           FollowUpStatus @default(open)
+  bookedAppointmentId String?     @unique
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Restrict)
+  doctorProfile DoctorProfile @relation("FollowUpRequestsAsDoctor", fields: [doctorProfileId], references: [id], onDelete: Restrict)
+  patientProfile PatientProfile @relation("FollowUpRequestsAsPatient", fields: [patientProfileId], references: [id], onDelete: Restrict)
+  bookedAppointment Appointment? @relation("FollowUpBookedAppointment", fields: [bookedAppointmentId], references: [id], onDelete: SetNull)
+
+  @@index([patientProfileId, status])
+  @@index([doctorProfileId, status])
+  @@index([status, windowEnd])
 }
