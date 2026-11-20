@@ -101,7 +101,7 @@ export async function updateStatus(req: Request, res: Response) {
 
 export async function cancelMine(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const appointment = await appointmentsService.cancelByPatient(req.user.id, getParam(req, 'appointmentId'));
+  const appointment = await appointmentsService.cancelByPatient(req.user.id, getParam(req, 'appointmentId'), auditActor(req));
   res.status(200).json(appointment);
 }
 

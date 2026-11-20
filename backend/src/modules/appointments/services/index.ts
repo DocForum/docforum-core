@@ -131,7 +131,7 @@ export async function rescheduleSlot(
   cutoffHours: number = 2,
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  const userId = actor.userId;
 
   return prisma.$transaction(async (tx) => {
     // First, get the existing appointment to find its current slot
@@ -139,6 +139,8 @@ export async function rescheduleSlot(
     if (!existingAppointment) {
       throw new HttpError(404, 'Appointment not found.');
     }
+
+    const patientProfile = await patientsService.resolveActingProfile(userId, existingAppointment.patientProfileId);
 
     // Check that the appointment belongs to this patient
     if (existingAppointment.patientProfileId !== patientProfile.id) {
@@ -158,7 +160,7 @@ export async function rescheduleSlot(
     const slotStart = slot.startTime;
     const now = new Date();
     const cutoffMs = cutoffHours * 60 * 60 * 1000;
-    if (now.getTime() - slotStart.getTime() < -cutoffMs) {
+    if (slotStart.getTime() - now.getTime() < cutoffMs) {
       // Slot hasn't started yet and we're within the cutoff window
       throw new HttpError(409, `Rescheduling is not allowed within ${cutoffHours} hours of the slot start time.`);
     }
@@ -189,6 +191,7 @@ export async function rescheduleSlot(
       metadata: {
         oldSlotId: currentSlotId,
         newSlotId,
+        patientProfileId: patientProfile.id,
       },
     });
 
@@ -200,14 +203,19 @@ export async function rescheduleSlot(
  * Cancels an appointment atomically: releases the slot back to `open` and
  * marks the appointment as cancelled. Includes cutoff window logic.
  *
- * Requirements from issue #56:\n - Patient can cancel an appointment\n - Before cutoff (2h before slot start): slot releases to `open`\n - After cutoff: slot stays booked, appointment marked `late_cancelled`\n - Concurrency: slot release is conditional on status = `booked`\n */
+ * Requirements from issue #56:
+ * - Patient can cancel an appointment
+ * - Before cutoff (2h before slot start): slot releases to `open`
+ * - After cutoff: slot stays booked, appointment marked `late_cancelled`
+ * - Concurrency: slot release is conditional on status = `booked`
+ */
 export async function cancelAppointment(
   actor: auditService.AuditActor,
   appointmentId: string,
   reason: 'patient' | 'doctor' = 'patient',
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  const userId = actor.userId;
 
   return prisma.$transaction(async (tx) => {
     // First, get the existing appointment to find its current slot
@@ -215,6 +223,8 @@ export async function cancelAppointment(
     if (!existingAppointment) {
       throw new HttpError(404, 'Appointment not found.');
     }
+
+    const patientProfile = await patientsService.resolveActingProfile(userId, existingAppointment.patientProfileId);
 
     // Check that the caller is the patient
     if (existingAppointment.patientProfileId !== patientProfile.id) {
@@ -239,8 +249,8 @@ export async function cancelAppointment(
     let newStatus: string;
     let slotStatus: string;
 
-    if (now.getTime() - slotStart.getTime() < -cutoffMs) {
-      // Slot hasn't started yet and we're within the cutoff window
+    if (slotStart.getTime() - now.getTime() > cutoffMs) {
+      // Slot hasn't started yet and we're outside the cutoff window (more than 2h before start)
       newStatus = 'cancelled';
       slotStatus = 'open';
     } else {
@@ -271,6 +281,7 @@ export async function cancelAppointment(
       metadata: {
         reason,
         slotId: currentSlotId,
+        patientProfileId: patientProfile.id,
       },
     });
 
@@ -798,10 +809,10 @@ export async function updateStatusByDoctor(
  * completed/no_show — those are clinical judgements for the doctor), and
  * only from `scheduled`.
  */
-export async function cancelByPatient(userId: string, appointmentId: string) {
-  const patientProfile = await patientsService.getMyPatientProfile(userId);
+export async function cancelByPatient(userId: string, appointmentId: string, actor?: auditService.AuditActor) {
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
   if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  const patientProfile = await patientsService.resolveActingProfile(userId, appointment.patientProfileId);
   if (appointment.patientProfileId !== patientProfile.id) {
     throw new HttpError(403, 'You can only cancel your own appointments.');
   }
@@ -811,6 +822,19 @@ export async function cancelByPatient(userId: string, appointmentId: string) {
 
   return prisma.$transaction(async (tx) => {
     await applyScheduledTransition(tx, appointment, 'cancelled');
+    if (actor) {
+      await auditService.record(tx, actor, {
+        entityType: 'Appointment',
+        entityId: appointment.id,
+        action: 'appointment.cancelled',
+        fromState: appointment.status,
+        toState: 'cancelled',
+        metadata: {
+          reason: 'patient',
+          patientProfileId: patientProfile.id,
+        },
+      });
+    }
     return appointmentsRepo.findAppointmentById(tx, appointmentId);
   });
 }
