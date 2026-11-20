@@ -36,10 +36,30 @@ export function listDispensedOrderItemIds(orderType: string, orderItemIds: strin
     .then((rows) => rows.map((row) => row.orderItemId));
 }
 
-export function countDispensedOrderItems(orderType: string, orderItemIds: string[]) {
+export function countDispensedOrderItems(
+  orderType: string,
+  orderItemIds: string[],
+  db: DbClient = prisma,
+) {
   if (orderItemIds.length === 0) return Promise.resolve(0);
-  return prisma.fulfillmentItem.count({
+  return db.fulfillmentItem.count({
     where: { orderType, orderItemId: { in: orderItemIds }, status: 'dispensed' },
+  });
+}
+
+/** Fulfillment records for this order that can still change (issue #84).
+ * A rejection refunds only when this is 0 — otherwise another facility may
+ * still dispense, and the money must stay in escrow. */
+export function countOpenRecordsForOrder(
+  db: DbClient,
+  orderType: 'prescription' | 'lab_order',
+  orderId: string,
+) {
+  return db.fulfillmentRecord.count({
+    where: {
+      ...(orderType === 'prescription' ? { prescriptionId: orderId } : { labOrderId: orderId }),
+      status: { in: ['pending', 'in_progress'] },
+    },
   });
 }
 

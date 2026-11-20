@@ -90,15 +90,10 @@ terminal intent has no matching order.
   `docforum-escrow` for the pattern). Running out of testnet funds is an
   operational concern, not a code bug; no auto-funding is built here.
 - `release`/`refund` are callable by anyone who can call this module's
-  service functions with the platform releaser identity — there's no
-  actual `FulfillmentRecord.status == fulfilled` trigger yet (that model
-  doesn't exist), so v1 exposes `release`/`refund` as directly-callable
-  actions (see the "Known gap" above), restricted at the HTTP layer to
-  `admin` role rather than any automatic trigger. Do not read this as the
-  final design for how release gets triggered in production — it's what
-  the roadmap already flagged: "don't let it drift into a manual/admin-
-  triggered release" is the target once Phase 4/5 exist; v1's admin-only
-  gate is the honest interim, not the destination.
+  service functions with the platform releaser identity, so the HTTP surface
+  stays `admin`-only. It is now an **override**, not the primary trigger:
+  issues #83/#84 made release/refund automatic off the durable order
+  transitions (see the update section at the end of this ADR).
 
 ## Update — 2026-10-19 (issues #79 and #80)
 
@@ -121,6 +116,45 @@ The backend polls Soroban RPC getEvents independently for each configured contra
 Payment operations use the `PlatformSigner` interface (`publicKey`, async transaction signing, and optional Soroban auth-entry signing) rather than constructing keypairs in the payments service. The env adapter preserves the current `PLATFORM_PAYER_SECRET` / `PLATFORM_RELEASER_SECRET` behavior. A reference HTTP adapter supports a signer service with role-scoped `GET /signers/{role}/public-key`, `POST /signers/{role}/sign-transaction`, and `POST /signers/{role}/sign-auth-entry` endpoints. Requests carry the network passphrase; the remote public key must match the configured expected address. Errors are sanitized before leaving the adapter.
 
 The HTTP adapter is a seam, not a managed KMS deployment. It requires HTTPS, a bearer token, and operator-provided signer service; production deployment choice and custody policy remain with issue #25. The issue #25 custody ADR should choose an adapter configuration here without changing the payment services interface. The implementation follows the signer surface proposed by `docforum-escrow` issue #60. The current published SDK remains compatible through its signer-shaped Keypair boundary; when SDK #60 is released, the local bridge can be removed without changing payment services. Signing is completed before the database transition transaction begins.
+
+## Automatic settlement (issues #83 and #84) — closes the "Known gap"
+
+`release` and `refund` are no longer admin-triggered only. The trigger is a
+domain event written in the **same transaction** as the order transition, and
+delivered by the transactional outbox (issue #94) — the durable task, its
+claim (`FOR UPDATE SKIP LOCKED`), lease recovery and bounded
+exponential-backoff retries already exist there, so no second queue table was
+invented for the same guarantee.
+
+- **Release (#83):** `prescriptions`/`lab-orders` publish `order.fulfilled`
+  inside the conditional `status -> fulfilled` update. The payments worker
+  then calls the SDK `release` and commits `escrowed -> released` with an
+  audit event (`settlementSource: automatic`). Only a whole order reaching
+  `fulfilled` (every item dispensed across every facility) publishes; a
+  `partially_fulfilled` order never unlocks money. This matches the rule
+  already documented in ARCHITECTURE.md §5.3.
+- **Refund (#84):** a facility rejecting a record wholesale (or marking its
+  last item `unfulfilled`) publishes `order.rejected` only when nothing was
+  dispensed for the order and no other fulfillment record is still open; the
+  lab-order expiry job publishes `order.expired` inside the
+  `issued -> expired` update. Either way the worker refunds through the
+  platform releaser, so the audit trail is identical to a manual refund, and
+  notifies the patient in-app.
+- **Races:** every local status write is one conditional UPDATE
+  (`escrowed -> released|refunded|failed`), so a release and a timeout refund
+  racing on-chain can commit locally at most once. The SDK's `NotFunded`
+  response (already released/refunded on-chain, e.g. by the timeout path) is
+  treated as a terminal reconcile: the intent moves to `failed` with a
+  `payment_intent.settlement_not_funded` audit row and the task completes
+  instead of retrying forever.
+- **Manual override:** `POST /payments/intents/:id/{release,refund}` remains,
+  audited exactly as before, for an operator resolving an intent the worker
+  cannot (for example after a `failed` reconcile).
+- **Known gap:** Phase 4 orders have no patient-dispute field (the dispute
+  flow of issue #76 is on the legacy `Order` model), so "disputed orders do
+  not release" is enforced only in the sense that release requires the
+  facility-derived `fulfilled` state. Wiring a dispute hold into the new order
+  lifecycle remains scoped to the Phase 4 dispute work.
 
 ## Network and contract safeguards (issue #88)
 

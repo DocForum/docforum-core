@@ -18,6 +18,7 @@ import { Prisma } from '@prisma/client';
 import type { FulfillmentItem, FulfillmentStatus, Role } from '@prisma/client';
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
+import { publish } from '../../../events';
 import { storageService, type UploadAttachmentOptions } from '../../../utils/storage';
 import { computeConfirmedSignal, formatOrderResponse } from '../../../utils/order-utils';
 import { record as recordAudit, type AuditActor } from '../../audit/services';
@@ -191,6 +192,15 @@ export async function updateFulfillmentItem(
     throw new HttpError(400, 'quantityDispensed exceeds the quantity the order asked for.');
   }
 
+  // Typed order FKs (docs/adr/0012): exactly one of prescriptionId /
+  // labOrderId is set, which is the record's order reference.
+  const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
+  const orderId = record.prescriptionId ?? record.labOrderId;
+  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
+  // Only a terminal "nothing dispensed here" outcome can trigger the
+  // automatic refund (issue #84); read the item universe before the write.
+  const orderItems = input.status === 'unfulfilled' ? await getOrderItems(orderType, orderId) : [];
+
   const claimed = await prisma
     .$transaction(async (tx) => {
       try {
@@ -215,7 +225,26 @@ export async function updateFulfillmentItem(
         throw error;
       }
       const items = await repo.listRecordItems(tx, recordId);
-      await repo.updateRecordStatus(tx, recordId, deriveRecordStatus(items));
+      const nextStatus = deriveRecordStatus(items);
+      await repo.updateRecordStatus(tx, recordId, nextStatus);
+      // Last item of every record ended unfulfilled, and nothing was
+      // dispensed for the order anywhere: the order can never be fulfilled,
+      // so publish the refund trigger in this same transaction. Another
+      // facility's still-open record keeps the escrow alive (split routing).
+      if (input.status === 'unfulfilled' && nextStatus === 'rejected') {
+        const openRecords = await repo.countOpenRecordsForOrder(tx, orderType, orderId);
+        const dispensed =
+          openRecords === 0
+            ? await repo.countDispensedOrderItems(
+                orderType,
+                orderItems.map((candidate) => candidate.id),
+                tx,
+              )
+            : 1;
+        if (openRecords === 0 && dispensed === 0) {
+          await publish(tx, 'order.rejected', { orderType, orderId });
+        }
+      }
       return true;
     })
     .catch((error) => {
@@ -228,11 +257,6 @@ export async function updateFulfillmentItem(
 
   if (!claimed) throw new HttpError(409, 'This item was already updated by the facility.');
 
-  // Typed order FKs (docs/adr/0012): exactly one of prescriptionId /
-  // labOrderId is set, which is the record's order reference.
-  const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
-  const orderId = record.prescriptionId ?? record.labOrderId;
-  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
   const orderStatus = await applyOrderStatus(orderType, orderId);
   return {
     record: await repo.findFulfillmentRecordById(recordId),
@@ -255,6 +279,15 @@ export async function updateFulfillmentRecord(
   if (input.status === 'rejected' && record.items.some((item) => item.status === 'dispensed')) {
     throw new HttpError(409, 'Items were already dispensed under this record — it can only be marked partially fulfilled.');
   }
+  // Typed order FKs (docs/adr/0012): exactly one of the two is set.
+  const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
+  const orderId = record.prescriptionId ?? record.labOrderId;
+  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
+  // Read before the transaction: the item universe is used only to ask "was
+  // anything dispensed for this order?", which decides whether a rejection
+  // may trigger an automatic refund (issue #84).
+  const orderItems = input.status === 'rejected' ? await getOrderItems(orderType, orderId) : [];
+
   const updated = await prisma.$transaction(async (tx) => {
     const claimed = await tx.fulfillmentRecord
       .updateMany({
@@ -263,6 +296,23 @@ export async function updateFulfillmentRecord(
       })
       .then((result) => result.count === 1);
     if (!claimed) return null;
+    if (input.status === 'rejected') {
+      // Only publish when this rejection means the order cannot be fulfilled
+      // by any remaining record and nothing was dispensed anywhere: another
+      // facility's still-open record (split routing) keeps the escrow alive.
+      const openRecords = await repo.countOpenRecordsForOrder(tx, orderType, orderId);
+      const dispensed =
+        openRecords === 0
+          ? await repo.countDispensedOrderItems(
+              orderType,
+              orderItems.map((item) => item.id),
+              tx,
+            )
+          : 1;
+      if (openRecords === 0 && dispensed === 0) {
+        await publish(tx, 'order.rejected', { orderType, orderId });
+      }
+    }
     return repo.findFulfillmentRecordById(recordId);
   });
   if (!updated) throw new HttpError(409, 'This fulfillment record has already reached a terminal state.');

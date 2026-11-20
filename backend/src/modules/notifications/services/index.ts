@@ -72,6 +72,14 @@ export const notificationPayloadSchemas = {
   referral_updated: z.object({ referralId: uuid }).strict(),
   order_ready: z.object({ orderId: uuid, orderType: z.enum(['prescription', 'lab_order']) }).strict(),
   results_available: z.object({ labOrderId: uuid }).strict(),
+  // Issue #72: told to the ordering doctor the moment an abnormal/critical
+  // result is attached; the acknowledgement task is the durable record.
+  lab_result_abnormal: z
+    .object({ labResultId: uuid, labOrderId: uuid, severity: z.enum(['abnormal', 'critical']) })
+    .strict(),
+  // Issue #84: the escrow refund completed. Identifiers only — never amounts
+  // or clinical detail (notifications are not a PHI surface).
+  payment_refunded: z.object({ paymentIntentId: uuid }).strict(),
 } as const;
 
 export type NotificationType = keyof typeof notificationPayloadSchemas;

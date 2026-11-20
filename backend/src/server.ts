@@ -7,6 +7,7 @@ import { startPatientExportJobs } from './jobs/patient-exports';
 import { startEscrowEventPoller } from './jobs/escrow-events';
 import { validatePlatformSigners } from './modules/payments/services/platform-signers';
 import { startOutboxEventJobs } from './jobs/outbox-events';
+import { startLabResultEscalationJobs } from './jobs/lab-result-escalation';
 import { validateSep10Config, validateWalletLinkConfig, verifyPaymentsNetwork } from './modules/payments/services';
 import { startAccountPurgeJob } from './jobs/account-purge';
 import { startPaymentIntentJobs } from './jobs/payment-intents';
@@ -134,6 +135,9 @@ pruneTimer.unref();
 startPatientExportJobs();
 startEscrowEventPoller();
 startOutboxEventJobs();
+// Abnormal lab result escalation (Phase 4, issue #72): an unacknowledged
+// abnormal/critical result moves to the admin queue once its deadline passes.
+startLabResultEscalationJobs();
 // Deleted-account tombstone purge (Phase 8, issue #41, docs/adr/0010).
 startAccountPurgeJob();
 // Prepared-transaction expiry (Phase 5.5, issue #80): an unsigned

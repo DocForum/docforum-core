@@ -9,7 +9,11 @@ const transitions: Record<PaymentIntentStatus, readonly PaymentIntentStatus[]> =
   // The submit half of ADR 0005 is not built yet (issue #80 covers prepare),
   // so `submitting` is reserved but never written by this service today.
   submitting: ['escrowed'],
-  escrowed: ['released', 'refunded'],
+  // `failed` is the terminal reconcile state (issue #83): the contract says
+  // the escrow is not funded (already released/refunded elsewhere, e.g. the
+  // timeout-refund path), so retrying release can never succeed. The intent
+  // stays visible for an admin to reconcile against the chain.
+  escrowed: ['released', 'refunded', 'failed'],
   released: [],
   refunded: [],
   failed: [],

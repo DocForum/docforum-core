@@ -11,13 +11,15 @@
 // specific order. Anyone else gets the same 404 as a missing order, so ids
 // can't be probed.
 import { randomUUID } from 'node:crypto';
-import type { Role } from '@prisma/client';
+import type { LabResultAbnormality, Role } from '@prisma/client';
+import { config } from '../../../config';
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { getObjectStorage } from '../../../utils/object-storage';
 import * as auditService from '../../audit/services';
 import * as doctorsService from '../../doctors/services';
 import * as facilitiesService from '../../facilities/services';
+import * as notificationsService from '../../notifications/services';
 import * as patientsService from '../../patients/services';
 import * as ordersRepo from '../repositories';
 
@@ -47,6 +49,11 @@ export interface LabResultView {
   fulfillingFacilityId: string;
   contentType: string | null;
   byteSize: number | null;
+  // Issue #72: the facility's judgement of the result.
+  abnormality: LabResultAbnormality;
+  // Present only for abnormal/critical results: the doctor's task deadline
+  // and whether it has been acknowledged yet.
+  acknowledgement: { escalationDueAt: Date; acknowledgedAt: Date | null } | null;
   createdAt: Date;
 }
 
@@ -54,6 +61,7 @@ export async function attachLabResult(
   actor: auditService.AuditActor,
   labOrderId: string,
   file: { body: unknown; contentType: string | undefined },
+  abnormality: LabResultAbnormality = 'normal',
 ): Promise<LabResultView> {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
   const facilityProfileId = await facilitiesService.getOwnFacilityProfileId(actor.userId);
@@ -87,22 +95,72 @@ export async function attachLabResult(
   const storage = getObjectStorage();
   await storage.putObject({ key: objectKey, body, contentType });
 
+  // Issue #72: abnormal and critical results open an acknowledgement task for
+  // the ordering doctor (the escalation job watches its deadline). The row
+  // is created in the SAME transaction as the result, so a result can never
+  // exist without the task its severity requires.
+  const acknowledgement =
+    abnormality === 'normal'
+      ? null
+      : {
+          severity: abnormality,
+          escalationDueAt: new Date(
+            Date.now() + config.labResults.escalationHours * 60 * 60 * 1000,
+          ),
+        };
+
   try {
-    const result = await prisma.$transaction(async (tx) => {
-      const created = await ordersRepo.createLabResult(tx, {
+    const created = await prisma.$transaction(async (tx) => {
+      const result = await ordersRepo.createLabResult(tx, {
         labOrderId: order.id, fulfillingFacilityId: facilityProfileId,
         resultObjectKey: objectKey, resultContentType: contentType, resultByteSize: body.length,
+        abnormality,
       });
+      if (acknowledgement) {
+        await ordersRepo.createLabResultAcknowledgement(tx, {
+          labResultId: result.id,
+          orderingDoctorId: order.orderingDoctorId,
+          severity: acknowledgement.severity,
+          escalationDueAt: acknowledgement.escalationDueAt,
+        });
+      }
       await auditService.record(tx, actor, {
-        entityType: 'LabResult', entityId: created.id, action: 'lab_result.attached',
+        entityType: 'LabResult', entityId: result.id, action: 'lab_result.attached',
         fromState: null, toState: 'attached',
-        metadata: { labOrderId: order.id, facilityProfileId, contentType, byteSize: body.length },
+        metadata: {
+          labOrderId: order.id, facilityProfileId, contentType, byteSize: body.length, abnormality,
+        },
       });
-      return created;
+      return result;
     });
+
+    // Best-effort in-app alert to the ordering doctor. The durable guarantee
+    // is the acknowledgement row (which the doctor's unacknowledged list and
+    // the admin escalation queue read); a failed notification must not fail
+    // an attached result.
+    if (acknowledgement) {
+      void ordersRepo
+        .findDoctorUserId(order.orderingDoctorId)
+        .then((userId) =>
+          userId
+            ? notificationsService.notify(userId, 'lab_result_abnormal', {
+                labResultId: created.id,
+                labOrderId: created.labOrderId,
+                severity: acknowledgement.severity,
+              })
+            : undefined,
+        )
+        .catch(() => console.error('[orders] abnormal-result notification failed'));
+    }
+
     return {
-      id: result.id, labOrderId: result.labOrderId, fulfillingFacilityId: result.fulfillingFacilityId,
-      contentType: result.resultContentType, byteSize: result.resultByteSize, createdAt: result.createdAt,
+      id: created.id, labOrderId: created.labOrderId, fulfillingFacilityId: created.fulfillingFacilityId,
+      contentType: created.resultContentType, byteSize: created.resultByteSize,
+      abnormality: created.abnormality,
+      acknowledgement: acknowledgement
+        ? { escalationDueAt: acknowledgement.escalationDueAt, acknowledgedAt: null }
+        : null,
+      createdAt: created.createdAt,
     };
   } catch (error) {
     // The row didn't commit, so nothing references the object: remove it
