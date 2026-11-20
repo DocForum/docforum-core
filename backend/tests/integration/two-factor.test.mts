@@ -12,7 +12,7 @@
 //      nothing else.
 //
 // Self-contained like the other integration suites: its own embedded
-// Postgres on its own port (5471) with the committed migrations applied.
+// Postgres on its own port (5473) with the committed migrations applied.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -27,7 +27,7 @@ import { generateTotp } from '../../src/modules/auth/services/totp.js';
 process.env.TOTP_REQUIRE_FOR_ADMIN = 'true';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = 5471;
+const PORT = 5473;
 const runId = Date.now();
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-two-factor-pg-'));
