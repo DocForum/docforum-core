@@ -93,7 +93,9 @@ describe('doctor discovery', () => {
     await pg.stop();
     try {
       fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    } catch {}
+    } catch (_err) {
+      void _err;
+    }
   });
 
   it('lists specialties publicly and searches only verified doctors with public fields', async () => {

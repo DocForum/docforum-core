@@ -140,10 +140,14 @@ describe('consultation close-once guarantee', () => {
     await prisma?.$disconnect();
     try {
       await pg.stop();
-    } catch {}
+    } catch (_err) {
+      void _err;
+    }
     try {
       fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    } catch {}
+    } catch (_err) {
+      void _err;
+    }
   });
 
   async function makeCompletedAppointment() {
