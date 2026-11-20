@@ -25,3 +25,37 @@ export function findConsultationById(db: DbClient, id: string) {
     include: { appointment: true, referrals: true },
   });
 }
+
+/**
+ * Conditional update that closes an open consultation only if outcome IS NULL.
+ * Returns the updated row or null if already closed.
+ */
+export async function closeOpenConsultation(
+  db: DbClient,
+  where: { appointmentId: string },
+  data: { outcome: ConsultationOutcome; notes?: string | null },
+): Promise<Consultation | null> {
+  let count: number;
+  if (data.notes !== undefined) {
+    count = await db.$executeRaw`
+      UPDATE "Consultation"
+      SET "outcome" = ${data.outcome}::"ConsultationOutcome",
+          "notes" = ${data.notes},
+          "updatedAt" = NOW()
+      WHERE "appointmentId" = ${where.appointmentId}
+        AND "outcome" IS NULL
+    `;
+  } else {
+    count = await db.$executeRaw`
+      UPDATE "Consultation"
+      SET "outcome" = ${data.outcome}::"ConsultationOutcome",
+          "updatedAt" = NOW()
+      WHERE "appointmentId" = ${where.appointmentId}
+        AND "outcome" IS NULL
+    `;
+  }
+  if (count === 0) {
+    return null;
+  }
+  return db.consultation.findUnique({ where: { appointmentId: where.appointmentId } });
+}

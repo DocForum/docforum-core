@@ -5,7 +5,7 @@ import { referralTargetSchema } from '../referrals/validation';
  * notes are the clinical record itself (empty notes are not a record). */
 export const closeConsultationSchema = z.object({
   outcome: z.enum(['resolved', 'referred', 'follow_up_needed']),
-  notes: z.string().min(1).max(20000),
+  notes: z.string().min(1).max(20000).optional(),
 });
 
 /** Create route (Phase 3's slice): the same row, addressable before sign-off. */

@@ -40,7 +40,8 @@ const pg = new EmbeddedPostgres({
   user: 'docforum',
   password: 'docforum',
   port: PORT,
-  persistent: false,
+  persistent: true,
+  initdbFlags: ['-E', 'UTF8'],
 });
 
 // Matches vitest.config.mts's DATABASE_URL convention: the client built at
@@ -79,6 +80,7 @@ describe('consultation close-once guarantee', () => {
   let owningDoctorToken: string;
   let otherDoctorToken: string;
   let patientToken: string;
+  let doctorProfileId: string;
   let appointmentId: string;
 
   beforeAll(async () => {
@@ -86,7 +88,7 @@ describe('consultation close-once guarantee', () => {
     await pg.start();
     await pg.createDatabase('docforum_test');
 
-    execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
+    execFileSync(process.execPath, [path.join(BACKEND_ROOT, 'node_modules/prisma/build/index.js'), 'migrate', 'deploy'], {
       cwd: BACKEND_ROOT,
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: 'pipe',
@@ -111,7 +113,7 @@ describe('consultation close-once guarantee', () => {
 
     const doctorMe = await request(app).get('/doctors/me').set('Authorization', `Bearer ${owningDoctorToken}`);
     expect(doctorMe.status).toBe(200);
-    const doctorProfileId = doctorMe.body.id as string;
+    doctorProfileId = doctorMe.body.id as string;
 
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const generate = await request(app)
@@ -130,15 +132,42 @@ describe('consultation close-once guarantee', () => {
       .send({ availabilitySlotId: slots.body[0].id });
     expect(book.status, JSON.stringify(book.body)).toBe(201);
     appointmentId = book.body.id as string;
-  });
+  }, 120_000);
 
   afterAll(async () => {
     const authServices = await import('../../src/modules/auth/services/index.js');
     authServices.resetEmailSender();
     await prisma?.$disconnect();
-    await pg.stop();
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    try {
+      await pg.stop();
+    } catch {}
+    try {
+      fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {}
   });
+
+  async function makeCompletedAppointment() {
+    const slot = await prisma.availabilitySlot.create({
+      data: {
+        doctorProfileId,
+        startTime: new Date(Date.now() - 3600_000),
+        endTime: new Date(Date.now() - 1800_000),
+        status: 'open',
+      },
+    });
+    const book = await request(app)
+      .post('/appointments')
+      .set('Authorization', `Bearer ${patientToken}`)
+      .send({ availabilitySlotId: slot.id });
+    expect(book.status).toBe(201);
+    const apptId = book.body.id as string;
+    const complete = await request(app)
+      .patch(`/appointments/${apptId}/status`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ status: 'completed' });
+    expect(complete.status).toBe(200);
+    return apptId;
+  }
 
   it('refuses to close a consultation before the appointment is completed', async () => {
     const res = await request(app)
@@ -268,5 +297,91 @@ describe('consultation close-once guarantee', () => {
       .send({ outcome: 'cured', notes: 'Invalid outcome value.' });
 
     expect(res.status).toBe(400);
+  });
+
+  it('allows opening a consultation without an outcome and closing it later', async () => {
+    const apptId = await makeCompletedAppointment();
+
+    // 1. Open consultation with notes, without outcome
+    const openRes = await request(app)
+      .post('/consultations')
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ appointmentId: apptId, notes: 'Preliminary visit notes' });
+    expect(openRes.status).toBe(201);
+    expect(openRes.body.outcome).toBeNull();
+    expect(openRes.body.notes).toBe('Preliminary visit notes');
+
+    // Audit event for open consultation is not consultation.closed
+    const auditBefore = await prisma.auditEvent.findMany({
+      where: { entityType: 'Consultation', entityId: openRes.body.id, action: 'consultation.closed' },
+    });
+    expect(auditBefore).toHaveLength(0);
+
+    // 2. Close it via POST /appointments/:id/consultation without new notes (notes preserved)
+    const closeRes = await request(app)
+      .post(`/appointments/${apptId}/consultation`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ outcome: 'resolved' });
+    expect(closeRes.status, JSON.stringify(closeRes.body)).toBe(201);
+    expect(closeRes.body.consultation.outcome).toBe('resolved');
+    expect(closeRes.body.consultation.notes).toBe('Preliminary visit notes');
+
+    // Audit event consultation.closed was created
+    const auditAfter = await prisma.auditEvent.findMany({
+      where: { entityType: 'Consultation', entityId: openRes.body.id, action: 'consultation.closed' },
+    });
+    expect(auditAfter).toHaveLength(1);
+    expect(auditAfter[0].toState).toBe('resolved');
+
+    // 3. Second close attempt fails 409
+    const secondClose = await request(app)
+      .post(`/appointments/${apptId}/consultation`)
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ outcome: 'follow_up_needed' });
+    expect(secondClose.status).toBe(409);
+  });
+
+  it('handles race condition when two requests attempt to close the same open consultation concurrently', async () => {
+    const apptId = await makeCompletedAppointment();
+
+    const openRes = await request(app)
+      .post('/consultations')
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ appointmentId: apptId, notes: 'Open for racing' });
+    expect(openRes.status).toBe(201);
+
+    const [r1, r2] = await Promise.all([
+      request(app)
+        .post(`/appointments/${apptId}/consultation`)
+        .set('Authorization', `Bearer ${owningDoctorToken}`)
+        .send({ outcome: 'resolved' }),
+      request(app)
+        .post(`/appointments/${apptId}/consultation`)
+        .set('Authorization', `Bearer ${owningDoctorToken}`)
+        .send({ outcome: 'referred' }),
+    ]);
+
+    const statuses = [r1.status, r2.status].sort();
+    expect(statuses).toEqual([201, 409]);
+
+    const rows = await prisma.consultation.findMany({ where: { appointmentId: apptId } });
+    expect(rows).toHaveLength(1);
+    expect(['resolved', 'referred']).toContain(rows[0].outcome);
+  });
+
+  it('refuses to let another doctor close an open consultation (404)', async () => {
+    const apptId = await makeCompletedAppointment();
+
+    const openRes = await request(app)
+      .post('/consultations')
+      .set('Authorization', `Bearer ${owningDoctorToken}`)
+      .send({ appointmentId: apptId, notes: 'Open notes' });
+    expect(openRes.status).toBe(201);
+
+    const otherClose = await request(app)
+      .post(`/appointments/${apptId}/consultation`)
+      .set('Authorization', `Bearer ${otherDoctorToken}`)
+      .send({ outcome: 'resolved' });
+    expect(otherClose.status).toBe(404);
   });
 });

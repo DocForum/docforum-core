@@ -65,27 +65,81 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
   const notes = input.notes ?? null;
 
   let consultation;
+  let returnNotes: string | null = null;
   try {
-    consultation = await prisma.$transaction(async (tx) => {
+    const outcome = input.outcome ?? null;
+
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await consultationsRepo.findConsultationByAppointmentId(tx, input.appointmentId);
+      if (existing) {
+        if (existing.outcome !== null) {
+          throw new HttpError(409, 'A consultation for this appointment has already been closed.');
+        }
+
+        const updateData: { outcome: ConsultationOutcome; notes?: string | null } = {
+          outcome: (outcome ?? existing.outcome) as ConsultationOutcome,
+        };
+
+        if (input.notes !== undefined) {
+          updateData.notes = input.notes === null ? null : (encryptField(input.notes) ?? null);
+        }
+
+        if (outcome !== null) {
+          const updated = await consultationsRepo.closeOpenConsultation(tx, { appointmentId: input.appointmentId }, updateData);
+          if (!updated) {
+            throw new HttpError(409, 'A consultation for this appointment has already been closed.');
+          }
+
+          await auditService.record(tx, actor, {
+            entityType: 'Consultation',
+            entityId: updated.id,
+            action: 'consultation.closed',
+            fromState: null,
+            toState: updated.outcome,
+            metadata: { appointmentId: updated.appointmentId },
+          });
+
+          const plaintextNotes = (input.notes ?? (updated.notes ? decryptField(updated.notes) : null)) ?? null;
+
+          return { record: updated, plaintextNotes };
+        } else {
+          let updatedRecord = existing;
+          if (updateData.notes !== undefined) {
+            updatedRecord = await tx.consultation.update({
+              where: { appointmentId: input.appointmentId },
+              data: { notes: updateData.notes },
+            });
+          }
+          const plaintextNotes = (input.notes ?? (updatedRecord.notes ? decryptField(updatedRecord.notes) : null)) ?? null;
+
+          return { record: updatedRecord, plaintextNotes };
+        }
+      }
+
       const record = await consultationsRepo.createConsultation(tx, {
         appointmentId: input.appointmentId,
-        outcome: input.outcome ?? null,
+        outcome,
         notes: notes === null ? null : (encryptField(notes) ?? null),
       });
 
       // Phase 8 audit trail (issue #43): the state change and its event commit
       // together, so an event exists iff the consultation was actually closed.
-      await auditService.record(tx, actor, {
-        entityType: 'Consultation',
-        entityId: record.id,
-        action: 'consultation.closed',
-        fromState: null,
-        toState: record.outcome,
-        metadata: { appointmentId: record.appointmentId },
-      });
+      if (record.outcome !== null) {
+        await auditService.record(tx, actor, {
+          entityType: 'Consultation',
+          entityId: record.id,
+          action: 'consultation.closed',
+          fromState: null,
+          toState: record.outcome,
+          metadata: { appointmentId: record.appointmentId },
+        });
+      }
 
-      return record;
+      return { record, plaintextNotes: notes };
     });
+
+    consultation = result.record;
+    returnNotes = result.plaintextNotes;
   } catch (err) {
     // The DB unique constraint is the actual guarantee; translate the race's
     // loser into a 409 rather than a 500.
@@ -97,7 +151,7 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
 
   // The caller just wrote these notes, so hand them back in plaintext rather
   // than leaking the stored ciphertext envelope.
-  return { consultation: { ...consultation, notes }, appointment };
+  return { consultation: { ...consultation, notes: returnNotes }, appointment };
 }
 
 /** Service-to-service read for modules that hang records off a consultation
