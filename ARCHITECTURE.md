@@ -38,6 +38,20 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | Background jobs | Simple queue (BullMQ on Redis) for reminders, order-expiry checks, notification delivery | Needed for FR-15/16 and the "orphaned order" hard question (PRD §8.1.3). |
 | Infra | Docker Compose for local dev; containerized deploy target TBD (not decided — see Open Questions in ROADMAP) | Keep infra decisions deferred until a real deploy target is chosen; don't overbuild CI/CD for a repo with no code yet. |
 
+**Linting (Phase 9, issue #28).** `npm run lint` in `backend/` runs ESLint 9
+with `typescript-eslint`'s type-aware config; CI runs it after `typecheck`.
+The toolchain lives in `backend/tools/lint` rather than in `backend`'s own
+devDependencies because `typescript-eslint` has no TypeScript 7 support yet
+(TS 7 ships no compiler API). That package pins `typescript` to the official
+TypeScript 6 compatibility package (`@typescript/typescript6`), so ESLint
+parses with the 6.x API while the application keeps `typescript@7` for `tsc`.
+A second `package-lock.json` (and a `npm ci --prefix tools/lint` CI step) is
+the cost of that split; drop the folder once typescript-eslint supports the
+TS 7.1 API. The baseline enables `no-floating-promises` as an error and
+deliberately leaves `no-explicit-any`, `no-console` (structured-logger
+migration, issue #341) and `no-unused-expressions` off — see the header of
+`backend/tools/lint/eslint.config.mjs` for the reasoning.
+
 ## 3. Module boundaries (backend)
 
 Each module under `backend/src/modules/<name>/` owns its own `routes/`, `controllers/`, `services/`, `repositories/`. Cross-module access happens through a module's exported service interface only — **never reach into another module's repository directly.** This is the internal seam that would let us extract a module into its own service later without a rewrite.
@@ -201,6 +215,31 @@ append-only (`Prescription`, `LabOrder`) or immutable
 **not** have one; the integration test asserts that set so a later change
 can't quietly widen it.
 
+### 4.1.1 TOTP two-factor authentication (Phase 8, issue #36)
+```
+User (extended)
+  totp_secret [ENCRYPTED]   # base32 secret, encrypted with the existing
+                            # field-encryption key; null = 2FA not enrolled
+  totp_enabled_at           # null until a valid code confirms enrolment
+  totp_last_used_step       # last accepted RFC 6238 time step (replay guard)
+
+TwoFactorRecoveryCode
+  id, user_id (FK, cascade), code_hash (SHA-256), used_at (nullable),
+  created_at
+  # single-use: redemption is one conditional UPDATE ... WHERE used_at IS NULL
+```
+Verification is dependency-free (`node:crypto`, RFC 4226/6238) and accepts a
+±1 step window. Replay is prevented server-side: the accepted step is claimed
+with a single conditional `updateMany` on `totp_last_used_step`, so two
+concurrent requests with the same code cannot both succeed — a client-held
+"already used" flag would not survive a replay. Half-authenticated tokens
+(`mfa_pending`, and `mfa_enrollment` when `TOTP_REQUIRE_FOR_ADMIN` forces
+enrolment for an admin) carry a `typ` claim and are signed with the access
+keyring; `verifyAccessToken` rejects any token that has `typ`, so a pending
+token can never be used as an access token and an enrolment token is only
+accepted by `POST /auth/2fa/setup` and `/enable`. Disabling 2FA requires the
+account password, and recovery codes are deleted when it is disabled.
+
 ### 4.2 Availability & Appointments
 ```
 AvailabilitySlot
@@ -346,6 +385,40 @@ PrescriptionItem
   id, prescription_id (FK), drug_name, dosage, frequency, duration
 ```
 
+### Medication catalog (Phase 4, issue #69)
+```
+Medication                          # reference data, not clinical advice
+  id, generic_name, strength, form, route
+  external_code (nullable, unique)  # whatever open code the importer's
+                                    # source provides; openFDA NDC = the
+                                    # NDC product code. RxNorm CUIs are NOT
+                                    # used — they are not openly licensed.
+  created_at, updated_at
+  # unique (generic_name, strength, form, route) — the identity the importer
+  # upserts on. GIN trigram index on generic_name (pg_trgm) backs the
+  # autocomplete; the extension is created by the migration because Prisma
+  # has no extension syntax, the index is declared in the schema so the
+  # drift check does not see a phantom index.
+
+PrescriptionItem (extended)
+  medication_id (nullable FK)          # null = unlisted medication
+  flagged_for_pharmacist_review        # true exactly when medication_id is null
+  drug_name                            # UNCHANGED: the display snapshot,
+                                       # "Amoxicillin 500 mg capsule"
+```
+The catalog is a **picker, never a checker**: it gives prescribers a controlled
+vocabulary and pharmacies an unambiguous line, and it deliberately does not
+evaluate interactions (PRD §8.2.8). Issuance snapshots `generic_name +
+strength + form` into the append-only `drug_name`; a later catalog edit (or an
+importer re-run) does not rewrite an issued prescription — same hard rule as
+the rest of §4.5. An item with no `medication_id` is the explicit
+unlisted-medication path: the prescriber's free text is kept verbatim and the
+row is flagged for pharmacist review, so "not in the catalog" is a recorded
+decision rather than an invisible one. Other modules read the catalog only
+through `medications/services` (AGENTS.md module boundary); the model lives in
+`prisma/schema/facilities.prisma` because it is reference data the
+facility/pharmacy side owns.
+
 ### 4.6 Lab orders (versioned, append-only)
 ```
 LabOrder
@@ -371,6 +444,35 @@ The facility and total are captured at issuance. The issuing clinician supplies
 pricing service. Corrections create a new immutable row. A `created` payment
 intent moves to the correction; an already escrowed intent remains linked to
 the original and is refunded through the existing admin refund action.
+
+Issue #72 adds the acknowledgement side of a result. `LabResult.abnormality`
+is `normal | abnormal | critical`, set by the fulfilling facility at attach
+time; it is not editable afterwards (the result is create-once, §4.6). An
+`abnormal` or `critical` result also creates exactly one
+`LabResultAcknowledgement` in the same transaction:
+
+```
+LabResultAcknowledgement
+  id, lab_result_id (FK, unique), ordering_doctor_id (FK to DoctorProfile)
+  severity (enum: abnormal|critical)
+  escalation_due_at (fixed at attach: created_at + LAB_RESULT_ESCALATION_HOURS)
+  acknowledged_at, acknowledged_by_doctor_id (one-shot conditional write)
+  escalated_at (one-shot conditional write by the sweep job)
+  created_at
+
+  @@index([acknowledged_at, escalation_due_at])   # admin escalation queue
+  @@index([ordering_doctor_id, acknowledged_at])  # doctor's list
+```
+
+Both writes are conditional (`acknowledged_at IS NULL`, and for escalation
+`acknowledged_at IS NULL AND escalated_at IS NULL`), so a repeat acknowledge
+is a `409`, an acknowledgement that wins the race is never escalated, and two
+job runners cannot double-escalate. Each write records an `AuditEvent`
+(`lab_result.acknowledged` / `lab_result.escalated`) in the same transaction;
+the acknowledgement table is not a second audit trail. `escalation_due_at` is
+stored rather than derived, so changing the env var never moves an existing
+deadline, and the admin queue computes `overdue` from it rather than relying
+on the job having run. `normal` results have no row at all.
 
 ### 4.7 Fulfillment (facility-side)
 ```
