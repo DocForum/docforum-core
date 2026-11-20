@@ -276,7 +276,7 @@ and admin-gated `GET /payments/intents/:id` plus
 of order issuance and carry a typed `Prescription`/`LabOrder` FK. Amounts
 are in the smallest unit of `assetCode` (issue #79); the allowed assets are
 an environment allowlist (`PAYMENT_ASSETS`, testnet XLM + USDC by default).
-Admin-triggered release/refund is the interim design, not the final one.
+Release/refund are triggered automatically from the durable order transitions (issues #83/#84, see below); the admin endpoints remain audited overrides.
 
 `POST /payments/intents/:id/prepare` (patient, verified email; issue #80)
 owns the caller's intent in the service — someone else's intent is `404`.
@@ -298,7 +298,7 @@ Verified doctors can create a consultation with `POST /orders/consultations` (`a
 
 | Endpoint | Auth | Body | Notes |
 |---|---|---|---|
-| `POST /orders/lab-orders/:labOrderId/result` | facility (the order's own facility only) | the raw file, `Content-Type: application/pdf` \| `image/png` \| `image/jpeg` | Stores the file in private object storage and creates the order's `LabResult`. The bytes must match the declared type (`415 LAB_RESULT_UNSUPPORTED_TYPE` / `LAB_RESULT_CONTENT_MISMATCH`). Size limit `LAB_RESULT_MAX_BYTES`, default 10 MiB (`413 LAB_RESULT_TOO_LARGE`). Empty body: `400`. Create-once: `409 LAB_RESULT_ALREADY_ATTACHED`. A superseded order: `409 LAB_ORDER_SUPERSEDED` (attach to the correction). Any other facility gets `404`, the same as a missing order. `201` with `{ id, labOrderId, fulfillingFacilityId, contentType, byteSize, createdAt }`. The storage key is never returned. Writes a `lab_result.attached` audit event. Does not change the order or its fulfillment status. No storage configured on the server: `503 OBJECT_STORAGE_NOT_CONFIGURED`. |
+| `POST /orders/lab-orders/:labOrderId/result` | facility (the order's own facility only) | the raw file, `Content-Type: application/pdf` \| `image/png` \| `image/jpeg` | Stores the file in private object storage and creates the order's `LabResult`. The bytes must match the declared type (`415 LAB_RESULT_UNSUPPORTED_TYPE` / `LAB_RESULT_CONTENT_MISMATCH`). Size limit `LAB_RESULT_MAX_BYTES`, default 10 MiB (`413 LAB_RESULT_TOO_LARGE`). Empty body: `400`. Create-once: `409 LAB_RESULT_ALREADY_ATTACHED`. A superseded order: `409 LAB_ORDER_SUPERSEDED` (attach to the correction). Any other facility gets `404`, the same as a missing order. `201` with `{ id, labOrderId, fulfillingFacilityId, contentType, byteSize, abnormality, acknowledgement, createdAt }`; `?abnormality=normal|abnormal|critical` (default `normal`, issue #72) is the facility's judgement, and abnormal/critical opens an acknowledgement task for the ordering doctor (see the `/lab-results` rows below). The storage key is never returned. Writes a `lab_result.attached` audit event. Does not change the order or its fulfillment status. No storage configured on the server: `503 OBJECT_STORAGE_NOT_CONFIGURED`. |
 | `GET /orders/lab-orders/:labOrderId/result` | patient (own order), ordering doctor, fulfilling facility | — | The file itself, as `Content-Disposition: attachment`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`. Anyone else, including admins: `404`, the same as a missing order. No result yet: `404 LAB_RESULT_NOT_FOUND`. Each read is recorded in the PHI access log (`entityType: 'LabResult'`). |
 
 ## Admin success metrics (`/admin/metrics`) — `backend/src/modules/metrics`
@@ -459,8 +459,8 @@ integration and callbacks remain pending the provider decision in issue #17.
 
 Outbox events are published within the transaction for the domain change and
 delivered after commit. Delivery is at least once; handlers must be idempotent.
-Booking confirmation is the first producer. Failed events retry with bounded
-exponential backoff and are dead-lettered after five attempts.
+Booking confirmation, order fulfillment/rejection/expiry (issues #83/#84) are
+the producers; failed events retry with bounded backoff, dead-letter after five attempts.
 
 ## Pharmacy orders (`/pharmacy-orders`) — `backend/src/modules/pharmacy-orders`
 

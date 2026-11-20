@@ -94,6 +94,25 @@ export function findPaymentIntentById(id: string) {
   return prisma.paymentIntent.findUnique({ where: { id } });
 }
 
+/** The intent attached to an order, addressed by its typed order FK
+ * (issue #85) — never by a string `orderType` + `orderId` pair. */
+export function findPaymentIntentByOrder(
+  orderType: 'prescription' | 'lab_order',
+  orderId: string,
+) {
+  return prisma.paymentIntent.findFirst({
+    where: orderType === 'prescription' ? { prescriptionId: orderId } : { labOrderId: orderId },
+  });
+}
+
+/** The login user who owns a patient profile — used to address the refund
+ * notification (issue #84). Not a clinical read: id only. */
+export function findPatientUserIdByProfileId(patientProfileId: string) {
+  return prisma.patientProfile
+    .findUnique({ where: { id: patientProfileId }, select: { userId: true } })
+    .then((row) => row?.userId ?? null);
+}
+
 /** One keyset page of a patient's payment intents, oldest first (patient
  * data export, issue #40). */
 export function findPaymentIntentsPageForPatient(patientProfileId: string, cursor: string | undefined, take: number) {

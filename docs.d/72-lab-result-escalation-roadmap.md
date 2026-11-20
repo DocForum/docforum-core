@@ -1,0 +1,5 @@
+---
+file: ROADMAP.md
+section: Phase 4 — Orders: prescriptions & lab orders
+---
+- [x] Abnormal lab result escalation and doctor acknowledgement tracking (PRD §8.2.7), tracked as [issue #72](https://github.com/DocForum/docforum-core/issues/72) — **Done.** `LabResult.abnormality` (`normal|abnormal|critical`) is set by the fulfilling facility at attach time; abnormal/critical results create one `LabResultAcknowledgement` for the ordering doctor in the same transaction and notify them. `POST /lab-results/:id/acknowledge` is a one-shot conditional write with a `lab_result.acknowledged` audit event; `GET /lab-results/unacknowledged` is the doctor's list and (for admins) the escalation queue. An interval sweep marks overdue tasks escalated (`lab_result.escalated`), and `overdue` is derived from `escalationDueAt` so a missed tick cannot hide a task. Critical results are deliberately **not** withheld from the patient (decision recorded in PRD §8.2.7). Migration: `20261120120000_lab_result_abnormality_acknowledgement`.

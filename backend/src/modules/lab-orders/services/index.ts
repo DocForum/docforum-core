@@ -7,6 +7,7 @@
 // state. See ARCHITECTURE.md §5.3.
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
+import { publish } from '../../../events';
 import { storageService } from '../../../utils/storage';
 import { record, type AuditActor } from '../../audit/services';
 import type { OrderStatus } from '@prisma/client';
@@ -26,12 +27,27 @@ export async function getLabOrder(id: string) {
  * Applies the fulfillment-derived order status. Called by pharmacy-orders
  * AFTER its own item rows have been written — a facility never writes a
  * LabOrder row directly (hard rule 5).
+ *
+ * Issue #83: the `fulfilled` transition and its `order.fulfilled` outbox
+ * event commit together, so a lab order's escrow is released exactly when
+ * the facility's dispense is durably recorded. A repeat call is a no-op.
  */
 export async function applyFulfillmentStatus(
   labOrderId: string,
   status: Extract<OrderStatus, 'fulfilled'>,
 ): Promise<boolean> {
-  return repo.applyOrderStatusIf(labOrderId, ['issued', 'partially_fulfilled'], status);
+  return prisma.$transaction(async (tx) => {
+    const changed = await repo.applyOrderStatusIf(
+      labOrderId,
+      ['issued', 'partially_fulfilled'],
+      status,
+      tx,
+    );
+    if (changed) {
+      await publish(tx, 'order.fulfilled', { orderType: 'lab_order', orderId: labOrderId });
+    }
+    return changed;
+  });
 }
 
 export async function createLabOrder(data: {

@@ -28,6 +28,17 @@ export const prescriptionSchema = requireExactlyOnePrice({
   supersedesPrescriptionId: z.string().uuid().optional(),
   items: z.array(item).min(1).max(100),
 });
+// Issue #72: the facility's judgement of a result. It travels as a query
+// parameter because the request body IS the file (raw parser), and it
+// defaults to `normal` so existing clients keep working.
+export const attachLabResultQuerySchema = z.object({
+  abnormality: z.enum(['normal', 'abnormal', 'critical']).default('normal'),
+});
+
+export const unacknowledgedResultsQuerySchema = z
+  .object({ limit: z.coerce.number().int().min(1).max(100).default(50) })
+  .strict();
+
 export const labOrderSchema = requireExactlyOnePrice({
   ...pricing,
   facilityProfileId: z.string().uuid(),

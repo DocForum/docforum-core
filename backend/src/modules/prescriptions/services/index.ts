@@ -1,6 +1,8 @@
 // prescriptions services — the only surface other modules may use to read
 // or lifecycle-update a Prescription (AGENTS.md hard rule 4).
 import { HttpError } from '../../../http-error';
+import { prisma } from '../../../db/prisma-client';
+import { publish } from '../../../events';
 import * as prescriptionsRepo from '../repositories';
 import type { OrderStatus } from '@prisma/client';
 
@@ -40,6 +42,11 @@ export async function getItemsForFulfillment(prescriptionId: string): Promise<Pr
  * Forward-only: `partially_fulfilled` may only be applied from `issued`,
  * `fulfilled` only from `issued`/`partially_fulfilled`, so an `expired` or
  * `superseded` order can't be walked backwards into a live state.
+ *
+ * Issue #83: the `fulfilled` transition and its `order.fulfilled` outbox
+ * event commit together, so automatic escrow release happens if and only if
+ * the whole order really reached `fulfilled`. Calling this again after the
+ * row already moved is a no-op and publishes nothing.
  */
 export async function applyFulfillmentStatus(
   prescriptionId: string,
@@ -47,5 +54,16 @@ export async function applyFulfillmentStatus(
 ): Promise<boolean> {
   const allowedFrom: OrderStatus[] =
     status === 'fulfilled' ? ['issued', 'partially_fulfilled'] : ['issued'];
-  return prescriptionsRepo.applyOrderStatusIf(prescriptionId, allowedFrom, status);
+  return prisma.$transaction(async (tx) => {
+    const changed = await prescriptionsRepo.applyOrderStatusIf(
+      prescriptionId,
+      allowedFrom,
+      status,
+      tx,
+    );
+    if (changed && status === 'fulfilled') {
+      await publish(tx, 'order.fulfilled', { orderType: 'prescription', orderId: prescriptionId });
+    }
+    return changed;
+  });
 }

@@ -8,6 +8,7 @@ import { appointmentsRouter } from '../../src/modules/appointments/routes';
 import { appointmentConsultationsRouter, consultationsRouter } from '../../src/modules/consultations/routes';
 import { ordersRouter } from '../../src/modules/orders/routes';
 import { adminOrdersRouter } from '../../src/modules/orders/routes/admin';
+import { labResultsRouter } from '../../src/modules/orders/routes/lab-results';
 import { metricsRouter } from '../../src/modules/metrics/routes';
 import { pharmacyOrdersRouter } from '../../src/modules/pharmacy-orders/routes';
 import { labOrdersRouter } from '../../src/modules/lab-orders/routes';
@@ -36,6 +37,7 @@ const EXPECTED: Array<[string, unknown]> = [
   ['/appointments', appointmentConsultationsRouter],
   ['/intake', intakeRouter],
   ['/orders', ordersRouter],
+  ['/lab-results', labResultsRouter],
   ['/pharmacy-orders', pharmacyOrdersRouter],
   ['/lab-orders', labOrdersRouter],
   ['/admin', adminOrdersRouter],
