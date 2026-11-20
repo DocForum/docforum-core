@@ -152,6 +152,10 @@ describe('consultation close-once guarantee', () => {
   });
 
   it('lets the treating doctor complete the appointment', async () => {
+    await prisma.availabilitySlot.updateMany({
+      where: { appointment: { id: appointmentId } },
+      data: { startTime: new Date(Date.now() - 60000) },
+    });
     const res = await request(app)
       .patch(`/appointments/${appointmentId}/status`)
       .set('Authorization', `Bearer ${owningDoctorToken}`)
