@@ -39,6 +39,8 @@ model PatientProfile {
   // separate flow that nothing creates rows for yet.
   walletLink      PatientWalletLink?
   intakes        IntakeForm[]
+  // Phase 2, issue #63: follow-ups this patient must book.
+  followUpRequests FollowUpRequest[] @relation("FollowUpRequestsAsPatient")
 
   // Phase 8 (issue #45): who viewed this patient's records.
   accessLogs AccessLog[]

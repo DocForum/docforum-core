@@ -28,6 +28,7 @@ model DoctorProfile {
   // they ultimately see the patient or not).
   referringReferrals Referral[]         @relation("ReferralReferringDoctor")
   targetedReferrals  Referral[]         @relation("ReferralTargetDoctor")
+  followUpRequests   FollowUpRequest[]  @relation("FollowUpRequestsAsDoctor")
 
   @@index([verificationStatus])
   // Trigram index for doctor search (similarity() in doctors/repositories);

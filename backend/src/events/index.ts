@@ -6,6 +6,11 @@ const uuid = z.string().uuid();
 
 export const eventPayloadSchemas = {
 	'appointment.booked': z.object({ appointmentId: uuid, patientUserId: uuid }).strict(),
+	// Phase 2, issue #61 — the notification hook point for the async thread.
+	// `recipientUserId` is null for a dependent profile (no login, #42).
+	'consultation.message.created': z
+		.object({ consultationId: uuid, messageId: uuid, senderUserId: uuid, recipientUserId: uuid.nullable() })
+		.strict(),
 } as const;
 
 export type DomainEventType = keyof typeof eventPayloadSchemas;

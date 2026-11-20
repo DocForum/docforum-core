@@ -8,16 +8,24 @@
 // orders module's consultation step) are three addresses for one operation,
 // not three implementations.
 import { Prisma, type ConsultationOutcome } from '@prisma/client';
-import { prisma } from '../../../db/prisma-client';
+import { config } from '../../../config';
+import { prisma, runWithRlsBypassContext } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { decryptField, encryptField } from '../../../utils/field-encryption';
 import * as appointmentsService from '../../appointments/services';
 import * as auditService from '../../audit/services';
 import * as doctorsService from '../../doctors/services';
 import * as patientsService from '../../patients/services';
+import { paginate, type PatientExportSection } from '../../patients/services';
 import * as consultationsRepo from '../repositories';
 import * as referralsService from '../../referrals/services';
 import type { ReferralTargetInput } from '../../referrals/services';
+import { createFollowUpRequestForConsultation } from './follow-ups';
+
+export * from './messages';
+export * from './attachments';
+export * from './follow-ups';
+export * from './sign-off';
 
 export interface ConsultationInput {
   appointmentId: string;
@@ -26,6 +34,11 @@ export interface ConsultationInput {
    * referral slice, matching `POST /consultations`). */
   outcome?: ConsultationOutcome | null;
   notes?: string | null;
+  /** Issue #63: optional suggested window for the follow-up request created
+   * when `outcome` is `follow_up_needed`. Defaults to now → now + the
+   * configured window length. */
+  followUpWindowStart?: Date;
+  followUpWindowEnd?: Date;
 }
 
 /**
@@ -63,6 +76,14 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
   }
 
   const notes = input.notes ?? null;
+  const notesCiphertext = notes === null ? null : (encryptField(notes) ?? null);
+
+  const followUpWindowStart = input.followUpWindowStart ?? new Date();
+  const followUpWindowEnd =
+    input.followUpWindowEnd ??
+    new Date(
+      followUpWindowStart.getTime() + config.consultations.followUpWindowDays * 24 * 60 * 60 * 1000,
+    );
 
   let consultation;
   try {
@@ -70,7 +91,7 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
       const record = await consultationsRepo.createConsultation(tx, {
         appointmentId: input.appointmentId,
         outcome: input.outcome ?? null,
-        notes: notes === null ? null : (encryptField(notes) ?? null),
+        notes: notesCiphertext,
       });
 
       // Phase 8 audit trail (issue #43): the state change and its event commit
@@ -83,6 +104,20 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
         toState: record.outcome,
         metadata: { appointmentId: record.appointmentId },
       });
+
+      // Issue #63: a follow-up outcome produces a bookable request in the
+      // same transaction — the close and the request exist together or not
+      // at all.
+      if (record.outcome === 'follow_up_needed') {
+        await createFollowUpRequestForConsultation(tx, {
+          consultationId: record.id,
+          doctorProfileId: appointment.doctorProfileId,
+          patientProfileId: appointment.patientProfileId,
+          notesCiphertext,
+          windowStart: followUpWindowStart,
+          windowEnd: followUpWindowEnd,
+        });
+      }
 
       return record;
     });
@@ -97,7 +132,7 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
 
   // The caller just wrote these notes, so hand them back in plaintext rather
   // than leaking the stored ciphertext envelope.
-  return { consultation: { ...consultation, notes }, appointment };
+  return { consultation: { ...consultation, notes, addenda: [] }, appointment };
 }
 
 /** Service-to-service read for modules that hang records off a consultation
@@ -135,13 +170,19 @@ export async function getConsultation(userId: string, consultationId: string) {
   if (!consultation) throw new HttpError(404, 'Consultation not found.');
 
   if (consultation.appointment) {
+    const addenda = consultation.addenda.map((addendum) => ({
+      id: addendum.id,
+      authorUserId: addendum.authorUserId,
+      body: decryptField(addendum.body) ?? '',
+      createdAt: addendum.createdAt,
+    }));
     const doctor = await doctorsService.getMyDoctorProfile(userId).catch(() => null);
     if (doctor && doctor.id === consultation.appointment.doctorProfileId) {
-      return { ...consultation, notes: decryptField(consultation.notes) };
+      return { ...consultation, notes: decryptField(consultation.notes), addenda };
     }
     const patient = await patientsService.getMyPatientProfile(userId).catch(() => null);
     if (patient && patient.id === consultation.appointment.patientProfileId) {
-      return { ...consultation, notes: decryptField(consultation.notes) };
+      return { ...consultation, notes: decryptField(consultation.notes), addenda };
     }
   }
   throw new HttpError(403, 'You do not have access to this consultation.');
@@ -161,3 +202,76 @@ export async function createReferrals(
 ) {
   return referralsService.createReferralBatch(userId, consultationId, targets);
 }
+
+/**
+ * Account-deletion retention hold (Phase 8, issue #41, docs/adr/0010): a
+ * patient with a consultation or a follow-up request has clinical records
+ * this module must keep. The appointments hold already covers every
+ * consultation, but the negative dependency is made explicit here so a later
+ * change to appointment retention cannot orphan a note or thread. Runs under
+ * the RLS bypass role because the purge job has no request identity.
+ */
+export async function hasClinicalRecordsForPatient(patientProfileId: string): Promise<boolean> {
+  return runWithRlsBypassContext(async () => {
+    const consultation = await prisma.consultation.findFirst({
+      where: { appointment: { patientProfileId } },
+      select: { id: true },
+    });
+    if (consultation) return true;
+    const followUp = await prisma.followUpRequest.findFirst({
+      where: { patientProfileId },
+      select: { id: true },
+    });
+    return followUp !== null;
+  });
+}
+
+/** This module's contribution to the patient data export (issue #40): the
+ * consultation note, its addenda, the async thread and the follow-up request.
+ * Right of access has to cover PHI this module stores, not just the note. */
+export const consultationsExportSection: PatientExportSection = {
+  name: 'consultations',
+  version: 1,
+  pages(subject, pageSize) {
+    return paginate(
+      pageSize,
+      (cursor, take) => consultationsRepo.findConsultationsPageForPatient(subject.patientProfileId, cursor, take),
+      (rows) =>
+        rows.map((row) => ({
+          id: row.id,
+          appointmentId: row.appointmentId,
+          outcome: row.outcome,
+          notes: decryptField(row.notes) ?? null,
+          signedAt: row.signedAt,
+          createdAt: row.createdAt,
+          addenda: row.addenda.map((addendum) => ({
+            id: addendum.id,
+            body: decryptField(addendum.body) ?? '',
+            createdAt: addendum.createdAt,
+          })),
+          messages: row.messages.map((message) => ({
+            id: message.id,
+            senderRole: message.senderRole,
+            body: decryptField(message.body) ?? '',
+            createdAt: message.createdAt,
+            attachments: message.attachments.map((attachment) => ({
+              id: attachment.id,
+              fileName: attachment.fileName,
+              contentType: attachment.contentType,
+              sizeBytes: attachment.sizeBytes,
+              createdAt: attachment.createdAt,
+            })),
+          })),
+          followUp: row.followUp
+            ? {
+                id: row.followUp.id,
+                windowStart: row.followUp.windowStart,
+                windowEnd: row.followUp.windowEnd,
+                status: row.followUp.status,
+                intakeFormId: row.followUp.intakeFormId,
+              }
+            : null,
+        })),
+    );
+  },
+};

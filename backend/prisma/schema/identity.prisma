@@ -63,6 +63,9 @@ model User {
   // Opposite of AccessLog.accessedByUser.
   accessLogs              AccessLog[]
   notifications           Notification[]
+  // Phase 2, issue #61/#64: clinical thread authorship.
+  consultationMessages    ConsultationMessage[] @relation("ConsultationMessageSender")
+  consultationAddenda     ConsultationAddendum[] @relation("ConsultationAddendumAuthor")
   // Phase 8 (issue #42, docs/adr/0011): dependents this user is guardian of.
   guardianships           Guardianship[]
   sep10Challenges         Sep10Challenge[]

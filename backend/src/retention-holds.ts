@@ -13,6 +13,7 @@ import { hasAppointmentsForPatient } from './modules/appointments/services';
 import { hasAccessLogsForPatient } from './modules/audit/services';
 import { hasOrdersForPatient } from './modules/orders/services';
 import { hasPaymentIntentsForPatient } from './modules/payments/services';
+import { hasClinicalRecordsForPatient } from './modules/consultations/services';
 import { hasReferralsForPatient } from './modules/referrals/services';
 import { hasGuardianshipsAsGuardian, registerRetentionHold, type RetentionHold } from './modules/patients/services';
 
@@ -21,6 +22,7 @@ export const RETENTION_HOLDS: RetentionHold[] = [
   { name: 'payments', holds: hasPaymentIntentsForPatient },
   { name: 'orders', holds: hasOrdersForPatient },
   { name: 'referrals', holds: hasReferralsForPatient },
+  { name: 'consultations', holds: hasClinicalRecordsForPatient },
   { name: 'access_logs', holds: hasAccessLogsForPatient },
   { name: 'guardianships', holds: hasGuardianshipsAsGuardian },
 ];

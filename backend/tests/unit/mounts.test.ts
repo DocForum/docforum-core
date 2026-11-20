@@ -5,7 +5,11 @@ import { adminAuthRouter, authRouter } from '../../src/modules/auth/routes';
 import { doctorsRouter, specialtiesRouter } from '../../src/modules/doctors/routes';
 import { availabilityRouter } from '../../src/modules/availability/routes';
 import { appointmentsRouter } from '../../src/modules/appointments/routes';
-import { appointmentConsultationsRouter, consultationsRouter } from '../../src/modules/consultations/routes';
+import {
+  appointmentConsultationsRouter,
+  consultationsRouter,
+  followUpsRouter,
+} from '../../src/modules/consultations/routes';
 import { ordersRouter } from '../../src/modules/orders/routes';
 import { adminOrdersRouter } from '../../src/modules/orders/routes/admin';
 import { metricsRouter } from '../../src/modules/metrics/routes';
@@ -54,6 +58,7 @@ const EXPECTED: Array<[string, unknown]> = [
   ['/me', meFlagsRouter],
   ['/admin', adminFlagsRouter],
   ['/consultations', consultationsRouter],
+  ['/follow-ups', followUpsRouter],
 ];
 
 describe('module mounts (src/mounts.ts)', () => {
