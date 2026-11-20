@@ -99,19 +99,19 @@ enum WaitlistStatus {
 }
 
 model WaitlistEntry {
-  id                  String   @id @default(uuid())
+  id                  String         @id @default(uuid())
   patientProfileId    String
   doctorProfileId     String?
   specialtyId         String?
-  status              String // pending | on_hold | accepted | expired
+  status              WaitlistStatus @default(pending)
   // Time window during which the patient is willing to accept a slot
   earliestAcceptable  DateTime
   latestAcceptable    DateTime
   // Time-boxed hold: when a slot is offered, it's held for this duration
   holdDurationMinutes Int
   // Audit trail
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   patientProfile       PatientProfile      @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
   doctorProfile        DoctorProfile?      @relation(fields: [doctorProfileId], references: [id], onDelete: SetNull)
@@ -121,7 +121,6 @@ model WaitlistEntry {
   availabilitySlot     AvailabilitySlot?   @relation(fields: [availabilitySlotId], references: [id])
   availabilitySlotId   String?
 
-  @@unique([patientProfileId, doctorProfileId, specialtyId])
   @@index([status])
   @@index([patientProfileId, status])
 }

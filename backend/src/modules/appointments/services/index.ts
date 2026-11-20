@@ -1,6 +1,6 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
-import type { AppointmentStatus, Prisma } from '@prisma/client';
+import { Prisma, type AppointmentStatus } from '@prisma/client';
 import { transitionAppointmentStatus, canFinalizeAppointment } from '../state-machine';
 import * as appointmentsRepo from '../repositories';
 import * as availabilityService from '../../availability/services';
@@ -298,46 +298,37 @@ export async function joinWaitlist(
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
 
-  return prisma.$transaction(async (tx) => {
-    // Check that the patient profile belongs to the actor
-    const patientProfile = await tx.patientProfile.findUnique({
-      where: { id: patientProfileId },
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // Check that the patient profile belongs to the actor
+      const patientProfile = await tx.patientProfile.findUnique({
+        where: { id: patientProfileId },
+      });
+      if (!patientProfile) {
+        throw new HttpError(404, 'Patient profile not found.');
+      }
+
+      // Create the waitlist entry: DB-level partial unique index prevents concurrent duplicates
+      const entry = await tx.waitlistEntry.create({
+        data: {
+          patientProfileId,
+          doctorProfileId: doctorProfileId ?? null,
+          specialtyId: specialtyId ?? null,
+          status: 'pending',
+          earliestAcceptable: earliestAcceptable ?? new Date(),
+          latestAcceptable: latestAcceptable ?? new Date(),
+          holdDurationMinutes: holdDurationMinutes ?? 30, // default 30 min hold
+        },
+      });
+
+      return entry;
     });
-    if (!patientProfile) {
-      throw new HttpError(404, 'Patient profile not found.');
-    }
-
-    // Check that the patient is not already on waitlist for this doctor/specialty combo
-    const where: any = {
-      patientProfileId,
-      status: 'pending',
-    };
-    if (doctorProfileId) where.doctorProfileId = doctorProfileId;
-    if (specialtyId) where.specialtyId = specialtyId;
-
-    const existingEntry = await tx.waitlistEntry.findFirst({
-      where,
-    });
-
-    if (existingEntry) {
+  } catch (err: any) {
+    if ((err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') || err?.code === 'P2002') {
       throw new HttpError(409, 'You are already on the waitlist for this doctor/specialty.');
     }
-
-    // Create the waitlist entry
-    const entry = await tx.waitlistEntry.create({
-      data: {
-        patientProfileId,
-        doctorProfileId,
-        specialtyId,
-        status: 'pending',
-        earliestAcceptable: earliestAcceptable ?? new Date(),
-        latestAcceptable: latestAcceptable ?? new Date(),
-        holdDurationMinutes: holdDurationMinutes ?? 30, // default 30 min hold
-      },
-    });
-
-    return entry;
-  });
+    throw err;
+  }
 }
 
 /**
@@ -357,7 +348,8 @@ export async function leaveWaitlist(
   }
 
   // Verify the entry belongs to this patient
-  if (entry.patientProfileId !== actor.userId) {
+  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  if (entry.patientProfileId !== patientProfile.id) {
     throw new HttpError(403, 'This waitlist entry does not belong to you.');
   }
 
