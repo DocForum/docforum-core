@@ -19,9 +19,17 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: backend/package-lock.json
+          cache-dependency-path: |
+            backend/package-lock.json
+            backend/tools/lint/package-lock.json
 
       - run: npm ci
+
+      # typescript-eslint has no TypeScript 7 support yet (TS 7 ships no
+      # compiler API), so the linter lives in its own package pinned to the
+      # TypeScript 6 compatibility API. See tools/lint/eslint.config.mjs.
+      - name: Install lint toolchain
+        run: npm ci --prefix tools/lint
 
       # Phase 8, issue #47: gate against high/critical advisories in
       # production dependencies (`npm audit --omit=dev --audit-level=high`
@@ -38,6 +46,9 @@ jobs:
         run: npm run i18n:check
 
       - run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
 
       - name: Unit tests
         run: npm run test

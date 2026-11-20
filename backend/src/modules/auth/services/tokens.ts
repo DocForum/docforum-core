@@ -21,6 +21,21 @@ export interface AccessTokenPayload {
   sid?: string;
   /** User.tokenVersion at issue time. Compared at refresh time (Phase 8 #33). */
   tv?: number;
+  /** Phase 8, issue #36: present only on the half-authenticated two-factor
+   * tokens. `verifyAccessToken` refuses any token that carries it, so a
+   * password-only step can never be used as a session. */
+  typ?: MfaTokenType;
+}
+
+/** The two half-authenticated token kinds (issue #36).
+ * - `mfa_pending`: password accepted, waiting for the TOTP/recovery code;
+ *   only `POST /auth/2fa/verify` accepts it.
+ * - `mfa_enrollment`: an admin who must enrol before getting a session;
+ *   only `POST /auth/2fa/setup` and `/enable` accept it. */
+export type MfaTokenType = 'mfa_pending' | 'mfa_enrollment';
+
+export interface MfaTokenPayload extends AccessTokenPayload {
+  typ: MfaTokenType;
 }
 
 /**
@@ -81,7 +96,29 @@ export function signRefreshToken(payload: RefreshTokenPayload): string {
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
-  return verifyWithKeyring<AccessTokenPayload>(config.jwt.accessKeys, token);
+  const payload = verifyWithKeyring<AccessTokenPayload>(config.jwt.accessKeys, token);
+  // Issue #36: a half-authenticated token is signed with the same keyring so
+  // it can be verified without server state, but it is NOT an access token.
+  // Rejecting here keeps every route guarded by `authenticate` safe.
+  if (payload.typ) throw new jwt.JsonWebTokenError('Not an access token.');
+  return payload;
+}
+
+/** Signs the short-lived half-authenticated token (issue #36). */
+export function signMfaToken(payload: MfaTokenPayload): string {
+  return signWithKeyring(
+    config.jwt.accessKeys,
+    payload,
+    `${config.twoFactor.mfaTokenTtlMinutes}m` as NonNullable<jwt.SignOptions['expiresIn']>,
+  );
+}
+
+/** Verifies a half-authenticated token and asserts its kind — an
+ * `mfa_pending` token is useless on the enrolment endpoints and vice versa. */
+export function verifyMfaToken(token: string, expected: MfaTokenType): MfaTokenPayload {
+  const payload = verifyWithKeyring<MfaTokenPayload>(config.jwt.accessKeys, token);
+  if (payload.typ !== expected) throw new jwt.JsonWebTokenError('Wrong two-factor token type.');
+  return payload;
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {

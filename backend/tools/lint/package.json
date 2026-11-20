@@ -1,0 +1,12 @@
+{
+  "name": "docforum-core-lint",
+  "private": true,
+  "description": "Isolated ESLint toolchain. It depends on the TypeScript 6 compatibility API (@typescript/typescript6) because typescript-eslint does not support TypeScript 7 yet (TS 7 ships no compiler API). The application keeps typescript@7 for tsc; this package exists only so `npm run lint` in backend/ can run type-aware rules.",
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "typescript-eslint": "^8.73.0"
+  }
+}

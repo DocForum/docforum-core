@@ -1,5 +1,5 @@
 import { z } from 'zod';
-// @ts-ignore TS1479: @stellar/stellar-sdk types are ESM-only but CJS runtime exports are present
+// @ts-expect-error TS1479: @stellar/stellar-sdk types are ESM-only but CJS runtime exports are present
 import { StrKey } from '@stellar/stellar-sdk';
 
 // Issue #78 — the typed-in address body is GONE. strictObject: a

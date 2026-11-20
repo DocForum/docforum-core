@@ -42,14 +42,29 @@ model Prescription {
 model PrescriptionItem {
   id             String @id @default(uuid())
   prescriptionId String
+  /// Display snapshot taken at issuance. When the item comes from the
+  /// controlled vocabulary this is the catalog row's display name
+  /// (generic name + strength + form); for the explicit "unlisted
+  /// medication" path it is the prescriber's free text. It is stored, not
+  /// joined, so a catalog edit never changes an issued prescription
+  /// (issue #69).
   drugName       String
   dosage         String
   frequency      String
   duration       String
+  /// Controlled-vocabulary link (issue #69). Null means the prescriber used
+  /// the explicit unlisted-medication path, which is then flagged for a
+  /// pharmacist to review (`flaggedForPharmacistReview`).
+  medicationId   String?
+  /// Set when the item was not chosen from the catalog, so a pharmacy can
+  /// see that the drug needs a pharmacist's review before dispensing.
+  flaggedForPharmacistReview Boolean @default(false)
 
   prescription Prescription @relation(fields: [prescriptionId], references: [id])
+  medication   Medication?  @relation(fields: [medicationId], references: [id], onDelete: Restrict)
 
   @@index([prescriptionId])
+  @@index([medicationId])
 }
 
 model LabOrder {

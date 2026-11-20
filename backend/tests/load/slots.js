@@ -75,7 +75,7 @@ export default function () {
         try {
           JSON.parse(body);
           return true;
-        } catch (err) {
+        } catch {
           return false;
         }
       },

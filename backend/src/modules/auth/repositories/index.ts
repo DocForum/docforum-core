@@ -288,6 +288,92 @@ export function consumePasswordResetToken(input: {
   });
 }
 
+// --- TOTP two-factor authentication (Phase 8, issue #36) -----------------
+// The secret is stored encrypted by the service (field-encryption, issue
+// #46); these functions never decrypt it, so a repository dump has no usable
+// secret. Recovery codes are stored as SHA-256 hashes only.
+
+export function setPendingTotpSecret(userId: string, encryptedSecret: string): Promise<boolean> {
+  return prisma.user
+    .updateMany({
+      where: { id: userId, totpEnabledAt: null, deletedAt: null },
+      data: { totpSecret: encryptedSecret },
+    })
+    .then((result) => result.count === 1);
+}
+
+/** Enables 2FA only from the "secret stored, not yet enabled" state, so a
+ * concurrent second enable call can't re-issue recovery codes over a live
+ * enrolment. Returns whether this call enabled it. */
+export function enableTotp(userId: string): Promise<boolean> {
+  return prisma.user
+    .updateMany({
+      where: { id: userId, totpEnabledAt: null, totpSecret: { not: null }, deletedAt: null },
+      data: { totpEnabledAt: new Date() },
+    })
+    .then((result) => result.count === 1);
+}
+
+/**
+ * Replay guard (issue #36): claims one TOTP time step for a user.
+ *
+ * A single conditional UPDATE — the step must be greater than the last one
+ * accepted. Two concurrent submissions of the same code therefore produce
+ * exactly one `count === 1`; accepting the ±1-step skew window never lets a
+ * code be replayed inside it. The same statement also guards a replayed
+ * *recovery* code, which the caller claims through `consumeRecoveryCode`
+ * instead.
+ */
+export function claimTotpStep(userId: string, step: number): Promise<boolean> {
+  return prisma.user
+    .updateMany({
+      where: {
+        id: userId,
+        OR: [{ totpLastUsedStep: null }, { totpLastUsedStep: { lt: step } }],
+      },
+      data: { totpLastUsedStep: step },
+    })
+    .then((result) => result.count === 1);
+}
+
+export function replaceRecoveryCodes(userId: string, codeHashes: string[]) {
+  return prisma.$transaction(async (tx) => {
+    // Regenerating replaces the whole set: an old, remembered code must not
+    // keep working after a re-enrolment.
+    await tx.twoFactorRecoveryCode.deleteMany({ where: { userId } });
+    await tx.twoFactorRecoveryCode.createMany({
+      data: codeHashes.map((codeHash) => ({ userId, codeHash })),
+    });
+  });
+}
+
+/** Single-use: matched by (user, hash) and only while unused. Returns whether
+ * this call consumed it. */
+export function consumeRecoveryCode(userId: string, codeHash: string): Promise<boolean> {
+  return prisma.twoFactorRecoveryCode
+    .updateMany({
+      where: { userId, codeHash, usedAt: null },
+      data: { usedAt: new Date() },
+    })
+    .then((result) => result.count === 1);
+}
+
+export async function disableTotp(userId: string, clearedSecret: null): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.user.updateMany({
+      where: { id: userId, totpEnabledAt: { not: null } },
+      data: { totpSecret: clearedSecret, totpEnabledAt: null, totpLastUsedStep: null },
+    });
+    if (result.count !== 1) return false;
+    await tx.twoFactorRecoveryCode.deleteMany({ where: { userId } });
+    return true;
+  });
+}
+
+export function countUnusedRecoveryCodes(userId: string): Promise<number> {
+  return prisma.twoFactorRecoveryCode.count({ where: { userId, usedAt: null } });
+}
+
 // --- Account deletion (Phase 8, issue #41, docs/adr/0010) ----------------
 // Called inside the patients module's deletion transaction, so every write
 // here takes the caller's transaction client.
