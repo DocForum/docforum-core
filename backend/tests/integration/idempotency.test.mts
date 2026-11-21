@@ -161,6 +161,7 @@ describe('Idempotency-Key replay protection', () => {
 
     const doctorUser = await signup('doctor', 'idem-doctor');
     doctor = { ...doctorUser, profileId: (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: doctorUser.userId } })).id };
+    await prisma.doctorProfile.update({ where: { id: doctor.profileId }, data: { verificationStatus: 'verified' } });
     patients = await Promise.all(Array.from({ length: 3 }, (_, i) => signup('patient', `idem-patient-${i}`)));
     patientProfileId = (await prisma.patientProfile.findFirstOrThrow({ where: { userId: patients[0]!.userId } })).id;
 

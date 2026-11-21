@@ -129,6 +129,7 @@ describe('guardian and dependent profiles', () => {
     const doctor = await signup('doctor', 'guardian-doctor');
     doctorToken = doctor.token;
     doctorProfileId = (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: doctor.userId } })).id;
+    await prisma.doctorProfile.update({ where: { id: doctorProfileId }, data: { verificationStatus: 'verified' } });
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const generated = await request(app)
       .post(`/availability/doctors/${doctorProfileId}/slots/generate`)

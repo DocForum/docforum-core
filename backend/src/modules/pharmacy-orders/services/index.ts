@@ -23,6 +23,7 @@ import { storageService, type UploadAttachmentOptions } from '../../../utils/sto
 import { computeConfirmedSignal, formatOrderResponse } from '../../../utils/order-utils';
 import { record as recordAudit, type AuditActor } from '../../audit/services';
 import * as repo from '../repositories';
+import * as facilitiesService from '../../facilities/services';
 import * as prescriptionsService from '../../prescriptions/services';
 import * as labOrdersService from '../../lab-orders/services';
 
@@ -123,8 +124,7 @@ export async function createFulfillment(
   if (requester.role !== 'patient' && requester.role !== 'admin') {
     throw new HttpError(403, 'You do not have permission to perform this action.');
   }
-  const facility = await repo.findFacilityProfileById(input.facilityId);
-  if (!facility) throw new HttpError(404, 'Facility not found.');
+  await facilitiesService.assertFacilityActive(input.facilityId);
 
   const orderItems = await getOrderItems(input.orderType, input.orderId);
   const requestedIds = input.orderItemIds ?? orderItems.map((item) => item.id);
