@@ -308,6 +308,22 @@ export function consumeSep10Challenge(nonce: string, consumedAt: Date, db: Db = 
   });
 }
 
+/** Retention prune (issue #276): deletes up to `batchSize` SEP-10 challenge
+ * rows that expired or were consumed before `cutoff`. An unexpired,
+ * unconsumed challenge never matches. */
+export function pruneExpiredSep10Challenges(options: { cutoff: Date; batchSize: number }) {
+  return prisma.$executeRaw`
+    DELETE FROM "Sep10Challenge"
+    WHERE "id" IN (
+      SELECT "id" FROM "Sep10Challenge"
+      WHERE "expiresAt" < ${options.cutoff}
+         OR ("consumedAt" IS NOT NULL AND "consumedAt" < ${options.cutoff})
+      ORDER BY "expiresAt" ASC
+      LIMIT ${options.batchSize}
+    )
+  `;
+}
+
 /** Runs `fn` inside ONE interactive transaction with a generous timeout
  * (the wallet-link flow performs a Horizon lookup inside it). Single
  * place the service layer opens transactions, so the Prisma client

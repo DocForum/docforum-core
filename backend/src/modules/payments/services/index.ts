@@ -37,6 +37,7 @@ import { assertWalletLinkFundingAllowed } from './wallet-link';
 // module's token/throttle re-exports.
 export {
   createSep10Challenge,
+  pruneExpiredSep10Challenges,
   verifySep10Challenge,
   resetSep10AccountFetcher,
   setSep10AccountFetcher,
