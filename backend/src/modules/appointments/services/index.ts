@@ -1,5 +1,6 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
+import { config } from '../../../config';
 import { Prisma, type AppointmentStatus } from '@prisma/client';
 import { transitionAppointmentStatus, canFinalizeAppointment } from '../state-machine';
 import * as appointmentsRepo from '../repositories';
@@ -204,90 +205,19 @@ export async function rescheduleSlot(
  * Cancels an appointment atomically: releases the slot back to `open` and
  * marks the appointment as cancelled. Includes cutoff window logic.
  *
- * Requirements from issue #56:
- * - Patient can cancel an appointment
- * - Before cutoff (2h before slot start): slot releases to `open`
+ * Requirements from issue #56 and #292:
+ * - Single correct cancellation path routing through applyScheduledTransition
+ * - Before cutoff (config.appointments.cutoffHours): slot releases to `open`
  * - After cutoff: slot stays booked, appointment marked `late_cancelled`
- * - Concurrency: slot release is conditional on status = `booked`
+ * - Conditional on status = `scheduled`
  */
 export async function cancelAppointment(
   actor: auditService.AuditActor,
   appointmentId: string,
-  reason: 'patient' | 'doctor' = 'patient',
+  _reason: 'patient' | 'doctor' = 'patient',
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const userId = actor.userId;
-
-  return prisma.$transaction(async (tx) => {
-    // First, get the existing appointment to find its current slot
-    const existingAppointment = await appointmentsRepo.findAppointmentById(tx, appointmentId);
-    if (!existingAppointment) {
-      throw new HttpError(404, 'Appointment not found.');
-    }
-
-    const patientProfile = await patientsService.resolveActingProfile(userId, existingAppointment.patientProfileId);
-
-    // Check that the caller is the patient
-    if (existingAppointment.patientProfileId !== patientProfile.id) {
-      throw new HttpError(403, 'Only the patient can cancel this appointment.');
-    }
-    const currentSlotId = existingAppointment.availabilitySlotId;
-    if (!currentSlotId) {
-      throw new HttpError(409, 'Appointment no longer has an active slot.');
-    }
-
-    // Check cutoff: no cancellation within 2 hours of slot start
-    const slot = await availabilityService.getSlot(tx, currentSlotId);
-    if (!slot) {
-      throw new HttpError(404, 'Original slot not found.');
-    }
-
-    const slotStart = slot.startTime;
-    const now = new Date();
-    const cutoffMs = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
-
-    // Determine the new status based on cutoff
-    let newStatus: string;
-    let slotStatus: string;
-
-    if (slotStart.getTime() - now.getTime() > cutoffMs) {
-      // Slot hasn't started yet and we're outside the cutoff window (more than 2h before start)
-      newStatus = 'cancelled';
-      slotStatus = 'open';
-    } else {
-      // Past cutoff: slot stays booked, appointment marked late-cancelled
-      newStatus = 'late_cancelled';
-      slotStatus = 'booked';
-    }
-
-    // Update the appointment status
-    const updatedAppointment = await appointmentsRepo.updateAppointment(tx, appointmentId, {
-      status: newStatus as any,
-    });
-
-    // Release the old slot only if within cutoff window
-    if (slotStatus === 'open') {
-      await tx.availabilitySlot.updateMany({
-        where: { id: currentSlotId, status: 'booked' },
-        data: { status: 'open' },
-      });
-    }
-
-    await auditService.record(tx, actor, {
-      entityType: 'Appointment',
-      entityId: updatedAppointment.id,
-      action: 'appointment.cancelled',
-      fromState: existingAppointment.status,
-      toState: newStatus,
-      metadata: {
-        reason,
-        slotId: currentSlotId,
-        patientProfileId: patientProfile.id,
-      },
-    });
-
-    return updatedAppointment;
-  });
+  return cancelByPatient(actor.userId, appointmentId, actor);
 }
 
 /**
@@ -798,7 +728,7 @@ async function applyScheduledTransition(
     await referralsService.applyAppointmentOutcome(tx, {
       appointmentId: appointment.id,
       referralId: appointment.referralId,
-      status: newStatus as 'completed' | 'cancelled' | 'no_show',
+      status: newStatus as 'completed' | 'cancelled' | 'late_cancelled' | 'no_show',
     });
   }
 }
@@ -852,7 +782,11 @@ export async function updateStatusByDoctor(
  * completed/no_show — those are clinical judgements for the doctor), and
  * only from `scheduled`.
  */
-export async function cancelByPatient(userId: string, appointmentId: string, actor?: auditService.AuditActor) {
+export async function cancelByPatient(
+  userId: string,
+  appointmentId: string,
+  actor?: auditService.AuditActor,
+) {
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
   if (!appointment) throw new HttpError(404, 'Appointment not found.');
   const patientProfile = await patientsService.resolveActingProfile(userId, appointment.patientProfileId);
@@ -863,22 +797,37 @@ export async function cancelByPatient(userId: string, appointmentId: string, act
     throw new HttpError(409, 'Only a scheduled appointment can be cancelled.');
   }
 
+  // Determine status (cancelled vs late_cancelled) based on cutoff config
+  let newStatus: AppointmentStatus = 'cancelled';
+  if (appointment.availabilitySlotId) {
+    const slot = await availabilityService.getSlot(prisma, appointment.availabilitySlotId);
+    if (slot) {
+      const cutoffMs = config.appointments.cutoffHours * 60 * 60 * 1000;
+      const now = new Date();
+      if (slot.startTime.getTime() - now.getTime() < cutoffMs) {
+        newStatus = 'late_cancelled';
+      }
+    }
+  }
+
   return prisma.$transaction(async (tx) => {
-    await applyScheduledTransition(tx, appointment, 'cancelled');
-    if (actor) {
+    await applyScheduledTransition(tx, appointment, newStatus);
+    const updated = await appointmentsRepo.findAppointmentById(tx, appointmentId);
+    if (actor && updated) {
       await auditService.record(tx, actor, {
         entityType: 'Appointment',
-        entityId: appointment.id,
+        entityId: updated.id,
         action: 'appointment.cancelled',
         fromState: appointment.status,
-        toState: 'cancelled',
+        toState: newStatus,
         metadata: {
           reason: 'patient',
           patientProfileId: patientProfile.id,
+          slotId: appointment.availabilitySlotId,
         },
       });
     }
-    return appointmentsRepo.findAppointmentById(tx, appointmentId);
+    return updated;
   });
 }
 
