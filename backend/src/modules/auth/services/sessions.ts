@@ -8,6 +8,9 @@
 // operation that mints new tokens.
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
+import { prisma } from '../../../db/prisma-client';
+import * as auditService from '../../audit/services';
+import type { AuditActor } from '../../audit/services';
 import {
   createRefreshSession,
   findRefreshSessionById,
@@ -99,8 +102,24 @@ export async function revokeOtherSessions(input: {
   return result.count;
 }
 
-/** Admin escape hatch: revoke every session for a user (issue #38). */
-export async function revokeAllUserSessions(userId: string): Promise<number> {
-  const result = await revokeRefreshSessionsForUser({ userId });
-  return result.count;
+/** Admin escape hatch: revoke every session for a user (issue #38).
+ * Writes an AuditEvent in the transaction if any sessions were revoked. */
+export async function revokeAllUserSessions(userId: string, actor?: AuditActor): Promise<number> {
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.refreshSession.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    if (result.count > 0 && actor) {
+      await auditService.record(tx, actor, {
+        entityType: 'User',
+        entityId: userId,
+        action: 'user.sessions_revoked',
+        fromState: null,
+        toState: null,
+        metadata: { clearedCount: result.count },
+      });
+    }
+    return result.count;
+  });
 }

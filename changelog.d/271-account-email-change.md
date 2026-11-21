@@ -1,0 +1,2 @@
+Phase 8: change account email with verification of the new address ([issue #271](https://github.com/DocForum/docforum-core/issues/271)).
+Added `POST /auth/change-email/request` and `POST /auth/change-email/confirm` endpoints backed by expiring `EmailChangeToken` model. Re-verifies password with login throttle integration, sends confirmation to the new email and notice to the old email, swaps the address atomically, and records `email_change.requested` and `email_change.confirmed` AuditEvents.

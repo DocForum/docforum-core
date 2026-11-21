@@ -322,6 +322,110 @@ describe('optimistic concurrency (version + If-Match)', () => {
     });
   });
 
+  describe('patient profile — GET /patients/me and PATCH /patients/me (issue #272)', () => {
+    it('publishes a strong version ETag on the individual resource read', async () => {
+      const res = await request(app).get('/patients/me').set(asUser(patient));
+      expect(res.status).toBe(200);
+      expect(res.body.version).toBe(1);
+      expect(res.headers.etag).toBe('"1"');
+      expect(res.body.fullName).toBe('cc-patient Fullname');
+    });
+
+    it('refuses a write with no If-Match and returns 428', async () => {
+      const res = await request(app)
+        .patch('/patients/me')
+        .set(asUser(patient))
+        .send({ fullName: 'No Precondition' });
+      expect(res.status).toBe(428);
+      expect(res.body.code).toBe('IF_MATCH_REQUIRED');
+    });
+
+    it('refuses a weak/garbage validator with 400', async () => {
+      const res = await request(app)
+        .patch('/patients/me')
+        .set(asUser(patient))
+        .set('If-Match', 'W/"1"')
+        .send({ fullName: 'Weak Validator' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVALID_IF_MATCH');
+    });
+
+    it('refuses a stale version with 412', async () => {
+      const res = await request(app)
+        .patch('/patients/me')
+        .set(asUser(patient))
+        .set('If-Match', '"999"')
+        .send({ fullName: 'Stale Version' });
+      expect(res.status).toBe(412);
+      expect(res.body.code).toBe('VERSION_CONFLICT');
+    });
+
+    it('updates fullName and dateOfBirth with matching If-Match, bumping version and ETag', async () => {
+      const readRes = await request(app).get('/patients/me').set(asUser(patient));
+      expect(readRes.status).toBe(200);
+      const etag = readRes.headers.etag as string;
+
+      const patchRes = await request(app)
+        .patch('/patients/me')
+        .set(asUser(patient))
+        .set('If-Match', etag)
+        .send({ fullName: 'Updated Patient Name', dateOfBirth: '1995-05-15' });
+
+      expect(patchRes.status).toBe(200);
+      expect(patchRes.body.fullName).toBe('Updated Patient Name');
+      expect(patchRes.body.dateOfBirth).toBe('1995-05-15T00:00:00.000Z');
+      expect(patchRes.body.version).toBe(readRes.body.version + 1);
+      expect(patchRes.headers.etag).toBe(`"${readRes.body.version + 1}"`);
+    });
+
+    it('lost update: two concurrent writes on the same version — exactly one succeeds, one gets 412', async () => {
+      const readRes = await request(app).get('/patients/me').set(asUser(patient));
+      const etag = readRes.headers.etag as string;
+
+      const [res1, res2] = await Promise.all([
+        request(app).patch('/patients/me').set(asUser(patient)).set('If-Match', etag).send({ fullName: 'Concurrent A' }),
+        request(app).patch('/patients/me').set(asUser(patient)).set('If-Match', etag).send({ fullName: 'Concurrent B' }),
+      ]);
+
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual([200, 412]);
+
+      const conflictRes = res1.status === 412 ? res1 : res2;
+      expect(conflictRes.body.code).toBe('VERSION_CONFLICT');
+    });
+
+    it('refuses non-patient roles (403)', async () => {
+      const getRes = await request(app).get('/patients/me').set(asUser(doctor));
+      expect(getRes.status).toBe(403);
+
+      const patchRes = await request(app)
+        .patch('/patients/me')
+        .set(asUser(doctor))
+        .set('If-Match', '"1"')
+        .send({ fullName: 'Doctor Not Patient' });
+      expect(patchRes.status).toBe(403);
+    });
+
+    it('refuses an anonymised profile (404)', async () => {
+      const deletedPatient = await signup('patient', 'cc-deleted-patient');
+      const profile = await prisma.patientProfile.findUniqueOrThrow({ where: { userId: deletedPatient.userId } });
+      await prisma.patientProfile.update({
+        where: { id: profile.id },
+        data: { anonymizedAt: new Date() },
+      });
+
+      const getRes = await request(app).get('/patients/me').set(asUser(deletedPatient));
+      expect(getRes.status).toBe(404);
+
+      const patchRes = await request(app)
+        .patch('/patients/me')
+        .set(asUser(deletedPatient))
+        .set('If-Match', '"1"')
+        .send({ fullName: 'Should Fail' });
+      expect(patchRes.status).toBe(404);
+    });
+  });
+
   describe('schema', () => {
     it('puts a version column on the mutable models and nothing else', async () => {
       const rows = await prisma.$queryRaw<{ table_name: string }[]>`

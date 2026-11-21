@@ -311,6 +311,194 @@ describe('admin account lifecycle', () => {
     expect(stillActive.deactivatedAt).toBeNull();
   });
 
+  it('holds the last active admin guard under concurrent deactivations (issue #274)', async () => {
+    // Bootstrap two fresh admins for the concurrency test
+    const emailA = `concurrent-admin-a-${runId}@example.com`;
+    const emailB = `concurrent-admin-b-${runId}@example.com`;
+
+    expect(runCreateAdmin([`--email=${emailA}`, '--force'], `${PASSWORD}\n`).status).toBe(0);
+    expect(runCreateAdmin([`--email=${emailB}`, '--force'], `${PASSWORD}\n`).status).toBe(0);
+
+    const adminA = await prisma.user.findUniqueOrThrow({ where: { email: emailA } });
+    const adminB = await prisma.user.findUniqueOrThrow({ where: { email: emailB } });
+
+    // Deactivate any other active admins so exactly Admin A and Admin B are active
+    await prisma.user.updateMany({
+      where: {
+        role: 'admin',
+        id: { notIn: [adminA.id, adminB.id] },
+        deactivatedAt: null,
+      },
+      data: { deactivatedAt: new Date() },
+    });
+
+    const activeBefore = await prisma.user.count({ where: { role: 'admin', deactivatedAt: null } });
+    expect(activeBefore).toBe(2);
+
+    const tokenA = (await loginAs(emailA)).accessToken;
+    const tokenB = (await loginAs(emailB)).accessToken;
+
+    try {
+      // Fire cross-deactivations concurrently: Admin A tries to deactivate B, Admin B tries to deactivate A
+      const [resA, resB] = await Promise.all([
+        request(app).patch(`/admin/users/${adminB.id}/deactivate`).set('Authorization', `Bearer ${tokenA}`),
+        request(app).patch(`/admin/users/${adminA.id}/deactivate`).set('Authorization', `Bearer ${tokenB}`),
+      ]);
+
+      // Exactly one must succeed (200), and the other is refused (409 last admin or 401 revoked session)
+      expect([resA.status, resB.status]).toContain(200);
+      const refusedStatus = resA.status === 200 ? resB.status : resA.status;
+      expect([409, 401]).toContain(refusedStatus);
+
+      const activeAfter = await prisma.user.count({ where: { role: 'admin', deactivatedAt: null } });
+      expect(activeAfter).toBe(1);
+
+      if (resA.status === 409 || resB.status === 409) {
+        const errRes = resA.status === 409 ? resA : resB;
+        expect(errRes.body.message).toMatch(/last active admin/i);
+      }
+    } finally {
+      // Restore bootstrap admin and obtain a fresh token for subsequent tests
+      await prisma.user.update({
+        where: { email: bootstrapAdminEmail },
+        data: { deactivatedAt: null, sessionsInvalidatedAt: null },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      bootstrapAdminToken = (await loginAs(bootstrapAdminEmail)).accessToken;
+    }
+  });
+
+  it('records AuditEvents for admin account actions and no events on idempotent paths (issue #273)', async () => {
+    // 1. Admin invite creation
+    const inviteEmail = `audit-invite-${runId}@example.com`;
+    const inviteRes = await request(app)
+      .post('/admin/invites')
+      .set('Authorization', `Bearer ${bootstrapAdminToken}`)
+      .send({ email: inviteEmail });
+    expect(inviteRes.status).toBe(201);
+
+    const inviteEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { action: 'admin_invite.created', entityId: inviteRes.body.id as string },
+    });
+    expect(inviteEvent.entityType).toBe('AdminInvite');
+    expect(inviteEvent.actorRole).toBe('admin');
+    // Ensure no raw invite token or sensitive data in metadata
+    const metadataStr = JSON.stringify(inviteEvent.metadata ?? {});
+    expect(metadataStr).not.toContain(inviteRes.body.token);
+
+    // 2. User deactivation & reactivation (with idempotent no-op check)
+    const patient = await signupPatient('audit-lifecycle');
+    const patientRow = await prisma.user.findUniqueOrThrow({ where: { email: patient.email } });
+
+    // First deactivation -> writes AuditEvent
+    const deact1 = await request(app)
+      .patch(`/admin/users/${patientRow.id}/deactivate`)
+      .set('Authorization', `Bearer ${bootstrapAdminToken}`);
+    expect(deact1.status).toBe(200);
+
+    const deactEvents1 = await prisma.auditEvent.findMany({
+      where: { action: 'user.deactivated', entityId: patientRow.id },
+    });
+    expect(deactEvents1.length).toBe(1);
+    expect(deactEvents1[0]!.fromState).toBe('active');
+    expect(deactEvents1[0]!.toState).toBe('deactivated');
+
+    // Second deactivation (idempotent no-op) -> NO new AuditEvent
+    const deact2 = await request(app)
+      .patch(`/admin/users/${patientRow.id}/deactivate`)
+      .set('Authorization', `Bearer ${bootstrapAdminToken}`);
+    expect(deact2.status).toBe(200);
+
+    const deactEvents2 = await prisma.auditEvent.findMany({
+      where: { action: 'user.deactivated', entityId: patientRow.id },
+    });
+    expect(deactEvents2.length).toBe(1);
+
+    // First reactivation -> writes AuditEvent
+    const react1 = await request(app)
+      .patch(`/admin/users/${patientRow.id}/reactivate`)
+      .set('Authorization', `Bearer ${bootstrapAdminToken}`);
+    expect(react1.status).toBe(200);
+
+    const reactEvents1 = await prisma.auditEvent.findMany({
+      where: { action: 'user.reactivated', entityId: patientRow.id },
+    });
+    expect(reactEvents1.length).toBe(1);
+    expect(reactEvents1[0]!.fromState).toBe('deactivated');
+    expect(reactEvents1[0]!.toState).toBe('active');
+
+    // Second reactivation (idempotent no-op) -> NO new AuditEvent
+    const react2 = await request(app)
+      .patch(`/admin/users/${patientRow.id}/reactivate`)
+      .set('Authorization', `Bearer ${bootstrapAdminToken}`);
+    expect(react2.status).toBe(200);
+
+    const reactEvents2 = await prisma.auditEvent.findMany({
+      where: { action: 'user.reactivated', entityId: patientRow.id },
+    });
+    expect(reactEvents2.length).toBe(1);
+
+    // 3. Admin session revocation
+    // Create a refresh session
+    await prisma.refreshSession.create({
+      data: { userId: patientRow.id },
+    });
+
+    const revokeRes1 = await request(app)
+      .delete(`/admin/users/${patientRow.id}/sessions`)
+      .set('Authorization', `Bearer ${bootstrapAdminToken}`);
+    expect(revokeRes1.status).toBe(200);
+    expect(revokeRes1.body.revoked).toBeGreaterThanOrEqual(1);
+
+    const sessionEvents1 = await prisma.auditEvent.findMany({
+      where: { action: 'user.sessions_revoked', entityId: patientRow.id },
+    });
+    expect(sessionEvents1.length).toBe(1);
+
+    // Revoking again when 0 active sessions -> idempotent no-op, writes no new event
+    const revokeRes2 = await request(app)
+      .delete(`/admin/users/${patientRow.id}/sessions`)
+      .set('Authorization', `Bearer ${bootstrapAdminToken}`);
+    expect(revokeRes2.status).toBe(200);
+    expect(revokeRes2.body.revoked).toBe(0);
+
+    const sessionEvents2 = await prisma.auditEvent.findMany({
+      where: { action: 'user.sessions_revoked', entityId: patientRow.id },
+    });
+    expect(sessionEvents2.length).toBe(1);
+
+    // 4. Admin login-throttle clear
+    const throttleEmail = `throttled-${runId}@example.com`;
+    await prisma.loginAttempt.create({
+      data: { scope: 'email', key: throttleEmail, failedCount: 5, lockUntil: new Date(Date.now() + 60_000) },
+    });
+
+    const clearRes1 = await request(app)
+      .post('/auth/login-attempts/clear')
+      .set('Authorization', `Bearer ${bootstrapAdminToken}`)
+      .send({ email: throttleEmail });
+    expect(clearRes1.status).toBe(200);
+    expect(clearRes1.body.cleared).toBe(1);
+
+    const clearEvents1 = await prisma.auditEvent.findMany({
+      where: { action: 'login_throttle.cleared', entityId: throttleEmail },
+    });
+    expect(clearEvents1.length).toBe(1);
+
+    // Clearing again when 0 buckets -> idempotent no-op, writes no new event
+    const clearRes2 = await request(app)
+      .post('/auth/login-attempts/clear')
+      .set('Authorization', `Bearer ${bootstrapAdminToken}`)
+      .send({ email: throttleEmail });
+    expect(clearRes2.status).toBe(200);
+    expect(clearRes2.body.cleared).toBe(0);
+
+    const clearEvents2 = await prisma.auditEvent.findMany({
+      where: { action: 'login_throttle.cleared', entityId: throttleEmail },
+    });
+    expect(clearEvents2.length).toBe(1);
+  });
+
   it('deactivation deletes no clinical or payment records', async () => {
     // A booked appointment is the strongest thing this phase can check —
     // there are no Prescription/LabOrder/PaymentIntent rows to protect yet.
