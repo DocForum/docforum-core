@@ -143,6 +143,7 @@ describe('AuditEvent foundation', () => {
 
     const doctorUser = await signup('doctor', 'audit-doctor');
     doctor = { ...doctorUser, profileId: (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: doctorUser.userId } })).id };
+    await prisma.doctorProfile.update({ where: { id: doctor.profileId }, data: { verificationStatus: 'verified' } });
     patients = await Promise.all(Array.from({ length: 5 }, (_, i) => signup('patient', `audit-patient-${i}`)));
 
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);

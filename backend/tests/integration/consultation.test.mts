@@ -112,6 +112,7 @@ describe('consultation close-once guarantee', () => {
     const doctorMe = await request(app).get('/doctors/me').set('Authorization', `Bearer ${owningDoctorToken}`);
     expect(doctorMe.status).toBe(200);
     const doctorProfileId = doctorMe.body.id as string;
+    await prisma.doctorProfile.update({ where: { id: doctorProfileId }, data: { verificationStatus: 'verified' } });
 
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const generate = await request(app)

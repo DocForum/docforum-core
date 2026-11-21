@@ -130,6 +130,7 @@ describe('account deletion with clinical-record retention', () => {
     const doctor = await signup('doctor', 'deletion-doctor');
     doctorToken = doctor.token;
     doctorProfileId = (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: doctor.userId } })).id;
+    await prisma.doctorProfile.update({ where: { id: doctorProfileId }, data: { verificationStatus: 'verified' } });
 
     alice = await signupPatient('alice');
     bob = await signupPatient('bob');

@@ -40,8 +40,8 @@ describe('transactional outbox', () => {
     return prisma.availabilitySlot.create({
       data: {
         doctorProfileId,
-        startTime: new Date(Date.now() + (60 + slotSequence) * 60 * 1000),
-        endTime: new Date(Date.now() + (90 + slotSequence) * 60 * 1000),
+        startTime: new Date(Date.now() + (60 + slotSequence * 60) * 60 * 1000),
+        endTime: new Date(Date.now() + (60 + slotSequence * 60 + 30) * 60 * 1000),
       },
     });
   }
@@ -72,7 +72,7 @@ describe('transactional outbox', () => {
     const doctorUser = await prisma.user.create({
       data: { email: `outbox-doctor-${runId}@example.com`, passwordHash: 'unused', role: 'doctor' },
     });
-    doctorProfileId = (await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: 'Outbox Doctor', timeZone: 'UTC' } })).id;
+    doctorProfileId = (await prisma.doctorProfile.create({ data: { userId: doctorUser.id, fullName: 'Outbox Doctor', timeZone: 'UTC', verificationStatus: 'verified' } })).id;
 
     const admin = await prisma.user.create({
       data: { email: `outbox-admin-${runId}@example.com`, passwordHash: 'unused', role: 'admin' },
@@ -106,20 +106,23 @@ describe('transactional outbox', () => {
     await prisma.$executeRawUnsafe(
       'CREATE TRIGGER fail_outbox_insert BEFORE INSERT ON "OutboxEvent" FOR EACH ROW EXECUTE FUNCTION fail_outbox_insert()',
     );
-    const rollbackSlot = await createSlot();
-    const eventCountBeforeRollback = await prisma.outboxEvent.count();
-    await expect(
-      appointments.bookSlot(
-        { userId: patientUserId, role: 'patient', requestId: `outbox-rollback-${runId}` },
-        rollbackSlot.id,
-      ),
-    ).rejects.toThrow();
-    await prisma.$executeRawUnsafe('DROP TRIGGER fail_outbox_insert ON "OutboxEvent"');
-    await prisma.$executeRawUnsafe('DROP FUNCTION fail_outbox_insert()');
+    try {
+      const rollbackSlot = await createSlot();
+      const eventCountBeforeRollback = await prisma.outboxEvent.count();
+      await expect(
+        appointments.bookSlot(
+          { userId: patientUserId, role: 'patient', requestId: `outbox-rollback-${runId}` },
+          rollbackSlot.id,
+        ),
+      ).rejects.toThrow();
 
-    expect(await prisma.appointment.count({ where: { availabilitySlotId: rollbackSlot.id } })).toBe(0);
-    expect((await prisma.availabilitySlot.findUniqueOrThrow({ where: { id: rollbackSlot.id } })).status).toBe('open');
-    expect(await prisma.outboxEvent.count()).toBe(eventCountBeforeRollback);
+      expect(await prisma.appointment.count({ where: { availabilitySlotId: rollbackSlot.id } })).toBe(0);
+      expect((await prisma.availabilitySlot.findUniqueOrThrow({ where: { id: rollbackSlot.id } })).status).toBe('open');
+      expect(await prisma.outboxEvent.count()).toBe(eventCountBeforeRollback);
+    } finally {
+      await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_outbox_insert ON "OutboxEvent"');
+      await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS fail_outbox_insert()');
+    }
   });
 
   it('delivers a persisted event after delayed dispatch and deduplicates notification delivery', async () => {

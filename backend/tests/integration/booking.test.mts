@@ -71,6 +71,7 @@ async function signupPatient(app: ReturnType<typeof import('../../src/app.js').c
 describe('booking concurrency', () => {
   let slotId: string;
   let patientTokens: string[];
+  let winningPatientToken: string;
   let app: ReturnType<typeof import('../../src/app.js').createApp>;
   let prisma: typeof import('../../src/db/prisma-client.js').prisma;
 
@@ -149,6 +150,9 @@ describe('booking concurrency', () => {
 
     expect(succeeded).toHaveLength(1);
     expect(conflicted).toHaveLength(CONCURRENT_PATIENTS - 1);
+    const winnerIndex = responses.findIndex((res) => res.status === 201);
+    expect(winnerIndex).toBeGreaterThanOrEqual(0);
+    winningPatientToken = patientTokens[winnerIndex];
 
     // Not just the HTTP layer — the database must agree there's exactly
     // one Appointment for this slot, and the slot itself is `booked`.
@@ -240,7 +244,7 @@ describe('booking concurrency', () => {
 
     const rescheduleRes = await request(app)
       .post(`/appointments/${apptId}/reschedule`)
-      .set('Authorization', `Bearer ${patientTokens[0]}`)
+      .set('Authorization', `Bearer ${winningPatientToken}`)
       .send({ newSlotId: pastSlot.id });
     expect(rescheduleRes.status).toBe(409);
     expect(rescheduleRes.body.message).toMatch(/no longer bookable/i);
@@ -290,7 +294,7 @@ describe('booking concurrency', () => {
     const apptId = appointments[0].id;
     const rescheduleRes = await request(app)
       .post(`/appointments/${apptId}/reschedule`)
-      .set('Authorization', `Bearer ${patientTokens[0]}`)
+      .set('Authorization', `Bearer ${winningPatientToken}`)
       .send({ newSlotId: futureSlot.id });
     expect(rescheduleRes.status).toBe(422);
     expect(rescheduleRes.body.message).toMatch(/doctor is not verified/i);
