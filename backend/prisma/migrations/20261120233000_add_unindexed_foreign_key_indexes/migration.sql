@@ -2,9 +2,6 @@
 CREATE INDEX "Appointment_patientProfileId_createdAt_idx" ON "Appointment"("patientProfileId", "createdAt");
 
 -- CreateIndex
-CREATE INDEX "Appointment_doctorProfileId_status_idx" ON "Appointment"("doctorProfileId", "status");
-
--- CreateIndex
 CREATE INDEX "Prescription_prescribingDoctorId_idx" ON "Prescription"("prescribingDoctorId");
 
 -- CreateIndex

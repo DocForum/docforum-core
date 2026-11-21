@@ -90,6 +90,7 @@ model Appointment {
   // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
   // existing. Flagged, not silently dropped.
 
+  @@index([patientProfileId, createdAt])
   @@index([doctorProfileId, status])
 }
 
