@@ -130,7 +130,7 @@ export async function rescheduleSlot(
   actor: auditService.AuditActor,
   appointmentId: string,
   newSlotId: string,
-  cutoffHours: number = 2,
+  cutoffHours: number = config.appointments.cutoffHours,
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
   const userId = actor.userId;
@@ -148,9 +148,19 @@ export async function rescheduleSlot(
     if (existingAppointment.patientProfileId !== patientProfile.id) {
       throw new HttpError(403, 'This appointment does not belong to you.');
     }
+
+    if (existingAppointment.status !== 'scheduled') {
+      throw new HttpError(409, 'Only a scheduled appointment can be rescheduled.');
+    }
+
     const currentSlotId = existingAppointment.availabilitySlotId;
     if (!currentSlotId) {
       throw new HttpError(409, 'Appointment no longer has an active slot.');
+    }
+
+    // Rescheduling onto the same slot is a no-op
+    if (currentSlotId === newSlotId) {
+      return existingAppointment;
     }
 
     // Check cutoff: no reschedule within cutoffHours of slot start
@@ -163,8 +173,19 @@ export async function rescheduleSlot(
     const now = new Date();
     const cutoffMs = cutoffHours * 60 * 60 * 1000;
     if (slotStart.getTime() - now.getTime() < cutoffMs) {
-      // Slot hasn't started yet and we're within the cutoff window
       throw new HttpError(409, `Rescheduling is not allowed within ${cutoffHours} hours of the slot start time.`);
+    }
+
+    // Validate new slot
+    const newSlot = await availabilityService.getSlot(tx, newSlotId);
+    if (!newSlot) {
+      throw new HttpError(404, 'New slot not found.');
+    }
+    if (newSlot.doctorProfileId !== existingAppointment.doctorProfileId) {
+      throw new HttpError(400, 'The new slot must belong to the same doctor.');
+    }
+    if (newSlot.startTime.getTime() <= now.getTime()) {
+      throw new HttpError(400, 'The new slot must be in the future.');
     }
 
     // Claim the new slot atomically
@@ -173,16 +194,19 @@ export async function rescheduleSlot(
       throw new HttpError(409, 'The new slot is no longer available.');
     }
 
-    // Release the old slot atomically (only if it's still booked by this appointment)
-    await tx.availabilitySlot.updateMany({
-      where: { id: currentSlotId, status: 'booked' },
-      data: { status: 'open' },
-    });
+    // Release the old slot through availabilityService
+    await availabilityService.releaseBookedSlotIfFuture(tx, currentSlotId);
 
-    // Re-point the appointment to the new slot
-    const updatedAppointment = await appointmentsRepo.updateAppointment(tx, appointmentId, {
-      availabilitySlotId: newSlotId,
-    });
+    // Re-point the appointment conditionally
+    const repointed = await appointmentsRepo.rescheduleIfScheduled(tx, appointmentId, newSlotId);
+    if (repointed.count !== 1) {
+      throw new HttpError(409, 'This appointment is no longer scheduled.');
+    }
+
+    const updatedAppointment = await appointmentsRepo.findAppointmentById(tx, appointmentId);
+    if (!updatedAppointment) {
+      throw new HttpError(404, 'Appointment not found.');
+    }
 
     await auditService.record(tx, actor, {
       entityType: 'Appointment',

@@ -72,7 +72,11 @@ describe('appointments cancellation (issue #292)', () => {
     await resetEmailSenderFixture();
     await prisma?.$disconnect();
     await pg.stop();
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch (_err) {
+      void _err;
+    }
   });
 
   it('cancels appointment via POST /:id/cancel, frees the slot, and allows re-booking', async () => {
@@ -194,5 +198,224 @@ describe('appointments cancellation (issue #292)', () => {
     expect(slotAfter.status).toBe('booked');
     const aptAfter = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
     expect(aptAfter.availabilitySlotId).toBe(slot.id);
+  });
+
+  describe('appointments reschedule (issue #293)', () => {
+    it('succeeds for far-future slot and releases the old slot', async () => {
+      const oldSlotStart = new Date(Date.now() + 48 * 3600 * 1000);
+      const newSlotStart = new Date(Date.now() + 72 * 3600 * 1000);
+      const [oldSlot, newSlot] = await Promise.all([
+        prisma.availabilitySlot.create({
+          data: {
+            doctorProfileId: doctorA.profileId,
+            startTime: oldSlotStart,
+            endTime: new Date(oldSlotStart.getTime() + 30 * 60 * 1000),
+            status: 'open',
+          },
+        }),
+        prisma.availabilitySlot.create({
+          data: {
+            doctorProfileId: doctorA.profileId,
+            startTime: newSlotStart,
+            endTime: new Date(newSlotStart.getTime() + 30 * 60 * 1000),
+            status: 'open',
+          },
+        }),
+      ]);
+
+      const bookRes = await request(app)
+        .post('/appointments')
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ availabilitySlotId: oldSlot.id });
+      expect(bookRes.status).toBe(201);
+      const appointmentId = bookRes.body.id;
+
+      const rescheduleRes = await request(app)
+        .post(`/appointments/${appointmentId}/reschedule`)
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ newSlotId: newSlot.id });
+      expect(rescheduleRes.status).toBe(200);
+      expect(rescheduleRes.body.availabilitySlotId).toBe(newSlot.id);
+
+      const oldSlotAfter = await prisma.availabilitySlot.findUniqueOrThrow({ where: { id: oldSlot.id } });
+      expect(oldSlotAfter.status).toBe('open');
+      const newSlotAfter = await prisma.availabilitySlot.findUniqueOrThrow({ where: { id: newSlot.id } });
+      expect(newSlotAfter.status).toBe('booked');
+    });
+
+    it('rejects reschedule within cutoff with 409', async () => {
+      // Current slot is 30m away (within 2h cutoff)
+      const oldSlotStart = new Date(Date.now() + 30 * 60 * 1000);
+      const newSlotStart = new Date(Date.now() + 48 * 3600 * 1000);
+      const [oldSlot, newSlot] = await Promise.all([
+        prisma.availabilitySlot.create({
+          data: {
+            doctorProfileId: doctorA.profileId,
+            startTime: oldSlotStart,
+            endTime: new Date(oldSlotStart.getTime() + 30 * 60 * 1000),
+            status: 'open',
+          },
+        }),
+        prisma.availabilitySlot.create({
+          data: {
+            doctorProfileId: doctorA.profileId,
+            startTime: newSlotStart,
+            endTime: new Date(newSlotStart.getTime() + 30 * 60 * 1000),
+            status: 'open',
+          },
+        }),
+      ]);
+
+      const bookRes = await request(app)
+        .post('/appointments')
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ availabilitySlotId: oldSlot.id });
+      expect(bookRes.status).toBe(201);
+      const appointmentId = bookRes.body.id;
+
+      const rescheduleRes = await request(app)
+        .post(`/appointments/${appointmentId}/reschedule`)
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ newSlotId: newSlot.id });
+      expect(rescheduleRes.status).toBe(409);
+    });
+
+    it('rescheduling onto the same slot is a no-op', async () => {
+      const slotStart = new Date(Date.now() + 48 * 3600 * 1000);
+      const slot = await prisma.availabilitySlot.create({
+        data: {
+          doctorProfileId: doctorA.profileId,
+          startTime: slotStart,
+          endTime: new Date(slotStart.getTime() + 30 * 60 * 1000),
+          status: 'open',
+        },
+      });
+
+      const bookRes = await request(app)
+        .post('/appointments')
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ availabilitySlotId: slot.id });
+      expect(bookRes.status).toBe(201);
+      const appointmentId = bookRes.body.id;
+
+      const rescheduleRes = await request(app)
+        .post(`/appointments/${appointmentId}/reschedule`)
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ newSlotId: slot.id });
+      expect(rescheduleRes.status).toBe(200);
+      expect(rescheduleRes.body.id).toBe(appointmentId);
+    });
+
+    it('refuses to reschedule to a slot of a different doctor with 400', async () => {
+      const slotStart1 = new Date(Date.now() + 48 * 3600 * 1000);
+      const slotStart2 = new Date(Date.now() + 72 * 3600 * 1000);
+      const [slotDocA, slotDocB] = await Promise.all([
+        prisma.availabilitySlot.create({
+          data: {
+            doctorProfileId: doctorA.profileId,
+            startTime: slotStart1,
+            endTime: new Date(slotStart1.getTime() + 30 * 60 * 1000),
+            status: 'open',
+          },
+        }),
+        prisma.availabilitySlot.create({
+          data: {
+            doctorProfileId: doctorB.profileId,
+            startTime: slotStart2,
+            endTime: new Date(slotStart2.getTime() + 30 * 60 * 1000),
+            status: 'open',
+          },
+        }),
+      ]);
+
+      const bookRes = await request(app)
+        .post('/appointments')
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ availabilitySlotId: slotDocA.id });
+      expect(bookRes.status).toBe(201);
+      const appointmentId = bookRes.body.id;
+
+      const rescheduleRes = await request(app)
+        .post(`/appointments/${appointmentId}/reschedule`)
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ newSlotId: slotDocB.id });
+      expect(rescheduleRes.status).toBe(400);
+    });
+
+    it('handles two patients racing to reschedule into the same target slot', async () => {
+      const slot1 = await prisma.availabilitySlot.create({
+        data: {
+          doctorProfileId: doctorA.profileId,
+          startTime: new Date(Date.now() + 48 * 3600 * 1000),
+          endTime: new Date(Date.now() + 48.5 * 3600 * 1000),
+          status: 'open',
+        },
+      });
+      const slot2 = await prisma.availabilitySlot.create({
+        data: {
+          doctorProfileId: doctorA.profileId,
+          startTime: new Date(Date.now() + 50 * 3600 * 1000),
+          endTime: new Date(Date.now() + 50.5 * 3600 * 1000),
+          status: 'open',
+        },
+      });
+      const targetSlot = await prisma.availabilitySlot.create({
+        data: {
+          doctorProfileId: doctorA.profileId,
+          startTime: new Date(Date.now() + 72 * 3600 * 1000),
+          endTime: new Date(Date.now() + 72.5 * 3600 * 1000),
+          status: 'open',
+        },
+      });
+
+      const [book1, book2] = await Promise.all([
+        request(app).post('/appointments').set('Authorization', `Bearer ${patient1.accessToken}`).send({ availabilitySlotId: slot1.id }),
+        request(app).post('/appointments').set('Authorization', `Bearer ${patient2.accessToken}`).send({ availabilitySlotId: slot2.id }),
+      ]);
+      expect(book1.status).toBe(201);
+      expect(book2.status).toBe(201);
+
+      const [reschedule1, reschedule2] = await Promise.all([
+        request(app).post(`/appointments/${book1.body.id}/reschedule`).set('Authorization', `Bearer ${patient1.accessToken}`).send({ newSlotId: targetSlot.id }),
+        request(app).post(`/appointments/${book2.body.id}/reschedule`).set('Authorization', `Bearer ${patient2.accessToken}`).send({ newSlotId: targetSlot.id }),
+      ]);
+
+      const statuses = [reschedule1.status, reschedule2.status].sort();
+      expect(statuses).toEqual([200, 409]);
+    });
+
+    it('handles a reschedule racing a booking into the same target slot', async () => {
+      const slot1 = await prisma.availabilitySlot.create({
+        data: {
+          doctorProfileId: doctorA.profileId,
+          startTime: new Date(Date.now() + 52 * 3600 * 1000),
+          endTime: new Date(Date.now() + 52.5 * 3600 * 1000),
+          status: 'open',
+        },
+      });
+      const targetSlot = await prisma.availabilitySlot.create({
+        data: {
+          doctorProfileId: doctorA.profileId,
+          startTime: new Date(Date.now() + 75 * 3600 * 1000),
+          endTime: new Date(Date.now() + 75.5 * 3600 * 1000),
+          status: 'open',
+        },
+      });
+
+      const book1 = await request(app)
+        .post('/appointments')
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ availabilitySlotId: slot1.id });
+      expect(book1.status).toBe(201);
+
+      const [rescheduleRes, bookRes] = await Promise.all([
+        request(app).post(`/appointments/${book1.body.id}/reschedule`).set('Authorization', `Bearer ${patient1.accessToken}`).send({ newSlotId: targetSlot.id }),
+        request(app).post('/appointments').set('Authorization', `Bearer ${patient2.accessToken}`).send({ availabilitySlotId: targetSlot.id }),
+      ]);
+
+      // Either reschedule won (200) and booking lost (409), OR booking won (201) and reschedule lost (409)
+      const won = (rescheduleRes.status === 200 && bookRes.status === 409) || (bookRes.status === 201 && rescheduleRes.status === 409);
+      expect(won).toBe(true);
+    });
   });
 });

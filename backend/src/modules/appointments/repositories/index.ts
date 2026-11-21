@@ -122,6 +122,16 @@ export function updateStatusIfScheduled(db: DbClient, id: string, status: Appoin
 }
 
 /**
+ * Conditionally repoints an appointment's availabilitySlotId if it is still scheduled.
+ */
+export function rescheduleIfScheduled(db: DbClient, id: string, newSlotId: string) {
+  return db.appointment.updateMany({
+    where: { id, status: 'scheduled' },
+    data: { availabilitySlotId: newSlotId },
+  });
+}
+
+/**
  * A cancelled appointment that released its slot back to `open` must also
  * drop its unique claim on availabilitySlotId — otherwise re-booking the
  * freed slot hits the unique constraint (discovered by the cascade
