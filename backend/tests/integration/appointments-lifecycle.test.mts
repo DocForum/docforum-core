@@ -418,4 +418,115 @@ describe('appointments cancellation (issue #292)', () => {
       expect(won).toBe(true);
     });
   });
+
+  describe('waitlist leave (issue #294)', () => {
+    it('allows patient to leave their own pending waitlist entry', async () => {
+      const entry = await prisma.waitlistEntry.create({
+        data: {
+          patientProfileId: patient1.profileId,
+          doctorProfileId: doctorA.profileId,
+          status: 'pending',
+          earliestAcceptable: new Date(),
+          latestAcceptable: new Date(Date.now() + 86400000),
+          holdDurationMinutes: 30,
+        },
+      });
+
+      const res = await request(app)
+        .post('/appointments/waitlist/leave')
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ entryId: entry.id });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ cancelled: true });
+
+      const updated = await prisma.waitlistEntry.findUniqueOrThrow({ where: { id: entry.id } });
+      expect(updated.status).toBe('expired');
+    });
+
+    it('rejects attempt to leave another patients waitlist entry with 403', async () => {
+      const entry = await prisma.waitlistEntry.create({
+        data: {
+          patientProfileId: patient1.profileId,
+          doctorProfileId: doctorA.profileId,
+          status: 'pending',
+          earliestAcceptable: new Date(),
+          latestAcceptable: new Date(Date.now() + 86400000),
+          holdDurationMinutes: 30,
+        },
+      });
+
+      const res = await request(app)
+        .post('/appointments/waitlist/leave')
+        .set('Authorization', `Bearer ${patient2.accessToken}`)
+        .send({ entryId: entry.id });
+      expect(res.status).toBe(403);
+    });
+
+    it('rejects attempt to leave an already accepted waitlist entry with 409', async () => {
+      const entry = await prisma.waitlistEntry.create({
+        data: {
+          patientProfileId: patient1.profileId,
+          doctorProfileId: doctorA.profileId,
+          status: 'accepted',
+          earliestAcceptable: new Date(),
+          latestAcceptable: new Date(Date.now() + 86400000),
+          holdDurationMinutes: 30,
+        },
+      });
+
+      const res = await request(app)
+        .post('/appointments/waitlist/leave')
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ entryId: entry.id });
+      expect(res.status).toBe(409);
+    });
+
+    it('rejects attempt to leave an already expired waitlist entry with 409', async () => {
+      const entry = await prisma.waitlistEntry.create({
+        data: {
+          patientProfileId: patient1.profileId,
+          doctorProfileId: doctorA.profileId,
+          status: 'expired',
+          earliestAcceptable: new Date(),
+          latestAcceptable: new Date(Date.now() + 86400000),
+          holdDurationMinutes: 30,
+        },
+      });
+
+      const res = await request(app)
+        .post('/appointments/waitlist/leave')
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ entryId: entry.id });
+      expect(res.status).toBe(409);
+    });
+
+    it('allows a guardian to leave a waitlist entry on behalf of their dependent', async () => {
+      const depRes = await request(app)
+        .post('/patients/me/dependents')
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ fullName: 'Dependent Child', dateOfBirth: '2020-01-01' });
+      expect(depRes.status).toBe(201);
+      const dependentProfileId = depRes.body.id;
+
+      const entry = await prisma.waitlistEntry.create({
+        data: {
+          patientProfileId: dependentProfileId,
+          doctorProfileId: doctorA.profileId,
+          status: 'pending',
+          earliestAcceptable: new Date(),
+          latestAcceptable: new Date(Date.now() + 86400000),
+          holdDurationMinutes: 30,
+        },
+      });
+
+      const res = await request(app)
+        .post('/appointments/waitlist/leave')
+        .set('Authorization', `Bearer ${patient1.accessToken}`)
+        .send({ entryId: entry.id });
+      expect(res.status).toBe(200);
+
+      const updated = await prisma.waitlistEntry.findUniqueOrThrow({ where: { id: entry.id } });
+      expect(updated.status).toBe('expired');
+    });
+  });
 });

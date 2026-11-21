@@ -313,16 +313,33 @@ export async function leaveWaitlist(
     throw new HttpError(404, 'Waitlist entry not found.');
   }
 
-  // Verify the entry belongs to this patient
-  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
-  if (entry.patientProfileId !== patientProfile.id) {
+  // Verify the entry belongs to the caller (or their active dependent)
+  let isOwner = false;
+  try {
+    const actingProfile = await patientsService.resolveActingProfile(actor.userId, entry.patientProfileId);
+    if (actingProfile.id === entry.patientProfileId) {
+      isOwner = true;
+    }
+  } catch (_err) {
+    isOwner = false;
+  }
+
+  if (!isOwner) {
     throw new HttpError(403, 'This waitlist entry does not belong to you.');
   }
 
-  await prisma.waitlistEntry.update({
-    where: { id: entryId },
+  if (entry.status === 'accepted') {
+    throw new HttpError(409, 'Cannot leave an already accepted waitlist entry.');
+  }
+
+  const updated = await prisma.waitlistEntry.updateMany({
+    where: { id: entryId, status: { in: ['pending', 'on_hold'] } },
     data: { status: 'expired' },
   });
+
+  if (updated.count === 0) {
+    throw new HttpError(409, 'This waitlist entry is no longer active.');
+  }
 
   return { cancelled: true };
 }
