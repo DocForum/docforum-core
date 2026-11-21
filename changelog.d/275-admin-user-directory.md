@@ -4,4 +4,5 @@ prefix, with audit-style keyset pagination. The response uses an explicit
 account-level allowlist (no credentials, tokens, TOTP secrets or clinical
 data), and tombstoned accounts are marked `deleted` with a null email
 instead of exposing their internal placeholder address. Migration adds
-`User_email_prefix_idx` (`text_pattern_ops`).
+`User_email_prefix_idx` (trigram GIN) so the prefix search is index-backed
+under any collation.

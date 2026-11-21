@@ -5,5 +5,4 @@ ALTER TABLE "AdminInvite" ADD COLUMN     "revokedAt" TIMESTAMP(3);
 ALTER TABLE "RefreshSession" ADD COLUMN     "revokedReason" TEXT;
 
 -- CreateIndex
-CREATE INDEX "User_email_prefix_idx" ON "User"("email" text_pattern_ops);
-
+CREATE INDEX "User_email_prefix_idx" ON "User" USING GIN ("email" gin_trgm_ops);
