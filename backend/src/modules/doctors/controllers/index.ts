@@ -43,6 +43,12 @@ export async function listPublic(req: Request, res: Response) {
   res.status(200).json(await doctorsService.listPublicDoctors(query));
 }
 
+export async function getPublicDoctor(req: Request, res: Response) {
+  const doctorProfileId = getParam(req, 'doctorProfileId');
+  const doctor = await doctorsService.getPublicDoctor(doctorProfileId);
+  res.status(200).json(doctor);
+}
+
 export async function setMySpecialties(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const { specialtyIds } = setMySpecialtiesSchema.parse(req.body);
