@@ -15,10 +15,12 @@ export interface GeneratedSlotRange {
   endTime: Date;
 }
 
+export type ExistingSlot = number | { startTime: Date | number; endTime?: Date | number };
+
 /** Pure slot construction, shared by the service and property tests. */
 export function buildSlotRanges(
   input: SlotGenerationInput,
-  existingStartTimes: readonly number[] = [],
+  existingSlots: readonly ExistingSlot[] = [],
 ): GeneratedSlotRange[] {
   const { doctorProfileId, date, startHour, endHour, slotLengthMinutes, timeZone = 'UTC' } = input;
   if (!Number.isInteger(slotLengthMinutes) || slotLengthMinutes <= 0) {
@@ -45,13 +47,27 @@ export function buildSlotRanges(
   if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeStart >= rangeEnd) {
     throw new Error('date and timeZone must produce a valid slot range.');
   }
-  const existing = new Set(existingStartTimes);
+  const existingIntervals: { start: number; end: number }[] = [];
+  const exactStarts = new Set<number>();
+  for (const item of existingSlots) {
+    if (typeof item === 'number') {
+      exactStarts.add(item);
+    } else {
+      const start = item.startTime instanceof Date ? item.startTime.getTime() : item.startTime;
+      const end = item.endTime instanceof Date ? item.endTime.getTime() : (item.endTime ?? start + 1);
+      existingIntervals.push({ start, end });
+    }
+  }
+
   const stepMs = slotLengthMinutes * 60 * 1_000;
   const slots: GeneratedSlotRange[] = [];
 
   for (let start = rangeStart; start + stepMs <= rangeEnd; start += stepMs) {
-    if (existing.has(start)) continue;
-    slots.push({ doctorProfileId, startTime: new Date(start), endTime: new Date(start + stepMs) });
+    const end = start + stepMs;
+    if (exactStarts.has(start)) continue;
+    const overlaps = existingIntervals.some((interval) => start < interval.end && end > interval.start);
+    if (overlaps) continue;
+    slots.push({ doctorProfileId, startTime: new Date(start), endTime: new Date(end) });
   }
   return slots;
 }

@@ -283,8 +283,8 @@ export async function updateDoctorSpecialtyVerification(
   });
 }
 
-export function findDoctorSpecialties(doctorProfileId: string) {
-  return prisma.doctorSpecialty.findMany({
+export function findDoctorSpecialties(doctorProfileId: string, db: DbClient = prisma) {
+  return db.doctorSpecialty.findMany({
     where: { doctorProfileId },
     include: { specialty: true },
   });

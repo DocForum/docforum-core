@@ -3,7 +3,19 @@ import * as availabilityRepo from '../repositories';
 import * as doctorsService from '../../doctors/services';
 import { buildSlotRanges } from '../slot-generation';
 
-export function listOpenSlots(doctorProfileId: string) {
+function isOverlapOrUniqueViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const e = error as Record<string, unknown>;
+  if (e.code === 'P2002') return true;
+  if (typeof e.message === 'string' && (e.message.includes('exclusion') || e.message.includes('23P01') || e.message.includes('AvailabilitySlot_doctor_no_overlap_excl'))) {
+    return true;
+  }
+  return false;
+}
+
+export async function listOpenSlots(doctorProfileId: string) {
+  const isVerified = await doctorsService.isDoctorVerified(doctorProfileId);
+  if (!isVerified) return [];
   return availabilityRepo.findOpenSlots(doctorProfileId);
 }
 
@@ -30,25 +42,32 @@ export async function generateSlots(input: GenerateSlotsInput) {
   } catch (error) {
     throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
   }
-  if (proposedSlots.length === 0) return { created: 0 };
+  if (proposedSlots.length === 0) return { created: 0, skippedOverlapping: 0, skipped: 0 };
 
   const existing = await availabilityRepo.findExistingSlotRanges(
     doctorProfileId,
     proposedSlots[0].startTime,
     proposedSlots[proposedSlots.length - 1].endTime,
   );
-  const existingStarts = existing.map((slot) => slot.startTime.getTime());
   let rows: ReturnType<typeof buildSlotRanges>;
   try {
-    rows = buildSlotRanges(input, existingStarts);
+    rows = buildSlotRanges(input, existing);
   } catch (error) {
     throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
   }
 
-  if (rows.length === 0) return { created: 0 };
+  const skippedOverlapping = proposedSlots.length - rows.length;
+  if (rows.length === 0) return { created: 0, skippedOverlapping, skipped: skippedOverlapping };
 
-  const result = await availabilityRepo.createSlots(rows);
-  return { created: result.count };
+  try {
+    const result = await availabilityRepo.createSlots(rows);
+    return { created: result.count, skippedOverlapping, skipped: skippedOverlapping };
+  } catch (error) {
+    if (isOverlapOrUniqueViolation(error)) {
+      throw new HttpError(409, 'Slot overlaps with an existing slot.');
+    }
+    throw error;
+  }
 }
 
 /** Re-exported for appointments/services — the only cross-module entry
