@@ -9,7 +9,10 @@
 // normalised email address and the client IP. A request is refused if
 // *either* is in backoff or locked.
 import { config } from '../../../config';
+import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
+import * as auditService from '../../audit/services';
+import type { AuditActor } from '../../audit/services';
 import * as repo from '../repositories';
 
 export interface ThrottleBucket {
@@ -159,15 +162,39 @@ export async function resetLoginThrottle(emailKey: string): Promise<void> {
   await repo.clearLoginAttempts([{ scope: 'email', key: emailKey }]);
 }
 
-/** Admin escape hatch: clear a lock that a legitimate user is stuck behind. */
-export async function clearLoginAttempts(input: { email?: string; ip?: string }): Promise<number> {
+/** Admin escape hatch: clear a lock that a legitimate user is stuck behind.
+ * Writes an AuditEvent in the transaction if any buckets were cleared. */
+export async function clearLoginAttempts(
+  input: { email?: string; ip?: string },
+  actor?: AuditActor,
+): Promise<number> {
   const buckets: { scope: string; key: string }[] = [];
   if (input.email) buckets.push({ scope: 'email', key: emailThrottleKey(input.email) });
   if (input.ip) {
     const ip = normalizeClientIp(input.ip);
     if (ip) buckets.push({ scope: 'ip', key: ip });
   }
-  return repo.clearLoginAttempts(buckets);
+  if (buckets.length === 0) return 0;
+
+  return prisma.$transaction(async (tx) => {
+    const deleteResult = await tx.loginAttempt.deleteMany({
+      where: { OR: buckets.map((bucket) => ({ scope: bucket.scope, key: bucket.key })) },
+    });
+    if (deleteResult.count > 0 && actor) {
+      await auditService.record(tx, actor, {
+        entityType: 'LoginAttempt',
+        entityId: input.email ? emailThrottleKey(input.email) : (input.ip ?? 'unknown'),
+        action: 'login_throttle.cleared',
+        fromState: null,
+        toState: null,
+        metadata: {
+          clearedCount: deleteResult.count,
+          scope: input.email ? 'email' : 'ip',
+        },
+      });
+    }
+    return deleteResult.count;
+  });
 }
 
 /** Cleanup job body (run on an interval from src/server.ts): rows whose last

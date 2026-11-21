@@ -1,0 +1,2 @@
+Phase 2: patient profile read and update endpoints with optimistic concurrency ([issue #272](https://github.com/DocForum/docforum-core/issues/272)).
+Added `GET /patients/me` returning caller's profile with strong ETag and `PATCH /patients/me` requiring `If-Match` header to update `fullName` and `dateOfBirth` via a single conditional UPDATE on `id`, `version`, and `anonymizedAt: null`. Refuses anonymized profiles.

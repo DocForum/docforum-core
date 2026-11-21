@@ -1,8 +1,13 @@
 import { Router } from 'express';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
+import { requireIfMatch } from '../../../middleware/optimistic-concurrency';
 import * as patientsController from '../controllers';
 
 export const patientsRouter = Router();
+
+// Patient profile read & update (Phase 2, issue #272)
+patientsRouter.get('/me', authenticate, requireRole('patient'), patientsController.getMe);
+patientsRouter.patch('/me', authenticate, requireRole('patient'), requireIfMatch, patientsController.updateMe);
 
 // Patient data export (Phase 8, issue #40). Patient-only and self-only:
 // doctors and admins get 403 here, and an export id that belongs to another

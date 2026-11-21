@@ -7,6 +7,7 @@
 // other way round.
 import { prisma } from '../../../db/prisma-client';
 import type { Prisma, Role } from '@prisma/client';
+import * as auditService from '../../audit/services';
 
 type Db = typeof prisma | Prisma.TransactionClient;
 
@@ -101,18 +102,21 @@ export function setUserReactivated(userId: string, at: Date) {
 /** Creates the invite and retires any outstanding invite for the same
  * address, in one transaction — issuing a new link shouldn't leave two live
  * ones. Retiring means setting `consumedAt`, never deleting. */
-export function replaceAdminInvite(input: {
-  email: string;
-  tokenHash: string;
-  expiresAt: Date;
-  invitedByUserId: string;
-}) {
+export function replaceAdminInvite(
+  input: {
+    email: string;
+    tokenHash: string;
+    expiresAt: Date;
+    invitedByUserId: string;
+  },
+  actor?: auditService.AuditActor,
+) {
   return prisma.$transaction(async (tx) => {
     await tx.adminInvite.updateMany({
       where: { email: input.email, consumedAt: null },
       data: { consumedAt: new Date() },
     });
-    return tx.adminInvite.create({
+    const invite = await tx.adminInvite.create({
       data: {
         email: input.email,
         tokenHash: input.tokenHash,
@@ -120,6 +124,16 @@ export function replaceAdminInvite(input: {
         invitedByUserId: input.invitedByUserId,
       },
     });
+    if (actor) {
+      await auditService.record(tx, actor, {
+        entityType: 'AdminInvite',
+        entityId: invite.id,
+        action: 'admin_invite.created',
+        fromState: null,
+        toState: 'pending',
+      });
+    }
+    return invite;
   });
 }
 

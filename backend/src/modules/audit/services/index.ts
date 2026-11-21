@@ -44,7 +44,10 @@ export type AuditEntityType =
   // Issue #277: an admin revoking a pending invite (`admin_invite.revoked`).
   | 'AdminInvite'
   | 'DoctorSpecialty'
-  | 'Specialty';
+  | 'Specialty'
+  | 'User'
+  | 'AdminInvite'
+  | 'LoginAttempt';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;

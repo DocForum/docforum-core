@@ -68,6 +68,7 @@ model User {
   refreshSessions RefreshSession[]
 
   emailVerificationTokens EmailVerificationToken[]
+  emailChangeTokens       EmailChangeToken[]
   passwordResetTokens     PasswordResetToken[]
   adminInvitesSent        AdminInvite[]
   // Phase 8 (issue #45): PHI read-access log rows this user wrote (as viewer).
@@ -118,6 +119,22 @@ model EmailVerificationToken {
   createdAt  DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Phase 8 (issue #271): hashed, single-use, expiring email-change tokens.
+// Only the SHA-256 hash is persisted. The pending new email is bound to
+// the token and the User.email column only changes upon confirmation.
+model EmailChangeToken {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  newEmail   String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
 
   @@index([userId])
 }

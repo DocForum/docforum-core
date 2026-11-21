@@ -2,9 +2,11 @@ import type { Request, Response } from 'express';
 import * as authService from '../services';
 import {
   clearLoginAttemptsSchema,
+  confirmEmailChangeSchema,
   loginSchema,
   passwordResetConfirmSchema,
   passwordResetRequestSchema,
+  requestEmailChangeSchema,
   signupSchema,
   signupWithInviteSchema,
   totpCodeSchema,
@@ -16,6 +18,7 @@ import { config } from '../../../config';
 import { readCsrfHeader } from '../../../middleware/csrf';
 import { getParam } from '../../../request-params';
 import { resolveLocale } from '../../../i18n';
+import { auditActor } from '../../../middleware/request-id';
 
 const REFRESH_COOKIE = 'docforum_refresh';
 const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30d — matches config.jwt.refreshTtl
@@ -96,14 +99,10 @@ export async function login(req: Request, res: Response) {
 }
 
 /** Admin-only: clear a login lock/throttle bucket for an account or an IP.
- * Writes an audit line to the server log. Not wired into AuditEvent yet
- * (issue #43 covered booking, doctor verification and payments only — see
- * ARCHITECTURE.md §6.2.4), so this is the interim record. */
+ * Records an AuditEvent in the clear transaction. */
 export async function clearLoginAttempts(req: Request, res: Response) {
   const { email, ip } = clearLoginAttemptsSchema.parse(req.body);
-  const cleared = await authService.clearLoginAttempts({ email, ip });
-  // eslint-disable-next-line no-console
-  console.info(`[auth] admin ${req.user?.id ?? 'unknown'} cleared ${cleared} login-throttle bucket(s) (email=${email ?? '-'} ip=${ip ?? '-'})`);
+  const cleared = await authService.clearLoginAttempts({ email, ip }, auditActor(req));
   res.status(200).json({ cleared });
 }
 
@@ -141,6 +140,20 @@ export async function verifyEmail(req: Request, res: Response) {
 export async function resendVerificationEmail(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const result = await authService.resendVerificationEmail(req.user.id);
+  res.status(200).json(result);
+}
+
+// Phase 8, issue #271 — change account email.
+export async function requestEmailChange(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const input = requestEmailChangeSchema.parse(req.body);
+  const result = await authService.requestEmailChange(req.user.id, input, auditActor(req), req.ip);
+  res.status(200).json(result);
+}
+
+export async function confirmEmailChange(req: Request, res: Response) {
+  const input = confirmEmailChangeSchema.parse(req.body);
+  const result = await authService.confirmEmailChange(input, auditActor(req));
   res.status(200).json(result);
 }
 
@@ -272,6 +285,6 @@ export async function revokeOtherSessions(req: Request, res: Response) {
 /** Admin: revoke every session a given user has. Mounted under /admin, not
  * /auth — it acts on someone else's sessions. */
 export async function revokeUserSessions(req: Request, res: Response) {
-  const revoked = await authService.revokeAllUserSessions(getParam(req, 'id'));
+  const revoked = await authService.revokeAllUserSessions(getParam(req, 'id'), auditActor(req));
   res.status(200).json({ revoked });
 }

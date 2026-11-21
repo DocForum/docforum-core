@@ -18,31 +18,22 @@ import { getAdminOverview } from '../../../admin-overview-sections';
 export async function createInvite(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const { email } = createAdminInviteSchema.parse(req.body);
-  const invite = await usersService.createAdminInvite({ email, invitedByUserId: req.user.id });
-  // Logged without the token: the invite link is a credential.
-  // eslint-disable-next-line no-console
-  console.info(`[users] admin ${req.user.id} created an invite for ${invite.email} (expires ${invite.expiresAt.toISOString()})`);
+  const invite = await usersService.createAdminInvite({ email, invitedByUserId: req.user.id }, auditActor(req));
   res.status(201).json(invite);
 }
 
 /**
- * Deactivates an account. There is no `AuditEvent` table yet (see
- * ARCHITECTURE_ESSENTIALS.md known gaps), so — like the login-throttle clear
- * endpoint — the console line is the interim record of who did this.
+ * Deactivates an account. Records an AuditEvent in the deactivation transaction.
  */
 export async function deactivate(req: Request, res: Response) {
   const userId = getParam(req, 'id');
-  const user = await usersService.deactivateUser({ userId });
-  // eslint-disable-next-line no-console
-  console.info(`[users] admin ${req.user?.id ?? 'unknown'} deactivated user ${userId}`);
+  const user = await usersService.deactivateUser({ userId }, auditActor(req));
   res.status(200).json(user);
 }
 
 export async function reactivate(req: Request, res: Response) {
   const userId = getParam(req, 'id');
-  const user = await usersService.reactivateUser({ userId });
-  // eslint-disable-next-line no-console
-  console.info(`[users] admin ${req.user?.id ?? 'unknown'} reactivated user ${userId}`);
+  const user = await usersService.reactivateUser({ userId }, auditActor(req));
   res.status(200).json(user);
 }
 
