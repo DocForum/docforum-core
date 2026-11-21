@@ -140,6 +140,8 @@ export default class RestrictedEmbeddedPostgres extends RealEmbeddedPostgres {
   override async stop(): Promise<void> {
     try {
       await super.stop();
+    } catch (_err) {
+      // On Windows, background processes may still hold file locks when super.stop() tries to rmdir
     } finally {
       this.#releasePort?.();
       this.#releasePort = null;

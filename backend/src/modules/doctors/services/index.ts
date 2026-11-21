@@ -69,6 +69,22 @@ export async function listPublicDoctors(input: {
   };
 }
 
+export async function getPublicDoctor(doctorProfileId: string) {
+  const details = await doctorsRepo.findPublicDoctorDetails([doctorProfileId]);
+  const doctor = details[0];
+  if (!doctor) {
+    throw new HttpError(404, 'Doctor not found.');
+  }
+  const nextSlots = await availabilityService.getNextAvailableSlots([doctor.id]);
+  const nextSlot = nextSlots.get(doctor.id);
+  return {
+    id: doctor.id,
+    fullName: doctor.fullName,
+    specialties: doctor.specialties.map((assignment) => assignment.specialty),
+    nextAvailableAt: nextSlot ? nextSlot.toISOString() : null,
+  };
+}
+
 export async function setMySpecialties(userId: string, requestedIds: string[]) {
   const specialtyIds = [...new Set(requestedIds)];
   return prisma.$transaction(async (tx) => {

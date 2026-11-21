@@ -133,9 +133,12 @@ export function searchVerifiedDoctorIds(input: {
           COALESCE(MAX(similarity(specialty."name", ${query})), 0)
         ) AS score
       FROM "DoctorProfile" AS doctor
+      JOIN "User" AS u ON u."id" = doctor."userId"
       LEFT JOIN "DoctorSpecialty" AS assignment ON assignment."doctorProfileId" = doctor."id"
       LEFT JOIN "Specialty" AS specialty ON specialty."id" = assignment."specialtyId"
       WHERE doctor."verificationStatus" = 'verified'
+        AND u."deactivatedAt" IS NULL
+        AND u."deletedAt" IS NULL
         AND (${doctorIds}::text[] IS NULL OR doctor."id" = ANY(${doctorIds}::text[]))
         AND (
           ${specialtySlug}::text IS NULL OR EXISTS (
@@ -197,7 +200,11 @@ export function searchVerifiedDoctorIds(input: {
 export async function findPublicDoctorDetails(ids: string[]) {
   if (ids.length === 0) return [];
   return prisma.doctorProfile.findMany({
-    where: { id: { in: ids }, verificationStatus: 'verified' },
+    where: {
+      id: { in: ids },
+      verificationStatus: 'verified',
+      user: { deactivatedAt: null, deletedAt: null },
+    },
     select: {
       id: true,
       fullName: true,
