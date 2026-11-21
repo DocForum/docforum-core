@@ -429,7 +429,7 @@ export async function listCreated(userId: string) {
  */
 export async function applyAppointmentOutcome(
   db: Prisma.TransactionClient,
-  input: { appointmentId: string; referralId: string; status: 'completed' | 'cancelled' | 'no_show' },
+  input: { appointmentId: string; referralId: string; status: 'completed' | 'cancelled' | 'late_cancelled' | 'no_show' },
 ) {
   const stillAccepted = {
     id: input.referralId,
@@ -442,7 +442,7 @@ export async function applyAppointmentOutcome(
     return;
   }
 
-  if (input.status === 'cancelled') {
+  if (input.status === 'cancelled' || input.status === 'late_cancelled') {
     await referralsRepo.updateReferralConditional(db, stillAccepted, {
       status: 'pending',
       resultingAppointmentId: null,

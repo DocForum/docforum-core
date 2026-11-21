@@ -217,4 +217,48 @@ describe('doctor discovery', () => {
     expect(page2.body.items).toHaveLength(1);
     expect(page2.body.items[0].id).not.toBe(page1.body.items[0].id);
   });
+
+  it('provides public doctor detail by id and hides unverified or deactivated doctors', async () => {
+    // 1. Valid verified doctor
+    const res = await request(app).get(`/doctors/${doctor.profileId}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: doctor.profileId,
+      fullName: 'Adebayo Adebayor',
+    });
+    expect(Object.keys(res.body).sort()).toEqual(['fullName', 'id', 'nextAvailableAt', 'specialties']);
+    expect(Array.isArray(res.body.specialties)).toBe(true);
+
+    // 2. Unverified (pending) doctor returns 404
+    const pendingProfile = await prisma.doctorProfile.findFirst({
+      where: { verificationStatus: 'pending' },
+    });
+    expect(pendingProfile).toBeTruthy();
+    const pendingRes = await request(app).get(`/doctors/${pendingProfile!.id}`);
+    expect(pendingRes.status).toBe(404);
+
+    // 3. Deactivated doctor returns 404
+    const fixtureModule = await import('./helpers/fixtures.mjs');
+    const deactDoctor = await fixtureModule.makeDoctor(app, prisma, emailedTokens, runId + 99);
+    await prisma.user.update({
+      where: { id: deactDoctor.userId },
+      data: { deactivatedAt: new Date() },
+    });
+    const deactRes = await request(app).get(`/doctors/${deactDoctor.profileId}`);
+    expect(deactRes.status).toBe(404);
+
+    // Also verify deactivated doctor is hidden from search
+    const searchRes = await request(app).get('/doctors');
+    expect(searchRes.status).toBe(200);
+    expect(searchRes.body.items.some((item: { id: string }) => item.id === deactDoctor.profileId)).toBe(false);
+
+    // 4. Unknown doctor returns 404
+    const unknownRes = await request(app).get('/doctors/00000000-0000-0000-0000-000000000000');
+    expect(unknownRes.status).toBe(404);
+
+    // 5. GET /doctors/me still routes to current doctor profile
+    const meRes = await request(app).get('/doctors/me').set('Authorization', `Bearer ${doctor.accessToken}`);
+    expect(meRes.status).toBe(200);
+    expect(meRes.body.id).toBe(doctor.profileId);
+  });
 });

@@ -9,6 +9,7 @@ doctorsRouter.get('/', doctorsController.listPublic);
 doctorsRouter.get('/me', authenticate, requireRole('doctor'), doctorsController.getMe);
 doctorsRouter.patch('/me', authenticate, requireRole('doctor'), requireIfMatch, doctorsController.updateMe);
 doctorsRouter.put('/me/specialties', authenticate, requireRole('doctor'), doctorsController.setMySpecialties);
+doctorsRouter.get('/:doctorProfileId', doctorsController.getPublicDoctor);
 doctorsRouter.patch(
   '/:doctorProfileId/verification',
   authenticate,
