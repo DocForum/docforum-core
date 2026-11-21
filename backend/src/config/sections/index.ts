@@ -6,6 +6,7 @@ export * from './accountPurge';
 export * from './adminInvites';
 export * from './auth';
 export * from './availability';
+export * from './consultations';
 export * from './cookie';
 export * from './corsOrigins';
 export * from './featureFlags';

@@ -30,6 +30,7 @@ model DoctorProfile {
   // they ultimately see the patient or not).
   referringReferrals Referral[]         @relation("ReferralReferringDoctor")
   targetedReferrals  Referral[]         @relation("ReferralTargetDoctor")
+  followUpRequests   FollowUpRequest[]  @relation("FollowUpRequestsAsDoctor")
 
   @@index([verificationStatus])
   // Trigram index for doctor search (similarity() in doctors/repositories);
@@ -38,9 +39,10 @@ model DoctorProfile {
 }
 
 model Specialty {
-  id   String @id @default(uuid())
-  name String @unique
-  slug String @unique
+  id        String  @id @default(uuid())
+  name      String  @unique
+  slug      String  @unique
+  isRetired Boolean @default(false)
 
   doctors         DoctorSpecialty[]
   waitlistEntries WaitlistEntry[]
@@ -57,6 +59,7 @@ model DoctorSpecialty {
   reviewer           String?
   reviewDate         DateTime?
   rejectionReason    String?
+  createdAt          DateTime           @default(now())
 
   doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
   specialty     Specialty     @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
