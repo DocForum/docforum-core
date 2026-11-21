@@ -117,8 +117,12 @@ export function searchVerifiedDoctorIds(input: {
   specialtySlug: string | null;
   cursor: string | null;
   take: number;
+  doctorIds?: string[] | null;
 }) {
-  const { query, specialtySlug, cursor, take } = input;
+  const { query, specialtySlug, cursor, take, doctorIds = null } = input;
+  if (doctorIds !== null && doctorIds.length === 0) {
+    return Promise.resolve([]);
+  }
   return prisma.$queryRaw<{ id: string; fullName: string; score: number }[]>`
     WITH ranked AS (
       SELECT
@@ -132,6 +136,7 @@ export function searchVerifiedDoctorIds(input: {
       LEFT JOIN "DoctorSpecialty" AS assignment ON assignment."doctorProfileId" = doctor."id"
       LEFT JOIN "Specialty" AS specialty ON specialty."id" = assignment."specialtyId"
       WHERE doctor."verificationStatus" = 'verified'
+        AND (${doctorIds}::text[] IS NULL OR doctor."id" = ANY(${doctorIds}::text[]))
         AND (
           ${specialtySlug}::text IS NULL OR EXISTS (
             SELECT 1

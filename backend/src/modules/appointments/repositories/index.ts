@@ -60,6 +60,14 @@ export function findAppointmentsForPatient(patientProfileId: string) {
   });
 }
 
+export function findAppointmentsForDoctor(doctorProfileId: string) {
+  return prisma.appointment.findMany({
+    where: { doctorProfileId },
+    include: { availabilitySlot: true },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
 /** Today's scheduled appointments for one doctor's own calendar. The
  * caller supplies the server-local day bounds; no patient-module data is
  * joined here, preserving the module boundary. */

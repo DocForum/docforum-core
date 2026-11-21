@@ -32,6 +32,47 @@ export function createSlots(rows: { doctorProfileId: string; startTime: Date; en
   return prisma.availabilitySlot.createMany({ data: rows });
 }
 
+export async function findNextAvailableSlotTimes(
+  doctorProfileIds: string[],
+  now = new Date(),
+): Promise<Map<string, Date>> {
+  if (doctorProfileIds.length === 0) return new Map();
+  const slots = await prisma.availabilitySlot.findMany({
+    where: {
+      doctorProfileId: { in: doctorProfileIds },
+      status: 'open',
+      startTime: { gte: now },
+    },
+    orderBy: { startTime: 'asc' },
+    select: { doctorProfileId: true, startTime: true },
+  });
+  const nextByDoctorId = new Map<string, Date>();
+  for (const slot of slots) {
+    if (!nextByDoctorId.has(slot.doctorProfileId)) {
+      nextByDoctorId.set(slot.doctorProfileId, slot.startTime);
+    }
+  }
+  return nextByDoctorId;
+}
+
+export async function findDoctorProfileIdsWithAvailableSlotsBefore(
+  before: Date,
+  now = new Date(),
+): Promise<string[]> {
+  const slots = await prisma.availabilitySlot.findMany({
+    where: {
+      status: 'open',
+      startTime: {
+        gte: now,
+        lt: before,
+      },
+    },
+    select: { doctorProfileId: true },
+    distinct: ['doctorProfileId'],
+  });
+  return slots.map((s) => s.doctorProfileId);
+}
+
 /**
  * THE mechanism that prevents double-booking (ARCHITECTURE.md §5.1): a
  * single conditional UPDATE, atomic at the database level regardless of how
