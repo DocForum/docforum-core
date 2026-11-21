@@ -2,6 +2,7 @@ import { HttpError } from '../../../http-error';
 import { versionConflict } from '../../../middleware/optimistic-concurrency';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
+import * as availabilityService from '../../availability/services';
 import * as doctorsRepo from '../repositories';
 import type { VerificationStatus } from '@prisma/client';
 
@@ -27,26 +28,41 @@ export async function listPublicDoctors(input: {
   q?: string;
   limit: number;
   cursor?: string;
+  availableBefore?: Date;
 }) {
+  let eligibleDoctorIds: string[] | null = null;
+  if (input.availableBefore) {
+    eligibleDoctorIds = await availabilityService.getDoctorIdsWithAvailableSlotsBefore(input.availableBefore);
+    if (eligibleDoctorIds.length === 0) {
+      return { items: [], nextCursor: null };
+    }
+  }
+
   const ranked = await doctorsRepo.searchVerifiedDoctorIds({
     query: input.q ?? null,
     specialtySlug: input.specialty ?? null,
     cursor: input.cursor ?? null,
     take: input.limit + 1,
+    doctorIds: eligibleDoctorIds,
   });
   const hasMore = ranked.length > input.limit;
   const page = ranked.slice(0, input.limit);
   const details = await doctorsRepo.findPublicDoctorDetails(page.map((doctor) => doctor.id));
   const detailsById = new Map(details.map((doctor) => [doctor.id, doctor]));
 
+  // Batch query next available slot for all doctors on this page
+  const nextSlots = await availabilityService.getNextAvailableSlots(page.map((d) => d.id));
+
   return {
     items: page.flatMap((rankedDoctor) => {
       const doctor = detailsById.get(rankedDoctor.id);
       if (!doctor) return [];
+      const nextSlot = nextSlots.get(doctor.id);
       return [{
         id: doctor.id,
         fullName: doctor.fullName,
         specialties: doctor.specialties.map((assignment) => assignment.specialty),
+        nextAvailableAt: nextSlot ? nextSlot.toISOString() : null,
       }];
     }),
     nextCursor: hasMore ? page.at(-1)?.id ?? null : null,

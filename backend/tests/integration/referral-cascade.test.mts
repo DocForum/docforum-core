@@ -132,8 +132,48 @@ describe('referral cascade on appointment transitions', () => {
     expect(rebook.status).toBe(201);
   });
 
+  it('refuses premature completion and no-show before slot start time without firing referral cascade', async () => {
+    const { referralId, appointmentId } = await freshAcceptedReferral(app, doctorA, doctorB, patient);
+
+    // 1. Doctor cannot mark as no-show before start time
+    const prematureNoShow = await setAppointmentStatus(app, doctorB, appointmentId, 'no_show');
+    expect(prematureNoShow.status).toBe(409);
+    expect(prematureNoShow.body.code).toBe('APPOINTMENT_NOT_STARTED');
+
+    // Prove the referral cascade did not fire
+    let referral = await prisma.referral.findUniqueOrThrow({ where: { id: referralId } });
+    expect(referral.status).toBe('accepted');
+    expect(referral.noShowCount).toBe(0);
+    expect(referral.referringDoctorNotifiedAt).toBeNull();
+
+    // 2. Doctor cannot mark as completed before start time
+    const prematureComplete = await setAppointmentStatus(app, doctorB, appointmentId, 'completed');
+    expect(prematureComplete.status).toBe(409);
+    expect(prematureComplete.body.code).toBe('APPOINTMENT_NOT_STARTED');
+
+    const appointmentStillScheduled = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+    expect(appointmentStillScheduled.status).toBe('scheduled');
+
+    // 3. Once slot has started, completion succeeds and cascade fires
+    const before = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+    await prisma.availabilitySlot.update({
+      where: { id: before.availabilitySlotId! },
+      data: { startTime: new Date(Date.now() - 60000) },
+    });
+
+    const completed = await setAppointmentStatus(app, doctorB, appointmentId, 'completed');
+    expect(completed.status).toBe(200);
+    referral = await prisma.referral.findUniqueOrThrow({ where: { id: referralId } });
+    expect(referral.status).toBe('completed');
+  });
+
   it('first no-show returns the referral to pending with noShowCount=1; second expires it with the referring-doctor flag', async () => {
     const { referralId, appointmentId } = await freshAcceptedReferral(app, doctorA, doctorB, patient);
+    const beforeFirst = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+    await prisma.availabilitySlot.update({
+      where: { id: beforeFirst.availabilitySlotId! },
+      data: { startTime: new Date(Date.now() - 60000) },
+    });
 
     const first = await setAppointmentStatus(app, doctorB, appointmentId, 'no_show');
     expect(first.status).toBe(200);
@@ -147,6 +187,11 @@ describe('referral cascade on appointment transitions', () => {
     const rebooked = await acceptReferral(app, patient, referralId, slots[0]);
     expect(rebooked.status).toBe(200);
     const secondAppointmentId = rebooked.body.resultingAppointmentId as string;
+    const beforeSecond = await prisma.appointment.findUniqueOrThrow({ where: { id: secondAppointmentId } });
+    await prisma.availabilitySlot.update({
+      where: { id: beforeSecond.availabilitySlotId! },
+      data: { startTime: new Date(Date.now() - 60000) },
+    });
 
     const second = await setAppointmentStatus(app, doctorB, secondAppointmentId, 'no_show');
     expect(second.status).toBe(200);
@@ -162,6 +207,11 @@ describe('referral cascade on appointment transitions', () => {
 
   it('completing the referral-origin appointment completes the referral', async () => {
     const { referralId, appointmentId } = await freshAcceptedReferral(app, doctorA, doctorB, patient);
+    const before = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+    await prisma.availabilitySlot.update({
+      where: { id: before.availabilitySlotId! },
+      data: { startTime: new Date(Date.now() - 60000) },
+    });
 
     const completed = await setAppointmentStatus(app, doctorB, appointmentId, 'completed');
     expect(completed.status).toBe(200);
@@ -172,6 +222,11 @@ describe('referral cascade on appointment transitions', () => {
 
   it('is idempotent when the transition (and hook) fires twice', async () => {
     const { referralId, appointmentId } = await freshAcceptedReferral(app, doctorA, doctorB, patient);
+    const before = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+    await prisma.availabilitySlot.update({
+      where: { id: before.availabilitySlotId! },
+      data: { startTime: new Date(Date.now() - 60000) },
+    });
 
     const first = await setAppointmentStatus(app, doctorB, appointmentId, 'no_show');
     expect(first.status).toBe(200);
@@ -192,6 +247,10 @@ describe('referral cascade on appointment transitions', () => {
       .set('Authorization', `Bearer ${patient.accessToken}`)
       .send({ availabilitySlotId: slots[0] });
     expect(appointment.status).toBe(201);
+    await prisma.availabilitySlot.update({
+      where: { id: slots[0] },
+      data: { startTime: new Date(Date.now() - 60000) },
+    });
     const completed = await setAppointmentStatus(app, doctorA, appointment.body.id, 'completed');
     expect(completed.status).toBe(200);
   });

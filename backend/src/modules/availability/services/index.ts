@@ -68,3 +68,11 @@ export async function getSlotTimesByIds(slotIds: string[]): Promise<Map<string, 
 export async function assertCanGenerateFor(userId: string, doctorProfileId: string) {
   await doctorsService.assertOwnsDoctorProfile(userId, doctorProfileId);
 }
+
+export function getNextAvailableSlots(doctorProfileIds: string[], now = new Date()): Promise<Map<string, Date>> {
+  return availabilityRepo.findNextAvailableSlotTimes(doctorProfileIds, now);
+}
+
+export function getDoctorIdsWithAvailableSlotsBefore(before: Date, now = new Date()): Promise<string[]> {
+  return availabilityRepo.findDoctorProfileIdsWithAvailableSlotsBefore(before, now);
+}

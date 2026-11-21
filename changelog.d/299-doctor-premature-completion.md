@@ -1,0 +1,2 @@
+Phase 2: prevent premature appointment completion and no-show marking before slot start time ([issue #299](https://github.com/DocForum/docforum-core/issues/299)).
+`updateStatusByDoctor` now refuses `completed` and `no_show` status updates before the slot's `startTime` or when the appointment has a released slot, returning HTTP 409 with code `APPOINTMENT_NOT_STARTED`. Pre-start cancellation remains permitted.
