@@ -5,6 +5,7 @@ import * as patientsService from '../../patients/services';
 import {
   acceptWaitlistSchema,
   bookSlotSchema,
+  doctorScheduleQuerySchema,
   leaveWaitlistSchema,
   listMineQuerySchema,
   rescheduleSlotBodySchema,
@@ -85,6 +86,13 @@ export async function acceptWaitlistOffer(req: Request, res: Response) {
 export async function listDoctorToday(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const appointments = await appointmentsService.listDoctorAppointmentsToday(req.user.id);
+  res.status(200).json(appointments);
+}
+
+export async function listDoctorSchedule(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const query = doctorScheduleQuerySchema.parse(req.query);
+  const appointments = await appointmentsService.listDoctorSchedule(req.user.id, query);
   res.status(200).json(appointments);
 }
 

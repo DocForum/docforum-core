@@ -41,7 +41,7 @@ model AvailabilitySlot {
   // ARCHITECTURE.md §5.1 and the integration test in
   // backend/tests/integration/booking.test.ts.
   @@unique([doctorProfileId, startTime, endTime])
-  @@index([doctorProfileId, status])
+  @@index([doctorProfileId, status, startTime])
 }
 
 model Appointment {
@@ -90,7 +90,6 @@ model Appointment {
   // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
   // existing. Flagged, not silently dropped.
 
-  @@index([patientProfileId, createdAt])
   @@index([doctorProfileId, status])
 }
 
