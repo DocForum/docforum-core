@@ -496,6 +496,9 @@ export async function listDoctorSchedule(
     const timeB = b.slot ? new Date(b.slot.startTime).getTime() : new Date(b.updatedAt).getTime();
     return timeA - timeB;
   });
+}
+
+/**
  * The participants of an appointment, for modules that own a per-visit
  * record (consultations: the async thread, issue #61). Profile IDs only —
  * the caller resolves user identity through the patients/doctors services,

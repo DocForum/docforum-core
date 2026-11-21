@@ -23,8 +23,9 @@ describe('consultation attachment signed URLs', () => {
   it('rejects a tampered expiry or signature', () => {
     const expires = Date.now() + 60_000;
     const signature = signAttachmentToken(id, expires);
+    const tampered = `${signature.slice(0, -1)}${signature.endsWith('A') ? 'B' : 'A'}`;
     expect(verifyAttachmentToken(id, expires + 60_000, signature)).toBe(false);
-    expect(verifyAttachmentToken(id, expires, `${signature.slice(0, -1)}A`)).toBe(false);
+    expect(verifyAttachmentToken(id, expires, tampered)).toBe(false);
     expect(verifyAttachmentToken(id, expires, '')).toBe(false);
   });
 });
