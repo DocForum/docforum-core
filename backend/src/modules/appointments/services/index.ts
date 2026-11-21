@@ -1,7 +1,7 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import type { AppointmentStatus, Prisma } from '@prisma/client';
-import { transitionAppointmentStatus } from '../state-machine';
+import { transitionAppointmentStatus, canFinalizeAppointment } from '../state-machine';
 import * as appointmentsRepo from '../repositories';
 import * as availabilityService from '../../availability/services';
 import * as doctorsService from '../../doctors/services';
@@ -89,6 +89,32 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
 export async function listMyAppointments(userId: string, patientProfileId?: string) {
   const patientProfile = await patientsService.resolveActingProfile(userId, patientProfileId);
   return appointmentsRepo.findAppointmentsForPatient(patientProfile.id);
+}
+
+export async function getAppointmentContextsForPatient(userId: string, patientProfileId?: string) {
+  const patientProfile = await patientsService.resolveActingProfile(userId, patientProfileId);
+  const appointments = await appointmentsRepo.findAppointmentsForPatient(patientProfile.id);
+  const map = new Map<string, { doctorProfileId: string; date: Date }>();
+  for (const appt of appointments) {
+    map.set(appt.id, {
+      doctorProfileId: appt.doctorProfileId,
+      date: appt.availabilitySlot?.startTime ?? appt.createdAt,
+    });
+  }
+  return map;
+}
+
+export async function getAppointmentContextsForDoctor(userId: string) {
+  const doctorProfile = await doctorsService.getMyDoctorProfile(userId);
+  const appointments = await appointmentsRepo.findAppointmentsForDoctor(doctorProfile.id);
+  const map = new Map<string, { patientProfileId: string; date: Date }>();
+  for (const appt of appointments) {
+    map.set(appt.id, {
+      patientProfileId: appt.patientProfileId,
+      date: appt.availabilitySlot?.startTime ?? appt.createdAt,
+    });
+  }
+  return map;
 }
 
 /**
@@ -725,12 +751,35 @@ async function applyScheduledTransition(
  * their own appointment completed / cancelled / no_show. Restricted to
  * the doctor the appointment is against — no admin-on-behalf path in v1.
  */
-export async function updateStatusByDoctor(userId: string, appointmentId: string, newStatus: AppointmentStatus) {
+export async function updateStatusByDoctor(
+  userId: string,
+  appointmentId: string,
+  newStatus: AppointmentStatus,
+  now = new Date(),
+) {
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
   if (!appointment) throw new HttpError(404, 'Appointment not found.');
   await doctorsService.assertOwnsDoctorProfile(userId, appointment.doctorProfileId);
   if (transitionAppointmentStatus(appointment.status, newStatus) === null) {
     throw new HttpError(409, 'Only a scheduled appointment can change status.');
+  }
+
+  if (newStatus === 'completed' || newStatus === 'no_show') {
+    if (!appointment.availabilitySlotId) {
+      throw new HttpError(
+        409,
+        'Appointments with a released slot cannot be marked completed or no-show.',
+        'APPOINTMENT_NOT_STARTED',
+      );
+    }
+    const slot = await availabilityService.getSlot(prisma, appointment.availabilitySlotId);
+    if (!slot || !canFinalizeAppointment(slot.startTime, now)) {
+      throw new HttpError(
+        409,
+        'Cannot mark appointment completed or no-show before the slot start time.',
+        'APPOINTMENT_NOT_STARTED',
+      );
+    }
   }
 
   return prisma.$transaction(async (tx) => {

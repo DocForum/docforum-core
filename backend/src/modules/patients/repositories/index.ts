@@ -197,7 +197,7 @@ export function findPatientProfileById(id: string) {
 export function findPatientSummariesByIds(ids: string[]) {
   return prisma.patientProfile.findMany({
     where: { id: { in: ids } },
-    select: { id: true, fullName: true },
+    select: { id: true, fullName: true, anonymizedAt: true },
   });
 }
 /** One keyset page of anonymised profiles old enough to be purge

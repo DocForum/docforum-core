@@ -15,6 +15,7 @@ import { startReferralExpiryJob } from './jobs/referral-expiry';
 import { startOrderExpiryJob } from './jobs/order-expiry';
 import { startFollowUpExpiryJob } from './jobs/follow-up-expiry';
 import { startConsultationSignOffJob } from './jobs/consultation-sign-off';
+import { startAuthTokenPruneJob } from './jobs/auth-token-prune';
 import { expireUnfulfilledOrders } from './jobs/lab-order-expiry';
 import { prisma } from './db/prisma-client';
 
@@ -41,6 +42,9 @@ const stopOrderExpiry = startOrderExpiryJob();
 const stopFollowUpExpiry = startFollowUpExpiryJob();
 // Notes unsigned after the grace period (Phase 2, issue #64).
 const stopConsultationSignOff = startConsultationSignOffJob();
+// Expired/consumed auth tokens, revoked sessions and stale SEP-10
+// challenges, in bounded batches (Phase 8, issue #276).
+const stopAuthTokenPrune = startAuthTokenPruneJob();
 
 async function startServer() {
   await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork(), validateSep10Config()]);
@@ -73,6 +77,7 @@ async function shutdown(signal: string) {
   stopOrderExpiry();
   stopFollowUpExpiry();
   stopConsultationSignOff();
+  stopAuthTokenPrune();
   if (server) {
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => server?.closeAllConnections(), 10_000);

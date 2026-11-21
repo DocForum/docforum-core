@@ -41,6 +41,8 @@ export type AuditEntityType =
   | 'Order'
   | 'OrderDispute'
   | 'FeatureFlag'
+  // Issue #277: an admin revoking a pending invite (`admin_invite.revoked`).
+  | 'AdminInvite'
   | 'DoctorSpecialty'
   | 'Specialty';
 

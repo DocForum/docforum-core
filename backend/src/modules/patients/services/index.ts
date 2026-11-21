@@ -301,12 +301,19 @@ export async function getPatientProfileById(id: string) {
   return profile;
 }
 
-/** Batch id -> { id, fullName } lookup for other modules (appointments schedule, issue #291).
- * Public-facing fields only. */
+/** Batch id -> { id, fullName } lookup for other modules. Anonymised profiles return 'Deleted patient'. */
 export async function getPatientSummariesByIds(ids: string[]): Promise<Map<string, { id: string; fullName: string }>> {
   if (ids.length === 0) return new Map();
   const rows = await patientsRepo.findPatientSummariesByIds([...new Set(ids)]);
-  return new Map(rows.map((row) => [row.id, { id: row.id, fullName: row.fullName }]));
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        id: row.id,
+        fullName: row.anonymizedAt ? 'Deleted patient' : row.fullName,
+      },
+    ]),
+  );
 }
 
 // --- Account deletion (Phase 8, issue #41, docs/adr/0010) ----------------

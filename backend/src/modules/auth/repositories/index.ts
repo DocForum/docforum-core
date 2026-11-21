@@ -13,11 +13,55 @@ export function findUserById(id: string, db: typeof prisma | Prisma.TransactionC
   return db.user.findUnique({ where: { id } });
 }
 
-// --- Refresh sessions (Phase 8 #38) -------------------------------------
+// --- Refresh sessions (Phase 8 #38, #278) --------------------------------
 
-export function createRefreshSession(input: { userId: string; userAgent?: string; ip?: string }) {
-  return prisma.refreshSession.create({
-    data: { userId: input.userId, userAgent: input.userAgent, ip: input.ip },
+/**
+ * Creates a session and enforces the per-user active-session cap atomically
+ * (Phase 8, issue #278).
+ *
+ * The transaction takes a per-user advisory lock first: two concurrent logins
+ * for the same account would otherwise each count the pre-login sessions, both
+ * create a row, and between them evict too few — leaving the user above the
+ * cap. The lock serialises only session creation for that one user, so
+ * concurrent logins for different accounts are unaffected. The cap is applied
+ * after the insert, ordering by `lastUsedAt` (least recently used last), so
+ * the session just issued is never the one evicted.
+ */
+export function createRefreshSession(input: {
+  userId: string;
+  userAgent?: string;
+  ip?: string;
+  maxActiveSessions: number;
+}) {
+  return prisma.$transaction(async (tx) => {
+    // hashtext() keeps the lock key to an int; collisions only serialise
+    // unrelated users briefly, they never change the outcome.
+    // The lock function returns Postgres `void`, which Prisma's driver
+    // adapter cannot deserialize; cast it to text so the statement is a
+    // normal scalar SELECT.
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${input.userId}))::text AS lock`;
+
+    const session = await tx.refreshSession.create({
+      data: { userId: input.userId, userAgent: input.userAgent, ip: input.ip },
+    });
+
+    // The just-created session is excluded and counts as one of the cap, so
+    // a same-millisecond timestamp or an id sort can never evict the device
+    // the caller is signing in on. Everything else is evicted oldest-first.
+    const excess = await tx.refreshSession.findMany({
+      where: { userId: input.userId, revokedAt: null, id: { not: session.id } },
+      select: { id: true },
+      orderBy: [{ lastUsedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      skip: Math.max(0, input.maxActiveSessions - 1),
+    });
+    if (excess.length > 0) {
+      await tx.refreshSession.updateMany({
+        where: { id: { in: excess.map((row) => row.id) }, revokedAt: null },
+        data: { revokedAt: new Date(), revokedReason: 'max_active_sessions' },
+      });
+    }
+
+    return session;
   });
 }
 
@@ -231,6 +275,55 @@ export function clearLoginAttempts(buckets: { scope: string; key: string }[]) {
 /** Cleanup: drop buckets whose last failure is older than `before`. */
 export function pruneStaleLoginAttempts(before: Date) {
   return prisma.loginAttempt.deleteMany({ where: { lastFailedAt: { lt: before } } }).then((result) => result.count);
+}
+
+// --- Auth-artifact retention (Phase 8, issue #276) -----------------------
+// Every statement deletes at most `batchSize` rows, selected by an indexed
+// expiry/consumption column, and only rows past `cutoff`. Raw SQL is used
+// because Prisma has no `DELETE ... LIMIT`; the bounded batch is what keeps
+// a large backlog from taking one long table lock.
+
+/** Expired or consumed verification tokens past the grace period. A token
+ * that is still unexpired and unconsumed never matches. */
+export function pruneExpiredVerificationTokens(options: { cutoff: Date; batchSize: number }) {
+  return prisma.$executeRaw`
+    DELETE FROM "EmailVerificationToken"
+    WHERE "id" IN (
+      SELECT "id" FROM "EmailVerificationToken"
+      WHERE "expiresAt" < ${options.cutoff}
+         OR ("consumedAt" IS NOT NULL AND "consumedAt" < ${options.cutoff})
+      ORDER BY "expiresAt" ASC
+      LIMIT ${options.batchSize}
+    )
+  `;
+}
+
+/** Expired or used password-reset tokens past the grace period. */
+export function pruneExpiredPasswordResetTokens(options: { cutoff: Date; batchSize: number }) {
+  return prisma.$executeRaw`
+    DELETE FROM "PasswordResetToken"
+    WHERE "id" IN (
+      SELECT "id" FROM "PasswordResetToken"
+      WHERE "expiresAt" < ${options.cutoff}
+         OR ("usedAt" IS NOT NULL AND "usedAt" < ${options.cutoff})
+      ORDER BY "expiresAt" ASC
+      LIMIT ${options.batchSize}
+    )
+  `;
+}
+
+/** Revoked refresh sessions past the grace period. `revokedAt IS NOT NULL`
+ * is the guard that makes deleting an active session impossible. */
+export function pruneRevokedRefreshSessions(options: { cutoff: Date; batchSize: number }) {
+  return prisma.$executeRaw`
+    DELETE FROM "RefreshSession"
+    WHERE "id" IN (
+      SELECT "id" FROM "RefreshSession"
+      WHERE "revokedAt" IS NOT NULL AND "revokedAt" < ${options.cutoff}
+      ORDER BY "revokedAt" ASC
+      LIMIT ${options.batchSize}
+    )
+  `;
 }
 
 /**

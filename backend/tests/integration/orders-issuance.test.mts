@@ -182,6 +182,10 @@ describe('issue #10: issuing prescriptions and lab orders from a consultation', 
     const [closedAppt, openAppt, scheduledAppt, cancelledAppt] = appointmentIds;
 
     for (const id of [closedAppt, openAppt]) {
+      await prisma.availabilitySlot.updateMany({
+        where: { appointment: { id } },
+        data: { startTime: new Date(Date.now() - 60000) },
+      });
       const done = await request(app).patch(`/appointments/${id}/status`).set('Authorization', `Bearer ${treatingDoctorToken}`).send({ status: 'completed' });
       expect(done.status, JSON.stringify(done.body)).toBe(200);
     }
