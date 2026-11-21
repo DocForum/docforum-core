@@ -250,6 +250,11 @@ describe('AuditEvent foundation', () => {
   });
 
   describe('doctor verification', () => {
+    beforeAll(async () => {
+      await prisma.doctorProfile.update({ where: { id: doctor.profileId }, data: { verificationStatus: 'pending' } });
+      await prisma.auditEvent.deleteMany({ where: { entityId: doctor.profileId } });
+    });
+
     const patch = (status: string, requestIdHeader?: string) => {
       const req = request(app).patch(`/doctors/${doctor.profileId}/verification`).set(adminAuth());
       if (requestIdHeader) req.set('X-Request-Id', requestIdHeader);
