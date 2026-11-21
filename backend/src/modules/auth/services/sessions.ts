@@ -6,6 +6,7 @@
 // a refresh only succeeds while its session row is present and unrevoked —
 // which is exactly when revocation has to bite, because that's the
 // operation that mints new tokens.
+import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import {
   createRefreshSession,
@@ -32,8 +33,11 @@ export interface SessionSummary {
   current: boolean;
 }
 
+/** Starts a session, evicting the user's least-recently-used sessions if
+ * this login would exceed `MAX_ACTIVE_SESSIONS_PER_USER` (issue #278). The
+ * eviction is part of the same transaction as the insert. */
 export function startSession(input: { userId: string } & SessionContext): Promise<{ id: string }> {
-  return createRefreshSession(input);
+  return createRefreshSession({ ...input, maxActiveSessions: config.sessions.maxActivePerUser });
 }
 
 /**
