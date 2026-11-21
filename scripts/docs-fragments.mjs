@@ -11,9 +11,12 @@
 //   node scripts/docs-fragments.mjs check <base-ref> [--maintainer]   # CI
 //
 // `check` fails when a PR adds net-new lines to a protected doc (changing
-// existing lines in place is fine), or when a fragment wouldn't fold cleanly.
-// `--maintainer` skips the protected-doc rule (fold PRs and maintainer edits)
-// but still validates the fragments.
+// existing lines in place is fine): that is what makes other PRs conflict.
+// A fragment that wouldn't fold cleanly (unknown heading, ambiguous `after:`,
+// bad front matter) only gets a warning with a suggested fix on a contributor
+// PR, because it can't cause conflicts and a maintainer can correct it when
+// folding. `--maintainer` skips the protected-doc rule (fold PRs and
+// maintainer edits) and treats fragment problems as errors.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -83,6 +86,31 @@ function headings(lines) {
 
 const norm = (s) => s.replace(/`/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 
+// "Did you mean" hints for a heading that isn't in `file`: an exact match in
+// another shared doc first, then the closest headings by shared words.
+function headingHint(wanted, file) {
+  const target = norm(wanted);
+  const words = (t) => new Set(norm(t).split(/[^a-z0-9]+/).filter((w) => w.length > 1));
+  const want = words(wanted);
+  const scored = [];
+  for (const doc of PROTECTED) {
+    let text;
+    try { text = fs.readFileSync(path.join(root, doc), 'utf8'); } catch { continue; }
+    for (const h of headings(text.split('\n'))) {
+      if (norm(h.text) === target && doc !== file) {
+        return ` That heading is in ${doc}: did you mean \`file: ${doc}\`?`;
+      }
+      if (doc !== file) continue;
+      const have = words(h.text);
+      const shared = [...want].filter((w) => have.has(w)).length;
+      if (shared) scored.push({ text: h.text, score: shared / (want.size + have.size - shared) });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const top = [...new Set(scored.slice(0, 3).map((h) => h.text))];
+  return top.length ? ` Closest headings in ${file}: ${top.map((t) => JSON.stringify(t)).join(', ')}.` : '';
+}
+
 // `section: A > B` picks heading B inside section A. Returns the insertion
 // index. Content that starts with its own heading goes at the very end of the
 // section, after its subsections; anything else (list items, table rows,
@@ -100,7 +128,7 @@ function sectionEnd(lines, file, spec, rel, wholeSection) {
     const inScope = candidates.filter(({ h }) => h.line > scopeStart && h.line < scopeEnd);
     const matches = inScope.filter(({ h }) => norm(h.text) === part);
     if (matches.length === 0) {
-      throw new Error(`${rel}: no heading ${JSON.stringify(raw[i])} in ${file}${scopeStart >= 0 ? ' inside the earlier section' : ''}`);
+      throw new Error(`${rel}: no heading ${JSON.stringify(raw[i])} in ${file}${scopeStart >= 0 ? ' inside the earlier section' : ''}.${headingHint(raw[i], file)}`);
     }
     if (matches.length > 1) {
       throw new Error(`${rel}: heading ${JSON.stringify(raw[i])} appears ${matches.length} times in ${file}; name its parent too (\`section: Parent > ${raw[i]}\`), or use \`after:\` with a line from the place you mean`);
@@ -214,10 +242,30 @@ function fold(dryRun) {
 
 // ----------------------------------------------------------------- check
 
+// GitHub annotations show inline on the PR's Files tab and in the checks list.
+const inActions = !!process.env.GITHUB_ACTIONS;
+const esc = (t) => t.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+function annotate(level, file, line, msg) {
+  if (inActions) console.log(`::${level} file=${file},line=${line || 1},title=Docs fragments::${esc(msg)}`);
+}
+
 function check(base, maintainer) {
-  const problems = [];
+  const errors = []; // fail the check
+  const warnings = []; // shown, but the check passes
   const fragments = [];
   const readDoc = (f) => fs.readFileSync(path.join(root, f), 'utf8');
+  const mergeBase = git('merge-base', base, 'HEAD').trim();
+  // Fragments this PR adds or edits. Problems in fragments already on the
+  // base branch are the maintainer's to fix, never the PR author's.
+  const own = new Set(
+    git('diff', '--name-only', '--diff-filter=AMR', mergeBase, 'HEAD', '--', DIR).split('\n').filter(Boolean),
+  );
+  const fragmentProblem = (rel, msg) => {
+    if (maintainer) errors.push({ file: rel, line: 1, msg });
+    else if (own.has(rel)) {
+      warnings.push({ file: rel, line: 1, msg: `${msg} (Not blocking: a maintainer can fix this when folding, but correcting it helps.)` });
+    } else console.log(`note: ${msg} (already on ${base}; not caused by this PR)`);
+  };
   // Check each fragment on its own so one bad file doesn't hide the others.
   for (const name of fs.readdirSync(path.join(root, DIR)).filter((f) => f.endsWith('.md') && f !== 'README.md').sort()) {
     const rel = `${DIR}/${name}`;
@@ -226,15 +274,12 @@ function check(base, maintainer) {
       applyAll([f], readDoc);
       fragments.push(f);
     } catch (e) {
-      problems.push(e.message);
+      fragmentProblem(rel, e.message);
     }
   }
-  if (!problems.length) {
-    try { applyAll(fragments, readDoc); } catch (e) { problems.push(e.message); }
-  }
+  try { applyAll(fragments, readDoc); } catch (e) { fragmentProblem(e.message.split(':')[0], e.message); }
 
   if (!maintainer) {
-    const mergeBase = git('merge-base', base, 'HEAD').trim();
     for (const file of PROTECTED) {
       const diff = git('diff', '-U0', '--no-color', mergeBase, 'HEAD', '--', file);
       for (const m of diff.matchAll(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
@@ -242,23 +287,41 @@ function check(base, maintainer) {
         const added = m[3] === undefined ? 1 : Number(m[3]);
         if (added > removed) {
           const start = Number(m[2]);
-          problems.push(
-            `${file}: ${added === 1 ? `line ${start} adds` : `lines ${start}-${start + added - 1} add`} ${added - removed} new line(s). ` +
-            `Put new content in a fragment under ${DIR}/ instead (see ${DIR}/README.md); ` +
-            `changing existing lines in place is fine.`,
-          );
+          errors.push({
+            file,
+            line: start,
+            msg:
+              `${file}: ${added === 1 ? `line ${start} adds` : `lines ${start}-${start + added - 1} add`} ${added - removed} new line(s). ` +
+              `Move the new lines into a fragment, e.g. ${DIR}/<issue>-<slug>.md starting with:\n---\nfile: ${file}\nsection: <the heading they go under>\n---\n` +
+              `(see ${DIR}/README.md). Changing existing lines in place, like ticking a checkbox, is fine.`,
+          });
         }
       }
     }
   }
 
-  if (problems.length) {
+  for (const w of warnings) annotate('warning', w.file, w.line, w.msg);
+  for (const e of errors) annotate('error', e.file, e.line, e.msg);
+  const summary = process.env.GITHUB_STEP_SUMMARY;
+  if (summary && (errors.length || warnings.length)) {
+    const rows = [
+      ...errors.map((e) => `- ❌ **${e.file}** — ${e.msg.replace(/\n/g, ' ')}`),
+      ...warnings.map((w) => `- ⚠️ **${w.file}** — ${w.msg.replace(/\n/g, ' ')}`),
+    ];
+    fs.appendFileSync(summary, `### Docs fragments\n\n${rows.join('\n')}\n\nSee [docs.d/README.md](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/blob/main/${DIR}/README.md).\n`);
+  }
+  if (warnings.length) {
+    console.log('Docs fragments warnings (not blocking):\n');
+    for (const w of warnings) console.log(`  - ${w.msg}`);
+    console.log('');
+  }
+  if (errors.length) {
     console.error('Docs fragments check failed:\n');
-    for (const p of problems) console.error(`  - ${p}`);
+    for (const e of errors) console.error(`  - ${e.msg}`);
     console.error(`\nWhy: new lines in shared docs make every other open PR conflict. See ${DIR}/README.md.`);
     process.exit(1);
   }
-  console.log(`Docs fragments OK (${fragments.length} pending fragment(s) fold cleanly${maintainer ? '; protected-doc rule skipped for a maintainer' : ''}).`);
+  console.log(`Docs fragments OK (${fragments.length} pending fragment(s) fold cleanly${warnings.length ? `, ${warnings.length} warning(s)` : ''}${maintainer ? '; protected-doc rule skipped for a maintainer' : ''}).`);
 }
 
 // ------------------------------------------------------------------ main
