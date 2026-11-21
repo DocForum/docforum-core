@@ -49,3 +49,11 @@ export const acceptWaitlistSchema = z.object({
 export const updateStatusSchema = z.object({
   status: z.enum(['completed', 'cancelled', 'no_show']),
 });
+
+export const doctorScheduleQuerySchema = z
+  .object({
+    from: z.string().optional(),
+    to: z.string().optional(),
+    status: z.enum(['scheduled', 'completed', 'cancelled', 'late_cancelled', 'no_show']).optional(),
+  })
+  .strict();

@@ -41,7 +41,7 @@ model AvailabilitySlot {
   // ARCHITECTURE.md §5.1 and the integration test in
   // backend/tests/integration/booking.test.ts.
   @@unique([doctorProfileId, startTime, endTime])
-  @@index([doctorProfileId, status])
+  @@index([doctorProfileId, status, startTime])
 }
 
 model Appointment {
@@ -89,6 +89,8 @@ model Appointment {
   // before confirmation, not enforced yet — booking works without it in
   // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
   // existing. Flagged, not silently dropped.
+
+  @@index([doctorProfileId, status])
 }
 
 enum WaitlistStatus {

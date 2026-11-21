@@ -3,9 +3,13 @@ import type { Prisma } from '@prisma/client';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
-export function findOpenSlots(doctorProfileId: string) {
+export function findOpenSlots(doctorProfileId: string, from: Date, to: Date) {
   return prisma.availabilitySlot.findMany({
-    where: { doctorProfileId, status: 'open', startTime: { gte: new Date() } },
+    where: {
+      doctorProfileId,
+      status: 'open',
+      startTime: { gte: from, lte: to },
+    },
     orderBy: { startTime: 'asc' },
   });
 }

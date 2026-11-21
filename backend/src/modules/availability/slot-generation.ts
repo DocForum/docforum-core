@@ -7,6 +7,11 @@ export interface SlotGenerationInput {
   endHour: number;
   slotLengthMinutes: number;
   timeZone?: string;
+  /**
+   * When provided, any slot whose startTime is on or before this cutoff is skipped.
+   * Used when generating slots for today to prevent adding slots that have already passed.
+   */
+  skipBefore?: Date;
 }
 
 export interface GeneratedSlotRange {
@@ -15,12 +20,19 @@ export interface GeneratedSlotRange {
   endTime: Date;
 }
 
-/** Pure slot construction, shared by the service and property tests. */
+/**
+ * Pure slot construction, shared by the service and property tests.
+ *
+ * Remainder behavior (issue #288):
+ * Slots are stepped at `slotLengthMinutes * 60_000` ms intervals from rangeStart.
+ * Any partial trailing remainder at the end of the window that cannot fit a full
+ * `slotLengthMinutes` slot is omitted (loop condition `start + stepMs <= rangeEnd`).
+ */
 export function buildSlotRanges(
   input: SlotGenerationInput,
   existingStartTimes: readonly number[] = [],
 ): GeneratedSlotRange[] {
-  const { doctorProfileId, date, startHour, endHour, slotLengthMinutes, timeZone = 'UTC' } = input;
+  const { doctorProfileId, date, startHour, endHour, slotLengthMinutes, timeZone = 'UTC', skipBefore } = input;
   if (!Number.isInteger(slotLengthMinutes) || slotLengthMinutes <= 0) {
     throw new Error('slotLengthMinutes must be a positive integer.');
   }
@@ -47,10 +59,12 @@ export function buildSlotRanges(
   }
   const existing = new Set(existingStartTimes);
   const stepMs = slotLengthMinutes * 60 * 1_000;
+  const skipBeforeMs = skipBefore ? skipBefore.getTime() : -Infinity;
   const slots: GeneratedSlotRange[] = [];
 
   for (let start = rangeStart; start + stepMs <= rangeEnd; start += stepMs) {
     if (existing.has(start)) continue;
+    if (start <= skipBeforeMs) continue;
     slots.push({ doctorProfileId, startTime: new Date(start), endTime: new Date(start + stepMs) });
   }
   return slots;
