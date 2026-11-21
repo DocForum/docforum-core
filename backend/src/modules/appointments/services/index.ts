@@ -1,6 +1,6 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
-import type { AppointmentStatus, Prisma } from '@prisma/client';
+import { Prisma, type AppointmentStatus } from '@prisma/client';
 import { transitionAppointmentStatus, canFinalizeAppointment } from '../state-machine';
 import * as appointmentsRepo from '../repositories';
 import * as availabilityService from '../../availability/services';
@@ -132,7 +132,7 @@ export async function rescheduleSlot(
   cutoffHours: number = 2,
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  const userId = actor.userId;
 
   return prisma.$transaction(async (tx) => {
     // First, get the existing appointment to find its current slot
@@ -140,6 +140,8 @@ export async function rescheduleSlot(
     if (!existingAppointment) {
       throw new HttpError(404, 'Appointment not found.');
     }
+
+    const patientProfile = await patientsService.resolveActingProfile(userId, existingAppointment.patientProfileId);
 
     // Check that the appointment belongs to this patient
     if (existingAppointment.patientProfileId !== patientProfile.id) {
@@ -159,7 +161,7 @@ export async function rescheduleSlot(
     const slotStart = slot.startTime;
     const now = new Date();
     const cutoffMs = cutoffHours * 60 * 60 * 1000;
-    if (now.getTime() - slotStart.getTime() < -cutoffMs) {
+    if (slotStart.getTime() - now.getTime() < cutoffMs) {
       // Slot hasn't started yet and we're within the cutoff window
       throw new HttpError(409, `Rescheduling is not allowed within ${cutoffHours} hours of the slot start time.`);
     }
@@ -190,6 +192,7 @@ export async function rescheduleSlot(
       metadata: {
         oldSlotId: currentSlotId,
         newSlotId,
+        patientProfileId: patientProfile.id,
       },
     });
 
@@ -201,14 +204,19 @@ export async function rescheduleSlot(
  * Cancels an appointment atomically: releases the slot back to `open` and
  * marks the appointment as cancelled. Includes cutoff window logic.
  *
- * Requirements from issue #56:\n - Patient can cancel an appointment\n - Before cutoff (2h before slot start): slot releases to `open`\n - After cutoff: slot stays booked, appointment marked `late_cancelled`\n - Concurrency: slot release is conditional on status = `booked`\n */
+ * Requirements from issue #56:
+ * - Patient can cancel an appointment
+ * - Before cutoff (2h before slot start): slot releases to `open`
+ * - After cutoff: slot stays booked, appointment marked `late_cancelled`
+ * - Concurrency: slot release is conditional on status = `booked`
+ */
 export async function cancelAppointment(
   actor: auditService.AuditActor,
   appointmentId: string,
   reason: 'patient' | 'doctor' = 'patient',
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  const userId = actor.userId;
 
   return prisma.$transaction(async (tx) => {
     // First, get the existing appointment to find its current slot
@@ -216,6 +224,8 @@ export async function cancelAppointment(
     if (!existingAppointment) {
       throw new HttpError(404, 'Appointment not found.');
     }
+
+    const patientProfile = await patientsService.resolveActingProfile(userId, existingAppointment.patientProfileId);
 
     // Check that the caller is the patient
     if (existingAppointment.patientProfileId !== patientProfile.id) {
@@ -240,8 +250,8 @@ export async function cancelAppointment(
     let newStatus: string;
     let slotStatus: string;
 
-    if (now.getTime() - slotStart.getTime() < -cutoffMs) {
-      // Slot hasn't started yet and we're within the cutoff window
+    if (slotStart.getTime() - now.getTime() > cutoffMs) {
+      // Slot hasn't started yet and we're outside the cutoff window (more than 2h before start)
       newStatus = 'cancelled';
       slotStatus = 'open';
     } else {
@@ -272,6 +282,7 @@ export async function cancelAppointment(
       metadata: {
         reason,
         slotId: currentSlotId,
+        patientProfileId: patientProfile.id,
       },
     });
 
@@ -299,46 +310,37 @@ export async function joinWaitlist(
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
 
-  return prisma.$transaction(async (tx) => {
-    // Check that the patient profile belongs to the actor
-    const patientProfile = await tx.patientProfile.findUnique({
-      where: { id: patientProfileId },
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // Check that the patient profile belongs to the actor
+      const patientProfile = await tx.patientProfile.findUnique({
+        where: { id: patientProfileId },
+      });
+      if (!patientProfile) {
+        throw new HttpError(404, 'Patient profile not found.');
+      }
+
+      // Create the waitlist entry: DB-level partial unique index prevents concurrent duplicates
+      const entry = await tx.waitlistEntry.create({
+        data: {
+          patientProfileId,
+          doctorProfileId: doctorProfileId ?? null,
+          specialtyId: specialtyId ?? null,
+          status: 'pending',
+          earliestAcceptable: earliestAcceptable ?? new Date(),
+          latestAcceptable: latestAcceptable ?? new Date(),
+          holdDurationMinutes: holdDurationMinutes ?? 30, // default 30 min hold
+        },
+      });
+
+      return entry;
     });
-    if (!patientProfile) {
-      throw new HttpError(404, 'Patient profile not found.');
-    }
-
-    // Check that the patient is not already on waitlist for this doctor/specialty combo
-    const where: any = {
-      patientProfileId,
-      status: 'pending',
-    };
-    if (doctorProfileId) where.doctorProfileId = doctorProfileId;
-    if (specialtyId) where.specialtyId = specialtyId;
-
-    const existingEntry = await tx.waitlistEntry.findFirst({
-      where,
-    });
-
-    if (existingEntry) {
+  } catch (err: any) {
+    if ((err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') || err?.code === 'P2002') {
       throw new HttpError(409, 'You are already on the waitlist for this doctor/specialty.');
     }
-
-    // Create the waitlist entry
-    const entry = await tx.waitlistEntry.create({
-      data: {
-        patientProfileId,
-        doctorProfileId,
-        specialtyId,
-        status: 'pending',
-        earliestAcceptable: earliestAcceptable ?? new Date(),
-        latestAcceptable: latestAcceptable ?? new Date(),
-        holdDurationMinutes: holdDurationMinutes ?? 30, // default 30 min hold
-      },
-    });
-
-    return entry;
-  });
+    throw err;
+  }
 }
 
 /**
@@ -358,7 +360,8 @@ export async function leaveWaitlist(
   }
 
   // Verify the entry belongs to this patient
-  if (entry.patientProfileId !== actor.userId) {
+  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  if (entry.patientProfileId !== patientProfile.id) {
     throw new HttpError(403, 'This waitlist entry does not belong to you.');
   }
 
@@ -470,6 +473,60 @@ export async function getAppointmentForDoctor(doctorUserId: string, appointmentI
   if (doctorProfile.userId !== doctorUserId) return null;
 
   return appointment;
+}
+
+/**
+ * Role-scoped appointment detail read (Phase 2, issue #296):
+ * - Patient (or active guardian of dependent minor) or treating doctor only.
+ * - Non-participants and admins get 404 (clinical privacy).
+ * - Returns appointment with slot times (`slot`), doctor summary (`doctor`), and origin.
+ * - Cancelled appointments with a released slot have no slot times (`slot: null`).
+ */
+export async function getAppointmentDetail(userId: string, appointmentId: string) {
+  const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
+  if (!appointment) {
+    throw new HttpError(404, 'Appointment not found.');
+  }
+
+  let authorized = false;
+
+  // Check if treating doctor
+  try {
+    const doctorProfile = await doctorsService.getDoctorProfileById(appointment.doctorProfileId);
+    if (doctorProfile.userId === userId) {
+      authorized = true;
+    }
+  } catch {
+    // Non-doctor or not found
+  }
+
+  // Check if patient or active guardian
+  if (!authorized) {
+    try {
+      const actingProfile = await patientsService.resolveActingProfile(userId, appointment.patientProfileId);
+      if (actingProfile.id === appointment.patientProfileId) {
+        authorized = true;
+      }
+    } catch {
+      // Non-participant or inactive guardianship
+    }
+  }
+
+  if (!authorized) {
+    throw new HttpError(404, 'Appointment not found.');
+  }
+
+  const slotTimes = appointment.availabilitySlotId
+    ? (await availabilityService.getSlotTimesByIds([appointment.availabilitySlotId])).get(appointment.availabilitySlotId) ?? null
+    : null;
+  const doctorSummaries = await doctorsService.getDoctorSummariesByIds([appointment.doctorProfileId]);
+  const doctor = doctorSummaries.get(appointment.doctorProfileId) ?? null;
+
+  return {
+    ...appointment,
+    slot: slotTimes ? { startTime: slotTimes.startTime, endTime: slotTimes.endTime } : null,
+    doctor,
+  };
 }
 
 /** Doctor's own scheduled appointments whose booked slot falls on the
@@ -795,10 +852,10 @@ export async function updateStatusByDoctor(
  * completed/no_show — those are clinical judgements for the doctor), and
  * only from `scheduled`.
  */
-export async function cancelByPatient(userId: string, appointmentId: string) {
-  const patientProfile = await patientsService.getMyPatientProfile(userId);
+export async function cancelByPatient(userId: string, appointmentId: string, actor?: auditService.AuditActor) {
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
   if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  const patientProfile = await patientsService.resolveActingProfile(userId, appointment.patientProfileId);
   if (appointment.patientProfileId !== patientProfile.id) {
     throw new HttpError(403, 'You can only cancel your own appointments.');
   }
@@ -808,6 +865,19 @@ export async function cancelByPatient(userId: string, appointmentId: string) {
 
   return prisma.$transaction(async (tx) => {
     await applyScheduledTransition(tx, appointment, 'cancelled');
+    if (actor) {
+      await auditService.record(tx, actor, {
+        entityType: 'Appointment',
+        entityId: appointment.id,
+        action: 'appointment.cancelled',
+        fromState: appointment.status,
+        toState: 'cancelled',
+        metadata: {
+          reason: 'patient',
+          patientProfileId: patientProfile.id,
+        },
+      });
+    }
     return appointmentsRepo.findAppointmentById(tx, appointmentId);
   });
 }

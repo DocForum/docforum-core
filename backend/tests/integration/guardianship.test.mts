@@ -25,7 +25,8 @@ const pg = new EmbeddedPostgres({
   user: 'docforum',
   password: 'docforum',
   port: PORT,
-  persistent: false,
+  persistent: true,
+  initdbFlags: ['--encoding=UTF8'],
 });
 const urlFor = (db: string) => `postgresql://docforum:docforum@localhost:${PORT}/${db}`;
 const databaseUrl = urlFor('docforum_test');
@@ -48,10 +49,12 @@ function yearsAgo(years: number, days = 0): string {
   return d.toISOString().slice(0, 10);
 }
 
+const PRISMA_CLI = path.join(BACKEND_ROOT, 'node_modules/prisma/build/index.js');
+
 // Prisma 7 (ADR 0006) dropped `db execute --url`: the CLI reads the URL from
 // prisma.config.ts, i.e. from DATABASE_URL, so the target goes in the env.
 function dbExecute(url: string, sql: string) {
-  execFileSync('npx', ['prisma', 'db', 'execute', '--stdin'], {
+  execFileSync(process.execPath, [PRISMA_CLI, 'db', 'execute', '--stdin'], {
     cwd: BACKEND_ROOT,
     env: { ...process.env, DATABASE_URL: url },
     input: sql,
@@ -60,7 +63,7 @@ function dbExecute(url: string, sql: string) {
 }
 
 function dbExecuteFile(url: string, file: string) {
-  execFileSync('npx', ['prisma', 'db', 'execute', '--file', file], {
+  execFileSync(process.execPath, [PRISMA_CLI, 'db', 'execute', '--file', file], {
     cwd: BACKEND_ROOT,
     env: { ...process.env, DATABASE_URL: url },
     stdio: 'pipe',
@@ -78,6 +81,7 @@ describe('guardian and dependent profiles', () => {
   let unverified: Patient;
   let d1: string; // g1's dependent
   let d2: string; // g2's dependent
+  let d1AppointmentId: string;
   const freeSlots: string[] = [];
 
   async function signup(role: 'patient' | 'doctor', label: string, verify = true) {
@@ -107,7 +111,7 @@ describe('guardian and dependent profiles', () => {
     await pg.initialise();
     await pg.start();
     await pg.createDatabase('docforum_test');
-    execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
+    execFileSync(process.execPath, [PRISMA_CLI, 'migrate', 'deploy'], {
       cwd: BACKEND_ROOT,
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: 'pipe',
@@ -148,7 +152,11 @@ describe('guardian and dependent profiles', () => {
     authServices.resetEmailSender();
     await prisma?.$disconnect();
     await pg.stop();
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    } catch {
+      // Ignore temporary folder EBUSY cleanup on Windows
+    }
   });
 
   it('lets a patient create a dependent: a login-less profile plus a guardianship', async () => {
@@ -212,6 +220,7 @@ describe('guardian and dependent profiles', () => {
     const res = await book(g1, { availabilitySlotId: slot, patientProfileId: d1 });
     expect(res.status).toBe(201);
     expect(res.body.patientProfileId).toBe(d1);
+    d1AppointmentId = res.body.id;
 
     // Audit (issue #43): the guardian is the actor; the event names the
     // dependent's profile the appointment was booked for.
@@ -251,6 +260,161 @@ describe('guardian and dependent profiles', () => {
     expect((await request(app).get('/appointments/mine').set(auth(adult))).body).toHaveLength(2);
   });
 
+  it('Issue #296: appointment detail endpoint returns ETag, slot times, doctor summary, and enforces role-scoped access', async () => {
+    // 1. Adult patient reads own appointment
+    const slot = nextSlot();
+    const booked = await book(adult, { availabilitySlotId: slot });
+    expect(booked.status).toBe(201);
+    const appointmentId = booked.body.id;
+
+    const patientRead = await request(app).get(`/appointments/${appointmentId}`).set(auth(adult));
+    expect(patientRead.status).toBe(200);
+    expect(patientRead.headers.etag).toBe('"1"');
+    expect(patientRead.body.id).toBe(appointmentId);
+    expect(patientRead.body.origin).toBe('direct_booking');
+    expect(patientRead.body.slot).toMatchObject({
+      startTime: expect.any(String),
+      endTime: expect.any(String),
+    });
+    expect(patientRead.body.doctor).toMatchObject({
+      id: doctorProfileId,
+      fullName: expect.any(String),
+    });
+
+    // 2. Treating doctor reads the appointment
+    const doctorRead = await request(app)
+      .get(`/appointments/${appointmentId}`)
+      .set('Authorization', `Bearer ${doctorToken}`);
+    expect(doctorRead.status).toBe(200);
+    expect(doctorRead.headers.etag).toBe('"1"');
+    expect(doctorRead.body.id).toBe(appointmentId);
+
+    // 3. Guardian reads dependent's appointment
+    const depRes = await createDependent(g1, { fullName: 'Child 296', dateOfBirth: yearsAgo(5) });
+    expect(depRes.status).toBe(201);
+    const dep296Id = depRes.body.id;
+
+    const depSlot = nextSlot();
+    const depBooked = await book(g1, { availabilitySlotId: depSlot, patientProfileId: dep296Id });
+    expect(depBooked.status).toBe(201);
+    const depApptId = depBooked.body.id;
+
+    const guardianRead = await request(app).get(`/appointments/${depApptId}`).set(auth(g1));
+    expect(guardianRead.status).toBe(200);
+    expect(guardianRead.headers.etag).toBe('"1"');
+    expect(guardianRead.body.id).toBe(depApptId);
+    expect(guardianRead.body.patientProfileId).toBe(dep296Id);
+
+    // 4. Non-participant (other patient g2) reading returns 404 (not 403)
+    const otherPatientRead = await request(app).get(`/appointments/${appointmentId}`).set(auth(g2));
+    expect(otherPatientRead.status).toBe(404);
+
+    // 5. Admin reading returns 404 (non-participant clinical privacy)
+    const adminUser = await signup('patient', 'admin-for-296');
+    await prisma.user.update({ where: { id: adminUser.userId }, data: { role: 'admin' } });
+    await prisma.patientProfile.delete({ where: { userId: adminUser.userId } });
+    const adminRead = await request(app)
+      .get(`/appointments/${appointmentId}`)
+      .set('Authorization', `Bearer ${adminUser.token}`);
+    expect(adminRead.status).toBe(404);
+
+    // 6. Check-in and queue endpoints work with getAppointmentDetail
+    const queueRes = await request(app).get(`/appointments/${appointmentId}/queue`).set(auth(adult));
+    expect(queueRes.status).toBe(200);
+    expect(queueRes.body.appointmentId).toBe(appointmentId);
+
+    // 7. Cancelled appointment with released slot returns slot: null
+    const cancelRes = await request(app)
+      .patch(`/appointments/${appointmentId}/status`)
+      .set('Authorization', `Bearer ${doctorToken}`)
+      .send({ status: 'cancelled' });
+    expect(cancelRes.status).toBe(200);
+
+    const cancelledRead = await request(app).get(`/appointments/${appointmentId}`).set(auth(adult));
+    expect(cancelledRead.status).toBe(200);
+    expect(cancelledRead.body.status).toBe('cancelled');
+    expect(cancelledRead.body.slot).toBeNull();
+  });
+
+  it("Issue #297: lets guardians cancel and reschedule a dependent's appointments with audit metadata", async () => {
+    // Create a new dependent for 297 so existing test counts are untouched
+    const depRes = await createDependent(g1, { fullName: 'Child 297', dateOfBirth: yearsAgo(7) });
+    expect(depRes.status).toBe(201);
+    const depId = depRes.body.id;
+
+    // 1. Guardian books for dependent
+    const slot1 = nextSlot();
+    const booked = await book(g1, { availabilitySlotId: slot1, patientProfileId: depId });
+    expect(booked.status).toBe(201);
+    const apptId = booked.body.id;
+
+    // 2. Guardian reschedules dependent's appointment to slot2
+    const slot2 = nextSlot();
+    const rescheduleRes = await request(app)
+      .post(`/appointments/${apptId}/reschedule`)
+      .set(auth(g1))
+      .send({ newSlotId: slot2 });
+    expect(rescheduleRes.status).toBe(200);
+    expect(rescheduleRes.body.availabilitySlotId).toBe(slot2);
+
+    // Verify audit event for reschedule
+    const rescheduleEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { entityType: 'Appointment', entityId: apptId, action: 'appointment.rescheduled' },
+    });
+    expect(rescheduleEvent).toMatchObject({
+      actorUserId: g1.userId,
+      actorRole: 'patient',
+    });
+    expect(rescheduleEvent.metadata).toMatchObject({
+      oldSlotId: slot1,
+      newSlotId: slot2,
+      patientProfileId: depId,
+    });
+
+    // 3. Guardian cancels dependent's appointment (POST /appointments/:id/cancel)
+    const cancelRes = await request(app)
+      .post(`/appointments/${apptId}/cancel`)
+      .set(auth(g1))
+      .send();
+    expect(cancelRes.status).toBe(200);
+    expect(cancelRes.body.status).toBe('cancelled');
+
+    // Verify audit event for cancel
+    const cancelEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { entityType: 'Appointment', entityId: apptId, action: 'appointment.cancelled' },
+    });
+    expect(cancelEvent).toMatchObject({
+      actorUserId: g1.userId,
+      actorRole: 'patient',
+    });
+    expect(cancelEvent.metadata).toMatchObject({
+      patientProfileId: depId,
+    });
+
+    // 4. Guardian cancels via second route (PATCH /appointments/:appointmentId/cancel)
+    const slot3 = nextSlot();
+    const booked2 = await book(g1, { availabilitySlotId: slot3, patientProfileId: depId });
+    expect(booked2.status).toBe(201);
+    const appt2Id = booked2.body.id;
+
+    const cancelMineRes = await request(app)
+      .patch(`/appointments/${appt2Id}/cancel`)
+      .set(auth(g1));
+    expect(cancelMineRes.status).toBe(200);
+    expect(cancelMineRes.body.status).toBe('cancelled');
+
+    const cancelMineEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { entityType: 'Appointment', entityId: appt2Id, action: 'appointment.cancelled' },
+    });
+    expect(cancelMineEvent).toMatchObject({
+      actorUserId: g1.userId,
+      actorRole: 'patient',
+    });
+    expect(cancelMineEvent.metadata).toMatchObject({
+      patientProfileId: depId,
+    });
+  });
+
   it('rejects a missing, empty or unknown patientProfileId cleanly', async () => {
     const slot = nextSlot();
     expect((await book(g1, { availabilitySlotId: slot, patientProfileId: '' })).status).toBe(400);
@@ -278,6 +442,26 @@ describe('guardian and dependent profiles', () => {
     const listed = (await request(app).get('/patients/me/dependents').set(auth(g1))).body.map((d: { id: string }) => d.id);
     expect(listed).not.toContain(d1);
     expect(listed).not.toContain(revokedChild.body.id);
+
+    // Ex-guardian is refused when attempting to reschedule or cancel the adult's appointment
+    const adultReschedule = await request(app)
+      .post(`/appointments/${d1AppointmentId}/reschedule`)
+      .set(auth(g1))
+      .send({ newSlotId: nextSlot() });
+    expect(adultReschedule.status).toBe(403);
+    expect(adultReschedule.body.code).toBe('GUARDIANSHIP_INACTIVE');
+
+    const adultCancel = await request(app)
+      .post(`/appointments/${d1AppointmentId}/cancel`)
+      .set(auth(g1));
+    expect(adultCancel.status).toBe(403);
+    expect(adultCancel.body.code).toBe('GUARDIANSHIP_INACTIVE');
+
+    const adultCancelMine = await request(app)
+      .patch(`/appointments/${d1AppointmentId}/cancel`)
+      .set(auth(g1));
+    expect(adultCancelMine.status).toBe(403);
+    expect(adultCancelMine.body.code).toBe('GUARDIANSHIP_INACTIVE');
 
     // Clinical history and the guardianship record are kept, not deleted.
     expect(await prisma.appointment.count({ where: { patientProfileId: d1 } })).toBe(1);
