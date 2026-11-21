@@ -92,6 +92,15 @@ export type { EmailMessage, EmailSender } from './email-dispatcher';
 // error type to set a `Retry-After` header, and src/server.ts runs the
 // cleanup job. Both go through this module's service surface.
 export { LoginThrottledError, clearLoginAttempts, pruneLoginAttempts } from './login-throttle';
+
+// Auth-artifact retention (Phase 8, issue #276), run by
+// src/jobs/auth-token-prune.ts.
+export {
+  pruneExpiredPasswordResetTokens,
+  pruneExpiredVerificationTokens,
+  pruneRevokedRefreshSessions,
+  type TokenPruneOptions,
+} from './token-prune';
 export type { ThrottleDecision } from './login-throttle';
 
 export interface AuthenticatedUser {

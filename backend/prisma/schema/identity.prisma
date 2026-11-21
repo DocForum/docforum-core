@@ -9,7 +9,7 @@ enum Role {
 
 model User {
   id                    String    @id @default(uuid())
-  version     Int      @default(1)
+  version               Int       @default(1)
   email                 String    @unique
   phone                 String?
   passwordHash          String
@@ -75,8 +75,8 @@ model User {
   accessLogs              AccessLog[]
   notifications           Notification[]
   // Phase 2, issue #61/#64: clinical thread authorship.
-  consultationMessages    ConsultationMessage[] @relation("ConsultationMessageSender")
-  consultationAddenda     ConsultationAddendum[] @relation("ConsultationAddendumAuthor")
+  consultationMessages    ConsultationMessage[]    @relation("ConsultationMessageSender")
+  consultationAddenda     ConsultationAddendum[]   @relation("ConsultationAddendumAuthor")
   // Phase 8 (issue #42, docs/adr/0011): dependents this user is guardian of.
   guardianships           Guardianship[]
   sep10Challenges         Sep10Challenge[]
@@ -84,6 +84,11 @@ model User {
   twoFactorRecoveryCodes  TwoFactorRecoveryCode[]
 
   @@index([role])
+  // Issue #275: the admin directory's email-prefix search. The unique btree
+  // on `email` only serves `LIKE 'x%'` under a C collation; a trigram GIN
+  // index backs the prefix scan under any locale (same pattern as the
+  // doctor/medication search indexes).
+  @@index([email(ops: raw("gin_trgm_ops"))], type: Gin, map: "User_email_prefix_idx")
 }
 
 /// One-time recovery codes for TOTP (Phase 8, issue #36). Only a SHA-256 hash
@@ -144,6 +149,11 @@ model AdminInvite {
   tokenHash       String    @unique
   expiresAt       DateTime
   consumedAt      DateTime?
+  // Issue #277: non-null once an admin revokes the invite. Redemption
+  // requires consumedAt IS NULL AND revokedAt IS NULL, so revoke vs redeem
+  // is decided by exactly one conditional UPDATE; a revoked invite never
+  // becomes redeemable again. Cleared rows are pruned after expiry (#276).
+  revokedAt       DateTime?
   invitedByUserId String
   createdAt       DateTime  @default(now())
 
@@ -195,11 +205,16 @@ model RefreshSession {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt  DateTime  @default(now())
+  createdAt     DateTime  @default(now())
   // Updated on refresh only — never on every access-token-authenticated
   // request, so this doesn't become a write hot-spot on the User row.
-  lastUsedAt DateTime  @default(now())
-  revokedAt  DateTime?
+  lastUsedAt    DateTime  @default(now())
+  revokedAt     DateTime?
+  // Issue #278: why the session died when it wasn't the user's own choice —
+  // `max_active_sessions` today. Lets the cap eviction be told apart from a
+  // "sign out" or an admin revocation without a second table. Null on rows
+  // that are still active, and on revocations that didn't record a reason.
+  revokedReason String?
 
   userAgent String?
   ip        String?
