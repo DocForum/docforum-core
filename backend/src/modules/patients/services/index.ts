@@ -3,6 +3,7 @@ import { prisma, runWithRlsContext } from '../../../db/prisma-client';
 import type { PatientProfile } from '@prisma/client';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
+import { versionConflict } from '../../../middleware/optimistic-concurrency';
 import * as patientsRepo from '../repositories';
 import { ChunkWriter, EXPORT_SCHEMA_VERSION, ExportSectionError, writeExportBundle } from './export-bundle';
 import { listExportSections, type PatientExportSection } from './export-registry';
@@ -32,6 +33,20 @@ export async function getMyPatientProfile(userId: string) {
   // deleted.
   if (!profile || profile.anonymizedAt) throw new HttpError(404, 'No patient profile for this account.');
   return profile;
+}
+
+export async function updateMyPatientProfile(
+  userId: string,
+  version: number,
+  input: { fullName?: string; dateOfBirth?: Date },
+) {
+  const current = await getMyPatientProfile(userId);
+  if (input.dateOfBirth && input.dateOfBirth.getTime() > Date.now()) {
+    throw new HttpError(400, 'dateOfBirth cannot be in the future.');
+  }
+  const updated = await patientsRepo.updatePatientProfile(current.id, version, input);
+  if (!updated) throw versionConflict();
+  return updated;
 }
 
 /** This module's own export section: the profile itself. A single item. */

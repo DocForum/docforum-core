@@ -7,6 +7,7 @@ import { config } from '../../../config';
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import * as auditService from '../../audit/services';
+import type { AuditActor } from '../../audit/services';
 import * as usersRepo from '../repositories';
 import { generateAdminInviteToken, hashAdminInviteToken } from './invite-tokens';
 import type { Role } from '@prisma/client';
@@ -64,7 +65,10 @@ export interface CreatedAdminInvite {
   inviteUrl: string;
 }
 
-export async function createAdminInvite(input: CreateAdminInviteInput): Promise<CreatedAdminInvite> {
+export async function createAdminInvite(
+  input: CreateAdminInviteInput,
+  actor?: AuditActor,
+): Promise<CreatedAdminInvite> {
   const email = input.email.trim();
   if (!email) throw new HttpError(400, 'An email address is required.');
 
@@ -84,7 +88,7 @@ export async function createAdminInvite(input: CreateAdminInviteInput): Promise<
     tokenHash: hashAdminInviteToken(token),
     expiresAt,
     invitedByUserId: input.invitedByUserId,
-  });
+  }, actor);
 
   return {
     id: invite.id,
@@ -358,29 +362,72 @@ export interface DeactivateInput {
  * `sessionsInvalidatedAt` — that's the whole point of a soft deactivation
  * (AGENTS.md hard rules on append-only/mutability of order records).
  */
-export async function deactivateUser(input: DeactivateInput): Promise<PublicUser> {
-  const user = await usersRepo.findUserById(input.userId);
-  if (!user) throw new HttpError(404, 'User not found.');
-  if (user.deactivatedAt) return toPublicUser(user); // idempotent
+export async function deactivateUser(input: DeactivateInput, actor?: AuditActor): Promise<PublicUser> {
+  return prisma.$transaction(async (tx) => {
+    // Lock all active admin rows ordered by id to prevent deadlocks and prevent
+    // two concurrent admin deactivations from both observing activeAdmins > 1.
+    await tx.$queryRaw`SELECT id FROM "User" WHERE role = 'admin'::"Role" AND "deactivatedAt" IS NULL ORDER BY id FOR UPDATE`;
 
-  // The admin console is the only way back in, so the last active admin
-  // must not be able to lock everyone out of it (explicit in issue #39).
-  if (user.role === 'admin') {
-    const activeAdmins = await usersRepo.countActiveUsersByRole('admin');
-    if (activeAdmins <= 1) {
-      throw new HttpError(409, 'Cannot deactivate the last active admin.');
+    const user = await tx.user.findUnique({ where: { id: input.userId } });
+    if (!user) throw new HttpError(404, 'User not found.');
+    if (user.deactivatedAt) return toPublicUser(user); // idempotent: no audit event
+
+    // The admin console is the only way back in, so the last active admin
+    // must not be able to lock everyone out of it (explicit in issue #39 / #274).
+    if (user.role === 'admin') {
+      const activeAdmins = await tx.user.count({ where: { role: 'admin', deactivatedAt: null } });
+      if (activeAdmins <= 1) {
+        throw new HttpError(409, 'Cannot deactivate the last active admin.');
+      }
     }
-  }
 
-  const updated = await usersRepo.setUserDeactivated(user.id, new Date());
-  return toPublicUser(updated);
+    const now = new Date();
+    const updated = await tx.user.update({
+      where: { id: user.id },
+      data: { deactivatedAt: now, sessionsInvalidatedAt: now },
+    });
+
+    if (actor) {
+      await auditService.record(tx, actor, {
+        entityType: 'User',
+        entityId: user.id,
+        action: 'user.deactivated',
+        fromState: 'active',
+        toState: 'deactivated',
+      });
+    }
+
+    return toPublicUser(updated);
+  });
 }
 
-export async function reactivateUser(input: DeactivateInput): Promise<PublicUser> {
-  const user = await usersRepo.findUserById(input.userId);
-  if (!user) throw new HttpError(404, 'User not found.');
-  if (!user.deactivatedAt) return toPublicUser(user); // idempotent
+export async function reactivateUser(input: DeactivateInput, actor?: AuditActor): Promise<PublicUser> {
+  return prisma.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({ where: { id: input.userId } });
+    if (!user) throw new HttpError(404, 'User not found.');
+    if (!user.deactivatedAt) return toPublicUser(user); // idempotent: no audit event
 
-  const updated = await usersRepo.setUserReactivated(user.id, new Date());
-  return toPublicUser(updated);
+    const now = new Date();
+    const updated = await tx.user.update({
+      where: { id: user.id },
+      data: {
+        deactivatedAt: null,
+        // Also bumped on reactivation: tokens issued before deactivation must
+        // not come back to life because the account was re-enabled.
+        sessionsInvalidatedAt: now,
+      },
+    });
+
+    if (actor) {
+      await auditService.record(tx, actor, {
+        entityType: 'User',
+        entityId: user.id,
+        action: 'user.reactivated',
+        fromState: 'deactivated',
+        toState: 'active',
+      });
+    }
+
+    return toPublicUser(updated);
+  });
 }

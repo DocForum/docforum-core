@@ -66,6 +66,14 @@ export {
   type RequestPasswordResetInput,
 } from './password-reset';
 
+// Email change (Phase 8, issue #271)
+export {
+  requestEmailChange,
+  confirmEmailChange,
+  type RequestEmailChangeInput,
+  type ConfirmEmailChangeInput,
+} from './email-change';
+
 // Hashing is auth's business (issue #14): the admin-only facility-creation
 // path in the facilities module hashes the initial password through this
 // service surface rather than depending on bcrypt directly.

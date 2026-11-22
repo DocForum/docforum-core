@@ -59,3 +59,13 @@ export const verifyTwoFactorSchema = z.object({
   mfaToken: z.string().min(1),
   code: z.string().trim().min(6).max(20),
 });
+
+// Phase 8, issue #271 — change account email.
+export const requestEmailChangeSchema = z.object({
+  newEmail: z.string().trim().email(),
+  password: z.string().min(1, 'password is required to request an email change.'),
+});
+
+export const confirmEmailChangeSchema = z.object({
+  token: z.string().min(1, 'token is required to confirm an email change.'),
+});
