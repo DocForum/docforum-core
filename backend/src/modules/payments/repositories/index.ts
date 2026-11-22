@@ -160,6 +160,44 @@ export function findPaymentHistoryPage(
   });
 }
 
+export type AdminIntentFilter = {
+  status?: PaymentIntentStatus;
+  assetCode?: string;
+  facilityId?: string;
+  patientProfileId?: string;
+  from?: Date;
+  to?: Date;
+  before?: { createdAt: Date; id: string };
+  take: number;
+};
+
+/** Issue #325: keyset-paginated admin list of all payment intents with
+ * optional filters. Uses existing @@index([status]) and @@index([facilityId])
+ * — no new indexes needed. Amounts stay BigInt; callers stringify them. */
+export function findAdminPaymentIntentsPage(filter: AdminIntentFilter) {
+  return prisma.paymentIntent.findMany({
+    where: {
+      ...(filter.status ? { status: filter.status } : {}),
+      ...(filter.assetCode ? { assetCode: filter.assetCode } : {}),
+      ...(filter.facilityId ? { facilityId: filter.facilityId } : {}),
+      ...(filter.patientProfileId ? { patientProfileId: filter.patientProfileId } : {}),
+      ...(filter.from || filter.to
+        ? { createdAt: { ...(filter.from ? { gte: filter.from } : {}), ...(filter.to ? { lte: filter.to } : {}) } }
+        : {}),
+      ...(filter.before
+        ? {
+            OR: [
+              { createdAt: { lt: filter.before.createdAt } },
+              { createdAt: filter.before.createdAt, id: { lt: filter.before.id } },
+            ],
+          }
+        : {}),
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: filter.take,
+  });
+}
+
 /** Aggregate each lifecycle bucket, per asset, in PostgreSQL. The amount
  * stays BigInt end to end; mixing assets in one total would be meaningless. */
 export function aggregateFacilityPayments(facilityId: string, from?: Date, to?: Date) {

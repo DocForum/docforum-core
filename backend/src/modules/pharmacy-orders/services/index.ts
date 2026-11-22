@@ -15,7 +15,7 @@
 //  - "A single item can't be dispensed by two facilities" is a DB-level
 //    constraint (unique index on (orderType, dispensedKey)), not app timing.
 import { Prisma } from '@prisma/client';
-import type { FulfillmentItem, FulfillmentStatus, Role } from '@prisma/client';
+import type { FulfillmentItem, FulfillmentRejectionReason, FulfillmentStatus, FulfillmentUnfulfilledReason, Role } from '@prisma/client';
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { publish } from '../../../events';
@@ -168,7 +168,12 @@ export async function createFulfillment(
 export async function updateFulfillmentItem(
   recordId: string,
   itemId: string,
-  input: { status: 'dispensed' | 'unfulfilled'; quantityDispensed?: number },
+  input: {
+    status: 'dispensed' | 'unfulfilled';
+    quantityDispensed?: number;
+    unfulfilledReason?: string;
+    unfulfilledNote?: string;
+  },
   requester: Requester,
 ) {
   const record = await requireOwnedRecord(recordId, requester);
@@ -212,7 +217,11 @@ export async function updateFulfillmentItem(
                 quantityDispensed,
                 dispensedAt: new Date(),
               }
-            : { status: 'unfulfilled' },
+            : {
+                status: 'unfulfilled',
+                unfulfilledReason: (input.unfulfilledReason ?? null) as FulfillmentUnfulfilledReason | null,
+                unfulfilledNote: input.unfulfilledNote ?? null,
+              },
         );
         if (!ok) return false;
       } catch (error) {
@@ -269,7 +278,7 @@ export async function updateFulfillmentItem(
  * settable — it's derived from dispensed items. */
 export async function updateFulfillmentRecord(
   recordId: string,
-  input: { status: 'in_progress' | 'rejected' },
+  input: { status: 'in_progress' | 'rejected'; rejectionReason?: string; rejectionNote?: string },
   requester: Requester,
 ) {
   const record = await requireOwnedRecord(recordId, requester);
@@ -292,7 +301,15 @@ export async function updateFulfillmentRecord(
     const claimed = await tx.fulfillmentRecord
       .updateMany({
         where: { id: recordId, status: { in: ['pending', 'in_progress'] } },
-        data: { status: input.status },
+        data: {
+          status: input.status,
+          ...(input.status === 'rejected'
+            ? {
+                rejectionReason: (input.rejectionReason ?? 'unspecified') as FulfillmentRejectionReason,
+                rejectionNote: input.rejectionNote ?? null,
+              }
+            : {}),
+        },
       })
       .then((result) => result.count === 1);
     if (!claimed) return null;
@@ -327,12 +344,25 @@ export async function getFulfillment(recordId: string, requester: Requester) {
 }
 
 /** Derived order-level fulfillment state WITHOUT writing it back (read
- * path for the patient/doctor UI). */
+ * path for the patient/doctor UI). Includes rejection/unfulfilled reasons
+ * from all records so the patient can see why items were not dispensed
+ * (issue #322). */
 export async function getOrderFulfillmentSummary(
   orderType: OrderType,
   orderId: string,
-): Promise<{ orderType: OrderType; orderId: string; totalItems: number; dispensedItems: number; status: DerivedOrderStatus }> {
-  const items = await getOrderItems(orderType, orderId);
+): Promise<{
+  orderType: OrderType;
+  orderId: string;
+  totalItems: number;
+  dispensedItems: number;
+  status: DerivedOrderStatus;
+  rejections: { facilityId: string; reason: string; note: string | null }[];
+  unfulfilledItems: { orderItemId: string; reason: string; note: string | null }[];
+}> {
+  const [items, records] = await Promise.all([
+    getOrderItems(orderType, orderId),
+    repo.findFulfillmentRecordsForOrder(orderType, orderId),
+  ]);
   const dispensedItems =
     orderType === 'prescription'
       ? await repo.countDispensedOrderItems(
@@ -342,7 +372,25 @@ export async function getOrderFulfillmentSummary(
       : await repo.countDispensedOrderItems('lab_order', [orderId]);
   const status: DerivedOrderStatus =
     dispensedItems === items.length ? 'fulfilled' : dispensedItems > 0 ? 'partially_fulfilled' : 'issued';
-  return { orderType, orderId, totalItems: items.length, dispensedItems, status };
+
+  // Surface rejection and unfulfilled reasons for the patient view (#322).
+  const rejections = records
+    .filter((r) => r.status === 'rejected' && r.rejectionReason)
+    .map((r) => ({
+      facilityId: r.facilityId,
+      reason: r.rejectionReason ?? 'unspecified',
+      note: r.rejectionNote ?? null,
+    }));
+  const unfulfilledItems = records
+    .flatMap((r) => r.items)
+    .filter((item) => item.status === 'unfulfilled' && item.unfulfilledReason)
+    .map((item) => ({
+      orderItemId: item.orderItemId,
+      reason: item.unfulfilledReason ?? 'unspecified',
+      note: item.unfulfilledNote ?? null,
+    }));
+
+  return { orderType, orderId, totalItems: items.length, dispensedItems, status, rejections, unfulfilledItems };
 }
 
 export { computeConfirmedSignal, formatOrderResponse };

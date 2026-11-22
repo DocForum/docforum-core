@@ -11,6 +11,24 @@ export const createFulfillmentSchema = z.object({
   orderItemIds: z.array(z.string().min(1)).min(1).optional(),
 });
 
+const fulfillmentUnfulfilledReasonEnum = z.enum([
+  'out_of_stock',
+  'expired_stock',
+  'item_not_stocked',
+  'item_discontinued',
+  'partial_stock',
+  'other',
+]);
+
+const fulfillmentRejectionReasonEnum = z.enum([
+  'out_of_stock',
+  'expired_stock',
+  'facility_capacity',
+  'no_staff_available',
+  'facility_closure',
+  'other',
+]);
+
 export const updateFulfillmentItemSchema = z
   .object({
     // `pending` → `dispensed` | `unfulfilled`. A terminal item can never
@@ -20,17 +38,32 @@ export const updateFulfillmentItemSchema = z
     // Required when dispensing an item whose quantity isn't tracked by
     // the order (always, until Phase 4 items grow a quantity field).
     quantityDispensed: z.number().int().min(1).optional(),
+    // Issue #322: required when marking an item unfulfilled.
+    unfulfilledReason: fulfillmentUnfulfilledReasonEnum.optional(),
+    unfulfilledNote: z.string().max(500).optional(),
   })
   .refine((value) => value.status === 'unfulfilled' || (value.quantityDispensed ?? 0) > 0, {
     message: 'quantityDispensed (a positive integer) is required when status is "dispensed".',
     path: ['quantityDispensed'],
+  })
+  .refine((value) => value.status !== 'unfulfilled' || value.unfulfilledReason !== undefined, {
+    message: 'unfulfilledReason is required when status is "unfulfilled".',
+    path: ['unfulfilledReason'],
   });
 
-export const updateFulfillmentRecordSchema = z.object({
-  // `fulfilled` is deliberately NOT settable: it is derived from the
-  // record's dispensed items (issue #73), never asserted by the facility.
-  status: z.enum(['in_progress', 'rejected']),
-});
+export const updateFulfillmentRecordSchema = z
+  .object({
+    // `fulfilled` is deliberately NOT settable: it is derived from the
+    // record's dispensed items (issue #73), never asserted by the facility.
+    status: z.enum(['in_progress', 'rejected']),
+    // Issue #322: required when rejecting the whole record.
+    rejectionReason: fulfillmentRejectionReasonEnum.optional(),
+    rejectionNote: z.string().max(500).optional(),
+  })
+  .refine((value) => value.status !== 'rejected' || value.rejectionReason !== undefined, {
+    message: 'rejectionReason is required when status is "rejected".',
+    path: ['rejectionReason'],
+  });
 
 export const orderFulfillmentStatusQuerySchema = z.object({
   orderType: z.enum(['prescription', 'lab_order']),
