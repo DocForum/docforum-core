@@ -23,6 +23,14 @@ enum DisputeStatus {
   resolved
 }
 
+// Issue #311: closed vocabulary for how a dispute is settled, so reports
+// can filter/group without parsing free text.
+enum DisputeOutcome {
+  upheld
+  rejected
+  refunded
+}
+
 model Order {
   id                  String      @id @default(uuid())
   orderType           OrderType
@@ -94,7 +102,7 @@ model OrderDisputeResolution {
   disputeId       String
   adminUserId     String
   resolutionNotes String
-  outcome         String // e.g. 'upheld' | 'rejected' | 'refunded'
+  outcome         DisputeOutcome
   createdAt       DateTime @default(now())
 
   dispute   OrderDispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)

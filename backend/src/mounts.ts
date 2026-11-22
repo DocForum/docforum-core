@@ -22,6 +22,7 @@ export { mount as metrics } from './modules/metrics/mount';
 export { mount as notifications } from './modules/notifications/mount';
 export { mount as orders } from './modules/orders/mount';
 export { mount as patients } from './modules/patients/mount';
+export { mount as prescriptions } from './modules/prescriptions/mount';
 export { mount as payments } from './modules/payments/mount';
 export { mount as pharmacyOrders } from './modules/pharmacy-orders/mount';
 export { mount as referrals } from './modules/referrals/mount';

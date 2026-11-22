@@ -10,12 +10,36 @@ export function findPrescriptionById(id: string) {
   return prisma.prescription.findUnique({ where: { id } });
 }
 
+/** Issue #314: full prescription + items for the detail-read endpoint. */
+export function findPrescriptionWithItems(id: string) {
+  return prisma.prescription.findUnique({
+    where: { id },
+    include: {
+      items: {
+        select: {
+          id: true,
+          drugName: true,
+          dosage: true,
+          frequency: true,
+          duration: true,
+          quantity: true,
+          unit: true,
+          medicationId: true,
+          flaggedForPharmacistReview: true,
+        },
+      },
+    },
+  });
+}
+
 export function listItems(prescriptionId: string) {
   // No orderBy: PrescriptionItem has no created_at (ARCHITECTURE.md §4.5),
   // and the item universe is order-insensitive for the derivation.
   return prisma.prescriptionItem.findMany({
     where: { prescriptionId },
-    select: { id: true, drugName: true },
+    // Issue #312: quantity included so getItemsForFulfillment can populate
+    // FulfillmentItem.quantityOrdered for over-dispensing checks.
+    select: { id: true, drugName: true, quantity: true },
   });
 }
 
@@ -36,4 +60,12 @@ export function applyOrderStatusIf(
   return db.prescription
     .updateMany({ where: { id, status: { in: allowedFrom } }, data: { status: to } })
     .then((result) => result.count === 1);
+}
+
+/** Returns the patientProfileId for a prescription — used by cross-module
+ * callers that need to verify ownership (issue #323). */
+export function findPatientProfileIdForPrescription(id: string) {
+  return prisma.prescription
+    .findUnique({ where: { id }, select: { patientProfileId: true } })
+    .then((row) => row?.patientProfileId ?? null);
 }

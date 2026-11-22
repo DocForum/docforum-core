@@ -34,3 +34,11 @@ export {
   createFulfillmentProof,
   markOrderFulfilled,
 } from '../../pharmacy-orders/repositories';
+
+/** Returns the patientProfileId for a lab order — used by cross-module
+ * callers that need to verify ownership (issue #323). */
+export function findPatientProfileIdForLabOrder(id: string) {
+  return prisma.labOrder
+    .findUnique({ where: { id }, select: { patientProfileId: true } })
+    .then((row) => row?.patientProfileId ?? null);
+}

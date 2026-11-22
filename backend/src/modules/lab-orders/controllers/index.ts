@@ -28,6 +28,7 @@ export async function fulfillLabOrder(req: Request, res: Response) {
 
 export async function getLabOrder(req: Request, res: Response) {
   const id = req.params.id as string;
-  const order = await services.getLabOrderById(id);
+  const viewer = { userId: req.user!.id, role: req.user!.role as string };
+  const order = await services.getLabOrderForViewer(id, viewer, req.path);
   res.status(200).json(order);
 }

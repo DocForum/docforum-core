@@ -92,6 +92,10 @@ interface ResolvedPrescriptionItem {
   duration: string;
   medicationId: string | null;
   flaggedForPharmacistReview: boolean;
+  // Issue #312: quantity and unit are required by the validation schema and
+  // forwarded verbatim — no server-side derivation needed.
+  quantity: number;
+  unit: string;
 }
 
 /**
@@ -111,7 +115,7 @@ interface ResolvedPrescriptionItem {
  */
 async function resolvePrescriptionItems(
   tx: Prisma.TransactionClient,
-  items: Array<{ medicationId?: string; drugName?: string; dosage: string; frequency: string; duration: string }>,
+  items: Array<{ medicationId?: string; drugName?: string; dosage: string; frequency: string; duration: string; quantity: number; unit: string }>,
 ): Promise<ResolvedPrescriptionItem[]> {
   const catalogIds = items
     .map((item) => item.medicationId)
@@ -128,6 +132,8 @@ async function resolvePrescriptionItems(
         duration: item.duration,
         medicationId: medication.id,
         flaggedForPharmacistReview: false,
+        quantity: item.quantity,
+        unit: item.unit,
       };
     }
     return {
@@ -138,6 +144,8 @@ async function resolvePrescriptionItems(
       duration: item.duration,
       medicationId: null,
       flaggedForPharmacistReview: true,
+      quantity: item.quantity,
+      unit: item.unit,
     };
   });
 }
@@ -145,7 +153,7 @@ async function resolvePrescriptionItems(
 export async function issuePrescription(actor: auditService.AuditActor, input: {
   consultationId: string; facilityProfileId: string; amountStroops?: bigint; catalogItemCode?: string;
   supersedesPrescriptionId?: string;
-  items: Array<{ medicationId?: string; drugName?: string; dosage: string; frequency: string; duration: string }>;
+  items: Array<{ medicationId?: string; drugName?: string; dosage: string; frequency: string; duration: string; quantity: number; unit: string }>;
 }) {
   const { consultation, appointment } = await consultationContext(actor, input.consultationId);
   let predecessor = null;
@@ -206,11 +214,17 @@ export async function issueLabOrder(actor: auditService.AuditActor, input: {
     return await prisma.$transaction(async (tx) => {
       await facilitiesService.requireFacilityForOrderKind(tx, input.facilityProfileId, 'lab_order');
       const pricing = await resolveOrderAmount(tx, input);
+      // Issue #313: set expiresAt at issuance so the expiry job has a target.
+      const ttlDays = input.urgency === 'urgent'
+        ? config.labOrders.urgentTtlDays
+        : config.labOrders.routineTtlDays;
+      const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
       const order = await ordersRepo.createLabOrder(tx, {
         consultationId: consultation.id, patientProfileId: appointment.patientProfileId,
         orderingDoctorId: appointment.doctorProfileId, facilityProfileId: input.facilityProfileId,
         amountStroops: pricing.amountStroops, testType: input.testType, urgency: input.urgency,
         notes: encryptField(input.notes) ?? null, supersedesLabOrderId: predecessor?.id ?? null,
+        expiresAt,
       });
       const paymentIntent = await createOrderPayment(tx, {
         kind: 'lab_order', orderId: order.id, patientProfileId: appointment.patientProfileId,
@@ -425,7 +439,7 @@ export const prescriptionsExportSection: PatientExportSection = {
         id: row.id, consultationId: row.consultationId, prescribingDoctorId: row.prescribingDoctorId,
         facilityProfileId: row.facilityProfileId, amountStroops: row.amountStroops.toString(),
         supersedesPrescriptionId: row.supersedesPrescriptionId, createdAt: row.createdAt,
-        items: row.items.map(({ drugName, dosage, frequency, duration }) => ({ drugName, dosage, frequency, duration })),
+        items: row.items.map(({ drugName, dosage, frequency, duration, quantity, unit }) => ({ drugName, dosage, frequency, duration, quantity, unit })),
       })),
     );
   },
