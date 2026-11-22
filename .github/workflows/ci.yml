@@ -25,6 +25,10 @@ jobs:
 
       - run: npm ci
 
+      - name: No tracked backup files
+        working-directory: .
+        run: node scripts/check-no-backup-files.mjs
+
       # typescript-eslint has no TypeScript 7 support yet (TS 7 ships no
       # compiler API), so the linter lives in its own package pinned to the
       # TypeScript 6 compatibility API. See tools/lint/eslint.config.mjs.
