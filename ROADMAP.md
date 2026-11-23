@@ -788,8 +788,8 @@ and issue links.
   match the facility type (`lab` ↔ `lab_test`, `pharmacy` ↔
   `medication_dispense`) and at least one is required, so an account created
   through this path can never be un-qualifiable data. Capability management
-  after creation (edit/retire a capability) has no endpoint yet — that surface
-  is still pending.
+  after creation (edit/retire a capability) is now implemented via
+  `POST/DELETE /facilities/:id/capabilities` (issue #320).
   Matching (PRD FR-13): `GET /facilities/eligible` now returns only facilities
   of the requested type that *hold* the matching `FacilityCapability` row, and
   the services export `listEligibleFacilitiesForOrderKind('lab_order' |

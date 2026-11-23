@@ -125,6 +125,24 @@ export function listRecordItems(db: DbClient, fulfillmentRecordId: string) {
   });
 }
 
+/** All fulfillment records for a prescription order — patient read path (issue #323). */
+export function listFulfillmentRecordsByPrescription(prescriptionId: string) {
+  return prisma.fulfillmentRecord.findMany({
+    where: { prescriptionId },
+    include: { items: { orderBy: { createdAt: 'asc' } }, facility: { select: { id: true, name: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+/** All fulfillment records for a lab order — patient read path (issue #323). */
+export function listFulfillmentRecordsByLabOrder(labOrderId: string) {
+  return prisma.fulfillmentRecord.findMany({
+    where: { labOrderId },
+    include: { items: { orderBy: { createdAt: 'asc' } }, facility: { select: { id: true, name: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
 export async function findOrderById(tx: Prisma.TransactionClient, orderId: string, orderType?: OrderType) {
   return tx.order.findFirst({
     where: {

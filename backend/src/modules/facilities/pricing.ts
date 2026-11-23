@@ -14,6 +14,8 @@ export const NATIVE_PRICE_ASSET = 'native';
 export interface PriceVersion {
   effectiveFrom: Date;
   amount: bigint;
+  /** Issue #321: a retirement version stops the item from being priced. */
+  retired: boolean;
 }
 
 /**
@@ -25,6 +27,9 @@ export interface PriceVersion {
  * price at 12:00 charges it from 12:00, not from the next instant.
  */
 export function selectCurrentPrice<T extends PriceVersion>(versions: readonly T[], at: Date): T | undefined {
+  // Newest in-force version wins (whether active or retired). Retirement is
+  // represented as a version with retired = true — the caller decides what
+  // to do with a retired current version. See issue #321.
   let current: T | undefined;
   for (const version of versions) {
     if (version.effectiveFrom.getTime() > at.getTime()) continue;
@@ -56,5 +61,18 @@ export function priceOnRequestError(catalogItemCode: string): HttpError {
     422,
     `This facility has no price for '${catalogItemCode}' yet — price on request.`,
     'PRICE_ON_REQUEST',
+  );
+}
+
+/**
+ * The error for "the item has been retired from this facility's price list".
+ * 422 with a stable `ITEM_RETIRED` code so callers can distinguish it from
+ * "never published" (PRICE_ON_REQUEST). Issue #321.
+ */
+export function itemRetiredError(catalogItemCode: string): HttpError {
+  return new HttpError(
+    422,
+    `'${catalogItemCode}' has been retired from this facility's price list.`,
+    'ITEM_RETIRED',
   );
 }

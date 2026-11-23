@@ -82,3 +82,16 @@ export const createFacilitySchema = z.object({
   type: z.enum(['lab', 'pharmacy']),
   capabilities: z.array(facilityCapabilitySchema).min(1).max(20),
 }).strict();
+
+/** POST /facilities/:id/capabilities — admin adds one capability (issue #320). */
+export const addCapabilitySchema = z.object({
+  capabilityType: z.enum(['lab_test', 'medication_dispense']),
+  detail: z.string().trim().min(1).max(100).nullish(),
+}).strict();
+
+/** POST /facilities/me/prices/retire — retire an item from the price list (issue #321). */
+export const retirePriceItemSchema = z.object({
+  catalogItemCode: z.string().min(1).max(100),
+  asset: z.string().min(1).max(120).optional(),
+  effectiveFrom: z.string().min(1).optional(),
+});

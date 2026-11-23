@@ -58,6 +58,16 @@ export async function getOrderFulfillmentStatus(req: Request, res: Response) {
   res.status(200).json(summary);
 }
 
+export async function listFulfillmentsForOrder(req: Request, res: Response) {
+  const { orderType } = orderFulfillmentStatusQuerySchema.parse(req.query);
+  const records = await pharmacyOrdersService.listFulfillmentsForOrder(
+    orderType as pharmacyOrdersService.OrderType,
+    getParam(req, 'orderId'),
+    requireUser(req),
+  );
+  res.status(200).json({ fulfillments: records });
+}
+
 // --- Pharmacy order creation / fulfillment proof ------------------------
 
 export async function createPharmacyOrder(req: Request, res: Response) {

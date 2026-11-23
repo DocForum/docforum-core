@@ -311,4 +311,73 @@ describe('facility account creation + capability matching (issue #14)', () => {
       facilitiesService.facilityRequirementForOrderKind('nonsense' as 'lab_order'),
     ).toThrowError(expect.objectContaining({ status: 400 }));
   });
+
+  describe('capability management (issue #320)', () => {
+    it('admin can add and remove a capability; eligible-facilities reflects the change', async () => {
+      // Create a fresh lab with one capability.
+      const labRes = await request(app)
+        .post('/facilities')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          email: `cap-mgmt-lab-${runId}@example.com`,
+          password: PASSWORD,
+          name: `Cap-Mgmt Lab ${runId}`,
+          type: 'lab',
+          capabilities: [{ capabilityType: 'lab_test', detail: null }],
+        })
+        .expect(201);
+      const labId = labRes.body.id as string;
+      const capId = labRes.body.capabilities[0].id as string;
+
+      // Admin adds an extra capability.
+      const addRes = await request(app)
+        .post(`/facilities/${labId}/capabilities`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ capabilityType: 'lab_test', detail: 'haematology' })
+        .expect(201);
+      expect(addRes.body.capabilityType).toBe('lab_test');
+      expect(addRes.body.detail).toBe('haematology');
+
+      // Duplicate tuple → 409.
+      await request(app)
+        .post(`/facilities/${labId}/capabilities`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ capabilityType: 'lab_test', detail: 'haematology' })
+        .expect(409);
+
+      // Remove the original null-detail capability.
+      await request(app)
+        .delete(`/facilities/${labId}/capabilities/${capId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(204);
+
+      // The lab still qualifies (it still has the haematology capability).
+      const eligible = await request(app).get('/facilities/eligible').query({ type: 'lab' });
+      const ids = eligible.body.facilities.map((f: { facilityId: string }) => f.facilityId);
+      expect(ids).toContain(labId);
+
+      // Remove the remaining capability — the lab disappears from /eligible.
+      const addRes2 = labRes.body.capabilities.find((c: { detail: string | null }) => c.detail === null);
+      const secondCapId = addRes.body.id as string;
+      await request(app)
+        .delete(`/facilities/${labId}/capabilities/${secondCapId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(204);
+
+      const eligible2 = await request(app).get('/facilities/eligible').query({ type: 'lab' });
+      const ids2 = eligible2.body.facilities.map((f: { facilityId: string }) => f.facilityId);
+      expect(ids2).not.toContain(labId);
+    });
+
+    it('rejects capability add/remove from unauthenticated or non-admin callers', async () => {
+      await request(app)
+        .post(`/facilities/${northlabId}/capabilities`)
+        .send({ capabilityType: 'lab_test', detail: null })
+        .expect(401);
+      await request(app)
+        .delete(`/facilities/${northlabId}/capabilities/nonexistent`)
+        .expect(401);
+    });
+  });
+
 });

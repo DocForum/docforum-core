@@ -8,6 +8,8 @@ import {
   createPriceVersionSchema,
   eligibleFacilitiesQuerySchema,
   priceFiltersSchema,
+  addCapabilitySchema,
+  retirePriceItemSchema,
 } from '../validation';
 
 /** BigInt does not serialize through JSON.stringify — every price response
@@ -19,6 +21,7 @@ function serializePrice(price: {
   asset: string;
   amount: bigint;
   effectiveFrom: Date;
+  retired: boolean;
   createdAt: Date;
 }) {
   return {
@@ -28,6 +31,7 @@ function serializePrice(price: {
     asset: price.asset,
     amountStroops: price.amount.toString(),
     effectiveFrom: price.effectiveFrom.toISOString(),
+    retired: price.retired,
     createdAt: price.createdAt.toISOString(),
   };
 }
@@ -97,4 +101,29 @@ export async function createFacility(req: Request, res: Response) {
   const body = createFacilitySchema.parse(req.body);
   const facility = await facilitiesService.createFacilityAccount(auditActor(req), body);
   res.status(201).json(facility);
+}
+
+/** POST /facilities/:id/capabilities — admin adds a capability (issue #320). */
+export async function addCapability(req: Request, res: Response) {
+  const facilityId = getParam(req, 'id');
+  const body = addCapabilitySchema.parse(req.body);
+  const capability = await facilitiesService.addFacilityCapability(auditActor(req), facilityId, body);
+  res.status(201).json(capability);
+}
+
+/** DELETE /facilities/:id/capabilities/:capabilityId — admin removes (issue #320). */
+export async function removeCapability(req: Request, res: Response) {
+  const facilityId = getParam(req, 'id');
+  const capabilityId = getParam(req, 'capabilityId');
+  await facilitiesService.removeFacilityCapability(auditActor(req), facilityId, capabilityId);
+  res.status(204).send();
+}
+
+/** POST /facilities/me/prices/retire — retire an item (issue #321). */
+export async function retireOwnPrice(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const body = retirePriceItemSchema.parse(req.body);
+  const facilityId = await facilitiesService.getOwnFacilityProfileId(req.user.id);
+  const price = await facilitiesService.retirePriceItem(auditActor(req), facilityId, body);
+  res.status(201).json(serializePrice(price));
 }

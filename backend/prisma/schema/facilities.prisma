@@ -128,6 +128,11 @@ model FacilityPrice {
   asset           String
   amount          BigInt
   effectiveFrom   DateTime
+  /// Issue #321: a retirement version sets this flag to true from effectiveFrom.
+  /// resolveCurrentPrice skips retired versions; issuance refuses an item whose
+  /// in-force version is retired (422 ITEM_RETIRED). Earlier intents priced
+  /// before retirement keep their snapshot — append-only history is unaffected.
+  retired         Boolean         @default(false)
   createdAt       DateTime        @default(now())
 
   // Two versions of the same item/asset cannot share an effective instant.

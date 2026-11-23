@@ -7,6 +7,10 @@ export function findPatientProfileByUserId(userId: string) {
   return prisma.patientProfile.findUnique({ where: { userId } });
 }
 
+export function findPatientProfileById(id: string) {
+  return prisma.patientProfile.findUnique({ where: { id } });
+}
+
 export function updatePatientProfile(
   id: string,
   version: number,
@@ -207,9 +211,6 @@ export function deleteUnservableExportChunks(): Promise<number> {
   `;
 }
 
-export function findPatientProfileById(id: string) {
-  return prisma.patientProfile.findUnique({ where: { id } });
-}
 
 export function findPatientSummariesByIds(ids: string[]) {
   return prisma.patientProfile.findMany({

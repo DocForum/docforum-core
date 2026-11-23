@@ -10,7 +10,7 @@ import {
 import { MAX_STROOPS, parseStroopsAmount } from '../../src/utils/stroops';
 import { prescriptionSchema, labOrderSchema } from '../../src/modules/orders/validation';
 
-const version = (iso: string, amount: bigint) => ({ effectiveFrom: new Date(iso), amount });
+const version = (iso: string, amount: bigint, retired = false) => ({ effectiveFrom: new Date(iso), amount, retired });
 
 describe('selectCurrentPrice', () => {
   const versions = [version('2026-10-01T00:00:00.000Z', 100n), version('2026-10-10T00:00:00.000Z', 200n)];
@@ -82,7 +82,7 @@ describe('native price asset', () => {
 
 describe('order pricing validation (issue #127)', () => {
   const base = { facilityProfileId: '5b1d4c0e-1a2b-4c3d-8e9f-0a1b2c3d4e5f', items: [] as never[] };
-  const prescriptionItem = { drugName: 'Amoxicillin', dosage: '500mg', frequency: 'TID', duration: '7d' };
+  const prescriptionItem = { drugName: 'Amoxicillin', dosage: '500mg', frequency: 'TID', duration: '7d', quantity: 30, unit: 'tablets' };
 
   it('accepts amountStroops alone (legacy manual pricing)', () => {
     const parsed = prescriptionSchema.parse({ ...base, items: [prescriptionItem], amountStroops: '15000000' });

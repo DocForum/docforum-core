@@ -25,6 +25,12 @@ import { isMinor } from './majority';
 
 export { isMinor, majorityDate } from './majority';
 
+/** Look up a patient profile by its primary key — used by cross-module
+ * callers that already hold a patientProfileId (issue #318). */
+export async function findPatientProfileById(id: string) {
+  return patientsRepo.findPatientProfileById(id);
+}
+
 export async function getMyPatientProfile(userId: string) {
   const profile = await patientsRepo.findPatientProfileByUserId(userId);
   // An anonymised profile (issue #41) belongs to a deleted account: every
@@ -577,4 +583,24 @@ export async function resolveActingProfile(
 export async function hasGuardianshipsAsGuardian(patientProfileId: string): Promise<boolean> {
   const profile = await patientsRepo.findPatientProfileById(patientProfileId);
   return profile?.userId ? patientsRepo.guardianHasGuardianships(profile.userId) : false;
+}
+
+/**
+ * Returns true if `actingProfileId` can read records belonging to
+ * `ownerProfileId` — i.e. they are the same profile, or `actingProfileId`
+ * is an active guardian of `ownerProfileId`. Used by cross-module callers
+ * that have already resolved both profile ids (issue #323).
+ */
+export async function isProfileAccessibleTo(
+  ownerProfileId: string,
+  actingProfileId: string,
+  now = new Date(),
+): Promise<boolean> {
+  if (ownerProfileId === actingProfileId) return true;
+  // Look for a guardianship where actingProfileId's user guards ownerProfileId.
+  const actingProfile = await patientsRepo.findPatientProfileById(actingProfileId);
+  if (!actingProfile?.userId) return false;
+  const guardianship = await patientsRepo.findGuardianship(actingProfile.userId, ownerProfileId);
+  if (!guardianship) return false;
+  return isActive(guardianship, now);
 }

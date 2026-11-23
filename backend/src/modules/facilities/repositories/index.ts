@@ -73,7 +73,8 @@ export function findPriceVersionsForFacilities(
   });
 }
 
-/** Appends a price version. Never updates an existing row — history stays. */
+/** Appends a price version. Never updates an existing row — history stays.
+ * Pass `retired: true` to publish a retirement version (issue #321). */
 export function createPriceVersion(
   db: Db,
   data: {
@@ -82,6 +83,7 @@ export function createPriceVersion(
     asset: string;
     amount: bigint;
     effectiveFrom: Date;
+    retired?: boolean;
   },
 ) {
   return db.facilityPrice.create({ data });
@@ -266,4 +268,27 @@ export async function createFacilityCapabilities(
     where: { facilityProfileId },
     orderBy: [{ capabilityType: 'asc' }, { detail: 'asc' }],
   });
+}
+
+// --- Capability management (issue #320) -----------------------------------
+
+export function findCapabilityById(id: string, db: Db = prisma) {
+  return db.facilityCapability.findUnique({ where: { id } });
+}
+
+/** Adds one capability to an existing facility. The unique constraint on
+ * (facilityProfileId, capabilityType, detail) is enforced by the DB; the
+ * service must catch P2002 and map it to 409. */
+export function addCapability(
+  db: Db,
+  facilityProfileId: string,
+  data: { capabilityType: CapabilityType; detail: string | null },
+) {
+  return db.facilityCapability.create({ data: { facilityProfileId, ...data } });
+}
+
+/** Removes one capability row. Returns the deleted row so the service can
+ * log it; throws P2025 (Prisma) when the row does not exist. */
+export function removeCapabilityById(db: Db, id: string) {
+  return db.facilityCapability.delete({ where: { id } });
 }

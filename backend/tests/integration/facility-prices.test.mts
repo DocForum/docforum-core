@@ -256,4 +256,64 @@ describe('facility price lists and intent pricing (issue #127)', () => {
     expect(intent.amount).toBe(4_200_000n);
     expect(intent.catalogItemCode).toBeNull();
   });
+
+  it('retires an item: POST /me/prices/retire returns 201 and requireCurrentPrice throws ITEM_RETIRED (issue #321)', async () => {
+    const catalogItemCode = `retire-me-${runId}`;
+    // Publish a price for the item
+    await request(app)
+      .post('/facilities/me/prices')
+      .set('Authorization', `Bearer ${facilityToken}`)
+      .send({ catalogItemCode, amount: '5000000', effectiveFrom: '2025-01-01T00:00:00.000Z' })
+      .expect(201);
+
+    // Retire it
+    const retireRes = await request(app)
+      .post('/facilities/me/prices/retire')
+      .set('Authorization', `Bearer ${facilityToken}`)
+      .send({ catalogItemCode, effectiveFrom: '2025-06-01T00:00:00.000Z' });
+    expect(retireRes.status).toBe(201);
+    expect(retireRes.body.retired).toBe(true);
+    expect(retireRes.body.catalogItemCode).toBe(catalogItemCode);
+
+    // resolveCurrentPrice now returns null (the in-force version is retired)
+    const resolved = await facilitiesService.resolveCurrentPrice(prisma, {
+      facilityProfileId: facilityId,
+      catalogItemCode,
+      at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    expect(resolved).toBeNull();
+
+    // requireCurrentPrice throws ITEM_RETIRED, not PRICE_ON_REQUEST
+    await expect(
+      facilitiesService.requireCurrentPrice(prisma, {
+        facilityProfileId: facilityId,
+        catalogItemCode,
+        at: new Date('2026-01-01T00:00:00.000Z'),
+      }),
+    ).rejects.toMatchObject({ status: 422, code: 'ITEM_RETIRED' });
+  });
+
+  it('retirement does not affect prices queried at a time before the retirement version (issue #321)', async () => {
+    const catalogItemCode = `retire-history-${runId}`;
+    await request(app)
+      .post('/facilities/me/prices')
+      .set('Authorization', `Bearer ${facilityToken}`)
+      .send({ catalogItemCode, amount: '7000000', effectiveFrom: '2025-01-01T00:00:00.000Z' })
+      .expect(201);
+    await request(app)
+      .post('/facilities/me/prices/retire')
+      .set('Authorization', `Bearer ${facilityToken}`)
+      .send({ catalogItemCode, effectiveFrom: '2025-12-01T00:00:00.000Z' })
+      .expect(201);
+
+    // Before retirement: price is still active
+    const price = await facilitiesService.resolveCurrentPrice(prisma, {
+      facilityProfileId: facilityId,
+      catalogItemCode,
+      at: new Date('2025-06-01T00:00:00.000Z'),
+    });
+    expect(price).not.toBeNull();
+    expect(price?.amount).toBe(7_000_000n);
+  });
+
 });

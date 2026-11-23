@@ -478,3 +478,128 @@ describe('partial fulfillment (issue #73)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('patient fulfillment reads (issue #323)', () => {
+  it('patient can GET their own fulfillment record and list records for their order', async () => {
+    const prescription = await createPrescriptionWithItems(['Aspirin 100mg']);
+    const item = prescription.items[0];
+
+    // Route to facilityA
+    const routed = await request(app)
+      .post('/pharmacy-orders/fulfillments')
+      .set('Authorization', `Bearer ${patientToken}`)
+      .send({
+        orderType: 'prescription',
+        orderId: prescription.id,
+        facilityId: facilityA.profile.id,
+        orderItemIds: [item.id],
+      })
+      .expect(201);
+    const recordId = routed.body.id as string;
+
+    // Patient GET /fulfillments/:id — should succeed.
+    const getRes = await request(app)
+      .get(`/pharmacy-orders/fulfillments/${recordId}`)
+      .set('Authorization', `Bearer ${patientToken}`)
+      .expect(200);
+    expect(getRes.body.id).toBe(recordId);
+
+    // Patient GET /orders/:orderId/fulfillments
+    const listRes = await request(app)
+      .get(`/pharmacy-orders/orders/${prescription.id}/fulfillments`)
+      .query({ orderType: 'prescription' })
+      .set('Authorization', `Bearer ${patientToken}`)
+      .expect(200);
+    expect(listRes.body.fulfillments).toHaveLength(1);
+    expect(listRes.body.fulfillments[0].id).toBe(recordId);
+  });
+
+  it('patient cannot read a fulfillment record that belongs to another patient', async () => {
+    // Create a second patient
+    const otherUser = await prisma.user.create({
+      data: {
+        email: `other-patient-${runId}@example.com`,
+        passwordHash: 'unused',
+        role: 'patient',
+        emailVerifiedAt: new Date(),
+      },
+    });
+    const otherProfile = await prisma.patientProfile.create({
+      data: { userId: otherUser.id, fullName: 'Other Patient', dateOfBirth: new Date('1990-01-01') },
+    });
+    const context = await createOrderContext();
+    const otherPrescription = await prisma.prescription.create({
+      data: {
+        consultationId: context.consultationId,
+        patientProfileId: otherProfile.id,
+        orderingDoctorId: context.doctorProfileId,
+        facilityProfileId: facilityA.profile.id,
+        amountStroops: 100n,
+        items: { create: [{ drugName: 'OtherDrug', dosage: '10mg', frequency: 'OD', duration: '3d' }] },
+      },
+      include: { items: true },
+    });
+
+    const routed = await request(app)
+      .post('/pharmacy-orders/fulfillments')
+      .set('Authorization', `Bearer ${patientToken}`)
+      .send({
+        orderType: 'prescription',
+        orderId: otherPrescription.id,
+        facilityId: facilityA.profile.id,
+        orderItemIds: [otherPrescription.items[0].id],
+      });
+    // The first patient cannot route another's prescription, but let's seed directly.
+    const otherRecord = await prisma.fulfillmentRecord.create({
+      data: {
+        prescriptionId: otherPrescription.id,
+        facilityId: facilityA.profile.id,
+        items: {
+          create: [{
+            orderType: 'prescription',
+            orderItemId: otherPrescription.items[0].id,
+            quantityOrdered: null,
+          }],
+        },
+      },
+    });
+
+    // The first patient (patientToken) must not see the other patient's record.
+    await request(app)
+      .get(`/pharmacy-orders/fulfillments/${otherRecord.id}`)
+      .set('Authorization', `Bearer ${patientToken}`)
+      .expect(403);
+  });
+
+  it('facility sees only its own records in the list', async () => {
+    const prescription = await createPrescriptionWithItems(['Zinc 10mg']);
+    const item = prescription.items[0];
+
+    // Route to facilityA
+    await request(app)
+      .post('/pharmacy-orders/fulfillments')
+      .set('Authorization', `Bearer ${patientToken}`)
+      .send({
+        orderType: 'prescription',
+        orderId: prescription.id,
+        facilityId: facilityA.profile.id,
+        orderItemIds: [item.id],
+      })
+      .expect(201);
+
+    // facilityA's list includes the record; facilityB's list is empty.
+    const listA = await request(app)
+      .get(`/pharmacy-orders/orders/${prescription.id}/fulfillments`)
+      .query({ orderType: 'prescription' })
+      .set('Authorization', `Bearer ${facilityA.token}`)
+      .expect(200);
+    expect(listA.body.fulfillments).toHaveLength(1);
+
+    const listB = await request(app)
+      .get(`/pharmacy-orders/orders/${prescription.id}/fulfillments`)
+      .query({ orderType: 'prescription' })
+      .set('Authorization', `Bearer ${facilityB.token}`)
+      .expect(200);
+    expect(listB.body.fulfillments).toHaveLength(0);
+  });
+});

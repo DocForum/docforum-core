@@ -16,9 +16,8 @@ pharmacyOrdersRouter.post(
   pharmacyOrdersController.createFulfillment,
 );
 
-// Owning facility or admin. A patient reading their order's fulfillment
-// is blocked on Phase 4 linking patients to orders — documented gap,
-// ARCHITECTURE.md §6.2.
+// Owning facility, admin, or the patient whose order the record belongs to
+// (issue #323 — Phase 4 link now exists: Prescription/LabOrder.patientProfileId).
 pharmacyOrdersRouter.get('/fulfillments/:id', authenticate, pharmacyOrdersController.getFulfillment);
 
 // Facility-only writes to its own records (hard rule 5 — the ownership
@@ -45,6 +44,14 @@ pharmacyOrdersRouter.get(
   '/orders/:orderId/fulfillment-status',
   authenticate,
   pharmacyOrdersController.getOrderFulfillmentStatus,
+);
+
+// Patient / facility / admin: list all fulfillment records for one order.
+// orderType query param disambiguates prescription vs. lab_order (issue #323).
+pharmacyOrdersRouter.get(
+  '/orders/:orderId/fulfillments',
+  authenticate,
+  pharmacyOrdersController.listFulfillmentsForOrder,
 );
 
 // Generic pharmacy order (Order model) creation and fulfillment proof.

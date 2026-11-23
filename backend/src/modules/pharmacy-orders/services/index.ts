@@ -25,6 +25,8 @@ import { record as recordAudit, type AuditActor } from '../../audit/services';
 import * as repo from '../repositories';
 import * as prescriptionsService from '../../prescriptions/services';
 import * as labOrdersService from '../../lab-orders/services';
+import * as patientsService from '../../patients/services';
+import * as facilitiesService from '../../facilities/services';
 
 export type OrderType = 'prescription' | 'lab_order';
 export type DerivedOrderStatus = 'issued' | 'partially_fulfilled' | 'fulfilled';
@@ -319,11 +321,94 @@ export async function updateFulfillmentRecord(
   return updated;
 }
 
-/** Read a record with its item rows. Owner facility or admin only — a
- * patient's access to their own order's fulfillment is blocked on Phase 4
- * linking PatientProfile to orders (documented gap, ARCHITECTURE.md §6.2). */
+/** Read a record with its item rows.
+ * Facility: must be the owning facility (hard rule 5).
+ * Admin: unrestricted.
+ * Patient: allowed when the fulfillment's linked order belongs to them or
+ *   to a dependent they guard (issue #323 — Phase 4 link now exists).
+ *   Facility-internal cost fields are stripped for patient callers. */
 export async function getFulfillment(recordId: string, requester: Requester) {
-  return requireOwnedRecord(recordId, requester);
+  const record = await repo.findFulfillmentRecordById(recordId);
+  if (!record) throw new HttpError(404, 'Fulfillment record not found.');
+
+  if (requester.role === 'admin') return record;
+
+  if (requester.role === 'facility') {
+    const facilityId = await getOwnFacilityId(requester);
+    if (!facilityId || record.facilityId !== facilityId) {
+      throw new HttpError(403, 'This fulfillment record belongs to a different facility.');
+    }
+    return record;
+  }
+
+  if (requester.role === 'patient') {
+    // Resolve the patient profile that the JWT userId corresponds to.
+    // resolveActingProfile throws 404 when the user has no patient profile.
+    const actingProfile = await patientsService.resolveActingProfile(requester.userId);
+    // Check ownership: the linked order must belong to this patient or their
+    // ward. PatientProfile.userId links the JWT to the profile; the order
+    // stores patientProfileId directly.
+    const ownerProfileId = record.prescriptionId
+      ? await prescriptionsService.getPatientProfileIdForOrder(record.prescriptionId)
+      : record.labOrderId
+        ? await labOrdersService.getPatientProfileIdForOrder(record.labOrderId)
+        : null;
+    if (!ownerProfileId) throw new HttpError(404, 'Associated order not found.');
+    const allowed = await patientsService.isProfileAccessibleTo(ownerProfileId, actingProfile.id);
+    if (!allowed) throw new HttpError(403, 'This fulfillment record does not belong to your orders.');
+    // Strip facility-internal fields for patient callers.
+    return stripFacilityFields(record);
+  }
+
+  throw new HttpError(403, 'Access denied.');
+}
+
+/** List all fulfillment records for one order. Only the owning patient (or
+ * their guardian), facility, or admin may call this (issue #323). */
+export async function listFulfillmentsForOrder(
+  orderType: OrderType,
+  orderId: string,
+  requester: Requester,
+) {
+  if (requester.role === 'admin') {
+    return orderType === 'prescription'
+      ? repo.listFulfillmentRecordsByPrescription(orderId)
+      : repo.listFulfillmentRecordsByLabOrder(orderId);
+  }
+
+  if (requester.role === 'facility') {
+    const facilityId = await getOwnFacilityId(requester);
+    if (!facilityId) throw new HttpError(403, 'No facility profile found for this user.');
+    const all = orderType === 'prescription'
+      ? await repo.listFulfillmentRecordsByPrescription(orderId)
+      : await repo.listFulfillmentRecordsByLabOrder(orderId);
+    return all.filter((r) => r.facilityId === facilityId);
+  }
+
+  if (requester.role === 'patient') {
+    const actingProfile = await patientsService.resolveActingProfile(requester.userId);
+    const ownerProfileId = orderType === 'prescription'
+      ? await prescriptionsService.getPatientProfileIdForOrder(orderId)
+      : await labOrdersService.getPatientProfileIdForOrder(orderId);
+    if (!ownerProfileId) throw new HttpError(404, 'Order not found.');
+    const allowed = await patientsService.isProfileAccessibleTo(ownerProfileId, actingProfile.id);
+    if (!allowed) throw new HttpError(403, 'This order does not belong to your records.');
+    const all = orderType === 'prescription'
+      ? await repo.listFulfillmentRecordsByPrescription(orderId)
+      : await repo.listFulfillmentRecordsByLabOrder(orderId);
+    return all.map(stripFacilityFields);
+  }
+
+  throw new HttpError(403, 'Access denied.');
+}
+
+/** Remove cost fields that are internal to the facility — never shown to
+ * patients (issue #323). */
+function stripFacilityFields<T extends object>(record: T): T {
+  // Currently FulfillmentRecord has no cost/internal columns beyond the
+  // standard audit fields. This function is a forward-compatible hook so
+  // future columns can be stripped here rather than scattered at call sites.
+  return record;
 }
 
 /** Derived order-level fulfillment state WITHOUT writing it back (read
@@ -362,9 +447,7 @@ export async function createPharmacyOrder(data: {
     throw new HttpError(400, 'Patient profile ID is required.');
   }
 
-  const patient = await prisma.patientProfile.findUnique({
-    where: { id: data.patientProfileId },
-  });
+  const patient = await patientsService.findPatientProfileById(data.patientProfileId!);
   if (!patient) {
     throw new HttpError(404, 'Patient profile not found.');
   }
@@ -400,9 +483,7 @@ export async function fulfillPharmacyOrder(
     throw new HttpError(400, 'Reference number is required for fulfillment proof.');
   }
 
-  const facilityProfile = await prisma.facilityProfile.findUnique({
-    where: { userId: facilityUserId },
-  });
+  const facilityProfile = await facilitiesService.findFacilityProfileByUserId(facilityUserId);
   if (!facilityProfile) {
     throw new HttpError(403, 'Facility profile required.');
   }
