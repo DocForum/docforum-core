@@ -10,7 +10,7 @@ import * as auditService from '../../audit/services';
 import { encryptField, decryptField } from '../../../utils/field-encryption';
 import * as ordersRepo from '../repositories';
 import type { Prisma } from '@prisma/client';
-import { paginate, type PatientExportSection } from '../../patients/services';
+import { paginate, type PatientExportSection, type ExportSubject } from '../../patients/services';
 import { formatOrderResponse } from '../../../utils/order-utils';
 
 /** The consultation step of the ordering flow.
@@ -449,11 +449,11 @@ export const labOrdersExportSection: PatientExportSection = {
 
 /** This module's contribution to the patient data export (issue #336).
  * Order disputes include the dispute reason and any resolutions. */
-export const orderDisputesExportSection: patientsService.PatientExportSection = {
+export const orderDisputesExportSection: PatientExportSection = {
   name: 'order_disputes',
   version: 1,
-  pages(subject, pageSize) {
-    return patientsService.paginate(
+  pages(subject: ExportSubject, pageSize: number) {
+    return paginate(
       pageSize,
       (cursor, take) => ordersRepo.findOrderDisputesPageForPatient(subject.patientProfileId, cursor, take),
       (rows) => rows.map((row) => ({

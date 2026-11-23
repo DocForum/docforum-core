@@ -55,8 +55,6 @@ async function startServer() {
   validateWalletLinkConfig();
   if (shuttingDown) return;
   const port = config.port;
-  const keepAliveTimeout = config.keepAliveTimeout;
-  const headersTimeout = config.headersTimeout;
   const requestTimeout = config.requestTimeout;
   server = app.listen(port, () => {
     // eslint-disable-next-line no-console
