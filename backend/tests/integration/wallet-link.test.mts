@@ -407,6 +407,23 @@ describe('verified wallet links (issue #78)', () => {
     expect(newLink!.replacedAt).toBeNull();
     expect(newLink!.activeOwnerKey).toBe(`facility:${facility.facilityId}`);
 
+    // Issue #328: both HTTP links are audited with the caller as actor;
+    // the re-link carries old + new address and starts a cool-down.
+    expect(oldLink!.effectiveAt.getTime()).toBeLessThanOrEqual(newLink!.createdAt.getTime()); // first link: immediate
+    expect(newLink!.effectiveAt.getTime()).toBeGreaterThan(Date.now());
+    const audits = await prisma.auditEvent.findMany({
+      where: { entityType: 'WalletLink', entityId: { in: [oldLink!.id, newLink!.id] } },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(audits.map((a) => a.action)).toEqual(['wallet_link.linked', 'wallet_link.changed']);
+    expect(audits.every((a) => a.actorUserId === facility.userId && a.actorRole === 'facility')).toBe(true);
+    expect(audits.every((a) => typeof a.requestId === 'string')).toBe(true);
+    expect(audits[1]!.metadata).toMatchObject({
+      previousStellarAccount: addr1.publicKey(),
+      newStellarAccount: addr2.publicKey(),
+      firstLink: false,
+    });
+
     // The already-funded escrow still references its own address/link —
     // re-linking did not rewrite it — and release works regardless.
     const intentAfter = await services.getPaymentIntent(intent.id);
@@ -553,6 +570,14 @@ describe('verified wallet links (issue #78)', () => {
         env: { ...process.env, DATABASE_URL: migUrl },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
+      // Issue #328 adds WalletLink.effectiveAt, which the current Prisma
+      // client selects; apply that migration too so the backfilled row is
+      // read in today's shape (and its backfill is checked below).
+      execFileSync('npx', ['prisma', 'db', 'execute', '--file', path.join(MIGRATIONS_DIR, '20261123163830_wallet_link_effective_at', 'migration.sql')], {
+        cwd: BACKEND_ROOT,
+        env: { ...process.env, DATABASE_URL: migUrl },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
 
       const rows = await migPrisma.walletLink.findMany({ where: { ownerId: profileId } });
       expect(rows).toHaveLength(1);
@@ -563,6 +588,7 @@ describe('verified wallet links (issue #78)', () => {
       expect(row.verifiedAt).toBeNull();
       expect(row.replacedAt).toBeNull();
       expect(row.activeOwnerKey).toBe(`facility:${profileId}`); // still the active link
+      expect(row.effectiveAt.getTime()).toBe(row.createdAt.getTime()); // #328 backfill: effective since creation
 
       // And the backfilled link participates in the new world: it can
       // be replaced, and it can only be replaced once.

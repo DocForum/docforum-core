@@ -1,10 +1,10 @@
 // Real-time notification fan-out over Server-Sent Events (Phase 6, issue #97).
 //
 // This is the in-process part: a hub that holds open streams per user and
-// delivers events to them. Persisted replay (Last-Event-ID resume from the
-// database) and cross-instance delivery through Postgres LISTEN/NOTIFY are
-// not here yet. They need the `Notification.userId` field, which is still a
-// schema TODO, and the notification dispatch interface from the same issue.
+// delivers events to them. Cross-instance delivery (issue #330) lives in
+// ./fanout.ts: every instance LISTENs on one Postgres channel and feeds the
+// events it receives into this hub. Persisted replay (Last-Event-ID resume
+// from the database) is still not built.
 import { HttpError } from '../../../http-error';
 
 /** Open streams one user may hold at once. Beyond this the stream returns 429. */
@@ -64,6 +64,20 @@ export class NotificationHub {
     const frame = formatSseEvent(event);
     for (const sink of sinks) sink.write(frame);
     return sinks.size;
+  }
+
+  /** Deliver an event to every open stream on this instance (issue #330:
+   * the `resync` hint after the fan-out listener reconnects). */
+  broadcast(event: StreamEvent): number {
+    const frame = formatSseEvent(event);
+    let delivered = 0;
+    for (const sinks of this.streams.values()) {
+      for (const sink of sinks) {
+        sink.write(frame);
+        delivered += 1;
+      }
+    }
+    return delivered;
   }
 
   /** Open stream count for a user. Used by tests and diagnostics. */

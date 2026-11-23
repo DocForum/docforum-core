@@ -237,6 +237,14 @@ model WalletLink {
   // once replaced. The unique index on this column IS the one-active-
   // link-per-owner DB guarantee.
   activeOwnerKey String?  @unique
+  // Issue #328: when this link may first be used as an escrow payee
+  // (funding/prepare). A facility re-link sets it to now +
+  // WALLET_LINK_COOLDOWN_HOURS; the first-ever link for an owner, and every
+  // patient link, is effective immediately. Until then the previously
+  // effective link stays the payee. A link replaced before its effectiveAt
+  // (replacedAt < effectiveAt) is cancelled and never becomes effective.
+  // Write-once. Pre-#328 rows are backfilled with createdAt.
+  effectiveAt DateTime @default(now())
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

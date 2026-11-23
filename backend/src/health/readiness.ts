@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
 import { prisma } from '../db/prisma-client';
+import { getNotificationFanoutState, type FanoutState } from '../modules/notifications/services';
 
 export type ReadinessResult = {
   status: 'ready' | 'not_ready';
@@ -10,6 +11,10 @@ export type ReadinessResult = {
     database: 'ok' | 'failed';
     migrations: 'ok' | 'pending' | 'failed';
     payments: 'disabled' | 'reachable' | 'unavailable';
+    // Issue #330: the real-time fan-out listener. Reported, never gating:
+    // real-time is best-effort (clients resync over HTTP), so a listener
+    // that is reconnecting must not pull the whole instance out of service.
+    notifications: FanoutState;
   };
 };
 
@@ -18,6 +23,7 @@ export type ReadinessChecks = {
   database: () => Promise<void>;
   migrations: () => Promise<void>;
   payments: () => Promise<'disabled' | 'reachable' | 'unavailable'>;
+  notifications: () => FanoutState;
 };
 
 const CACHE_MS = 3_000;
@@ -79,6 +85,7 @@ const defaultChecks: ReadinessChecks = {
       clearTimeout(timeout);
     }
   },
+  notifications: getNotificationFanoutState,
 };
 
 export function createReadinessChecker(checks: ReadinessChecks, cacheMs = CACHE_MS) {
@@ -99,7 +106,7 @@ export function createReadinessChecker(checks: ReadinessChecks, cacheMs = CACHE_
       const ready = configuration === 'ok' && database === 'ok' && migrations === 'ok';
       const result: ReadinessResult = {
         status: ready ? 'ready' : 'not_ready',
-        checks: { configuration, database, migrations, payments },
+        checks: { configuration, database, migrations, payments, notifications: checks.notifications() },
       };
       return result;
     })().finally(() => {

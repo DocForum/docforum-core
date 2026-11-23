@@ -25,10 +25,51 @@ export function createWalletLink(
     verificationMethod: 'sep10';
     verifiedAt: Date;
     activeOwnerKey: string;
+    // Issue #328: when the link may first be used as an escrow payee.
+    effectiveAt: Date;
   },
   db: Db = prisma,
 ) {
   return db.walletLink.create({ data });
+}
+
+/** Issue #328: every link for an owner that had taken effect by `now`,
+ * newest effectiveAt first. The caller (selectEffectiveWalletLink) drops
+ * cancelled rows; an owner has a handful of rows, so the cap is generous. */
+export function findWalletLinksEffectiveBy(
+  ownerType: WalletLinkOwnerType,
+  ownerId: string,
+  now: Date,
+  db: Db = prisma,
+) {
+  return db.walletLink.findMany({
+    where: { ownerType, ownerId, effectiveAt: { lte: now } },
+    orderBy: [{ effectiveAt: 'desc' }, { createdAt: 'desc' }],
+    take: 50,
+  });
+}
+
+/** Issue #328: has this owner ever had a link? Decides the first-link
+ * exemption from the cool-down. */
+export function countWalletLinks(ownerType: WalletLinkOwnerType, ownerId: string, db: Db = prisma) {
+  return db.walletLink.count({ where: { ownerType, ownerId } });
+}
+
+/** Issue #328: the facility's links for one address — the release guard
+ * checks the address an escrow was funded to took effect. */
+export function findFacilityWalletLinksByAccount(facilityId: string, stellarPublicKey: string) {
+  return prisma.walletLink.findMany({
+    where: { ownerType: 'facility', ownerId: facilityId, stellarPublicKey },
+  });
+}
+
+/** Issue #328: active facility links still inside their cool-down. */
+export function findPendingFacilityWalletLinks(now: Date, take: number) {
+  return prisma.walletLink.findMany({
+    where: { ownerType: 'facility', replacedAt: null, effectiveAt: { gt: now } },
+    orderBy: [{ effectiveAt: 'asc' }, { id: 'asc' }],
+    take,
+  });
 }
 
 export function findActiveWalletLink(ownerType: WalletLinkOwnerType, ownerId: string, db: Db = prisma) {
