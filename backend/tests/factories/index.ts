@@ -70,6 +70,17 @@ export const availabilitySlotFactory = (
   };
 };
 
+export const referralFactory = (
+  patientProfileId: string,
+  doctorProfileId: string,
+  overrides: Partial<Prisma.ReferralUncheckedCreateInput> = {},
+): Prisma.ReferralUncheckedCreateInput => ({
+  patientProfileId,
+  doctorProfileId,
+  status: 'pending',
+  ...overrides,
+});
+
 export const appointmentFactory = (
   patientProfileId: string,
   doctorProfileId: string,
