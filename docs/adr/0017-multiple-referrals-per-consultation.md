@@ -1,4 +1,4 @@
-# ADR 0006: One consultation may spawn several referrals — created atomically, living independently
+# ADR 0017: One consultation may spawn several referrals — created atomically, living independently
 
 Status: Accepted
 

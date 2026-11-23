@@ -1,5 +1,5 @@
 /** Object storage driver for lab result files (Phase 5, issue #16 —
- * docs/adr/0014). `s3` talks to a private S3 bucket (or any S3-compatible
+ * docs/adr/0018). `s3` talks to a private S3 bucket (or any S3-compatible
  * endpoint); `memory` is a process-local map for tests only and is refused in
  * production. Unset with no bucket configured = `none`: the server still
  * starts (the Render preview has no bucket), and the result endpoints answer
@@ -22,7 +22,7 @@ function parseObjectStorageDriver(
   return driver;
 }
 
-// Lab result files (Phase 5, issue #16 — docs/adr/0014). The bucket must be
+// Lab result files (Phase 5, issue #16 — docs/adr/0018). The bucket must be
 // private: files are only ever served back through the API, which checks
 // access on every read. Credentials come from the AWS SDK's default chain
 // (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or an instance role) — never

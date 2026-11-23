@@ -18,7 +18,7 @@ async function copyLocal(from, to) {
   const dest = path.join(SITE_ROOT, to);
   await mkdir(path.dirname(dest), { recursive: true });
   // Local files get the same rewrite as remote ones: a repo-relative link
-  // (e.g. ROADMAP.md -> docs/adr/0006-...md) has no page in the site.
+  // (e.g. ROADMAP.md -> docs/adr/0017-...md) has no page in the site.
   const content = rewriteRelativeLinks(await readFile(src, 'utf8'), 'docforum-core');
   await writeFile(dest, content);
   console.log(`  synced (local)  ${from} -> docs/site/${to}`);

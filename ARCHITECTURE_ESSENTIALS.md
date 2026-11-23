@@ -10,7 +10,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
 - Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue. Existing interval jobs: login-throttle prune (`src/server.ts`), patient-export worker/cleanup (`src/jobs/patient-exports.ts`) and deleted-account tombstone purge (`src/jobs/account-purge.ts`), all started only from `server.ts`.
 - New module holding patient data? Register a patient-export section (ARCHITECTURE.md §3.1) — right of access must stay complete.
-- File storage = **Amazon S3**, private bucket (`docs/adr/0014`, issue #16), only through `src/utils/object-storage.ts`. Never return an object key or a public/presigned URL: clinical files are served by the API after an access check.
+- File storage = **Amazon S3**, private bucket (`docs/adr/0018`, issue #16), only through `src/utils/object-storage.ts`. Never return an object key or a public/presigned URL: clinical files are served by the API after an access check.
 
 ## Hard rules (violating these = request changes on the PR)
 1. **Never mutate a `Prescription` or `LabOrder` after issuance.** Corrections = new row with `supersedes_*_id`.
