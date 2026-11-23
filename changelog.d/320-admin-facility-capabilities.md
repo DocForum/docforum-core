@@ -1,0 +1,1 @@
+Adds admin-only endpoints for managing facility capabilities (issue #320): `POST /facilities/:facilityId/capabilities` and `DELETE /facilities/:facilityId/capabilities/:capabilityId`. Both operations record `FacilityCapability` audit events. Added `addCapabilitySchema` validation and `CapabilityView` service type.

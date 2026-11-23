@@ -129,6 +129,30 @@ export function listReferralsCreatedBy(referringDoctorId: string) {
   });
 }
 
+export function listIncomingReferrals(filters: {
+  targetDoctorId: string;
+  statuses?: ReferralStatus[];
+  before?: { createdAt: Date; id: string };
+  take: number;
+}) {
+  return prisma.referral.findMany({
+    where: {
+      targetDoctorId: filters.targetDoctorId,
+      ...(filters.statuses ? { status: { in: filters.statuses } } : {}),
+      ...(filters.before
+        ? {
+            OR: [
+              { createdAt: { lt: filters.before.createdAt } },
+              { createdAt: filters.before.createdAt, id: { lt: filters.before.id } },
+            ],
+          }
+        : {}),
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: filters.take,
+  });
+}
+
 /** Duplicate-specialty guard (#66): any referral already hanging off this
  * consultation aimed at the same doctor or specialty. Matches ALL
  * statuses on purpose — a declined referral still means "we tried this". */

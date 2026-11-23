@@ -16,10 +16,18 @@ pharmacyOrdersRouter.post(
   pharmacyOrdersController.createFulfillment,
 );
 
-// Owning facility or admin. A patient reading their order's fulfillment
-// is blocked on Phase 4 linking patients to orders — documented gap,
-// ARCHITECTURE.md §6.2.
+// Owning facility, admin, or the order's patient (and active guardian)
+// may read a fulfillment record by id (issue #323).
 pharmacyOrdersRouter.get('/fulfillments/:id', authenticate, pharmacyOrdersController.getFulfillment);
+
+// Patient (or admin) lists all fulfillment records for one of their orders
+// (issue #323). orderType query param is required.
+pharmacyOrdersRouter.get(
+  '/orders/:orderId/fulfillments',
+  authenticate,
+  requireRole('patient', 'admin'),
+  pharmacyOrdersController.listOrderFulfillments,
+);
 
 // Facility-only writes to its own records (hard rule 5 — the ownership
 // check lives in the service). `fulfilled` is never settable here: it is
