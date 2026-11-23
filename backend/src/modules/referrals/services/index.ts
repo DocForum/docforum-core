@@ -146,6 +146,11 @@ async function prepareReferralTarget(
   // Routing first: everything below (self-referral gate, verification,
   // duplicate checks, loop walk) then sees one resolved doctor regardless
   // of whether the referring doctor named them or the rule picked them.
+  // Issue #334: an unknown specialty id gets its own message rather than
+  // "no eligible doctor" (routing) or a foreign-key failure (insert).
+  if (target.targetSpecialtyId) {
+    await doctorsService.assertSpecialtyExists(target.targetSpecialtyId);
+  }
   const targetDoctorId = await resolveTargetDoctor(db, referringDoctorId, target, excludeFromRouting);
 
   if (targetDoctorId === referringDoctorId) {
