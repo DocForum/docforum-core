@@ -82,3 +82,11 @@ export const createFacilitySchema = z.object({
   type: z.enum(['lab', 'pharmacy']),
   capabilities: z.array(facilityCapabilitySchema).min(1).max(20),
 }).strict();
+
+export const addCapabilitySchema = facilityCapabilitySchema;
+
+export const retirePriceItemSchema = z.object({
+  catalogItemCode: z.string().min(1).max(100),
+  asset: z.string().min(1).max(120).optional(),
+  effectiveFrom: z.string().min(1).optional(),
+});

@@ -6,18 +6,8 @@ import type { PaymentIntent, PaymentIntentStatus, Prisma, WalletLinkOwnerType } 
 
 type Db = Prisma.TransactionClient;
 
-/** Reads FacilityProfile directly — a Phase 1 core identity model, not
- * something the (still-placeholder) facilities module exclusively owns. */
-export function findFacilityProfileByUserId(userId: string) {
-  return prisma.facilityProfile.findUnique({ where: { userId } });
-}
-
-/** Same reasoning as findFacilityProfileByUserId — PatientProfile is a
- * Phase 1 identity model, and the payments module needs the caller's
- * patient-scoped id to own-check an intent (issue #80). */
-export function findPatientProfileByUserId(userId: string) {
-  return prisma.patientProfile.findUnique({ where: { userId } });
-}
+// findFacilityProfileByUserId and findPatientProfileByUserId removed in
+// issue #318 — payments now calls the owning module's service directly.
 
 // --- Wallet links (issue #78) --------------------------------------------
 // NOTE ON WRITES: `createWalletLink` is the only WalletLink insert in
@@ -107,11 +97,8 @@ export function findPaymentIntentByOrder(
 
 /** The login user who owns a patient profile — used to address the refund
  * notification (issue #84). Not a clinical read: id only. */
-export function findPatientUserIdByProfileId(patientProfileId: string) {
-  return prisma.patientProfile
-    .findUnique({ where: { id: patientProfileId }, select: { userId: true } })
-    .then((row) => row?.userId ?? null);
-}
+// findPatientUserIdByProfileId removed in issue #318 — call
+// patientsService.getPatientUserIdByProfileId instead.
 
 /** One keyset page of a patient's payment intents, oldest first (patient
  * data export, issue #40). */
@@ -174,11 +161,8 @@ export function aggregateFacilityPayments(facilityId: string, from?: Date, to?: 
   });
 }
 
-/** Same FacilityProfile read this module already does for its own
- * payee lookups (see findFacilityProfileByUserId). */
-export function findFacilityNamesByIds(ids: string[]) {
-  return prisma.facilityProfile.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } });
-}
+// findFacilityNamesByIds removed in issue #318 — call
+// facilitiesService.getFacilityNamesByIds instead.
 
 /**
  * Status writes are conditional on the state the caller observed (issue

@@ -189,7 +189,7 @@ describe('facility price lists and intent pricing (issue #127)', () => {
     const later = await facilitiesService.resolveCurrentPrice(prisma, {
       facilityProfileId: facilityId, catalogItemCode: 'future-price', at: new Date(now + 61 * MINUTE),
     });
-    expect(later?.amount).toBe(11_111_111n);
+    expect(later && 'amount' in later ? later.amount : undefined).toBe(11_111_111n);
   });
 
   it('eligible facilities expose the current price and "price on request" rather than zero', async () => {

@@ -16,6 +16,8 @@ import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
 import { verifySep10Challenge } from './sep10';
 import type { Role, WalletLink, WalletLinkVerificationMethod } from '@prisma/client';
+import { findFacilityProfileByUserId } from '../../facilities/services';
+import { findPatientProfileByUserId } from '../../patients/services';
 
 /**
  * ADR 0005, "Consequences → Privacy risk" — reproduced VERBATIM (every
@@ -47,12 +49,12 @@ export interface WalletLinkOwner {
  * and is listed as an open design decision in the PR. */
 async function resolveCallerOwner(userId: string, role: Role): Promise<WalletLinkOwner> {
   if (role === 'patient') {
-    const profile = await paymentsRepo.findPatientProfileByUserId(userId);
+    const profile = await findPatientProfileByUserId(userId);
     if (!profile) throw new HttpError(403, 'No patient profile is associated with this account.');
     return { ownerType: 'patient', ownerId: profile.id };
   }
   if (role === 'facility') {
-    const profile = await paymentsRepo.findFacilityProfileByUserId(userId);
+    const profile = await findFacilityProfileByUserId(userId);
     if (!profile) throw new HttpError(403, 'No facility profile is associated with this account.');
     return { ownerType: 'facility', ownerId: profile.id };
   }

@@ -21,6 +21,7 @@ import * as facilitiesRepo from '../repositories';
 import type { Db } from '../repositories';
 import {
   NATIVE_PRICE_ASSET,
+  itemRetiredError,
   parseEffectiveFrom,
   priceOnRequestError,
   selectCurrentPrice,
@@ -166,26 +167,28 @@ export async function createPriceVersion(
 /**
  * The price in force for one facility + catalog item (+ asset) at `at`, or
  * `null` when the facility has not published one — the caller renders that as
- * "price on request". Accepts a transaction client so the read and the write
- * it prices happen in one transaction.
+ * "price on request". Returns `{ retired: true }` when the current version
+ * marks the item retired. Accepts a transaction client so the read and the
+ * write it prices happen in one transaction.
  */
 export async function resolveCurrentPrice(
   db: Db,
   input: { facilityProfileId: string; catalogItemCode: string; asset?: string; at?: Date },
-): Promise<{ amount: bigint; effectiveFrom: Date; versionId: string } | null> {
+): Promise<{ amount: bigint; effectiveFrom: Date; versionId: string } | { retired: true } | null> {
   const catalogItemCode = assertCatalogItemCode(input.catalogItemCode);
   const asset = assertAsset(input.asset);
   const at = input.at ?? new Date();
   const versions = await facilitiesRepo.findPriceVersions(input.facilityProfileId, catalogItemCode, asset, db);
   const current = selectCurrentPrice(versions, at);
   if (!current) return null;
-  return { amount: current.amount, effectiveFrom: current.effectiveFrom, versionId: current.id };
+  if (current.retired) return { retired: true };
+  return { amount: current.amount, effectiveFrom: current.effectiveFrom, versionId: current.id! };
 }
 
 /**
  * Same as `resolveCurrentPrice`, but throws the documented 422
- * `PRICE_ON_REQUEST` instead of returning null. Used where an amount is
- * mandatory (pricing a new intent).
+ * `PRICE_ON_REQUEST` or `ITEM_RETIRED` instead of returning null/retired.
+ * Used where an amount is mandatory (pricing a new intent).
  */
 export async function requireCurrentPrice(
   db: Db,
@@ -193,7 +196,155 @@ export async function requireCurrentPrice(
 ): Promise<{ amount: bigint; effectiveFrom: Date; versionId: string }> {
   const price = await resolveCurrentPrice(db, input);
   if (!price) throw priceOnRequestError(input.catalogItemCode);
+  if ('retired' in price) throw itemRetiredError(input.catalogItemCode);
   return price;
+}
+
+/**
+ * Retires an item from the facility's price list from `effectiveFrom` onward.
+ * Append-only: inserts a new retired row; existing rows and any intent priced
+ * before the retirement are unaffected. Admin or the facility owner only.
+ */
+export async function retirePriceItem(
+  actor: auditService.AuditActor,
+  facilityId: string,
+  input: { catalogItemCode: string; asset?: string; effectiveFrom?: string | Date },
+): Promise<PriceView & { retired: boolean }> {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  await requireFacilityForWrite(actor, facilityId);
+
+  const catalogItemCode = assertCatalogItemCode(input.catalogItemCode);
+  const asset = assertAsset(input.asset);
+  const effectiveFrom = parseEffectiveFrom(input.effectiveFrom);
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const price = await facilitiesRepo.createPriceVersion(tx, {
+        facilityId,
+        catalogItemCode,
+        asset,
+        amount: BigInt(0),
+        effectiveFrom,
+        retired: true,
+      });
+      await auditService.record(tx, actor, {
+        entityType: 'FacilityPrice',
+        entityId: price.id,
+        action: 'facility_price.retired',
+        fromState: 'published',
+        toState: 'retired',
+        metadata: {
+          facilityId,
+          catalogItemCode,
+          asset,
+          effectiveFrom: effectiveFrom.toISOString(),
+        },
+      });
+      return { ...price, retired: price.retired };
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new HttpError(409, 'A price (or retirement) for this item and asset already exists with that effectiveFrom.');
+    }
+    throw error;
+  }
+}
+
+/** Non-throwing facility profile lookup by userId — for cross-module service calls. */
+export function findFacilityProfileByUserId(userId: string) {
+  return facilitiesRepo.findFacilityProfileByUserId(userId);
+}
+
+/** Non-throwing facility profile lookup by id — for cross-module service calls. */
+export function findFacilityProfileById(id: string, db?: Db) {
+  return facilitiesRepo.findFacilityProfileById(id, db);
+}
+
+/** Batch name lookup for many facility ids — for cross-module service calls. */
+export function getFacilityNamesByIds(ids: string[]) {
+  return facilitiesRepo.getFacilityNamesByIds(ids);
+}
+
+// --- Admin capability management (issue #320) ----------------------------
+
+export interface CapabilityView {
+  id: string;
+  capabilityType: CapabilityType;
+  detail: string | null;
+}
+
+/**
+ * Admin-only: add a capability to a facility. Duplicate (facilityProfileId,
+ * capabilityType, detail) rows are unique-constrained at the DB level; the
+ * service reports a 409 instead of a 500. With audit event.
+ */
+export async function addFacilityCapability(
+  actor: auditService.AuditActor,
+  facilityId: string,
+  input: FacilityCapabilityInput,
+): Promise<CapabilityView> {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const facility = await facilitiesRepo.findFacilityProfileById(facilityId);
+  if (!facility) throw new HttpError(404, 'Facility not found.');
+
+  const capabilityType = input.capabilityType as CapabilityType;
+  const detail = input.detail === null || input.detail === undefined
+    ? null
+    : String(input.detail).trim() || null;
+  if (detail !== null && detail.length > MAX_CAPABILITY_DETAIL_LENGTH) {
+    throw new HttpError(400, `capability detail must be at most ${MAX_CAPABILITY_DETAIL_LENGTH} characters.`);
+  }
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const row = await facilitiesRepo.addCapability(tx, facilityId, { capabilityType, detail });
+      await auditService.record(tx, actor, {
+        entityType: 'FacilityCapability',
+        entityId: row.id,
+        action: 'facility.capability_added',
+        fromState: null,
+        toState: 'active',
+        metadata: { facilityId, capabilityType, detail },
+      });
+      return { id: row.id, capabilityType: row.capabilityType, detail: row.detail };
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new HttpError(409, 'This facility already holds this capability.');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Admin-only: remove a capability from a facility. Only affects future
+ * eligibility matching — already-routed orders are unaffected (they carry
+ * their own facilityId FK). With audit event.
+ */
+export async function removeFacilityCapability(
+  actor: auditService.AuditActor,
+  facilityId: string,
+  capabilityId: string,
+): Promise<void> {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const facility = await facilitiesRepo.findFacilityProfileById(facilityId);
+  if (!facility) throw new HttpError(404, 'Facility not found.');
+  const capability = await facilitiesRepo.findCapabilityById(capabilityId);
+  if (!capability || capability.facilityProfileId !== facilityId) {
+    throw new HttpError(404, 'Capability not found for this facility.');
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await facilitiesRepo.removeCapability(tx, capabilityId);
+    await auditService.record(tx, actor, {
+      entityType: 'FacilityCapability',
+      entityId: capabilityId,
+      action: 'facility.capability_removed',
+      fromState: 'active',
+      toState: 'removed',
+      metadata: { facilityId, capabilityType: capability.capabilityType, detail: capability.detail },
+    });
+  });
 }
 
 export interface EligibleFacility {
