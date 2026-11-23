@@ -316,6 +316,16 @@ export async function getPatientProfileById(id: string) {
   return profile;
 }
 
+/** Non-throwing userId lookup by patientProfileId — for cross-module calls. */
+export function getPatientUserIdByProfileId(patientProfileId: string): Promise<string | null> {
+  return patientsRepo.findPatientProfileOwner(patientProfileId).then((row) => row?.userId ?? null);
+}
+
+/** Non-throwing patient profile lookup by userId — for cross-module calls. */
+export function findPatientProfileByUserId(userId: string) {
+  return patientsRepo.findPatientProfileByUserId(userId);
+}
+
 /** Batch id -> { id, fullName } lookup for other modules. Anonymised profiles return 'Deleted patient'. */
 export async function getPatientSummariesByIds(ids: string[]): Promise<Map<string, { id: string; fullName: string }>> {
   if (ids.length === 0) return new Map();

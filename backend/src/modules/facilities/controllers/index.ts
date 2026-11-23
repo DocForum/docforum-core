@@ -4,10 +4,12 @@ import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
 import * as facilitiesService from '../services';
 import {
+  addCapabilitySchema,
   createFacilitySchema,
   createPriceVersionSchema,
   eligibleFacilitiesQuerySchema,
   priceFiltersSchema,
+  retirePriceItemSchema,
 } from '../validation';
 
 /** BigInt does not serialize through JSON.stringify — every price response
@@ -97,4 +99,37 @@ export async function createFacility(req: Request, res: Response) {
   const body = createFacilitySchema.parse(req.body);
   const facility = await facilitiesService.createFacilityAccount(auditActor(req), body);
   res.status(201).json(facility);
+}
+
+/** POST /facilities/:facilityId/capabilities — admin adds a capability. */
+export async function addCapability(req: Request, res: Response) {
+  const facilityId = getParam(req, 'facilityId');
+  const body = addCapabilitySchema.parse(req.body);
+  const capability = await facilitiesService.addFacilityCapability(auditActor(req), facilityId, body);
+  res.status(201).json(capability);
+}
+
+/** DELETE /facilities/:facilityId/capabilities/:capabilityId — admin removes. */
+export async function removeCapability(req: Request, res: Response) {
+  const facilityId = getParam(req, 'facilityId');
+  const capabilityId = getParam(req, 'capabilityId');
+  await facilitiesService.removeFacilityCapability(auditActor(req), facilityId, capabilityId);
+  res.status(204).send();
+}
+
+/** POST /facilities/me/prices/retire — facility retires an item. */
+export async function retireOwnPriceItem(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const body = retirePriceItemSchema.parse(req.body);
+  const facilityId = await facilitiesService.getOwnFacilityProfileId(req.user.id);
+  const price = await facilitiesService.retirePriceItem(auditActor(req), facilityId, body);
+  res.status(201).json({
+    id: price.id,
+    facilityId: price.facilityId,
+    catalogItemCode: price.catalogItemCode,
+    asset: price.asset,
+    retired: price.retired,
+    effectiveFrom: price.effectiveFrom.toISOString(),
+    createdAt: price.createdAt.toISOString(),
+  });
 }

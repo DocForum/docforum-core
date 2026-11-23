@@ -1,0 +1,1 @@
+Adds price-item retirement to the facility price list (issue #321). A new `retired` boolean on `FacilityPrice` (append-only: retirement inserts a new row). `resolveCurrentPrice` returns `{ retired: true }` when the current version is retired; `requireCurrentPrice` throws `ITEM_RETIRED` (422). Added `POST /facilities/me/prices/retire` endpoint (facility owner only).

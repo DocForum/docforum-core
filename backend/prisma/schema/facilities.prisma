@@ -128,6 +128,9 @@ model FacilityPrice {
   asset           String
   amount          BigInt
   effectiveFrom   DateTime
+  // When true this version marks the item as retired from effectiveFrom
+  // onward. Append-only: a new retired row supersedes the last live price.
+  retired         Boolean         @default(false)
   createdAt       DateTime        @default(now())
 
   // Two versions of the same item/asset cannot share an effective instant.
