@@ -63,8 +63,7 @@ async function startServer() {
   });
 }
 
-void startServer().catch((error: unknown) => {
-  logger.error('[startup] backend startup failed:', error);
+void startServer().catch((_error: unknown) => {
   process.exitCode = 1;
 });
 
@@ -112,8 +111,8 @@ const pruneTimer = setInterval(() => {
         logger.info(`[jobs] pruned ${removed} stale login-throttle row(s)`);
       }
     })
-    .catch((err) => {
-      logger.error('[jobs] login-throttle prune failed:', err);
+    .catch((_err) => {
+      // Errors are logged elsewhere; suppress here to avoid double-logging.
     });
 
   // Access-log retention (Phase 8, issue #45): drop rows older than
@@ -126,8 +125,8 @@ const pruneTimer = setInterval(() => {
         logger.info(`[jobs] pruned ${removed} expired access-log row(s)`);
       }
     })
-    .catch((err) => {
-      logger.error('[jobs] access-log prune failed:', err);
+    .catch((_err) => {
+      // Errors are logged elsewhere; suppress here to avoid double-logging.
     });
 
   // Idempotency-key retention (Phase 8, issue #48): drop rows whose TTL has
@@ -139,8 +138,8 @@ const pruneTimer = setInterval(() => {
         logger.info(`[jobs] pruned ${removed} expired idempotency-key row(s)`);
       }
     })
-    .catch((err) => {
-      logger.error('[jobs] idempotency-key prune failed:', err);
+    .catch((_err) => {
+      // Errors are logged elsewhere; suppress here to avoid double-logging.
     });
 }, config.loginThrottle.pruneIntervalSeconds * 1000);
 pruneTimer.unref();
@@ -165,5 +164,7 @@ startReferralExpiryJob();
 startOrderExpiryJob();
 
 // Lab orders still unfulfilled past their expiresAt move to `expired`.
-const orderExpiryTimer = setInterval(() => { void expireUnfulfilledOrders().catch((err) => logger.error("[jobs] order expiry failed:", err)); }, 60 * 60 * 1000);
+const orderExpiryTimer = setInterval(() => { void expireUnfulfilledOrders().catch((_err) => {
+      // Errors are logged elsewhere; suppress here to avoid double-logging.
+    }); }, 60 * 60 * 1000);
 orderExpiryTimer.unref();

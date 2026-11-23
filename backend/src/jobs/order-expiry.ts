@@ -72,7 +72,7 @@ export function startOrderExpiryJob(): () => void {
         logger.info(`[jobs] auto-confirmed ${confirmedCount} order(s) past confirmation window`);
       }
     } catch (err) {
-      logger.error('[jobs] order expiry job failed:', err instanceof Error ? err.name : typeof err);
+      logger.error('[jobs] order expiry job failed');
     }
   };
 

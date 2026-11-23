@@ -2,6 +2,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
+import { logger } from '../../../logger';
 import { auditActor } from '../../../middleware/request-id';
 import * as usersService from '../services';
 import { createAdminInviteSchema, listAdminInvitesQuerySchema, listAdminUsersQuerySchema } from '../validation';

@@ -20,7 +20,7 @@ function isRetentionError(error: unknown): boolean {
 
 async function notifyUnmatched(alert: ChainAlert): Promise<void> {
   // Keep the alert useful without including patient data or secrets.
-  logger.error('[security:high] unmatched escrow terminal event', alert as Error);
+  logger.error('[security:high] unmatched escrow terminal event');
   const url = config.payments.escrowEventAlertWebhookUrl;
   if (!url) return;
   try {
@@ -30,9 +30,9 @@ async function notifyUnmatched(alert: ChainAlert): Promise<void> {
       body: JSON.stringify({ severity: 'high', kind: 'unmatched_escrow_event', ...alert }),
       signal: AbortSignal.timeout(5_000),
     });
-    if (!response.ok) logger.error('[security:high] escrow alert hook returned non-success status', response.status);
+    if (!response.ok) logger.error('[security:high] escrow alert hook returned non-success status');
   } catch (error) {
-    logger.error('[security:high] escrow alert hook failed', error instanceof Error ? error.name : typeof error);
+    logger.error('[security:high] escrow alert hook failed');
   }
 }
 
@@ -137,10 +137,7 @@ export async function pollEscrowContractEvents(): Promise<void> {
           data: { catchupError },
         });
       }
-      logger.error('[jobs] escrow event poll failed', {
-        contractId: contract.contractId,
-        error: error instanceof Error ? error.name : typeof error,
-      });
+      logger.error('[jobs] escrow event poll failed');
     }
   }
   await reconcilePending();

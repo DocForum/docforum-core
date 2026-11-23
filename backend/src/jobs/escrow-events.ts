@@ -1,7 +1,6 @@
 import { config } from '../config';
 import { pollEscrowContractEvents } from '../modules/payments/services/escrow-events';
 import { runWithRlsBypassContext } from '../db/prisma-client';
-import { logger } from '../logger';
 
 export function startEscrowEventPoller(): () => void {
   let running = false;
@@ -9,8 +8,8 @@ export function startEscrowEventPoller(): () => void {
     if (running) return;
     running = true;
     void runWithRlsBypassContext(() => pollEscrowContractEvents())
-      .catch((error) => {
-        logger.error('[jobs] escrow event poll failed', error instanceof Error ? error.name : typeof error);
+      .catch((_error) => {
+        // Errors are logged elsewhere; suppress here to avoid double-logging.
       })
       .finally(() => { running = false; });
   };

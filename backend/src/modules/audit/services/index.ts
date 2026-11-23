@@ -12,6 +12,7 @@
 import type { Prisma, Role } from '@prisma/client';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
+import { logger } from '../../../logger';
 import * as auditRepo from '../repositories';
 
 /** Who caused a transition. Controllers build it from the request with
@@ -248,11 +249,11 @@ export function recordAccess(input: AccessLogInput): void {
       route: input.route ?? null,
       detail: input.detail ?? null,
     })
-    .catch((err: unknown) => {
+    .catch((_err: unknown) => {
       logFailureCount += 1;
       // Fail-open by design, but loudly: this is a privacy trail, so a
       // silent gap is worse than a noisy one.
-      logger.error(`[audit] FAILED to record access (${input.entityType} ${input.entityId})`, err as Error);
+      logger.error(`[audit] FAILED to record access (${input.entityType} ${input.entityId})`);
     });
 }
 
