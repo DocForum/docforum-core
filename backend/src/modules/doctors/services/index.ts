@@ -26,6 +26,7 @@ export function listSpecialties(options: { includeRetired?: boolean } = {}) {
 export async function listPublicDoctors(input: {
   specialty?: string;
   q?: string;
+  symptom?: string;
   limit: number;
   cursor?: string;
   availableBefore?: Date;
@@ -38,13 +39,46 @@ export async function listPublicDoctors(input: {
     }
   }
 
-  const ranked = await doctorsRepo.searchVerifiedDoctorIds({
-    query: input.q ?? null,
-    specialtySlug: input.specialty ?? null,
-    cursor: input.cursor ?? null,
-    take: input.limit + 1,
-    doctorIds: eligibleDoctorIds,
-  });
+  // Issue #60: `?symptom=` resolves the curated mapping to weighted
+  // specialties and ranks doctors by the strongest mapping they hold. An
+  // unknown or unmapped symptom is an empty result plus a hint — never a
+  // 404, because "we don't know that complaint" is not a client error.
+  let ranked: Array<{ id: string; fullName: string; score: number }>;
+  let hint: string | undefined;
+  if (input.symptom) {
+    const symptom = await doctorsRepo.findSymptomBySlug(input.symptom.toLowerCase());
+    if (!symptom || symptom.isRetired) {
+      return {
+        items: [],
+        nextCursor: null,
+        hint: 'Unknown symptom. Use GET /symptoms?q= to find a supported complaint.',
+      };
+    }
+    if (symptom.specialties.length === 0) {
+      return {
+        items: [],
+        nextCursor: null,
+        hint: `No specialties are mapped to "${symptom.name}" yet.`,
+      };
+    }
+    ranked = await doctorsRepo.searchVerifiedDoctorIdsForSymptom({
+      symptomId: symptom.id,
+      cursor: input.cursor ?? null,
+      take: input.limit + 1,
+      doctorIds: eligibleDoctorIds,
+    });
+    if (ranked.length === 0) {
+      hint = `No verified doctors currently list a specialty mapped to "${symptom.name}".`;
+    }
+  } else {
+    ranked = await doctorsRepo.searchVerifiedDoctorIds({
+      query: input.q ?? null,
+      specialtySlug: input.specialty ?? null,
+      cursor: input.cursor ?? null,
+      take: input.limit + 1,
+      doctorIds: eligibleDoctorIds,
+    });
+  }
   const hasMore = ranked.length > input.limit;
   const page = ranked.slice(0, input.limit);
   const details = await doctorsRepo.findPublicDoctorDetails(page.map((doctor) => doctor.id));
@@ -66,6 +100,7 @@ export async function listPublicDoctors(input: {
       }];
     }),
     nextCursor: hasMore ? page.at(-1)?.id ?? null : null,
+    ...(hint ? { hint } : {}),
   };
 }
 
@@ -512,4 +547,165 @@ export async function updateSpecialty(
 
 export async function retireSpecialty(actor: auditService.AuditActor, id: string) {
   return updateSpecialty(actor, id, { isRetired: true });
+}
+
+// --- Symptom -> specialty mapping (issue #60) ----------------------------
+// Admin-managed controlled vocabulary. The mapping is reviewed guidance, not
+// a diagnosis: nothing here scores a patient's symptoms, it only points from
+// a plain-language complaint to specialties a doctor already lists.
+
+export async function searchSymptoms(input: { q?: string; limit: number }) {
+  const rows = await doctorsRepo.searchSymptoms(input.q ?? null, input.limit);
+  return {
+    items: rows.map((row) => ({ id: row.id, name: row.name, slug: row.slug })),
+  };
+}
+
+export function listSymptomsForAdmin() {
+  return doctorsRepo.findSymptomsForAdmin();
+}
+
+export async function createSymptom(actor: auditService.AuditActor, input: { name: string; slug?: string }) {
+  const name = input.name.trim();
+  const slug = input.slug?.trim() || slugify(name);
+  if (!slug) {
+    throw new HttpError(400, 'Invalid symptom name or slug.');
+  }
+
+  const existing = await doctorsRepo.findSymptomByNameOrSlug(name, slug);
+  if (existing) {
+    throw new HttpError(409, 'Symptom with this name or slug already exists.');
+  }
+
+  return prisma.$transaction(async (tx) => {
+    try {
+      const symptom = await doctorsRepo.createSymptom({ name, slug }, tx);
+      await auditService.record(tx, actor, {
+        entityType: 'Symptom',
+        entityId: symptom.id,
+        action: 'symptom.created',
+        fromState: null,
+        toState: 'active',
+        metadata: { slug: symptom.slug },
+      });
+      return symptom;
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new HttpError(409, 'Symptom with this name or slug already exists.');
+      }
+      throw err;
+    }
+  });
+}
+
+export async function updateSymptom(
+  actor: auditService.AuditActor,
+  id: string,
+  input: { name?: string; isRetired?: boolean },
+) {
+  return prisma.$transaction(async (tx) => {
+    const symptom = await doctorsRepo.findSymptomById(id, tx);
+    if (!symptom) {
+      throw new HttpError(404, 'Symptom not found.');
+    }
+
+    const trimmedName = input.name?.trim();
+    if (trimmedName && trimmedName !== symptom.name) {
+      const duplicate = await doctorsRepo.findSymptomByName(trimmedName, id, tx);
+      if (duplicate) {
+        throw new HttpError(409, 'Symptom with this name already exists.');
+      }
+    }
+
+    const willRename = Boolean(trimmedName && trimmedName !== symptom.name);
+    const willRetire = Boolean(input.isRetired !== undefined && input.isRetired !== symptom.isRetired);
+    if (!willRename && !willRetire) {
+      return symptom;
+    }
+
+    const updated = await doctorsRepo.updateSymptom(
+      id,
+      {
+        ...(willRename ? { name: trimmedName } : {}),
+        ...(input.isRetired !== undefined ? { isRetired: input.isRetired } : {}),
+      },
+      tx,
+    );
+
+    if (willRename) {
+      await auditService.record(tx, actor, {
+        entityType: 'Symptom',
+        entityId: symptom.id,
+        action: 'symptom.renamed',
+        fromState: symptom.name,
+        toState: trimmedName!,
+        metadata: { slug: symptom.slug },
+      });
+    }
+    if (willRetire) {
+      await auditService.record(tx, actor, {
+        entityType: 'Symptom',
+        entityId: symptom.id,
+        action: input.isRetired ? 'symptom.retired' : 'symptom.unretired',
+        fromState: symptom.isRetired ? 'retired' : 'active',
+        toState: input.isRetired ? 'retired' : 'active',
+        metadata: { slug: symptom.slug },
+      });
+    }
+
+    return updated;
+  });
+}
+
+/** Replaces the whole mapping set for a symptom (PUT semantics): an omitted
+ * specialty is unmapped, which is how "stop suggesting cardiology for
+ * palpitations" is expressed. Duplicate specialty ids keep the highest
+ * weight rather than failing. */
+export async function setSymptomSpecialties(
+  actor: auditService.AuditActor,
+  id: string,
+  requested: Array<{ specialtyId: string; weight: number }>,
+) {
+  const bySpecialty = new Map<string, number>();
+  for (const mapping of requested) {
+    bySpecialty.set(mapping.specialtyId, Math.max(bySpecialty.get(mapping.specialtyId) ?? 0, mapping.weight));
+  }
+  const mappings = [...bySpecialty.entries()].map(([specialtyId, weight]) => ({ specialtyId, weight }));
+
+  return prisma.$transaction(async (tx) => {
+    const symptom = await doctorsRepo.findSymptomById(id, tx);
+    if (!symptom) {
+      throw new HttpError(404, 'Symptom not found.');
+    }
+    if (mappings.length > 0) {
+      const specialties = await doctorsRepo.findSpecialtiesByIds(
+        mappings.map((mapping) => mapping.specialtyId),
+        tx,
+      );
+      if (specialties.length !== mappings.length) {
+        throw new HttpError(400, 'One or more specialty ids are unknown.');
+      }
+    }
+
+    await doctorsRepo.replaceSymptomSpecialties(id, mappings, tx);
+    await auditService.record(tx, actor, {
+      entityType: 'Symptom',
+      entityId: symptom.id,
+      action: 'symptom.mappings_replaced',
+      fromState: null,
+      toState: `${mappings.length} mapping(s)`,
+      metadata: {
+        slug: symptom.slug,
+        // Audit metadata values are scalars; the mapping set is summarised
+        // rather than nested (the row-level change is reconstructable from
+        // SymptomSpecialty's own createdAt/audit trail).
+        mappings: mappings.map((mapping) => `${mapping.specialtyId}:${mapping.weight}`).join(','),
+      },
+    });
+    return doctorsRepo
+      .findSymptomsForAdmin(tx)
+      .then((all: Awaited<ReturnType<typeof doctorsRepo.findSymptomsForAdmin>>) =>
+        all.find((row) => row.id === symptom.id) ?? null,
+      );
+  });
 }

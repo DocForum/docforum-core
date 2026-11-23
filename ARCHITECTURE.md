@@ -732,7 +732,7 @@ First user: `payments.wallet_funding` gates `POST /payments/intents/:id/prepare`
 ```
 PaymentIntent
   id, prescription_id / lab_order_id (exactly one typed FK — issue #85)
-  status (enum: created|awaiting_signature|submitting|escrowed|released|refunded|failed)
+  status (enum: created|funding|awaiting_signature|submitting|escrowed|released|refunded|failed)
   patient_profile_id (FK, RESTRICT), facility_id (FK)
   amount (bigint — smallest unit of asset_code; never scaled in this repo)
   asset_code, token_contract_id (SAC address; token_contract_id is nullable
@@ -892,16 +892,16 @@ class of bug, and **new mutable-resource routes must follow it.**
 - **Security — login throttling (Phase 8, issue #35)**: `POST /auth/login` is throttled per normalised email *and* per client IP, in Postgres (`LoginAttempt`, §4.9): exponential backoff with `Retry-After` from `LOGIN_THROTTLE_BACKOFF_AFTER` failures, a temporary lock at `LOGIN_THROTTLE_LOCK_AFTER`, and a cleanup interval in `src/server.ts`. Two things this depends on operationally: (1) `TRUST_PROXY` must be set correctly in production — Render terminates TLS in front of exactly one hop, so `TRUST_PROXY=1`; leaving it unset makes every request look like Render's proxy (one shared bucket for everyone), and `true` lets a client spoof `X-Forwarded-For` for a fresh bucket per request; (2) the throttle deliberately does not reveal whether an account exists — locked, backoff and unknown-account responses are identical, and an absent account still pays the bcrypt comparison cost so response timing doesn't leak either.
 - **Idempotent retries (Phase 8, issue #48)**: `POST /appointments`, `POST /payments/intents` and `POST /payments/intents/:id/{fund,release,refund}` honour an `Idempotency-Key` header (`src/middleware/idempotency.ts`). A repeat of the same key with the same request body inside 24 h replays the stored status and body instead of running the mutation again; the same key with a different body is `422`; a second request arriving while the first is still running is `409 IN_PROGRESS` with a `Retry-After`, because ownership is decided by the unique constraint on `(userId, key)` rather than by an in-memory lock that would be correct on one instance and broken on two. Keys are namespaced per user, and 5xx is never cached so a client can retry a failed call with the same key. See §4.12 for the model.
 - **Migrations**: Prisma migrations are the only way schema changes happen — no manual DB edits, ever.
-- **Environments**: local (Docker Compose), staging, production — staging/production infra choice is an open item (see ROADMAP).
+- **Environments**: local (Docker Compose), staging, production — topology is decided in `docs/adr/0015-production-deployment-target.md` (Render, paid, Blueprint-defined, managed Postgres with PITR).
 
 ## 8. Explicit non-decisions (deferred, not forgotten)
 
-- Deployment target (Fly.io / Render / AWS / etc.) — still undecided for
-  production. A Render free-tier instance exists as a **preview only**
-  (so `docforum-web`'s GitHub Pages preview has a live backend to call) —
-  see `docs/adr/0003-render-preview-deployment.md`. Explicitly not this
-  decision: no secrets manager, no backups, disposable data, 30-day
-  free-tier DB expiry.
+- Deployment target — **resolved (Phase 9, issue #22):** Render, paid, with
+  staging + production defined in a checked-in Blueprint; paid Postgres with
+  PITR plus ADR 0007's off-platform encrypted dumps; secrets in per-environment
+  Render environment groups. See `docs/adr/0015-production-deployment-target.md`.
+  ADR 0003's free-tier instance stays a preview only, unchanged. (Fly.io/AWS
+  and a KMS remain the recorded alternatives there, not open decisions.)
 - Notification provider — **resolved (Phase 6, issue #17):** Postmark for
   email and Twilio for SMS, behind the provider-agnostic `notifications`
   interface (see §2). Provider SDK calls must stay inside the dispatch

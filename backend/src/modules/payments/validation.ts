@@ -66,7 +66,7 @@ const inclusiveEndDate = isoDateString.transform((value) => {
 
 export const paymentHistoryQuerySchema = z
   .object({
-    status: z.enum(['created', 'escrowed', 'released', 'refunded', 'failed']).optional(),
+    status: z.enum(['created', 'funding', 'escrowed', 'released', 'refunded', 'failed']).optional(),
     from: isoDate.optional(),
     to: inclusiveEndDate.optional(),
     cursor: z.string().min(1).max(512).optional(),
