@@ -215,8 +215,7 @@ async function generateClaimedExport(
     // Log the error *type* only — a driver or section error message can
     // echo the data it was handling.
     const cause = err instanceof ExportSectionError ? err.cause : err;
-    // eslint-disable-next-line no-console
-    console.error(
+    logger.error(
       `[jobs] patient export ${exportId} attempt ${attempt} failed${section ? ` in section "${section}"` : ''}: ${
         cause instanceof Error ? cause.name : typeof cause
       }`,
@@ -457,8 +456,7 @@ export async function purgeDeletedPatientAccounts(now = new Date()): Promise<Pur
           result.held += 1;
         } else {
           result.failed += 1;
-          // eslint-disable-next-line no-console
-          console.error(`[jobs] account purge failed for one profile: ${err instanceof Error ? err.name : typeof err}`);
+          logger.error(`[jobs] account purge failed for one profile: ${err instanceof Error ? err.name : typeof err}`);
         }
       }
     }

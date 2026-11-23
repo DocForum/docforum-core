@@ -14,6 +14,7 @@ import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import { formatMessage, resolveLocale } from '../../../i18n';
 import * as notificationsRepo from '../repositories';
+import { logger } from '../../../logger';
 
 export interface NotificationMessage {
   to: string;
@@ -31,7 +32,7 @@ export interface NotificationChannel {
  * single-use link (whose token is useless once used/expired). */
 export const consoleNotificationChannel: NotificationChannel = {
   async send(message) {
-    console.log(`[notifications] → ${message.to}\n${message.subject}\n${message.body}`);
+    logger.info(`[notifications] → ${message.to}\n${message.subject}`);
   },
 };
 
@@ -133,7 +134,7 @@ export async function notify<T extends NotificationType>(
     );
     results.forEach((result, index) => {
       if (result.status === 'rejected') {
-        console.error(`[notifications] ${registeredAdapters[index]?.channel ?? 'unknown'} adapter failed for notification ${notification.id}`);
+        logger.error(`[notifications] ${registeredAdapters[index]?.channel ?? 'unknown'} adapter failed for notification ${notification.id}`);
       }
     });
   }

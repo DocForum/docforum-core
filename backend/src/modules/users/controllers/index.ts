@@ -52,7 +52,7 @@ export async function revokeInvite(req: Request, res: Response) {
   const inviteId = getParam(req, 'id');
   const result = await usersService.revokeAdminInvite(auditActor(req), inviteId);
   // eslint-disable-next-line no-console
-  console.info(`[users] admin ${req.user.id} revoked invite ${inviteId} (alreadyRevoked=${result.alreadyRevoked})`);
+   logger.info(`[users] admin ${req.user.id} revoked invite ${inviteId} (alreadyRevoked=${result.alreadyRevoked})`);
   res.status(200).json(result);
 }
 

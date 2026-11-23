@@ -1,6 +1,7 @@
 import { prisma } from '../../../db/prisma-client';
 import { config } from '../../../config';
 import { decodeEscrowRpcEvent } from './escrow-event-decoder';
+import { logger } from '../../../logger';
 
 type ContractConfig = (typeof config.payments.escrowContracts)[number];
 type ChainAlert = {
@@ -19,7 +20,7 @@ function isRetentionError(error: unknown): boolean {
 
 async function notifyUnmatched(alert: ChainAlert): Promise<void> {
   // Keep the alert useful without including patient data or secrets.
-  console.error('[security:high] unmatched escrow terminal event', alert);
+  logger.error('[security:high] unmatched escrow terminal event', alert as Error);
   const url = config.payments.escrowEventAlertWebhookUrl;
   if (!url) return;
   try {
@@ -29,9 +30,9 @@ async function notifyUnmatched(alert: ChainAlert): Promise<void> {
       body: JSON.stringify({ severity: 'high', kind: 'unmatched_escrow_event', ...alert }),
       signal: AbortSignal.timeout(5_000),
     });
-    if (!response.ok) console.error('[security:high] escrow alert hook returned non-success status', response.status);
+    if (!response.ok) logger.error('[security:high] escrow alert hook returned non-success status', response.status);
   } catch (error) {
-    console.error('[security:high] escrow alert hook failed', error instanceof Error ? error.name : typeof error);
+    logger.error('[security:high] escrow alert hook failed', error instanceof Error ? error.name : typeof error);
   }
 }
 
@@ -136,7 +137,7 @@ export async function pollEscrowContractEvents(): Promise<void> {
           data: { catchupError },
         });
       }
-      console.error('[jobs] escrow event poll failed', {
+      logger.error('[jobs] escrow event poll failed', {
         contractId: contract.contractId,
         error: error instanceof Error ? error.name : typeof error,
       });

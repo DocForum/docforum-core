@@ -1,6 +1,7 @@
 import { prisma } from '../db/prisma-client';
 import { config } from '../config';
 import { record, SYSTEM_ACTOR } from '../modules/audit/services';
+import { logger } from '../logger';
 
 export async function expireUnconfirmedOrders(
   windowHours: number = config.orders.confirmationWindowHours,
@@ -68,12 +69,10 @@ export function startOrderExpiryJob(): () => void {
     try {
       const { confirmedCount } = await expireUnconfirmedOrders();
       if (confirmedCount > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`[jobs] auto-confirmed ${confirmedCount} order(s) past confirmation window`);
+        logger.info(`[jobs] auto-confirmed ${confirmedCount} order(s) past confirmation window`);
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[jobs] order expiry job failed:', err instanceof Error ? err.name : typeof err);
+      logger.error('[jobs] order expiry job failed:', err instanceof Error ? err.name : typeof err);
     }
   };
 

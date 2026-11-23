@@ -12,6 +12,7 @@
 // issue #80 adds prepare(), which builds the patient-signed transaction.
 // Release/refund are unchanged.
 import { HttpError } from '../../../http-error';
+import { logger } from '../../../logger';
 import { config, type PaymentAsset } from '../../../config';
 import type { PaymentIntent, PaymentIntentStatus } from '@prisma/client';
 import * as paymentsRepo from '../repositories';
@@ -884,7 +885,7 @@ async function notifyRefundCompleted(intent: PaymentIntent): Promise<void> {
     if (!userId) return;
     await notificationsService.notify(userId, 'payment_refunded', { paymentIntentId: intent.id });
   } catch {
-    console.error('[payments] refund-completed notification failed');
+    logger.error('[payments] refund-completed notification failed');
   }
 }
 

@@ -48,4 +48,6 @@ export const adminQueueQuerySchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((value) => value === 'true'),
+  targetSpecialtyId: z.string().optional(),
+  targetDoctorId: z.string().optional(),
 });
