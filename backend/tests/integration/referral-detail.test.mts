@@ -210,6 +210,12 @@ describe('referral detail endpoint', () => {
     expect(mine.status).toBe(200);
     expect(mine.body.referrals).toEqual(expect.any(Array));
 
+    const incoming = await request(app)
+      .get('/referrals/incoming')
+      .set('Authorization', `Bearer ${target.accessToken}`);
+    expect(incoming.status).toBe(200);
+    expect(incoming.body.items).toEqual(expect.any(Array));
+
     const created = await request(app)
       .get('/referrals/created')
       .set('Authorization', `Bearer ${gp.accessToken}`);
@@ -291,6 +297,21 @@ describe('referral detail endpoint', () => {
       expiredAt: expiredAt.toISOString(),
       expiredReason: 'ttl',
     });
+  });
+
+  it('returns readable snapshot notes for encrypted legacy rows', async () => {
+    const referralId = await pendingReferral();
+    const { encryptField } = await import('../../src/utils/field-encryption.js');
+    const encrypted = encryptField('detail snapshot after encryption');
+    expect(encrypted).toBeTruthy();
+    await prisma.referral.update({
+      where: { id: referralId },
+      data: { snapshotNotes: encrypted as string },
+    });
+
+    const res = await getDetail(patient.accessToken, referralId);
+    expect(res.status).toBe(200);
+    expect(res.body.snapshotNotes).toBe('detail snapshot after encryption');
   });
 
   it('lets an active guardian read a dependent referral by naming the dependent', async () => {
