@@ -460,10 +460,9 @@ export const orderDisputesExportSection: PatientExportSection = {
         id: row.id,
         orderId: row.orderId,
         reason: row.reason,
-        confirmedAt: row.confirmedAt,
-        resolvedAt: row.resolvedAt,
-        resolutionNotes: row.resolutionNotes,
+        status: row.status,
         createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
       })),
     );
   },
