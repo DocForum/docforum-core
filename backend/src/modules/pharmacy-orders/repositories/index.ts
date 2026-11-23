@@ -6,16 +6,8 @@ import type { FulfillmentStatus, OrderType, Prisma } from '@prisma/client';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
-/** Reads FacilityProfile directly — a Phase 1 core identity model, not
- * something the (still-placeholder) facilities module exclusively owns.
- * (Same precedent as payments/repositories.) */
-export function findFacilityProfileByUserId(userId: string) {
-  return prisma.facilityProfile.findUnique({ where: { userId } });
-}
-
-export function findFacilityProfileById(id: string) {
-  return prisma.facilityProfile.findUnique({ where: { id } });
-}
+// findFacilityProfileByUserId and findFacilityProfileById removed in
+// issue #318 — pharmacy-orders now calls facilitiesService directly.
 
 export function findFulfillmentRecordById(id: string) {
   return prisma.fulfillmentRecord.findUnique({
@@ -184,6 +176,17 @@ export async function createFulfillmentProof(
       attachmentUrl: data.attachmentUrl,
       notes: data.notes,
     },
+  });
+}
+
+/** All fulfillment records for one order — patient list endpoint (issue #323). */
+export function listFulfillmentRecordsForOrder(orderType: 'prescription' | 'lab_order', orderId: string) {
+  const where =
+    orderType === 'prescription' ? { prescriptionId: orderId } : { labOrderId: orderId };
+  return prisma.fulfillmentRecord.findMany({
+    where,
+    include: { items: { orderBy: { createdAt: 'asc' } }, facility: { select: { id: true, name: true } } },
+    orderBy: { createdAt: 'asc' },
   });
 }
 

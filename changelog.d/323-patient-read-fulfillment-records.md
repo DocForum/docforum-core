@@ -1,0 +1,1 @@
+Lets patients (and active guardians) read fulfillment records for their own orders (issue #323). `getFulfillment` now allows patient/guardian access in addition to the owning facility and admin. Adds `GET /pharmacy-orders/orders/:orderId/fulfillments` list endpoint that returns all fulfillment records for one order.

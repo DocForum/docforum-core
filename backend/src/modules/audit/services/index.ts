@@ -38,6 +38,8 @@ export type AuditEntityType =
   | 'FacilityPrice'
   // Issue #14: admin-only facility account creation (`facility.created`).
   | 'FacilityProfile'
+  // Issue #320: admin add/remove facility capabilities.
+  | 'FacilityCapability'
   | 'Order'
   | 'OrderDispute'
   | 'FeatureFlag'

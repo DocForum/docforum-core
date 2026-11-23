@@ -20,7 +20,8 @@ import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
 import { hasTrustline } from './trustline';
 import { getPlatformSigners } from './platform-signers';
 import { resolveEscrowPayee } from './payout-privacy';
-import { getMyPatientProfile, paginate, type PatientExportSection } from '../../patients/services';
+import { getMyPatientProfile, getPatientUserIdByProfileId, findPatientProfileByUserId, paginate, type PatientExportSection } from '../../patients/services';
+import { findFacilityProfileByUserId, findFacilityProfileById, getFacilityNamesByIds } from '../../facilities/services';
 import { prisma } from '../../../db/prisma-client';
 import { parseStroopsAmount } from '../../../utils/stroops';
 import * as auditService from '../../audit/services';
@@ -139,7 +140,7 @@ function requireRecordedContractId(intent: { sorobanContractId: string | null })
   return contractId;
 }
 export async function getOwnFacilityProfileId(userId: string): Promise<string> {
-  const profile = await paymentsRepo.findFacilityProfileByUserId(userId);
+  const profile = await findFacilityProfileByUserId(userId);
   if (!profile) throw new HttpError(403, 'No facility profile is associated with this account.');
   return profile.id;
 }
@@ -147,7 +148,7 @@ export async function getOwnFacilityProfileId(userId: string): Promise<string> {
 /** The caller's patient profile id — every patient-scoped payment read is
  * owned through this, never through a client-supplied profile id. */
 export async function getOwnPatientProfileId(userId: string): Promise<string> {
-  const profile = await paymentsRepo.findPatientProfileByUserId(userId);
+  const profile = await findPatientProfileByUserId(userId);
   if (!profile) throw new HttpError(403, 'No patient profile is associated with this account.');
   return profile.id;
 }
@@ -276,7 +277,7 @@ export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, i
   const amountStroops = parseStroopsAmount(input.amountStroops, 'amountStroops');
   const asset = resolveAsset('XLM');
   const catalogItemCode = input.catalogItemCode ?? null;
-  const facility = await tx.facilityProfile.findUnique({ where: { id: input.facilityProfileId }, select: { type: true } });
+  const facility = await findFacilityProfileById(input.facilityProfileId, tx);
   const expectedType = input.kind === 'prescription' ? 'pharmacy' : 'lab';
   if (!facility || facility.type !== expectedType) throw new HttpError(400, `The selected facility must be a ${expectedType} facility.`);
 
@@ -881,7 +882,7 @@ async function reconcileNotFunded(
  * message is a courtesy to the patient. */
 async function notifyRefundCompleted(intent: PaymentIntent): Promise<void> {
   try {
-    const userId = await paymentsRepo.findPatientUserIdByProfileId(intent.patientProfileId);
+    const userId = await getPatientUserIdByProfileId(intent.patientProfileId);
     if (!userId) return;
     await notificationsService.notify(userId, 'payment_refunded', { paymentIntentId: intent.id });
   } catch {
@@ -956,7 +957,7 @@ export const paymentsExportSection: PatientExportSection = {
       pageSize,
       (cursor, take) => paymentsRepo.findPaymentIntentsPageForPatient(subject.patientProfileId, cursor, take),
       async (rows) => {
-        const facilities = await paymentsRepo.findFacilityNamesByIds([...new Set(rows.map((row) => row.facilityId))]);
+        const facilities = await getFacilityNamesByIds([...new Set(rows.map((row) => row.facilityId))]);
         const facilityNames = new Map(facilities.map((facility) => [facility.id, facility.name]));
         return rows.map((row) => ({
           id: row.id,

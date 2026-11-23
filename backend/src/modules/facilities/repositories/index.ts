@@ -82,9 +82,33 @@ export function createPriceVersion(
     asset: string;
     amount: bigint;
     effectiveFrom: Date;
+    retired?: boolean;
   },
 ) {
   return db.facilityPrice.create({ data });
+}
+
+/** Capability management (issue #320) */
+
+export function findCapabilityById(id: string, db: Db = prisma) {
+  return db.facilityCapability.findUnique({ where: { id } });
+}
+
+export async function addCapability(
+  db: Db,
+  facilityProfileId: string,
+  capability: { capabilityType: CapabilityType; detail: string | null },
+) {
+  return db.facilityCapability.create({ data: { facilityProfileId, ...capability } });
+}
+
+export async function removeCapability(db: Db, capabilityId: string) {
+  return db.facilityCapability.delete({ where: { id: capabilityId } });
+}
+
+export function getFacilityNamesByIds(ids: string[], db: Db = prisma) {
+  if (ids.length === 0) return Promise.resolve([]);
+  return db.facilityProfile.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } });
 }
 
 // --- Eligible-facility query (issues #14 + #74) ---------------------------
