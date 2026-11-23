@@ -51,7 +51,9 @@ export type AuditEntityType =
   | 'Symptom'
   | 'User'
   | 'AdminInvite'
-  | 'LoginAttempt';
+  | 'LoginAttempt'
+  // Issue #328: facility payout-wallet changes (`wallet_link.linked|changed`).
+  | 'WalletLink';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;

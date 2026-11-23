@@ -28,9 +28,16 @@ import * as flagsService from '../../flags/services';
 import * as notificationsService from '../../notifications/services';
 import type { Prisma } from '@prisma/client';
 import { transitionPaymentIntentStatus } from './state-machine';
+import { facilityLedgerCsvChunks, type LedgerCsvFilters } from './ledger-csv';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
 
-import { assertWalletLinkFundingAllowed } from './wallet-link';
+import {
+  assertEscrowPayeeEffective,
+  assertWalletLinkFundingAllowed,
+  findEffectiveWalletLink,
+  requireEffectiveFacilityPayee,
+  writeWalletLink,
+} from './wallet-link';
 
 // SEP-10 Stellar Web Authentication (issue #77). Re-exported through
 // this module's service surface (not imported file-by-file from outside)
@@ -56,8 +63,13 @@ export {
   linkWalletViaSep10,
   validateWalletLinkConfig,
   walletLinkFundingAllowed,
+  // Issue #328: payout-change cool-down.
+  assertEscrowPayeeEffective,
+  findEffectiveWalletLink,
+  listPendingFacilityWalletLinks,
+  selectEffectiveWalletLink,
 } from './wallet-link';
-export type { WalletLinkOwner } from './wallet-link';
+export type { PendingWalletLinkChange, WalletLinkOwner } from './wallet-link';
 
 // Test seams re-exported through the service surface (same convention as the
 // auth module's setEmailSender) — see escrow-sdk-loader.ts and trustline.ts.
@@ -152,21 +164,19 @@ export async function getOwnPatientProfileId(userId: string): Promise<string> {
   return profile.id;
 }
 
-export async function linkWallet(facilityId: string, stellarPublicKey: string) {
-  const now = new Date();
-  await paymentsRepo.deactivateActiveWalletLink('facility', facilityId, now);
-  return paymentsRepo.createWalletLink({
-    ownerType: 'facility',
-    ownerId: facilityId,
-    stellarPublicKey,
-    verificationMethod: 'sep10',
-    verifiedAt: now,
-    activeOwnerKey: `facility:${facilityId}`,
-  });
+/** Test-fixture helper (integration + testnet suites). Goes through the
+ * same writer as the SEP-10 flow, so it is audited and subject to the
+ * issue #328 cool-down like every other link. */
+export async function linkWallet(facilityId: string, stellarPublicKey: string, now = new Date()) {
+  return paymentsRepo.inTransaction((tx) =>
+    writeWalletLink(tx, auditService.SYSTEM_ACTOR, { ownerType: 'facility', ownerId: facilityId }, stellarPublicKey, now),
+  );
 }
 
+/** The facility's EFFECTIVE payout link (issue #328) — a link still inside
+ * its cool-down is never returned here. */
 export function getWalletLink(facilityId: string) {
-  return paymentsRepo.findActiveWalletLink('facility', facilityId);
+  return findEffectiveWalletLink('facility', facilityId);
 }
 
 export function getPatientWalletLink(patientProfileId: string) {
@@ -419,6 +429,15 @@ export async function listFacilityPaymentLedger(userId: string, filters: Payment
   };
 }
 
+/** GET /payments/facility/ledger.csv (issue #329). Resolves the caller's
+ * facility BEFORE returning, so a non-facility caller gets its 403 while
+ * the response is still a normal JSON error, then hands back a lazy chunk
+ * stream (never a buffered document). */
+export async function openFacilityLedgerCsv(userId: string, filters: LedgerCsvFilters): Promise<AsyncGenerator<string>> {
+  const facilityId = await getOwnFacilityProfileId(userId);
+  return facilityLedgerCsvChunks(facilityId, filters);
+}
+
 /** Public, non-identifying references only: the escrow is on a public
  * ledger anyway. No patient data, no secrets. */
 function intentAuditMetadata(intent: PaymentIntent) {
@@ -479,10 +498,13 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
   }
 
-  // The facility's ACTIVE link (issue #78: one per owner; replaced rows
-  // are history and must never be picked up here).
-  const walletLink = await paymentsRepo.findActiveWalletLink('facility', intent.facilityId);
-  if (!walletLink) throw new HttpError(409, 'The facility for this payment has no linked wallet.');
+  // The facility's EFFECTIVE link (issue #328): the newest link that has
+  // passed its cool-down. A link changed inside the window is never the
+  // payee — funding keeps using the previous effective address until then.
+  const walletLink = await requireEffectiveFacilityPayee(
+    intent.facilityId,
+    new HttpError(409, 'The facility for this payment has no linked wallet.'),
+  );
   assertWalletLinkFundingAllowed(walletLink);
 
   const { platformPayer, platformReleaser, escrowContractId } = await requirePaymentsConfig();
@@ -695,14 +717,12 @@ export async function preparePaymentIntent(
     );
   }
 
-  const payeeWallet = await getWalletLink(intent.facilityId);
-  if (!payeeWallet) {
-    throw new HttpError(
-      409,
-      'The facility for this payment has no linked wallet.',
-      'FACILITY_WALLET_NOT_LINKED',
-    );
-  }
+  // Issue #328: the effective payee, never a link inside its cool-down.
+  const payeeWallet = await requireEffectiveFacilityPayee(
+    intent.facilityId,
+    new HttpError(409, 'The facility for this payment has no linked wallet.', 'FACILITY_WALLET_NOT_LINKED'),
+    now,
+  );
 
   const asset = resolveAssetForIntent(intent);
   await requirePayeeTrustline(payeeWallet.stellarPublicKey, asset);
@@ -757,6 +777,8 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
   if (transitionPaymentIntentStatus(intent.status, 'released') !== 'released' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
   }
+  // Issue #328: never release to a payee that is only a not-yet-effective link.
+  await assertEscrowPayeeEffective(intent);
 
   const { platformReleaser } = await requirePaymentsConfig();
   const client = await escrowClient(requireRecordedContractId(intent));
@@ -900,6 +922,12 @@ async function settleEscrowForOrder(
   // duplicate-delivery guard, and the reason a release and a refund racing
   // each other cannot both commit locally.
   if (intent.status !== 'escrowed' || intent.escrowId === null) return 'not_escrowed';
+
+  // Issue #328: a release is held rather than sent to a payee that is only a
+  // not-yet-effective link: the throw makes the outbox retry with backoff
+  // and, after MAX_ATTEMPTS, dead-letter it for an operator (funds stay in
+  // escrow). Refunds go back to the payer, so they are not held.
+  if (kind === 'release') await assertEscrowPayeeEffective(intent);
 
   const { platformReleaser } = await requirePaymentsConfig();
   const client = await escrowClient(requireRecordedContractId(intent));

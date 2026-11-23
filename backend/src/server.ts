@@ -18,6 +18,7 @@ import { startConsultationSignOffJob } from './jobs/consultation-sign-off';
 import { startAuthTokenPruneJob } from './jobs/auth-token-prune';
 import { expireUnfulfilledOrders } from './jobs/lab-order-expiry';
 import { prisma } from './db/prisma-client';
+import { startNotificationFanout } from './modules/notifications/services';
 
 const app = createApp();
 
@@ -45,6 +46,9 @@ const stopConsultationSignOff = startConsultationSignOffJob();
 // Expired/consumed auth tokens, revoked sessions and stale SEP-10
 // challenges, in bounded batches (Phase 8, issue #276).
 const stopAuthTokenPrune = startAuthTokenPruneJob();
+// Cross-instance real-time notification fan-out (Phase 6, issue #330): a
+// dedicated Postgres LISTEN connection, reconnected on loss.
+const stopNotificationFanout = startNotificationFanout();
 
 async function startServer() {
   await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork(), validateSep10Config()]);
@@ -90,6 +94,7 @@ async function shutdown(signal: string) {
   stopFollowUpExpiry();
   stopConsultationSignOff();
   stopAuthTokenPrune();
+  await stopNotificationFanout();
   if (server) {
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => server?.closeAllConnections(), 10_000);
