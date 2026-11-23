@@ -76,7 +76,6 @@ export const referralFactory = (
   overrides: Partial<Prisma.ReferralUncheckedCreateInput> = {},
 ): Prisma.ReferralUncheckedCreateInput => ({
   patientProfileId,
-  doctorProfileId,
   status: 'pending',
   ...overrides,
 });
