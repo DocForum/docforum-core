@@ -16,6 +16,7 @@
     "test:integration:payments-testnet": "DATABASE_URL_TEST=postgresql://docforum:docforum@localhost:5435/docforum_payments_test vitest run tests/testnet-integration",
     "test:all": "vitest run",
     "db:seed": "tsx prisma/seed.ts",
+    "reconcile:escrows": "tsx scripts/reconcile-escrows.ts",
     "test:properties": "vitest run tests/unit/availability-slots.property.test.ts tests/unit/state-machines.property.test.ts",
     "audit:prod": "node scripts/audit-gate.mjs",
     "i18n:check": "node scripts/check-i18n-catalogues.mjs",

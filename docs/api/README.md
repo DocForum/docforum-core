@@ -173,7 +173,7 @@ the authenticator app (default `DocForum`).
 
 | Method & path | Auth | Notes |
 |---|---|---|
-| `GET /doctors` | none | Query: optional `specialty` slug, typo-tolerant `q`, `availableBefore` (ISO date-time), `limit` (1–50, default 20), and keyset `cursor`. Returns `{ items: [{ id, fullName, nextAvailableAt, specialties: [{ id, name, slug }] }], nextCursor }`; only verified profiles and public fields are returned. One/two-character queries use prefix matching; longer queries use `pg_trgm` similarity. `nextAvailableAt` is the ISO timestamp of the earliest open future slot, or `null`. |
+| `GET /doctors` | none | Query: optional `specialty` slug, typo-tolerant `q`, `symptom` slug (curated mapping, ranked by mapping strength — issue #60), `availableBefore` (ISO date-time), `limit` (1–50, default 20), and keyset `cursor`. Returns `{ items: [{ id, fullName, nextAvailableAt, specialties: [{ id, name, slug }] }], nextCursor }`; only verified profiles and public fields are returned. One/two-character queries use prefix matching; longer queries use `pg_trgm` similarity. `nextAvailableAt` is the ISO timestamp of the earliest open future slot, or `null`. With `symptom`, an unknown, retired or unmapped symptom is a `200` with empty `items` and an explanatory `hint`. |
 | `GET /doctors/me` | doctor | Returns the caller's own `DoctorProfile`. |
 | `PUT /doctors/me/specialties` | doctor | Body `{ specialtyIds: string[] }`; replaces the caller's specialty assignments. Unknown ids return `400`. |
 | `PATCH /doctors/:doctorProfileId/verification` | admin | Body `{ status: 'pending'\|'verified'\|'rejected' }`. Manual, admin-gated per PRD FR-3 — there is no automated verification pipeline. |
