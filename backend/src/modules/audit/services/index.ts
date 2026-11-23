@@ -45,6 +45,8 @@ export type AuditEntityType =
   | 'AdminInvite'
   | 'DoctorSpecialty'
   | 'Specialty'
+  // Issue #60: admin edits to the curated symptom -> specialty vocabulary.
+  | 'Symptom'
   | 'User'
   | 'AdminInvite'
   | 'LoginAttempt';

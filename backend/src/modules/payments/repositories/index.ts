@@ -182,13 +182,48 @@ export function findFacilityNamesByIds(ids: string[]) {
 
 /**
  * Status writes are conditional on the state the caller observed (issue
- * #43): `created -> escrowed`, `created -> awaiting_signature`,
- * `awaiting_signature -> created` (expiry), `escrowed -> released|refunded`.
+ * #43): `created -> funding`, `funding -> escrowed|created`,
+ * `created -> awaiting_signature`, `awaiting_signature -> created`
+ * (expiry), `escrowed -> released|refunded`.
  * They run in the caller's transaction alongside the AuditEvent, and return
  * null if the row was no longer in the expected state (a concurrent action
  * won), so an audit event can never claim a transition that didn't happen.
- * The check-then-act gap before the on-chain call is issue #24's to close.
  */
+
+/** Claim an intent for funding (issue #24) — ONE conditional UPDATE, so of
+ * N concurrent fund requests exactly one moves `created -> funding` and the
+ * rest get null. This is the DB-level equivalent of booking's conditional
+ * slot update (ARCHITECTURE.md §5.1): the guard is the WHERE clause, not an
+ * in-process lock that would be correct on one instance and broken on two. */
+export async function claimForFunding(
+  tx: Prisma.TransactionClient,
+  id: string,
+  now: Date,
+): Promise<PaymentIntent | null> {
+  // No version bump: the claim is an internal reservation, like
+  // `created -> awaiting_signature` (issue #80). The externally visible
+  // transition is the settle write, so a funded intent still advances its
+  // version exactly once and existing ETag/If-Match clients see no change.
+  const result = await tx.paymentIntent.updateMany({
+    where: { id, status: 'created' },
+    data: { status: 'funding', fundingStartedAt: now },
+  });
+  return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
+}
+
+/** `funding -> created` after the chain call failed. Conditional, so a
+ * request that lost its claim can never clobber the winner's row. */
+export async function releaseFundingClaim(
+  tx: Prisma.TransactionClient,
+  id: string,
+): Promise<PaymentIntent | null> {
+  const result = await tx.paymentIntent.updateMany({
+    where: { id, status: 'funding' },
+    data: { status: 'created', fundingStartedAt: null },
+  });
+  return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
+}
+
 export async function markEscrowed(
   tx: Prisma.TransactionClient,
   id: string,
@@ -201,10 +236,20 @@ export async function markEscrowed(
   },
 ) {
   const result = await tx.paymentIntent.updateMany({
-    where: { id, status: 'created' },
-    data: { status: 'escrowed', ...input, version: { increment: 1 } },
+    where: { id, status: 'funding' },
+    data: { status: 'escrowed', fundingStartedAt: null, ...input, version: { increment: 1 } },
   });
   return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
+}
+
+/** Stuck `funding` claims for reconciliation (issue #24): oldest claim
+ * first, so a page always makes progress. */
+export function findStaleFundingClaims(olderThan: Date, take: number): Promise<PaymentIntent[]> {
+  return prisma.paymentIntent.findMany({
+    where: { status: 'funding', fundingStartedAt: { lt: olderThan } },
+    orderBy: [{ fundingStartedAt: 'asc' }, { id: 'asc' }],
+    take,
+  });
 }
 
 /** `created -> awaiting_signature` (issue #80). Conditional, so two

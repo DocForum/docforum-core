@@ -14,6 +14,14 @@
 
 enum PaymentIntentStatus {
   created
+  // Issue #24: claimed by exactly one fund request BEFORE the on-chain
+  // create_escrow call. The claim is a conditional UPDATE on this column,
+  // so a second concurrent fund request loses at the database, not at an
+  // in-process check. A crash between a successful create_escrow and the
+  // write back to `escrowed` leaves the row here; `reconcile-escrows.ts`
+  // reports it and resolves it explicitly (never by retrying the chain
+  // call, which would create a second escrow).
+  funding
   // ADR 0005 steps 2-4: a prepared (unsigned) create_escrow transaction
   // exists, then is being submitted with the patient's signature. The
   // submit half is not built yet (issue #80 only covers prepare), so
@@ -99,12 +107,19 @@ model PaymentIntent {
   // isn't hypothetical.
   sorobanContractId String?
 
+  // When the current `funding` claim was taken (issue #24). NULL outside
+  // that state. A stuck claim is one older than
+  // ESCROW_FUNDING_STALE_AFTER_SECONDS; reconciliation reads exactly this
+  // pair, which `updatedAt` can't serve because any write moves it.
+  fundingStartedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([facilityId])
   @@index([status])
   @@index([status, preparedExpiresAt])
+  @@index([status, fundingStartedAt])
 }
 
 // ADR 0005 step 1: a patient's verified Stellar address, used as the payer
