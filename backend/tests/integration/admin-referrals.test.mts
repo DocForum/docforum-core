@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
+import { encryptField } from '../../src/utils/field-encryption.js';
 import {
   acceptReferral,
   consultationRitual,
@@ -85,22 +86,27 @@ describe('admin referral operations', () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
-  async function pendingReferralToCardioA(options: { backdate?: boolean } = {}) {
+  async function createReferralTo(targetDoctorId: string, snapshotNotes: string) {
     const { consultationId } = await consultationRitual(app, patient, gp);
     const created = await createReferral(app, gp, {
       sourceConsultationId: consultationId,
-      targetDoctorId: cardioA.profileId,
+      targetDoctorId,
       targetSpecialtyId: cardioSpecialtyId,
-      snapshotNotes: 'admin fixture notes',
+      snapshotNotes,
     });
-    expect(created.status).toBe(201);
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    return created.body.id as string;
+  }
+
+  async function pendingReferralToCardioA(options: { backdate?: boolean } = {}) {
+    const referralId = await createReferralTo(cardioA.profileId, 'admin fixture notes');
     if (options.backdate) {
       await prisma.referral.update({
-        where: { id: created.body.id },
+        where: { id: referralId },
         data: { createdAt: new Date(Date.now() - 72 * 60 * 60 * 1000) },
       });
     }
-    return created.body.id as string;
+    return referralId;
   }
 
   function adminPost(pathname: string, body: object) {
@@ -108,6 +114,23 @@ describe('admin referral operations', () => {
       .post(pathname)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send(body);
+  }
+
+  function doctorGet(pathname: string, doctor: { accessToken: string }) {
+    return request(app).get(pathname).set('Authorization', `Bearer ${doctor.accessToken}`);
+  }
+
+  async function waitForAccessLog(referralId: string, accessedBy: string) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const rows = await prisma.accessLog.findMany({
+        where: { entityType: 'Referral', entityId: referralId, accessedBy },
+      });
+      if (rows.length > 0) return rows;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return prisma.accessLog.findMany({
+      where: { entityType: 'Referral', entityId: referralId, accessedBy },
+    });
   }
 
   it('serves the stuck queue with age and reason, filtered by status and olderThan', async () => {
@@ -133,8 +156,110 @@ describe('admin referral operations', () => {
     expect(badQuery.status).toBe(400);
   });
 
+  it('serves only the target doctor’s incoming referrals, with snapshot notes and an access log', async () => {
+    const target = await makeDoctor(app, prisma, emailedTokens, runId, { specialtyId: cardioSpecialtyId });
+    const other = await makeDoctor(app, prisma, emailedTokens, runId, { specialtyId: cardioSpecialtyId });
+    const plainId = await createReferralTo(target.profileId, 'plain specialist notes');
+    const encryptedId = await createReferralTo(target.profileId, 'before encryption');
+    await prisma.referral.update({
+      where: { id: encryptedId },
+      data: { snapshotNotes: encryptField('encrypted specialist notes')! },
+    });
+
+    const inbox = await doctorGet('/referrals/incoming', target);
+    expect(inbox.status, JSON.stringify(inbox.body)).toBe(200);
+    const ids = (inbox.body.items as { id: string }[]).map((row) => row.id);
+    expect(ids).toHaveLength(2);
+    expect(ids).toEqual(expect.arrayContaining([plainId, encryptedId]));
+    expect(inbox.body.nextCursor).toBeNull();
+    expect(inbox.body.items.find((row: { id: string }) => row.id === plainId).snapshotNotes).toBe(
+      'plain specialist notes',
+    );
+    expect(inbox.body.items.find((row: { id: string }) => row.id === encryptedId).snapshotNotes).toBe(
+      'encrypted specialist notes',
+    );
+
+    const otherInbox = await doctorGet('/referrals/incoming', other);
+    expect(otherInbox.status).toBe(200);
+    expect(otherInbox.body.items).toEqual([]);
+    const referringInbox = await doctorGet('/referrals/incoming', gp);
+    expect(referringInbox.body.items).toEqual([]);
+    const asPatient = await request(app)
+      .get('/referrals/incoming')
+      .set('Authorization', `Bearer ${patient.accessToken}`);
+    expect(asPatient.status).toBe(403);
+    const asAdmin = await request(app)
+      .get('/referrals/incoming')
+      .set('Authorization', `Bearer ${admin.accessToken}`);
+    expect(asAdmin.status).toBe(403);
+
+    for (const referralId of [plainId, encryptedId]) {
+      const logs = await waitForAccessLog(referralId, target.userId);
+      expect(logs.length).toBeGreaterThan(0);
+      expect(logs[0]).toMatchObject({
+        entityType: 'Referral',
+        entityId: referralId,
+        patientProfileId: patient.profileId,
+        accessedBy: target.userId,
+        route: 'GET /referrals/incoming',
+        detail: 'incoming referral read',
+      });
+    }
+    const otherLogs = await prisma.accessLog.findMany({
+      where: { entityType: 'Referral', entityId: plainId, accessedBy: other.userId },
+    });
+    expect(otherLogs).toEqual([]);
+  });
+
+  it('excludes terminal referrals by default, includes them by filter, and keyset-paginates', async () => {
+    const target = await makeDoctor(app, prisma, emailedTokens, runId, { specialtyId: cardioSpecialtyId });
+    const ids: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const referralId = await createReferralTo(target.profileId, `paging ${index}`);
+      await prisma.referral.update({
+        where: { id: referralId },
+        data: { createdAt: new Date(Date.now() - (4 - index) * 60 * 60 * 1000) },
+      });
+      ids.push(referralId);
+    }
+    const cancelled = await adminPost(`/referrals/admin/${ids[1]}/cancel`, { reason: 'duplicate' });
+    expect(cancelled.status).toBe(200);
+    await prisma.referral.update({
+      where: { id: ids[3] },
+      data: { status: 'expired', expiredAt: new Date(), expiredReason: 'ttl' },
+    });
+
+    const defaults = await doctorGet('/referrals/incoming', target);
+    expect(defaults.status).toBe(200);
+    expect(defaults.body.items.map((row: { id: string }) => row.id)).toEqual([ids[2], ids[0]]);
+    expect(defaults.body.nextCursor).toBeNull();
+
+    const cancelledPage = await doctorGet('/referrals/incoming?status=cancelled', target);
+    expect(cancelledPage.body.items.map((row: { id: string }) => row.id)).toEqual([ids[1]]);
+    const expiredPage = await doctorGet('/referrals/incoming?status=expired', target);
+    expect(expiredPage.body.items.map((row: { id: string }) => row.id)).toEqual([ids[3]]);
+
+    const first = await doctorGet('/referrals/incoming?limit=1', target);
+    expect(first.body.items.map((row: { id: string }) => row.id)).toEqual([ids[2]]);
+    expect(first.body.nextCursor).toBeTruthy();
+    const second = await doctorGet(
+      `/referrals/incoming?limit=1&cursor=${encodeURIComponent(first.body.nextCursor)}`,
+      target,
+    );
+    expect(second.body.items.map((row: { id: string }) => row.id)).toEqual([ids[0]]);
+    expect(second.body.nextCursor).toBeNull();
+
+    expect((await doctorGet('/referrals/incoming?cursor=not-a-cursor', target)).status).toBe(400);
+    expect((await doctorGet('/referrals/incoming?status=unknown', target)).status).toBe(400);
+  });
+
   it('reassigns a stuck referral to a verified doctor in the specialty, audited, snapshot untouched', async () => {
     const referralId = await pendingReferralToCardioA();
+    const beforeOld = await doctorGet('/referrals/incoming', cardioA);
+    expect(beforeOld.body.items.some((row: { id: string }) => row.id === referralId)).toBe(true);
+    const beforeNew = await doctorGet('/referrals/incoming', cardioB);
+    expect(beforeNew.body.items.some((row: { id: string }) => row.id === referralId)).toBe(false);
+
     const res = await adminPost(`/referrals/admin/${referralId}/reassign`, {
       targetDoctorId: cardioB.profileId,
       reason: 'cardioA on leave',
@@ -158,6 +283,13 @@ describe('admin referral operations', () => {
       toDoctorId: cardioB.profileId,
       reason: 'cardioA on leave',
     });
+
+    const afterOld = await doctorGet('/referrals/incoming', cardioA);
+    expect(afterOld.body.items.some((row: { id: string }) => row.id === referralId)).toBe(false);
+    const afterNew = await doctorGet('/referrals/incoming', cardioB);
+    const moved = afterNew.body.items.find((row: { id: string }) => row.id === referralId);
+    expect(moved).toBeDefined();
+    expect(moved.snapshotNotes).toBe('admin fixture notes');
   });
 
   it('validates reassignment targets through the doctors service', async () => {

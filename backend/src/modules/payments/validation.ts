@@ -76,3 +76,16 @@ export const paymentHistoryQuerySchema = z
   .refine((query) => !query.from || !query.to || query.from <= query.to, {
     message: '`from` must not be after `to`.',
   });
+
+/** GET /payments/facility/ledger.csv (issue #329): the ledger's filters
+ * without pagination — the CSV streams every matching row. */
+export const ledgerCsvQuerySchema = z
+  .object({
+    status: z.enum(['created', 'funding', 'escrowed', 'released', 'refunded', 'failed']).optional(),
+    from: isoDate.optional(),
+    to: inclusiveEndDate.optional(),
+  })
+  .strict()
+  .refine((query) => !query.from || !query.to || query.from <= query.to, {
+    message: '`from` must not be after `to`.',
+  });
