@@ -447,6 +447,28 @@ export const labOrdersExportSection: PatientExportSection = {
   },
 };
 
+/** This module's contribution to the patient data export (issue #336).
+ * Order disputes include the dispute reason and any resolutions. */
+export const orderDisputesExportSection: patientsService.PatientExportSection = {
+  name: 'order_disputes',
+  version: 1,
+  pages(subject, pageSize) {
+    return patientsService.paginate(
+      pageSize,
+      (cursor, take) => ordersRepo.findOrderDisputesPageForPatient(subject.patientProfileId, cursor, take),
+      (rows) => rows.map((row) => ({
+        id: row.id,
+        orderId: row.orderId,
+        reason: row.reason,
+        confirmedAt: row.confirmedAt,
+        resolvedAt: row.resolvedAt,
+        resolutionNotes: row.resolutionNotes,
+        createdAt: row.createdAt,
+      })),
+    );
+  },
+};
+
 /** Retention hold (issue #41, docs/adr/0010): prescriptions and lab orders
  * are append-only clinical orders, so a patient who has any is never purged
  * after deletion. */

@@ -100,7 +100,7 @@ export async function updateStatus(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const { status } = updateStatusSchema.parse(req.body);
   const appointment = await appointmentsService.updateStatusByDoctor(
-    req.user.id,
+    auditActor(req),
     getParam(req, 'appointmentId'),
     status,
   );
@@ -109,7 +109,10 @@ export async function updateStatus(req: Request, res: Response) {
 
 export async function cancelMine(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const appointment = await appointmentsService.cancelByPatient(req.user.id, getParam(req, 'appointmentId'), auditActor(req));
+  const appointment = await appointmentsService.cancelByPatient(
+    auditActor(req),
+    getParam(req, 'appointmentId'),
+  );
   res.status(200).json(appointment);
 }
 

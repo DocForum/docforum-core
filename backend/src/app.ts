@@ -5,6 +5,7 @@ import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
 import { registerPatientExportSections } from './export-sections';
 import { requestId } from './middleware/request-id';
+import { deadlineMiddleware } from './middleware/deadline';
 import * as moduleMounts from './mounts';
 import { registerRetentionHolds } from './retention-holds';
 import { getReadiness } from './health/readiness';
@@ -48,6 +49,12 @@ export function createApp() {
 
   // Each module mounts its own routes (src/mounts.ts, one line per module).
   for (const mount of Object.values(moduleMounts)) mount(app);
+
+  // Deadline middleware (Phase 8, issue #335): return 503 when a request
+  // exceeds its wall-clock deadline. Must be registered before the error
+  // handler so the handler can distinguish a 503 from our middleware from
+  // other errors. Exempts SSE streams and lab-result upload.
+  app.use(deadlineMiddleware);
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.

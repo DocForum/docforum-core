@@ -50,10 +50,22 @@ async function startServer() {
   await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork(), validateSep10Config()]);
   validateWalletLinkConfig();
   if (shuttingDown) return;
-  server = app.listen(config.port, () => {
+  const port = config.port;
+  const keepAliveTimeout = config.keepAliveTimeout;
+  const headersTimeout = config.headersTimeout;
+  const requestTimeout = config.requestTimeout;
+  server = app.listen(port, () => {
     // eslint-disable-next-line no-console
-    console.log(`docforum-core backend listening on :${config.port}`);
+    console.log(`docforum-core backend listening on :${port}`);
   });
+  // Phase 8, issue #335: configure HTTP-level timeouts after the server
+  // is listening, since Node's `app.listen` options are only accepted
+  // during the listen call. We set them via the server object directly.
+  if (server?.setTimeout) {
+    server.setTimeout(requestTimeout);
+  }
+  // Per-request socket timeouts are handled by the deadlineMiddleware
+  // registered in app.ts, which overrides res.end to clear its timeout.
 }
 
 void startServer().catch((error: unknown) => {

@@ -196,6 +196,17 @@ export async function patientHasOrders(patientProfileId: string): Promise<boolea
   return prescription !== null || labOrder !== null;
 }
 
+/** One keyset page of a patient's order disputes (issue #336). Dispute
+ * columns only — resolution data comes from this table directly. */
+export function findOrderDisputesPageForPatient(patientProfileId: string, cursor: string | undefined, take: number) {
+  return prisma.orderDispute.findMany({
+    where: { patientProfileId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  });
+}
+
 export async function findOrderForPatient(
   tx: Prisma.TransactionClient,
   orderId: string,

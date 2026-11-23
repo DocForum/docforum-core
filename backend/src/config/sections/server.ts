@@ -1,5 +1,11 @@
 import { requireEnv } from '../helpers';
 
+// Render's proxy idle timeout is 5 minutes; keep-alive above that.
+// See: https://render.com/docs/proxies#idle-timeout
+export const keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT ?? 300_000); // 5 minutes
+export const headersTimeout = Number(process.env.HEADERS_TIMEOUT ?? 30_000); // 30 seconds
+export const requestTimeout = Number(process.env.REQUEST_TIMEOUT ?? 120_000); // 2 minutes
+
 export const port = Number(process.env.PORT ?? 4000);
 export const databaseUrl = requireEnv('DATABASE_URL');
 

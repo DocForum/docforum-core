@@ -480,6 +480,31 @@ export async function applyAppointmentOutcome(
   }
 }
 
+/** This module's contribution to the patient data export (issue #336).
+ * Referrals include their immutable snapshot notes, lineage, and status. */
+export const referralsExportSection: patientsService.PatientExportSection = {
+  name: 'referrals',
+  version: 1,
+  pages(subject, pageSize) {
+    return patientsService.paginate(
+      pageSize,
+      (cursor, take) => referralsRepo.findReferralsPageForPatient(subject.patientProfileId, cursor, take),
+      (rows) => rows.map((row) => ({
+        id: row.id,
+        status: row.status,
+        noShowCount: row.noShowCount,
+        referringDoctorId: row.referringDoctorId,
+        targetDoctorId: row.targetDoctorId,
+        targetSpecialtyId: row.targetSpecialtyId,
+        snapshotNotes: row.snapshotNotes,
+        createdAt: row.createdAt,
+        expiredAt: row.expiredAt,
+        expiredReason: row.expiredReason,
+      })),
+    );
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Time-based expiry (issue #8)
 // ---------------------------------------------------------------------------
@@ -642,7 +667,7 @@ export async function adminCancel(
     // this transaction) WITHOUT the normal cascade — we know we're
     // cancelling the referral, no need for it to bounce back to pending.
     if (referral.status === 'accepted' && referral.resultingAppointmentId) {
-      await appointmentsService.forceCancelAppointment(tx, referral.resultingAppointmentId);
+      await appointmentsService.forceCancelAppointment(tx, referral.resultingAppointmentId, actor);
     }
 
     const updated = await referralsRepo.updateReferralIfStatus(tx, referralId, ['pending', 'accepted'], {
