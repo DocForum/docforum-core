@@ -21,7 +21,7 @@ import { labResultsRouter } from '../../src/modules/orders/routes/lab-results';
 import { metricsRouter } from '../../src/modules/metrics/routes';
 import { pharmacyOrdersRouter } from '../../src/modules/pharmacy-orders/routes';
 import { labOrdersRouter } from '../../src/modules/lab-orders/routes';
-import { paymentsRouter } from '../../src/modules/payments/routes';
+import { paymentsAdminRouter, paymentsRouter } from '../../src/modules/payments/routes';
 import { escrowEventsRouter } from '../../src/modules/payments/routes/escrow-events';
 import { facilitiesRouter } from '../../src/modules/facilities/routes';
 import { patientsRouter } from '../../src/modules/patients/routes';
@@ -63,6 +63,7 @@ const EXPECTED: Array<[string, unknown]> = [
   ['/admin/outbox', outboxAdminRouter],
   ['/admin', auditRouter],
   ['/admin/payments', escrowEventsRouter],
+  ['/admin/payments', paymentsAdminRouter],
   ['/admin', adminAuditRouter],
   ['/patients', patientAuditRouter],
   ['/referrals', referralsRouter],
