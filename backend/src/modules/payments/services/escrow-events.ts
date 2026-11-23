@@ -1,6 +1,7 @@
 import { prisma } from '../../../db/prisma-client';
 import { config } from '../../../config';
 import { decodeEscrowRpcEvent } from './escrow-event-decoder';
+import { HttpError } from '../../../http-error';
 
 type ContractConfig = (typeof config.payments.escrowContracts)[number];
 type ChainAlert = {
@@ -145,17 +146,53 @@ export async function pollEscrowContractEvents(): Promise<void> {
   await reconcilePending();
 }
 
-export async function listEscrowEvents(limit: number, state?: 'pending' | 'matched' | 'unmatched') {
-  const [items, cursors] = await Promise.all([
+type EscrowEventsCursor = { detectedAt: Date; id: string };
+
+/** Opaque keyset cursor over the endpoint's `detectedAt desc, id desc` order. */
+export function encodeEscrowEventsCursor(item: { detectedAt: Date; id: string }): string {
+  return Buffer.from(`${item.detectedAt.toISOString()}|${item.id}`, 'utf8').toString('base64url');
+}
+
+export function decodeEscrowEventsCursor(cursor: string): EscrowEventsCursor {
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const separator = raw.indexOf('|');
+  const detectedAt = new Date(raw.slice(0, separator));
+  const id = raw.slice(separator + 1);
+  if (separator < 1 || Number.isNaN(detectedAt.getTime()) || !id) {
+    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+  }
+  return { detectedAt, id };
+}
+
+export async function listEscrowEvents(
+  limit: number,
+  state?: 'pending' | 'matched' | 'unmatched',
+  cursor?: string,
+) {
+  const after = cursor ? decodeEscrowEventsCursor(cursor) : undefined;
+  const [rows, cursors] = await Promise.all([
     prisma.escrowChainEvent.findMany({
-      where: state ? { state } : {},
+      where: {
+        ...(state ? { state } : {}),
+        ...(after
+          ? {
+              OR: [
+                { detectedAt: { lt: after.detectedAt } },
+                { detectedAt: after.detectedAt, id: { lt: after.id } },
+              ],
+            }
+          : {}),
+      },
       orderBy: [{ detectedAt: 'desc' }, { id: 'desc' }],
-      take: limit,
+      take: limit + 1,
     }),
     prisma.escrowEventCursor.findMany({ orderBy: { contractId: 'asc' } }),
   ]);
+  const items = rows.slice(0, limit);
+  const last = items[items.length - 1];
   return {
     items: items.map((event) => ({ ...event, escrowId: event.escrowId?.toString() ?? null })),
     cursors,
+    nextCursor: rows.length > limit && last ? encodeEscrowEventsCursor(last) : null,
   };
 }

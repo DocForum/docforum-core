@@ -8,7 +8,7 @@ const KEYS = [
   'accessLog', 'accountPurge', 'adminInvites', 'appBaseUrl', 'appointments', 'auth', 'availability', 'consultations', 'cookie', 'corsOrigins',
   'databaseUrl', 'featureFlags', 'headersTimeout', 'idempotency', 'jwt', 'keepAliveTimeout', 'labResults', 'log', 'loginThrottle',
   'objectStorage', 'orders', 'passwordReset', 'patientExport', 'patients', 'payments', 'port', 'rateLimit',
-  'referrals', 'requestTimeout', 'sep10', 'sessions', 'tokenPrune', 'trustProxy', 'twoFactor',
+  'referrals', 'securityHeaders', 'sep10', 'sessions', 'tokenPrune', 'trustProxy', 'twoFactor',
 ];
 
 describe('config sections', () => {
