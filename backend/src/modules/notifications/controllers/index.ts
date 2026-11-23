@@ -44,8 +44,12 @@ export async function markAllRead(req: Request, res: Response) {
 
 // SSE stream endpoint (issue #97).
 
-/** Heartbeat comment interval. Keeps proxies from closing an idle stream. */
-const HEARTBEAT_MS = 15_000;
+/**
+ * Heartbeat comment interval. Keeps proxies from closing an idle stream.
+ * Mutable only so integration tests can shorten it (issue #331); read at
+ * connect time, so a change applies to streams opened afterwards.
+ */
+export const streamTimings = { heartbeatMs: 15_000 };
 /** Client retry hint sent once on connect, in milliseconds. */
 const RETRY_MS = 5_000;
 
@@ -64,7 +68,9 @@ export function stream(req: Request, res: Response) {
 
   res.status(200);
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  // `no-store` like every other response (issue #332); `no-transform` keeps
+  // proxies from compressing/buffering the stream.
+  res.setHeader('Cache-Control', 'no-store, no-transform');
   res.setHeader('Connection', 'keep-alive');
   // Stops nginx-style proxies from buffering the stream. Render's proxy honours it too.
   res.setHeader('X-Accel-Buffering', 'no');
@@ -72,7 +78,7 @@ export function stream(req: Request, res: Response) {
   res.write(`retry: ${RETRY_MS}\n\n`);
 
   // `Last-Event-ID` is accepted but not replayed yet; see services/stream.ts.
-  const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), HEARTBEAT_MS);
+  const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), streamTimings.heartbeatMs);
   const expiry =
     exp === undefined
       ? undefined
