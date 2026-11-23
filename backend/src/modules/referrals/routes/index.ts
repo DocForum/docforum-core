@@ -73,3 +73,4 @@ referralsRouter.get(
   requireRole('admin'),
   referralsController.auditTrail,
 );
+referralsRouter.get('/:referralId', authenticate, referralsController.getOne);
