@@ -70,3 +70,14 @@ export const labOrderSchema = requireExactlyOnePrice({
   notes: z.string().max(20000).optional(),
   supersedesLabOrderId: z.string().uuid().optional(),
 });
+
+/** GET /admin/disputes?status= (issue #317). */
+export const listDisputesQuerySchema = z.object({
+  status: z.enum(['pending', 'resolved']).optional(),
+});
+
+/** POST /admin/disputes/:id/resolve (issue #317). */
+export const resolveDisputeSchema = z.object({
+  resolutionNotes: z.string().trim().min(1).max(5000),
+  outcome: z.string().trim().min(1).max(100),
+});

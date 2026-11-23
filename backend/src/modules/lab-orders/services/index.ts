@@ -8,7 +8,8 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { publish } from '../../../events';
-import { storageService } from '../../../utils/storage';
+import { getObjectStorage } from '../../../utils/object-storage';
+import crypto from 'node:crypto';
 import { record, type AuditActor } from '../../audit/services';
 import type { OrderStatus } from '@prisma/client';
 import * as repo from '../repositories';
@@ -104,9 +105,15 @@ export async function fulfillLabOrder(
     throw new HttpError(403, 'Facility profile required.');
   }
 
-  let attachmentUrl: string | undefined = undefined;
-  if (input.attachment) {
-    attachmentUrl = await storageService.uploadAttachment(input.attachment);
+  let attachmentUrl: string | undefined;
+  if (input.attachment?.data) {
+    const key = `fulfillment-proofs/${crypto.randomUUID()}`;
+    await getObjectStorage().putObject({
+      key,
+      body: Buffer.from(input.attachment.data, 'base64'),
+      contentType: input.attachment.contentType ?? 'application/octet-stream',
+    });
+    attachmentUrl = key;
   }
 
   const result = await prisma.$transaction(async (tx) => {

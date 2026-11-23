@@ -2,11 +2,13 @@ import type { Request, Response } from 'express';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
+import { expectedVersion, setVersionEtag } from '../../../middleware/optimistic-concurrency';
 import * as facilitiesService from '../services';
 import {
   createFacilitySchema,
   createPriceVersionSchema,
   eligibleFacilitiesQuerySchema,
+  facilityUpdateSchema,
   priceFiltersSchema,
 } from '../validation';
 
@@ -49,6 +51,27 @@ function serializeEligible(facility: facilitiesService.EligibleFacility) {
         }
       : null,
   };
+}
+
+/** GET /facilities/me — the signed-in facility owner's full profile (issue #319). */
+export async function getOwnProfile(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const profile = await facilitiesService.getOwnFacilityProfile(req.user.id);
+  setVersionEtag(res, profile.version);
+  res.status(200).json(profile);
+}
+
+/** PATCH /facilities/me — update the facility's own profile (issue #319). */
+export async function updateOwnProfile(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const input = facilityUpdateSchema.parse(req.body);
+  const profile = await facilitiesService.updateOwnFacilityProfile(
+    auditActor(req),
+    expectedVersion(req),
+    input,
+  );
+  setVersionEtag(res, profile.version);
+  res.status(200).json(profile);
 }
 
 /** GET /facilities/me/prices — the signed-in facility owner's price list. */

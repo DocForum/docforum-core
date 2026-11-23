@@ -1,23 +1,22 @@
 import type { Request, Response } from 'express';
 import { auditActor } from '../../../middleware/request-id';
+import { getParam } from '../../../request-params';
 import * as adminServices from '../services/admin';
-import type { DisputeStatus } from '@prisma/client';
+import { listDisputesQuerySchema, resolveDisputeSchema } from '../validation';
 
 export async function listDisputes(req: Request, res: Response) {
-  const statusParam = req.query.status as DisputeStatus | undefined;
-  const disputes = await adminServices.listDisputes(statusParam);
+  const { status } = listDisputesQuerySchema.parse(req.query);
+  const disputes = await adminServices.listDisputes(status);
   res.status(200).json(disputes);
 }
 
 export async function resolveDispute(req: Request, res: Response) {
-  const disputeId = req.params.id as string;
-  const { resolutionNotes, outcome, status } = req.body || {};
+  const { resolutionNotes, outcome } = resolveDisputeSchema.parse(req.body);
   const actor = auditActor(req);
-  const resolvedOutcome = (outcome || status || 'resolved') as string;
   const resolution = await adminServices.resolveDispute(
-    disputeId,
+    getParam(req, 'id'),
     req.user!.id,
-    { resolutionNotes, outcome: resolvedOutcome },
+    { resolutionNotes, outcome },
     actor,
   );
   res.status(200).json(resolution);

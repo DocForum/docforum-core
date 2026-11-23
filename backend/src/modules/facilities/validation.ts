@@ -63,6 +63,24 @@ export type EligibleFacilitiesQuery = z.infer<typeof eligibleFacilitiesQuerySche
 
 export type CreatePriceVersionBody = z.infer<typeof createPriceVersionSchema>;
 
+/**
+ * PATCH /facilities/me — the facility owner updates their own profile fields.
+ * At least one field must be provided; `type` and `userId` are immutable.
+ */
+export const facilityUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    address: z.string().trim().min(1).max(500).optional(),
+    latitude: z.number().min(-90).max(90).optional(),
+    longitude: z.number().min(-180).max(180).optional(),
+  })
+  .strict()
+  .refine((data) => Object.values(data).some((v) => v !== undefined), {
+    message: 'At least one field must be provided.',
+  });
+
+export type FacilityUpdateBody = z.infer<typeof facilityUpdateSchema>;
+
 /** Admin-only facility creation (issue #14, PRD OQ-2). The shape is checked
  * here; the type↔capability consistency rule lives in the service so a
  * direct service call cannot bypass it. */

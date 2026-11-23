@@ -5,6 +5,8 @@ import { auditActor } from '../../../middleware/request-id';
 import * as pharmacyOrdersService from '../services';
 import {
   createFulfillmentSchema,
+  createPharmacyOrderSchema,
+  fulfillPharmacyOrderSchema,
   orderFulfillmentStatusQuerySchema,
   updateFulfillmentItemSchema,
   updateFulfillmentRecordSchema,
@@ -61,31 +63,24 @@ export async function getOrderFulfillmentStatus(req: Request, res: Response) {
 // --- Pharmacy order creation / fulfillment proof ------------------------
 
 export async function createPharmacyOrder(req: Request, res: Response) {
-  const { patientProfileId, prescribingDoctorId, details } = req.body || {};
-  const order = await pharmacyOrdersService.createPharmacyOrder({
-    patientProfileId,
-    prescribingDoctorId,
-    details,
-  });
+  const input = createPharmacyOrderSchema.parse(req.body);
+  const order = await pharmacyOrdersService.createPharmacyOrder(input);
   res.status(201).json(order);
 }
 
 export async function fulfillPharmacyOrder(req: Request, res: Response) {
-  const id = req.params.id as string;
-  const { referenceNumber, attachment, notes } = req.body || {};
+  const input = fulfillPharmacyOrderSchema.parse(req.body);
   const actor = auditActor(req);
-
   const order = await pharmacyOrdersService.fulfillPharmacyOrder(
-    id,
+    getParam(req, 'id'),
     req.user!.id,
-    { referenceNumber, attachment, notes },
+    input,
     actor,
   );
   res.status(200).json(order);
 }
 
 export async function getPharmacyOrder(req: Request, res: Response) {
-  const id = req.params.id as string;
-  const order = await pharmacyOrdersService.getPharmacyOrderById(id);
+  const order = await pharmacyOrdersService.getPharmacyOrderById(getParam(req, 'id'));
   res.status(200).json(order);
 }

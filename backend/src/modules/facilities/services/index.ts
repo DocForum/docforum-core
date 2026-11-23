@@ -15,6 +15,7 @@
 //      never stored, never logged, never echoed back.
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
+import { versionConflict } from '../../../middleware/optimistic-concurrency';
 import * as auditService from '../../audit/services';
 import { hashPassword } from '../../auth/services';
 import * as facilitiesRepo from '../repositories';
@@ -87,6 +88,42 @@ export async function getOwnFacilityProfileId(userId: string): Promise<string> {
   const facility = await facilitiesRepo.findFacilityProfileByUserId(userId);
   if (!facility) throw new HttpError(403, 'No facility profile is linked to this account.');
   return facility.id;
+}
+
+/** GET /facilities/me — the signed-in facility owner's full profile (issue #319). */
+export async function getOwnFacilityProfile(userId: string) {
+  const facility = await facilitiesRepo.findFacilityProfileByUserId(userId);
+  if (!facility) throw new HttpError(403, 'No facility profile is linked to this account.');
+  return facility;
+}
+
+/** PATCH /facilities/me — optimistic-concurrency profile update (issue #319).
+ * Uses the ETag/If-Match version from ARCHITECTURE.md §5.4. */
+export async function updateOwnFacilityProfile(
+  actor: auditService.AuditActor,
+  version: number,
+  input: { name?: string; address?: string; latitude?: number; longitude?: number },
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const current = await getOwnFacilityProfile(actor.userId);
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await facilitiesRepo.updateFacilityProfile(current.id, version, input, tx);
+    if (!result) return null;
+    const changed = Object.keys(input)
+      .filter((k) => (input as Record<string, unknown>)[k] !== undefined)
+      .join(',');
+    await auditService.record(tx, actor, {
+      entityType: 'FacilityProfile',
+      entityId: current.id,
+      action: 'facility.profile_updated',
+      fromState: String(version),
+      toState: String(version + 1),
+      metadata: { fieldsChanged: changed },
+    });
+    return result;
+  });
+  if (!updated) throw versionConflict();
+  return updated;
 }
 
 async function requireFacilityForWrite(actor: auditService.AuditActor, facilityId: string) {

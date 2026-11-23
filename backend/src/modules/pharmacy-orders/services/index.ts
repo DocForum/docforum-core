@@ -19,7 +19,8 @@ import type { FulfillmentItem, FulfillmentStatus, Role } from '@prisma/client';
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { publish } from '../../../events';
-import { storageService, type UploadAttachmentOptions } from '../../../utils/storage';
+import { getObjectStorage } from '../../../utils/object-storage';
+import crypto from 'node:crypto';
 import { computeConfirmedSignal, formatOrderResponse } from '../../../utils/order-utils';
 import { record as recordAudit, type AuditActor } from '../../audit/services';
 import * as repo from '../repositories';
@@ -349,7 +350,9 @@ export { computeConfirmedSignal, formatOrderResponse };
 
 export interface FulfillOrderInput {
   referenceNumber: string;
-  attachment?: string | UploadAttachmentOptions;
+  /** Base64-encoded file content with optional MIME type, stored in object
+   * storage (issue #316). The key is never returned to callers. */
+  attachment?: { data: string; contentType?: string };
   notes?: string;
 }
 
@@ -407,9 +410,15 @@ export async function fulfillPharmacyOrder(
     throw new HttpError(403, 'Facility profile required.');
   }
 
-  let attachmentUrl: string | undefined = undefined;
-  if (input.attachment) {
-    attachmentUrl = await storageService.uploadAttachment(input.attachment);
+  let attachmentUrl: string | undefined;
+  if (input.attachment?.data) {
+    const key = `fulfillment-proofs/${crypto.randomUUID()}`;
+    await getObjectStorage().putObject({
+      key,
+      body: Buffer.from(input.attachment.data, 'base64'),
+      contentType: input.attachment.contentType ?? 'application/octet-stream',
+    });
+    attachmentUrl = key;
   }
 
   const result = await prisma.$transaction(async (tx) => {
