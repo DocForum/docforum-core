@@ -116,6 +116,18 @@ export async function cancelMine(req: Request, res: Response) {
   res.status(200).json(appointment);
 }
 
+export async function cancelDay(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const { date } = req.query;
+  if (!date) throw new HttpError(400, 'date query parameter is required.');
+  const result = await appointmentsService.cancelDay(
+    auditActor(req),
+    req.user.id,
+    String(date),
+  );
+  res.status(200).json(result);
+}
+
 export async function getOne(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const appointmentId = getParam(req, 'id');

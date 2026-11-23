@@ -105,6 +105,16 @@ appointmentsRouter.patch(
   appointmentsController.cancelMine,
 );
 
+// Doctor cancels all scheduled appointments for a given date (Phase 2, issue #338).
+// Optional `reason` query parameter may be included.
+appointmentsRouter.post(
+  '/doctor/cancel-day',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  appointmentsController.cancelDay,
+);
+
 // Role-scoped appointment detail (Phase 2, issue #296): patient, guardian, or treating doctor
 appointmentsRouter.get(
   '/:id',

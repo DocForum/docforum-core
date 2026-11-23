@@ -954,8 +954,76 @@ export async function forceCancelAppointment(
   return appointmentsRepo.findAppointmentById(db, appointmentId);
 }
 
-/** Retention hold (issue #41, docs/adr/0010): appointments are clinical
- * records, so a patient who has any is never purged after deletion. */
-export function hasAppointmentsForPatient(patientProfileId: string): Promise<boolean> {
-  return appointmentsRepo.patientHasAppointments(patientProfileId);
+/** Cancel all scheduled appointments for a doctor on a given date
+ * (Phase 2, issue #338). Runs `applyScheduledTransition` for each,
+ * so referral cascades fire, and closes open slots for that day.
+ *
+ * - Past appointments earlier in the day are untouched.
+ * - If a slot gets booked between listing and cancelling, the conditional
+ *   UPDATE only matches `status = 'scheduled'`, so it is cancelled, not left booked.
+ * - Slot release follows the same logic as `cancelByPatient`: released only
+ *   if the slot start time is ahead of the cutoff window.
+ * - Returns a summary: { cancelled, slots_closed, failures, appointment_ids }.
+ */
+export async function cancelDay(
+  actor: auditService.AuditActor,
+  doctorProfileId: string,
+  date: string,
+  reason?: string,
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+
+  // Resolve the doctor profile to verify ownership
+  await doctorsService.assertOwnsDoctorProfile(actor.userId, doctorProfileId);
+
+  // Find the doctor's profile to get their time zone
+  const doctor = await doctorsService.getMyDoctorProfile(actor.userId);
+
+  // Compute the local calendar day bounds for the given date in the doctor's time zone.
+  // If `date` is already an ISO date string (e.g. "2026-10-19"), we can parse it;
+  // otherwise treat it as "today" in the doctor's timezone.
+  const { start, end } = getCalendarDayBounds(doctor.timeZone, date);
+
+  // Find all scheduled appointments for this doctor on that day.
+  // Keep only those still in 'scheduled' status — past/terminal states are untouched.
+  const appointments = await appointmentsRepo.findAppointmentsForDoctorOnDay(doctor.id, start, end);
+  const scheduled = appointments.filter(
+    (appt) => appt.status === 'scheduled',
+  );
+
+  // Summary results
+  let cancelled = 0;
+  let slots_closed = 0;
+  let failures = 0;
+  const cancelled_ids: string[] = [];
+
+  // Process each scheduled appointment in its own transaction.
+  for (const appt of scheduled) {
+    try {
+      const fromState = appt.status; // should be 'scheduled'
+      // Wrap each transition in its own transaction so the conditional UPDATE
+      // only ever matches a still-`scheduled` row, even under concurrency.
+      const result = await prisma.$transaction(async (tx) => {
+        await applyScheduledTransition(tx, appt, 'cancelled' as AppointmentStatus, actor, fromState);
+        // After the transition, fetch the updated appointment to check slot state.
+        return appointmentsRepo.findAppointmentById(tx, appt.id);
+      });
+
+      cancelled += 1;
+      cancelled_ids.push(appt.id);
+
+      // Try to release the slot if it's still booked and ahead of cutoff.
+      if (result?.availabilitySlotId) {
+        const released = await availabilityService.releaseBookedSlotIfFuture(prisma, result.availabilitySlotId);
+        if (released) {
+          slots_closed += 1;
+        }
+      }
+    } catch (err) {
+      failures += 1;
+      // One failure shouldn't stop the rest.
+    }
+  }
+
+  return { cancelled, slots_closed, failures, cancelled_ids };
 }
