@@ -6,6 +6,21 @@ import type { Logger } from 'pino';
 import { logger as rootLogger } from '../logger';
 import { localizedErrorMessage, resolveLocale } from '../i18n';
 
+/** Prisma known-request codes mapped to a client status (issue #334). */
+export const PRISMA_CLIENT_ERRORS: Readonly<Record<string, { status: number; message: string; log: string }>> = {
+  // Unique constraint failed.
+  P2002: { status: 409, message: 'A record with this value already exists.', log: 'Unique constraint violation' },
+  // Foreign key constraint failed: the request names a record that doesn't
+  // exist (create/update), or one that other records still depend on.
+  P2003: {
+    status: 422,
+    message: 'The request refers to a record that does not exist or is still in use.',
+    log: 'Foreign key constraint violation',
+  },
+  // An update/delete (or a required connect) matched no row.
+  P2025: { status: 404, message: 'Record not found.', log: 'Record not found' },
+};
+
 // docforum-web's api-client.ts assumes an error envelope of
 // `{ message: string }` (documented as unconfirmed there) — this is the
 // implementation that assumption is checked against. Keep them in sync.
@@ -33,9 +48,15 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return;
   }
 
-  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-    requestLogger.warn({ err }, 'Unique constraint violation');
-    res.status(409).json({ message: 'A record with this value already exists.' });
+  // Prisma request errors that are the client's fault (issue #334). The
+  // messages are fixed strings: Prisma's own `message`/`meta` name tables,
+  // columns and constraints, so they are logged server-side and never sent.
+  // Errors thrown inside `$transaction` reach here as the same class, so
+  // they map the same way.
+  const prismaMapping = err instanceof Prisma.PrismaClientKnownRequestError ? PRISMA_CLIENT_ERRORS[err.code] : undefined;
+  if (prismaMapping) {
+    requestLogger.warn({ err }, prismaMapping.log);
+    res.status(prismaMapping.status).json({ message: prismaMapping.message });
     return;
   }
 

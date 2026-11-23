@@ -24,6 +24,7 @@ export * from './patients';
 export * from './payments';
 export * from './rateLimit';
 export * from './referrals';
+export * from './securityHeaders';
 export * from './sep10';
 export * from './server';
 export * from './sessions';
