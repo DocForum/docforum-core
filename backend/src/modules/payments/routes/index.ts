@@ -7,6 +7,8 @@ export const paymentsRouter = Router();
 
 paymentsRouter.get('/mine', authenticate, requireRole('patient'), paymentsController.listMyPayments);
 paymentsRouter.get('/facility/ledger', authenticate, requireRole('facility'), paymentsController.listFacilityLedger);
+// Issue #329: the same ledger as a streamed CSV download.
+paymentsRouter.get('/facility/ledger.csv', authenticate, requireRole('facility'), paymentsController.exportFacilityLedgerCsv);
 
 // Facility manages its own payout wallet.
 paymentsRouter.post(
@@ -82,3 +84,8 @@ paymentsRouter.post(
   requireVerifiedEmail,
   paymentsController.sep10Verify,
 );
+
+// Admin payment views, mounted at /admin/payments next to escrow events.
+// Issue #328: facility payout-wallet changes still inside their cool-down.
+export const paymentsAdminRouter = Router();
+paymentsAdminRouter.get('/wallet-links/pending', authenticate, requireRole('admin'), paymentsController.listPendingWalletLinks);

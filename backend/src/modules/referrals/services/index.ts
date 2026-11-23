@@ -19,6 +19,7 @@ import * as appointmentsService from '../../appointments/services';
 import * as auditService from '../../audit/services';
 import * as doctorsService from '../../doctors/services';
 import * as patientsService from '../../patients/services';
+import { decryptField, isEncrypted } from '../../../utils/field-encryption';
 import { evaluateReferralLoop, LoopGuardError, REFERRAL_MAX_HOPS } from '../loop';
 import { selectLeastLoaded } from '../routing';
 
@@ -145,6 +146,11 @@ async function prepareReferralTarget(
   // Routing first: everything below (self-referral gate, verification,
   // duplicate checks, loop walk) then sees one resolved doctor regardless
   // of whether the referring doctor named them or the rule picked them.
+  // Issue #334: an unknown specialty id gets its own message rather than
+  // "no eligible doctor" (routing) or a foreign-key failure (insert).
+  if (target.targetSpecialtyId) {
+    await doctorsService.assertSpecialtyExists(target.targetSpecialtyId);
+  }
   const targetDoctorId = await resolveTargetDoctor(db, referringDoctorId, target, excludeFromRouting);
 
   if (targetDoctorId === referringDoctorId) {
@@ -430,6 +436,66 @@ export async function listMine(userId: string, patientProfileId?: string) {
 export async function listCreated(userId: string) {
   const referringDoctor = await doctorsService.getMyDoctorProfile(userId);
   return referralsRepo.listReferralsCreatedBy(referringDoctor.id);
+}
+
+const DEFAULT_INCOMING_REFERRAL_STATUSES: ReferralStatus[] = ['pending', 'accepted'];
+
+function encodeIncomingCursor(row: { createdAt: Date; id: string }): string {
+  return Buffer.from(`${row.createdAt.toISOString()}|${row.id}`, 'utf8').toString('base64url');
+}
+
+function decodeIncomingCursor(cursor: string): { createdAt: Date; id: string } {
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const separator = raw.indexOf('|');
+  const createdAt = new Date(raw.slice(0, separator));
+  const id = raw.slice(separator + 1);
+  if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
+    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+  }
+  return { createdAt, id };
+}
+
+function readableSnapshotNotes(value: string): string {
+  return isEncrypted(value) ? decryptField(value) ?? value : value;
+}
+
+export interface IncomingReferralFilters {
+  status?: ReferralStatus;
+  limit?: number;
+  cursor?: string;
+}
+
+export async function listIncoming(userId: string, filters: IncomingReferralFilters) {
+  const doctor = await doctorsService.getMyDoctorProfile(userId);
+  const limit = filters.limit ?? 20;
+  const before = filters.cursor ? decodeIncomingCursor(filters.cursor) : undefined;
+  const rows = await referralsRepo.listIncomingReferrals({
+    targetDoctorId: doctor.id,
+    statuses: filters.status ? [filters.status] : DEFAULT_INCOMING_REFERRAL_STATUSES,
+    before,
+    take: limit + 1,
+  });
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const items = pageRows.map((row) => ({
+    ...row,
+    snapshotNotes: readableSnapshotNotes(row.snapshotNotes),
+  }));
+
+  for (const row of pageRows) {
+    auditService.recordAccess({
+      accessedBy: userId,
+      patientProfileId: row.patientProfileId,
+      entityType: 'Referral',
+      entityId: row.id,
+      route: 'GET /referrals/incoming',
+      detail: 'incoming referral read',
+    });
+  }
+
+  const last = pageRows.at(-1);
+  return { items, nextCursor: hasMore && last ? encodeIncomingCursor(last) : null };
 }
 
 /**

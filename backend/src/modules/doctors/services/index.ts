@@ -239,6 +239,17 @@ export async function assertDoctorVerifiedInSpecialty(doctorProfileId: string, s
   return profile;
 }
 
+/** Throws 422 when `specialtyId` names no specialty in the catalog. Lets
+ * callers (referral creation, issue #334) give a specific message instead of
+ * relying on a foreign-key failure or a misleading downstream error. */
+export async function assertSpecialtyExists(specialtyId: string) {
+  const specialty = await doctorsRepo.findSpecialtyById(specialtyId);
+  if (!specialty) {
+    throw new HttpError(422, 'The target specialty does not exist.', 'SPECIALTY_NOT_FOUND');
+  }
+  return specialty;
+}
+
 /** Doctor's specialty ids — used by referral creation to denormalise the
  * target specialty onto the referral for the loop guard. */
 export async function listDoctorSpecialtyIds(doctorProfileId: string) {

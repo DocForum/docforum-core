@@ -6,16 +6,22 @@
 // against (`verifySep10Challenge` from issue #77).
 //
 // Invariant (reviewer check): `createWalletLink` (the only WalletLink
-// insert in the repositories) is called from exactly one place — the
-// transaction below, after `verifySep10Challenge` has resolved without
-// throwing. There is no seed, no admin route, no script and no legacy
-// write path; `unverified_legacy` rows only ever come from the
+// insert in the repositories) is called from exactly one place —
+// `writeWalletLink` below, which also writes the issue #328 AuditEvent and
+// cool-down in the same transaction. Its HTTP caller runs it only after
+// `verifySep10Challenge` has resolved without throwing; the other caller is
+// the test-fixture helper `linkWallet` in services/index.ts. There is no
+// seed, no admin route, no script and no legacy write path;
+// `unverified_legacy` rows only ever come from the
 // add_verified_wallet_links migration backfill.
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import * as paymentsRepo from '../repositories';
 import { verifySep10Challenge } from './sep10';
-import type { Role, WalletLink, WalletLinkVerificationMethod } from '@prisma/client';
+import type { PaymentIntent, Prisma, Role, WalletLink, WalletLinkOwnerType, WalletLinkVerificationMethod } from '@prisma/client';
+import { findFacilityProfileByUserId, getFacilityNamesByIds } from '../../facilities/services';
+import { findPatientProfileByUserId } from '../../patients/services';
+import * as auditService from '../../audit/services';
 
 /**
  * ADR 0005, "Consequences → Privacy risk" — reproduced VERBATIM (every
@@ -47,12 +53,12 @@ export interface WalletLinkOwner {
  * and is listed as an open design decision in the PR. */
 async function resolveCallerOwner(userId: string, role: Role): Promise<WalletLinkOwner> {
   if (role === 'patient') {
-    const profile = await paymentsRepo.findPatientProfileByUserId(userId);
+    const profile = await findPatientProfileByUserId(userId);
     if (!profile) throw new HttpError(403, 'No patient profile is associated with this account.');
     return { ownerType: 'patient', ownerId: profile.id };
   }
   if (role === 'facility') {
-    const profile = await paymentsRepo.findFacilityProfileByUserId(userId);
+    const profile = await findFacilityProfileByUserId(userId);
     if (!profile) throw new HttpError(403, 'No facility profile is associated with this account.');
     return { ownerType: 'facility', ownerId: profile.id };
   }
@@ -78,6 +84,7 @@ export async function linkWalletViaSep10(
   userId: string,
   role: Role,
   signedChallengeTx: string,
+  actor: auditService.AuditActor = { userId, role, requestId: null },
 ): Promise<WalletLink> {
   const owner = await resolveCallerOwner(userId, role);
   const now = new Date();
@@ -87,23 +94,7 @@ export async function linkWalletViaSep10(
       // Full SEP-10 server verification, ledger binding (this user) and
       // atomic nonce consumption — inside this transaction.
       const { account } = await verifySep10Challenge(userId, signedChallengeTx, tx);
-
-      // Re-link deactivates rather than mutates/deletes: the previous
-      // row keeps its address and history, and the active sentinel key
-      // frees up for the new row (unique index keeps this race-safe).
-      await paymentsRepo.deactivateActiveWalletLink(owner.ownerType, owner.ownerId, now, tx);
-
-      return paymentsRepo.createWalletLink(
-        {
-          ownerType: owner.ownerType,
-          ownerId: owner.ownerId,
-          stellarPublicKey: account,
-          verificationMethod: 'sep10',
-          verifiedAt: now,
-          activeOwnerKey: `${owner.ownerType}:${owner.ownerId}`,
-        },
-        tx,
-      );
+      return writeWalletLink(tx, actor, owner, account, now);
     });
   } catch (err) {
     // P2002 on activeOwnerKey = a concurrent request created the link
@@ -113,6 +104,205 @@ export async function linkWalletViaSep10(
     }
     throw err;
   }
+}
+
+// --- Payout-address change audit + cool-down (issue #328) -----------------
+//
+// Rule: a facility's FIRST-EVER link is effective immediately (there is no
+// earlier payee to redirect away from). Every later facility link becomes
+// effective only WALLET_LINK_COOLDOWN_HOURS after it was created; until then
+// the previously effective link keeps being the escrow payee for funding and
+// prepare. Re-linking again inside the window cancels the pending link (it
+// never takes effect) and restarts the window. Patient links (payer side)
+// are immediate: they can't redirect a payout.
+//
+// Escrows already funded are bound on chain to the payee recorded at
+// funding (PaymentIntent.fundedWalletAddress) and stay that way; release
+// can never move them. assertEscrowPayeeEffective is a defence-in-depth
+// check on the release paths on top of that.
+
+type EffectiveCandidate = Pick<WalletLink, 'effectiveAt' | 'replacedAt' | 'createdAt'>;
+
+/** A link replaced before it took effect was cancelled and never becomes
+ * effective. */
+export function isCancelledWalletLink(link: Pick<WalletLink, 'effectiveAt' | 'replacedAt'>): boolean {
+  return link.replacedAt !== null && link.replacedAt.getTime() < link.effectiveAt.getTime();
+}
+
+/** Pure: the link that is the owner's payee at `now` — the latest-effective
+ * row that has taken effect and was not cancelled. Exported for unit tests. */
+export function selectEffectiveWalletLink<T extends EffectiveCandidate>(rows: readonly T[], now: Date): T | null {
+  const candidates = rows.filter((row) => row.effectiveAt.getTime() <= now.getTime() && !isCancelledWalletLink(row));
+  candidates.sort(
+    (a, b) => b.effectiveAt.getTime() - a.effectiveAt.getTime() || b.createdAt.getTime() - a.createdAt.getTime(),
+  );
+  return candidates[0] ?? null;
+}
+
+/** The owner's effective link at `now` (the payee funding must use). */
+export async function findEffectiveWalletLink(
+  ownerType: WalletLinkOwnerType,
+  ownerId: string,
+  now: Date = new Date(),
+  db?: Prisma.TransactionClient,
+): Promise<WalletLink | null> {
+  return selectEffectiveWalletLink(await paymentsRepo.findWalletLinksEffectiveBy(ownerType, ownerId, now, db), now);
+}
+
+function cooldownMs(): number {
+  const hours = config.walletLink.cooldownHours;
+  if (Number.isNaN(hours)) {
+    throw new HttpError(
+      500,
+      'WALLET_LINK_COOLDOWN_HOURS is not a valid non-negative number — wallet changes are refused until it is.',
+      'PAYMENTS_MISCONFIGURED',
+    );
+  }
+  return hours * 60 * 60 * 1000;
+}
+
+/**
+ * The ONLY WalletLink insert path. Runs inside the caller's transaction:
+ * deactivates the current active row, inserts the new one with its
+ * effectiveAt, and records the AuditEvent — all or nothing.
+ */
+export async function writeWalletLink(
+  tx: Prisma.TransactionClient,
+  actor: auditService.AuditActor,
+  owner: WalletLinkOwner,
+  account: string,
+  now: Date,
+): Promise<WalletLink> {
+  const previousEffective = await findEffectiveWalletLink(owner.ownerType, owner.ownerId, now, tx);
+  const previousActive = await paymentsRepo.findActiveWalletLink(owner.ownerType, owner.ownerId, tx);
+
+  // Re-link deactivates rather than mutates/deletes: the previous row keeps
+  // its address and history, and the active sentinel key frees up for the
+  // new row (unique index keeps this race-safe). The deactivation count is
+  // read-committed against the latest row, so two near-simultaneous "first"
+  // links can't both claim the first-link exemption: the second either sees
+  // the first and gets the cool-down, or loses the unique-key race (409).
+  const { count: replaced } = await paymentsRepo.deactivateActiveWalletLink(owner.ownerType, owner.ownerId, now, tx);
+  const firstLink = replaced === 0 && (await paymentsRepo.countWalletLinks(owner.ownerType, owner.ownerId, tx)) === 0;
+  const delayMs = owner.ownerType === 'facility' && !firstLink ? cooldownMs() : 0;
+  const effectiveAt = new Date(now.getTime() + delayMs);
+
+  const link = await paymentsRepo.createWalletLink(
+    {
+      ownerType: owner.ownerType,
+      ownerId: owner.ownerId,
+      stellarPublicKey: account,
+      verificationMethod: 'sep10',
+      verifiedAt: now,
+      activeOwnerKey: `${owner.ownerType}:${owner.ownerId}`,
+      effectiveAt,
+    },
+    tx,
+  );
+
+  const cancelledPending =
+    previousActive !== null && previousActive.effectiveAt.getTime() > now.getTime() ? previousActive : null;
+  // Facility payout addresses are business accounts and the point of the
+  // audit row. A patient's payer address is NOT recorded: linking it to
+  // their identity is the ADR 0005 on-chain privacy risk.
+  const recordAccounts = owner.ownerType === 'facility';
+  await auditService.record(tx, actor, {
+    entityType: 'WalletLink',
+    entityId: link.id,
+    action: firstLink ? 'wallet_link.linked' : 'wallet_link.changed',
+    fromState: previousEffective ? 'effective' : null,
+    toState: effectiveAt.getTime() > now.getTime() ? 'pending' : 'effective',
+    metadata: {
+      ownerType: owner.ownerType,
+      ownerId: owner.ownerId,
+      previousLinkId: previousEffective?.id ?? null,
+      previousStellarAccount: recordAccounts ? previousEffective?.stellarPublicKey ?? null : null,
+      newStellarAccount: recordAccounts ? account : null,
+      effectiveAt: effectiveAt.toISOString(),
+      cooldownHours: delayMs / (60 * 60 * 1000),
+      firstLink,
+      cancelledPendingLinkId: cancelledPending?.id ?? null,
+    },
+  });
+  return link;
+}
+
+/** Thrown when an owner has a link but it is still inside its cool-down. */
+function cooldownError(effectiveAt: Date): HttpError {
+  return new HttpError(
+    409,
+    `The facility's new payout wallet is in its security cool-down until ${effectiveAt.toISOString()}.`,
+    'WALLET_LINK_COOLDOWN',
+  );
+}
+
+/**
+ * The payee for funding/prepare: the facility's EFFECTIVE link. Never the
+ * newest row — a link inside its cool-down is skipped in favour of the
+ * previous effective one. No effective link at all: `notLinked` (each
+ * caller keeps its existing error), or WALLET_LINK_COOLDOWN when the only
+ * link is still pending.
+ */
+export async function requireEffectiveFacilityPayee(facilityId: string, notLinked: HttpError, now = new Date()): Promise<WalletLink> {
+  const effective = await findEffectiveWalletLink('facility', facilityId, now);
+  if (effective) return effective;
+  const active = await paymentsRepo.findActiveWalletLink('facility', facilityId);
+  if (active && active.effectiveAt.getTime() > now.getTime()) throw cooldownError(active.effectiveAt);
+  throw notLinked;
+}
+
+/**
+ * Release-path guard (defence in depth). An escrow's payee is fixed on
+ * chain at funding, and funding only ever uses an effective link, so this
+ * cannot fail through the normal flow. It refuses a release whose recorded
+ * payee is known to this facility ONLY as a link that has not taken effect
+ * (pending or cancelled). An address with no link row at all (pre-#78
+ * escrows, escrows adopted from chain events) is not a wallet linked inside
+ * the window and is left alone; a null fundedWalletAddress likewise.
+ */
+export async function assertEscrowPayeeEffective(
+  intent: Pick<PaymentIntent, 'facilityId' | 'fundedWalletAddress'>,
+  now = new Date(),
+): Promise<void> {
+  if (!intent.fundedWalletAddress) return;
+  const links = await paymentsRepo.findFacilityWalletLinksByAccount(intent.facilityId, intent.fundedWalletAddress);
+  if (links.length === 0) return;
+  if (links.some((link) => link.effectiveAt.getTime() <= now.getTime() && !isCancelledWalletLink(link))) return;
+  const soonest = links.reduce((a, b) => (a.effectiveAt < b.effectiveAt ? a : b));
+  throw cooldownError(soonest.effectiveAt);
+}
+
+export interface PendingWalletLinkChange {
+  id: string;
+  facilityId: string;
+  facilityName: string | null;
+  newStellarPublicKey: string;
+  previousStellarPublicKey: string | null;
+  linkedAt: Date;
+  effectiveAt: Date;
+}
+
+/** GET /admin/payments/wallet-links/pending — facility payout changes still
+ * inside their cool-down, soonest first, with the address they replace. */
+export async function listPendingFacilityWalletLinks(now = new Date(), limit = 100): Promise<PendingWalletLinkChange[]> {
+  const pending = await paymentsRepo.findPendingFacilityWalletLinks(now, limit);
+  if (pending.length === 0) return [];
+  const facilityIds = [...new Set(pending.map((link) => link.ownerId))];
+  const [names, previous] = await Promise.all([
+    getFacilityNamesByIds(facilityIds),
+    Promise.all(facilityIds.map(async (id) => [id, await findEffectiveWalletLink('facility', id, now)] as const)),
+  ]);
+  const nameById = new Map(names.map((facility) => [facility.id, facility.name]));
+  const previousById = new Map(previous);
+  return pending.map((link) => ({
+    id: link.id,
+    facilityId: link.ownerId,
+    facilityName: nameById.get(link.ownerId) ?? null,
+    newStellarPublicKey: link.stellarPublicKey,
+    previousStellarPublicKey: previousById.get(link.ownerId)?.stellarPublicKey ?? null,
+    linkedAt: link.createdAt,
+    effectiveAt: link.effectiveAt,
+  }));
 }
 
 /** GET /payments/wallet-link — the caller's own ACTIVE link (replaced
@@ -169,5 +359,9 @@ export function assertWalletLinkFundingAllowed(link: Pick<WalletLink, 'verificat
 export function validateWalletLinkConfig(): void {
   if (Number.isNaN(config.payments.walletLinkUnverifiedFundingCutoff)) {
     throw new Error('WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF is not a valid ISO date.');
+  }
+  // Issue #328.
+  if (Number.isNaN(config.walletLink.cooldownHours)) {
+    throw new Error('WALLET_LINK_COOLDOWN_HOURS must be a non-negative number of hours.');
   }
 }

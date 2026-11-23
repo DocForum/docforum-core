@@ -6,18 +6,8 @@ import type { PaymentIntent, PaymentIntentStatus, Prisma, WalletLinkOwnerType } 
 
 type Db = Prisma.TransactionClient;
 
-/** Reads FacilityProfile directly — a Phase 1 core identity model, not
- * something the (still-placeholder) facilities module exclusively owns. */
-export function findFacilityProfileByUserId(userId: string) {
-  return prisma.facilityProfile.findUnique({ where: { userId } });
-}
-
-/** Same reasoning as findFacilityProfileByUserId — PatientProfile is a
- * Phase 1 identity model, and the payments module needs the caller's
- * patient-scoped id to own-check an intent (issue #80). */
-export function findPatientProfileByUserId(userId: string) {
-  return prisma.patientProfile.findUnique({ where: { userId } });
-}
+// findFacilityProfileByUserId and findPatientProfileByUserId removed in
+// issue #318 — payments now calls the owning module's service directly.
 
 // --- Wallet links (issue #78) --------------------------------------------
 // NOTE ON WRITES: `createWalletLink` is the only WalletLink insert in
@@ -35,10 +25,51 @@ export function createWalletLink(
     verificationMethod: 'sep10';
     verifiedAt: Date;
     activeOwnerKey: string;
+    // Issue #328: when the link may first be used as an escrow payee.
+    effectiveAt: Date;
   },
   db: Db = prisma,
 ) {
   return db.walletLink.create({ data });
+}
+
+/** Issue #328: every link for an owner that had taken effect by `now`,
+ * newest effectiveAt first. The caller (selectEffectiveWalletLink) drops
+ * cancelled rows; an owner has a handful of rows, so the cap is generous. */
+export function findWalletLinksEffectiveBy(
+  ownerType: WalletLinkOwnerType,
+  ownerId: string,
+  now: Date,
+  db: Db = prisma,
+) {
+  return db.walletLink.findMany({
+    where: { ownerType, ownerId, effectiveAt: { lte: now } },
+    orderBy: [{ effectiveAt: 'desc' }, { createdAt: 'desc' }],
+    take: 50,
+  });
+}
+
+/** Issue #328: has this owner ever had a link? Decides the first-link
+ * exemption from the cool-down. */
+export function countWalletLinks(ownerType: WalletLinkOwnerType, ownerId: string, db: Db = prisma) {
+  return db.walletLink.count({ where: { ownerType, ownerId } });
+}
+
+/** Issue #328: the facility's links for one address — the release guard
+ * checks the address an escrow was funded to took effect. */
+export function findFacilityWalletLinksByAccount(facilityId: string, stellarPublicKey: string) {
+  return prisma.walletLink.findMany({
+    where: { ownerType: 'facility', ownerId: facilityId, stellarPublicKey },
+  });
+}
+
+/** Issue #328: active facility links still inside their cool-down. */
+export function findPendingFacilityWalletLinks(now: Date, take: number) {
+  return prisma.walletLink.findMany({
+    where: { ownerType: 'facility', replacedAt: null, effectiveAt: { gt: now } },
+    orderBy: [{ effectiveAt: 'asc' }, { id: 'asc' }],
+    take,
+  });
 }
 
 export function findActiveWalletLink(ownerType: WalletLinkOwnerType, ownerId: string, db: Db = prisma) {
@@ -107,11 +138,8 @@ export function findPaymentIntentByOrder(
 
 /** The login user who owns a patient profile — used to address the refund
  * notification (issue #84). Not a clinical read: id only. */
-export function findPatientUserIdByProfileId(patientProfileId: string) {
-  return prisma.patientProfile
-    .findUnique({ where: { id: patientProfileId }, select: { userId: true } })
-    .then((row) => row?.userId ?? null);
-}
+// findPatientUserIdByProfileId removed in issue #318 — call
+// patientsService.getPatientUserIdByProfileId instead.
 
 /** One keyset page of a patient's payment intents, oldest first (patient
  * data export, issue #40). */
@@ -174,11 +202,8 @@ export function aggregateFacilityPayments(facilityId: string, from?: Date, to?: 
   });
 }
 
-/** Same FacilityProfile read this module already does for its own
- * payee lookups (see findFacilityProfileByUserId). */
-export function findFacilityNamesByIds(ids: string[]) {
-  return prisma.facilityProfile.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } });
-}
+// findFacilityNamesByIds removed in issue #318 — call
+// facilitiesService.getFacilityNamesByIds instead.
 
 /**
  * Status writes are conditional on the state the caller observed (issue

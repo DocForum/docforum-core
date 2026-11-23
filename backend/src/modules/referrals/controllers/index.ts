@@ -7,8 +7,7 @@ import {
   adminReassignSchema,
   createReferralBatchSchema,
   createReferralSchema,
-  declineReferralSchema,
-  listMineQuerySchema,
+  incomingReferralsQuerySchema,
 } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
@@ -66,6 +65,13 @@ export async function listCreated(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const referrals = await referralsService.listCreated(req.user.id);
   res.status(200).json(referrals);
+}
+
+export async function listIncoming(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const filters = incomingReferralsQuerySchema.parse(req.query);
+  const page = await referralsService.listIncoming(req.user.id, filters);
+  res.status(200).json(page);
 }
 
 export async function adminQueue(req: Request, res: Response) {

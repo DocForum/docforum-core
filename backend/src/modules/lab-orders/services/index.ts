@@ -16,6 +16,8 @@ import {
   formatOrderResponse,
   type FulfillOrderInput,
 } from '../../pharmacy-orders/services';
+import * as facilitiesService from '../../facilities/services';
+import * as patientsService from '../../patients/services';
 
 export async function getLabOrder(id: string) {
   const labOrder = await repo.findLabOrderById(id);
@@ -59,12 +61,7 @@ export async function createLabOrder(data: {
     throw new HttpError(400, 'Patient profile ID is required.');
   }
 
-  const patient = await prisma.patientProfile.findUnique({
-    where: { id: data.patientProfileId },
-  });
-  if (!patient) {
-    throw new HttpError(404, 'Patient profile not found.');
-  }
+  await patientsService.getPatientProfileById(data.patientProfileId);
 
   const order = await prisma.$transaction(async (tx) => {
     return repo.createOrder(tx, {
@@ -97,9 +94,7 @@ export async function fulfillLabOrder(
     throw new HttpError(400, 'Reference number is required for fulfillment proof.');
   }
 
-  const facilityProfile = await prisma.facilityProfile.findUnique({
-    where: { userId: facilityUserId },
-  });
+  const facilityProfile = await facilitiesService.findFacilityProfileByUserId(facilityUserId);
   if (!facilityProfile) {
     throw new HttpError(403, 'Facility profile required.');
   }
