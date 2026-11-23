@@ -71,8 +71,8 @@ Each module under `backend/src/modules/<name>/` owns its own `routes/`, `control
 - `orders` — patient order confirmation and dispute handling (`POST /orders/:id/confirm-receipt`, `POST /orders/:id/dispute`), derived `confirmedSignal` calculation, unconfirmed order expiry job, and admin dispute queue (`GET /admin/orders/disputes`, `POST /admin/orders/disputes/:id/resolve`).
 - `orders` also owns lab result attachment (issue #16, `docs/adr/0018`): `POST /orders/lab-orders/:labOrderId/result` (the order's own facility only, create-once) writes the file to object storage and a `LabResult` row; `GET` on the same path serves it to the patient, the ordering doctor and the fulfilling facility only (PRD §7). `services/lab-results.ts`.
 - `notifications` — outbound notification dispatch, provider-agnostic.
-- `payments` — `PaymentIntent`, the facility payee `WalletLink`, and the patient payer `PatientWalletLink` (§4.13). Relational metadata only; every Stellar call goes through `@docforum/escrow-sdk` via `services/escrow-sdk-loader.ts`. Assets are allowlisted per environment (issue #79), and the prepare half of ADR 0005 (issue #80) builds the unsigned patient transaction without moving funds.
-- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking (both the direct and the referral-origin path), consultation closing (Phase 2, issue #4), doctor verification, payment fund/release/refund, the patient's referral accept/decline, and the referral admin actions (Phase 3, issue #68 — `referral.reassign` / `referral.cancel`, recorded as `entityType: 'Referral'` rows; there is no second, referral-specific audit table). **Phase 4 transitions (fulfillment) must call `record()` in the same transaction when they're built** — prescriptions and lab orders already do. Also owns the PHI read-access log (Phase 8, issue #45, §4.11): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
+- `payments` — `PaymentIntent`, the facility payee `WalletLink`, and the patient payer `PatientWalletLink` (§4.17). Relational metadata only; every Stellar call goes through `@docforum/escrow-sdk` via `services/escrow-sdk-loader.ts`. Assets are allowlisted per environment (issue #79), and the prepare half of ADR 0005 (issue #80) builds the unsigned patient transaction without moving funds.
+- `audit` — the append-only `AuditEvent` trail (Phase 8, issue #43). Owns one write helper, `auditService.record(tx, actor, event)`, that every module calls **inside the transaction of the state change it describes** (it refuses the root client), and the admin-only `GET /admin/audit-events`. Controllers build the actor with `auditActor(req)` (`src/middleware/request-id.ts`: user id, role, `X-Request-Id`). Wired today: appointment booking (both the direct and the referral-origin path), consultation closing (Phase 2, issue #4), doctor verification, payment fund/release/refund, the patient's referral accept/decline, and the referral admin actions (Phase 3, issue #68 — `referral.reassign` / `referral.cancel`, recorded as `entityType: 'Referral'` rows; there is no second, referral-specific audit table). **Phase 4 transitions (fulfillment) must call `record()` in the same transaction when they're built** — prescriptions and lab orders already do. Also owns the PHI read-access log (Phase 8, issue #45, §4.16): `auditService.recordAccess()` (fire-and-forget off the read path, fail-open but counted), admin `GET /admin/access-logs` (+ `/user`, `/stats`) and the patient-facing `GET /patients/me/access-log`, whose response strips all viewer PII to a role.
 
 ### 3.1 Patient data export registry (Phase 8, issue #40)
 
@@ -109,7 +109,7 @@ immediately by a new request). Sections run one at a time and the bundle is
 flushed in bounded chunks to `PatientExportChunk` (§4.11), so memory is
 bounded by one page of rows plus one chunk regardless of history length.
 
-### 3.1 Account deletion and retention holds (Phase 8, issue #41)
+### 3.2 Account deletion and retention holds (Phase 8, issue #41)
 
 `DELETE /patients/me` is orchestrated by `patients` and anonymises in one
 transaction: the `User` row through `auth`'s service (`anonymizeAccount`,
@@ -650,7 +650,7 @@ Bundle format (schemaVersion 1): `{ format: "docforum.patient-export",
 schemaVersion, exportId, generatedAt, sections: { <name>: { version, items } } }`
 — see §3.1 for where sections come from.
 
-### 4.11 PHI read-access log (Phase 8, issue #45)
+### 4.16 PHI read-access log (Phase 8, issue #45)
 ```
 AccessLog
   id, accessed_by (nullable FK → User, SET NULL on delete — the row keeps
@@ -728,7 +728,7 @@ same transaction (counts and the percentage only — never the allowlisted ids).
 First user: `payments.wallet_funding` gates `POST /payments/intents/:id/prepare`
 (ADR 0005: wallet funding launches as an option), seeded off.
 
-### 4.13 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
+### 4.17 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
 ```
 PaymentIntent
   id, prescription_id / lab_order_id (exactly one typed FK — issue #85)
@@ -787,7 +787,7 @@ T5, enforced as a curated config policy.
 
 ### 5.3 Order issuance and fulfillment
 1. Specialist issues `Prescription` and/or `LabOrder` from a `Consultation`.
-2. Patient views eligible facilities filtered by `FacilityCapability` matching the order — optionally sorted by distance from a patient-supplied point (§5.4).
+2. Patient views eligible facilities filtered by `FacilityCapability` matching the order — optionally sorted by distance from a patient-supplied point (§5.5).
 3. Patient selects a facility → `FulfillmentRecord` created (`pending`) with one `FulfillmentItem` per routed item. Splitting a partially dispensed order across a second facility is the same call scoped to the remaining items (issue #73).
 4. Facility updates its own `FulfillmentRecord` status; for labs, attaches `LabResult`. An item becomes `dispensed` only through `PATCH /pharmacy-orders/fulfillments/:id/items/:itemId`, a one-shot conditional update backed by the `(orderType, dispensedKey)` unique index — a second facility dispensing the same item is a constraint violation (409), even under concurrency.
 5. Order's own `status` field is updated to `fulfilled` only via this facility-confirmed path — patient/doctor cannot self-mark it. Since issue #73 this includes `partially_fulfilled`, and the write happens as a post-commit derivation in `pharmacy-orders/services` through the prescriptions/lab-orders module services (rules 4 and 5): facilities never touch `Prescription`/`LabOrder` rows, pharmacy-orders never writes those tables directly, and the update is conditional and forward-only.
@@ -808,7 +808,7 @@ is *all items dispensed*. (Release itself remains admin-triggered in v1
 per ADR 0004; this rule is what makes that action's eligibility check
 honest once wired.)
 
-### 5.4 Facility discovery by distance (Phase 5, issue #74)
+### 5.5 Facility discovery by distance (Phase 5, issue #74)
 1. Patient calls `GET /facilities/eligible?capabilityType=…&near=lat,lng&radiusKm=…`.
 2. The repository applies an **indexed bounding box** prefilter (`(latitude, longitude)` composite index) that is provably a superset of the radius circle, then computes exact haversine distance in SQL over those rows and sorts ascending (`NULLS LAST` — facilities without coordinates stay discoverable, just last).
 3. The patient's `near` point never leaves the request: it is only ever a bind parameter in that statement — not stored, not logged, not echoed back (the response carries per-facility `distanceKm` only).

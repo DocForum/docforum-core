@@ -8,7 +8,7 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`. The refresh cookie is `SameSite=None` cross-site, so `/auth/refresh` + `/auth/logout` require an `X-CSRF-Token` header (a per-session token bound into the refresh JWT) and an allowlisted `Origin` — see `backend/src/middleware/csrf.ts`. CORS is an explicit per-environment allowlist (`CORS_ORIGINS`).
 - Frontend: React + TypeScript + Vite, React Query + Zustand.
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
-- Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue. Existing interval jobs: login-throttle prune (`src/server.ts`), patient-export worker/cleanup (`src/jobs/patient-exports.ts`) and deleted-account tombstone purge (`src/jobs/account-purge.ts`), all started only from `server.ts`.
+- Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue — the transactional outbox in `src/jobs/outbox-events.ts` is the durable dispatch path, not an external queue. Currently started from `src/server.ts`: login-throttle + access-log + idempotency-key prune (`src/server.ts`), patient-export worker/cleanup (`src/jobs/patient-exports.ts`), escrow event poller (`escrow-events.ts`), outbox dispatcher (`outbox-events.ts`), lab-result escalation (`lab-result-escalation.ts`), deleted-account tombstone purge (`account-purge.ts`), prepared-payment expiry (`payment-intents.ts`), referral expiry (`referral-expiry.ts`), unconfirmed-order expiry (`order-expiry.ts`), lab-order expiry (`lab-order-expiry.ts`), follow-up expiry (`follow-up-expiry.ts`), consultation sign-off (`consultation-sign-off.ts`), auth-artifact prune (`auth-token-prune.ts`), and the Postgres LISTEN notification fan-out (`modules/notifications/services`). CI schedules (daily backup restore drill, nightly testnet payments, nightly property tests, 3-hourly PR conflict notifier) are separate; `infra/render.staging.yaml` defines no deploy-level scheduler.
 - New module holding patient data? Register a patient-export section (ARCHITECTURE.md §3.1) — right of access must stay complete.
 - File storage = **Amazon S3**, private bucket (`docs/adr/0018`, issue #16), only through `src/utils/object-storage.ts`. Never return an object key or a public/presigned URL: clinical files are served by the API after an access check.
 
@@ -72,7 +72,7 @@ Mutable records above (plus `Appointment` and `PaymentIntent`) carry a `version`
 ## Where things live
 - Backend modules: `backend/src/modules/<name>/{routes,controllers,services,repositories}`
 - Data model source of truth: `backend/prisma/schema/` (one `.prisma` file per module; see its README)
-- Frontend: `frontend/src/{pages,components,features,hooks,services,store,types}`
+- Frontend: lives in [`docforum-web`](https://github.com/DocForum/docforum-web) (React + TypeScript + Vite); this repo is backend-only — see ROADMAP.md's org note and the superseded Phase 7.
 - Roadmap / status: `ROADMAP.md` — **must be updated on every contribution that changes scope or completes work**.
 
 
