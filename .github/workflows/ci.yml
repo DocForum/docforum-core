@@ -68,6 +68,25 @@ jobs:
       - name: Integration tests (self-contained embedded Postgres — double-booking guarantee + end-to-end care-thread)
         run: npm run test:integration
 
+      # Issue #346. Both suites in one vitest process, so the report is the
+      # union of what unit tests and integration tests each reach — a module
+      # only exercised over HTTP still shows as covered. The per-module floors
+      # are in vitest.config.mts; this step goes red when coverage of a
+      # correctness-critical module drops below its recorded level.
+      - name: Coverage (unit + integration, merged)
+        run: npm run test:coverage
+
+      # The browsable report (html + lcov + json-summary) outlives the run.
+      # `run: ` steps use the job's `working-directory: backend`, action steps
+      # don't — hence the repo-root path here.
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: backend/coverage
+          if-no-files-found: error
+          retention-days: 14
+
       # Fails when a schema change has no matching migration (or a migration
       # doesn't produce what the schema declares).
       - name: Migrations reproduce the schema (no drift)

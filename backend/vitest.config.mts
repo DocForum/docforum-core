@@ -54,5 +54,85 @@ export default defineConfig({
       DATABASE_URL:
         process.env.DATABASE_URL_TEST ?? 'postgresql://docforum:docforum@localhost:5433/docforum_test',
     },
+    coverage: {
+      provider: 'v8',
+      // Every source file is measured, not only the ones a test imported —
+      // the point of the report is that an untested path shows as 0% instead
+      // of being missing from the table (issue #346).
+      include: ['src/**/*.ts'],
+      // text for the terminal, lcov + json-summary for CI and scripts, html
+      // so a contributor can browse the report from the artifact.
+      reporter: ['text', 'lcov', 'json-summary', 'html'],
+      // Unit and integration coverage are collected by the same vitest
+      // process (see `npm run test:coverage`), so one coverage map covers
+      // both suites — no cross-run merge to get wrong.
+      //
+      // Floors for the correctness-critical modules (issue #346). Each floor is
+      // the measurement below rounded down to a whole percent, minus 2 points, so
+      // a V8 or timing difference between a dev machine and the CI runner can't
+      // fail an unrelated PR. Measured with `npm run test:coverage` on the
+      // `7f70e1b` tree this sits on (119 test files, exit 0):
+      //
+      //   module         statements  functions  branches  lines   floor s/f/b/l
+      //   appointments       77.28       86.67     60.79   83.50     75/84/58/81
+      //   availability       93.60      100.00     84.93   94.74     91/98/82/92
+      //   referrals          89.92      100.00     81.15   95.92     88/98/79/94
+      //   orders             86.03       90.82     75.95   90.05     84/88/74/88
+      //   payments           79.26       91.16     70.37   83.23     77/89/68/81
+      //
+      // That is a snapshot, not a live total — re-measure before changing a
+      // number. Appointments is up from 75.95 / 85.33 / 58.63 / 82.27 on `4a8cfbf`
+      // because `#419` landed the doctor day-view and status-transition suite, so
+      // its floor went up with it; that is the only direction this comment allows.
+      // Two green merged runs of this tree (279.08s, then 188.42s) agree to the
+      // hundredth on seventeen of these twenty numbers. The three that move are
+      // payments: statements 79.26 to 79.38, branches 70.37 to 70.53, lines 83.23
+      // to 83.35 — so run-to-run movement is real but stays inside 0.16, and every
+      // floor below is under every measurement its own module has produced.
+      // Referrals is the one module whose floors came from a higher number than the
+      // tabled one: unchanged referral code measured 90.19 / 100.00 / 81.56 / 96.21
+      // on `4a8cfbf`, and 88/98/79/94 was kept rather than dropped to the 87/93 a
+      // flat "minus 2" off 89.92 / 95.92 would give, because a floor is not lowered
+      // to go green. Its headroom is therefore 1.92 / 2.00 / 2.15 / 1.92. Orders'
+      // branch floor is the other exception: 75.95 rounds to 76, so 74 sits 1.95
+      // below rather than a clean 2.
+      //
+      // The gate is live, not decorative. Raising appointments' `lines` floor one
+      // point above its own measurement (80 → 84, against 82.27) produced exactly
+      // one error and nothing else: `ERROR: Coverage for lines (82.26%) does not
+      // meet "src/modules/appointments/**" threshold (84%)`, with the same test
+      // files passing and exit 1. As committed, the merged run exits 0 with all 119
+      // files green and no threshold error.
+      //
+      // One interaction to know about: these floors assume a green suite. On a run
+      // where a module's own test file fails, that file's lines go uncovered and
+      // the module measures lower — with `orders.test.mts` among 3 files failing,
+      // orders' lines came out at 87.90% against its 88 floor and reported
+      // `ERROR: Coverage for lines (87.9%) does not meet "src/modules/orders/**"
+      // threshold (88%)`. That only surfaces if you pass `--coverage.reportOnFailure`
+      // (vitest otherwise prints no table for a failing run), and the run was
+      // already exiting 1 on the test failure, so it is noise rather than a second
+      // gate — but it is why the floors are not set tighter than 2 points.
+      //
+      // Worker counts are not a fix for the suite's own flakiness, which is
+      // load-dependent and lands in a different file each run: locally, plain
+      // `npm run test:integration` fails at both 7 and 3 workers (and CI's runs of
+      // that step on `main` are green, so it reads as a loaded dev machine rather
+      // than a broken suite). No count is tuned for here.
+      //
+      // Only these directories are gated: a global threshold would make
+      // every unrelated PR fail on someone else's coverage. Raise a number
+      // when its module genuinely improves; never lower one to go green.
+      // The floors assume both suites — `--coverage` on `tests/unit` alone
+      // fails them by design, since most of these paths are only reached
+      // over HTTP.
+      thresholds: {
+        'src/modules/appointments/**': { statements: 75, functions: 84, branches: 58, lines: 81 },
+        'src/modules/availability/**': { statements: 91, functions: 98, branches: 82, lines: 92 },
+        'src/modules/referrals/**': { statements: 88, functions: 98, branches: 79, lines: 94 },
+        'src/modules/orders/**': { statements: 84, functions: 88, branches: 74, lines: 88 },
+        'src/modules/payments/**': { statements: 77, functions: 89, branches: 68, lines: 81 },
+      },
+    },
   },
 });
