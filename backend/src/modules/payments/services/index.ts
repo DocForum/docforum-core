@@ -1164,7 +1164,7 @@ export async function submitPaymentIntent(
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
   const patientProfileId = await getOwnPatientProfileId(actor.userId);
 
-  let intent = await getPaymentIntent(id);
+  const intent = await getPaymentIntent(id);
   if (intent.patientProfileId !== patientProfileId) throw new HttpError(404, 'PaymentIntent not found.');
 
   // Idempotent: a retried submit of an already-escrowed intent never
