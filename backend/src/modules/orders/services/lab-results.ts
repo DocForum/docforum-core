@@ -1,4 +1,4 @@
-// Lab result attachment (Phase 5, issue #16 — docs/adr/0014).
+// Lab result attachment (Phase 5, issue #16 — docs/adr/0018).
 //
 // A facility attaches the result file for a lab order assigned to it; the
 // file goes to object storage and a `LabResult` row records its opaque key.

@@ -9,7 +9,7 @@ import {
   createReferralSchema,
   declineReferralSchema,
   incomingReferralsQuerySchema,
-  listMineQuerySchema,
+  referralDetailQuerySchema,
 } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
@@ -74,6 +74,17 @@ export async function listIncoming(req: Request, res: Response) {
   const filters = incomingReferralsQuerySchema.parse(req.query);
   const page = await referralsService.listIncoming(req.user.id, filters);
   res.status(200).json(page);
+}
+
+export async function getOne(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const { patientProfileId } = referralDetailQuerySchema.parse(req.query);
+  const referral = await referralsService.getReferralDetail(
+    auditActor(req),
+    getParam(req, 'referralId'),
+    patientProfileId,
+  );
+  res.status(200).json(referral);
 }
 
 export async function adminQueue(req: Request, res: Response) {

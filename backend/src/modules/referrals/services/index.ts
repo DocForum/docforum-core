@@ -459,6 +459,40 @@ function readableSnapshotNotes(value: string): string {
   return isEncrypted(value) ? decryptField(value) ?? value : value;
 }
 
+export async function getReferralDetail(
+  actor: auditService.AuditActor,
+  referralId: string,
+  patientProfileId?: string,
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const referral = await referralsRepo.findReferralById(prisma, referralId);
+  if (!referral) throw new HttpError(404, 'Referral not found.');
+
+  let authorized = false;
+  if (actor.role === 'admin') {
+    authorized = true;
+  } else if (actor.role === 'doctor') {
+    const doctor = await doctorsService.getMyDoctorProfile(actor.userId);
+    authorized = doctor.id === referral.referringDoctorId || doctor.id === referral.targetDoctorId;
+  } else if (actor.role === 'patient') {
+    const actingProfile = await patientsService.resolveActingProfile(actor.userId, patientProfileId);
+    authorized = actingProfile.id === referral.patientProfileId;
+  }
+
+  if (!authorized) throw new HttpError(404, 'Referral not found.');
+
+  auditService.recordAccess({
+    accessedBy: actor.userId,
+    patientProfileId: referral.patientProfileId,
+    entityType: 'Referral',
+    entityId: referral.id,
+    route: 'GET /referrals/:referralId',
+    detail: 'referral detail read',
+  });
+
+  return { ...referral, snapshotNotes: readableSnapshotNotes(referral.snapshotNotes) };
+}
+
 export interface IncomingReferralFilters {
   status?: ReferralStatus;
   limit?: number;

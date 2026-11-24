@@ -39,6 +39,10 @@ export const listMineQuerySchema = z.object({
   patientProfileId: z.string().uuid().optional(),
 });
 
+export const referralDetailQuerySchema = z.object({
+  patientProfileId: z.string().min(1).optional(),
+});
+
 // The reason travels into the audit trail as a metadata value, and the
 // audit module caps metadata strings at 200 characters (ARCHITECTURE.md
 // §4.10). Bound it here so an over-long reason is a 400, not a failed
