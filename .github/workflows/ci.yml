@@ -57,6 +57,18 @@ jobs:
       - name: Check message catalogue keys
         run: npm run i18n:check
 
+      # Issue #357: `docs/api/access-matrix.md` is generated from the routers,
+      # and this fails a PR that changes a guard without regenerating it. The
+      # generator only builds the Express app and reads its middleware chains
+      # back — it never opens a connection, so the three values below exist to
+      # satisfy the config loader's required-variable checks.
+      - name: Access matrix is up to date
+        env:
+          JWT_ACCESS_SECRET: ci-staleness-check-only
+          JWT_REFRESH_SECRET: ci-staleness-check-only
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci_never_connected
+        run: npm run docs:access-matrix:check
+
       - run: npm run typecheck
 
       - name: Lint

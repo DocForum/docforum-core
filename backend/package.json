@@ -18,6 +18,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "reconcile:escrows": "tsx scripts/reconcile-escrows.ts",
     "new:module": "node scripts/new-module.mjs",
+    "docs:access-matrix": "tsx scripts/gen-access-matrix.ts",
+    "docs:access-matrix:check": "tsx scripts/gen-access-matrix.ts --check",
     "test:properties": "vitest run tests/unit/availability-slots.property.test.ts tests/unit/state-machines.property.test.ts",
     "audit:prod": "node scripts/audit-gate.mjs",
     "i18n:check": "node scripts/check-i18n-catalogues.mjs",
