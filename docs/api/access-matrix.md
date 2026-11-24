@@ -289,6 +289,7 @@ Every route also passes the application middleware, in order:
 | `POST /referrals/from-consultation/:consultationId` | `doctor` | `authenticate` | yes | — | — |
 | `POST /referrals/:referralId/accept` | `patient` | `authenticate` | yes | — | — |
 | `POST /referrals/:referralId/decline` | `patient` | `authenticate` | yes | — | — |
+| `POST /referrals/:referralId/withdraw` | `doctor` | `authenticate` | yes | — | — |
 | `GET /referrals/incoming` | `doctor` | `authenticate` | — | — | — |
 | `GET /referrals/mine` | `patient` | `authenticate` | — | — | — |
 | `GET /referrals/created` | `doctor` | `authenticate` | — | — | — |
@@ -296,6 +297,7 @@ Every route also passes the application middleware, in order:
 | `POST /referrals/admin/:referralId/reassign` | `admin` | `authenticate` | — | — | — |
 | `POST /referrals/admin/:referralId/cancel` | `admin` | `authenticate` | — | — | — |
 | `GET /referrals/admin/:referralId/audit-events` | `admin` | `authenticate` | — | — | — |
+| `GET /referrals/:referralId` | _none_ | `authenticate` | — | — | — |
 
 ## `/specialties`
 
