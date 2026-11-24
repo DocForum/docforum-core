@@ -9,6 +9,7 @@ import {
   createReferralSchema,
   declineReferralSchema,
   incomingReferralsQuerySchema,
+  listMineQuerySchema,
   referralDetailQuerySchema,
 } from '../validation';
 import { HttpError } from '../../../http-error';
