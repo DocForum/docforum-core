@@ -11,6 +11,7 @@ import {
   incomingReferralsQuerySchema,
   listMineQuerySchema,
   referralDetailQuerySchema,
+  withdrawReferralSchema,
 } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
@@ -47,6 +48,17 @@ export async function decline(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const { patientProfileId } = declineReferralSchema.parse(req.body ?? {});
   const referral = await referralsService.declineReferral(auditActor(req), getParam(req, 'referralId'), patientProfileId);
+  res.status(200).json(referral);
+}
+
+export async function withdraw(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const input = withdrawReferralSchema.parse(req.body);
+  const referral = await referralsService.withdrawReferral(
+    auditActor(req),
+    getParam(req, 'referralId'),
+    input,
+  );
   res.status(200).json(referral);
 }
 

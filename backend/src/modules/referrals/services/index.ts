@@ -412,25 +412,48 @@ export async function declineReferral(
   });
 }
 
-export async function listMine(userId: string, patientProfileId?: string) {
-  // Issue #305: the optional profile id is never trusted on its own — a
-  // dependent is reachable only through an active guardianship.
-  const patientProfile = patientProfileId
-    ? await patientsService.resolveActingProfile(userId, patientProfileId)
-    : await patientsService.getMyPatientProfile(userId);
-  const referrals = await referralsRepo.listReferralsForPatient(patientProfile.id);
-  const detail = patientProfile.userId === null ? 'referral list read (guardian)' : 'referral list read';
-  for (const referral of referrals) {
-    auditService.recordAccess({
-      accessedBy: userId,
-      patientProfileId: patientProfile.id,
+export async function withdrawReferral(
+  actor: auditService.AuditActor,
+  referralId: string,
+  input: { reason: string },
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const referringDoctor = await doctorsService.getMyDoctorProfile(actor.userId);
+
+  return prisma.$transaction(async (tx) => {
+    const referral = await referralsRepo.findReferralById(tx, referralId);
+    if (!referral || referral.referringDoctorId !== referringDoctor.id) {
+      throw new HttpError(404, 'Referral not found.');
+    }
+    if (referral.status !== 'pending') {
+      throw new HttpError(409, 'Only a pending referral can be withdrawn.');
+    }
+
+    const updated = await referralsRepo.updateReferralConditional(
+      tx,
+      { id: referralId, status: 'pending', resultingAppointmentId: null },
+      { status: 'cancelled', cancelledReason: input.reason },
+    );
+    if (updated.count !== 1) {
+      throw new HttpError(409, 'This referral is no longer pending.');
+    }
+
+    await auditService.record(tx, actor, {
       entityType: 'Referral',
-      entityId: referral.id,
-      route: 'GET /referrals/mine',
-      detail,
+      entityId: referralId,
+      action: 'referral.withdraw',
+      fromState: 'pending',
+      toState: 'cancelled',
+      metadata: { reason: input.reason },
     });
-  }
-  return referrals;
+
+    return referralsRepo.findReferralById(tx, referralId);
+  });
+}
+
+export async function listMine(userId: string) {
+  const patientProfile = await patientsService.getMyPatientProfile(userId);
+  return referralsRepo.listReferralsForPatient(patientProfile.id);
 }
 
 export async function listCreated(userId: string) {
