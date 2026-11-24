@@ -43,13 +43,11 @@ the synced content without starting/building anything.
 
 ## Rebuilding on upstream changes (cross-repo docs sync)
 
-The site deploys automatically when documentation changes land in `docforum-core`.
-That is limited by `.github/workflows/deploy-docs.yml`'s `paths:` filter, which
-lists `docs/site/**`, `PRD.md`, `ARCHITECTURE.md`, `ARCHITECTURE_ESSENTIALS.md`,
-`ROADMAP.md`, `docs/adr/**` and `docs/api/**` — `docs/runbooks/**` is not in it,
-so a push that only edits a runbook file does not redeploy the site and the
-deployed copy stays as it was. Adding `docs/runbooks/**` to that list (or
-running the workflow manually) picks it up.
+The site deploys automatically when documentation changes land in `docforum-core`:
+`.github/workflows/deploy-docs.yml`'s `paths:` filter lists `docs/site/**`,
+`PRD.md`, `ARCHITECTURE.md`, `ARCHITECTURE_ESSENTIALS.md`, `ROADMAP.md`,
+`docs/adr/**`, `docs/api/**` and `docs/runbooks/**`. A new synced source needs
+adding there too, or a push that only edits it won't redeploy the site.
 
 When documentation changes land on `main` in sibling repositories (`docforum-web`
 or `docforum-escrow`), the site is rebuilt via GitHub's `repository_dispatch` event
