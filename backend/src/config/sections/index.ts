@@ -10,6 +10,7 @@ export * from './availability';
 export * from './consultations';
 export * from './cookie';
 export * from './corsOrigins';
+export * from './expirySweeps';
 export * from './featureFlags';
 export * from './idempotency';
 export * from './jwt';

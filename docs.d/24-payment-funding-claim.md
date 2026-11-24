@@ -1,6 +1,6 @@
 ---
 file: ARCHITECTURE.md
-section: 4.13 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
+section: 4.17 Payments (Phase 5.5 — ADR 0004 custodial v1, ADR 0005 non-custodial)
 ---
 
 **Funding claim (issue #24).** `funding` is a transient status a fund request

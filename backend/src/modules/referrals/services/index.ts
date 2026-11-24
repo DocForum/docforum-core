@@ -399,6 +399,45 @@ export async function declineReferral(actor: auditService.AuditActor, referralId
   });
 }
 
+export async function withdrawReferral(
+  actor: auditService.AuditActor,
+  referralId: string,
+  input: { reason: string },
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const referringDoctor = await doctorsService.getMyDoctorProfile(actor.userId);
+
+  return prisma.$transaction(async (tx) => {
+    const referral = await referralsRepo.findReferralById(tx, referralId);
+    if (!referral || referral.referringDoctorId !== referringDoctor.id) {
+      throw new HttpError(404, 'Referral not found.');
+    }
+    if (referral.status !== 'pending') {
+      throw new HttpError(409, 'Only a pending referral can be withdrawn.');
+    }
+
+    const updated = await referralsRepo.updateReferralConditional(
+      tx,
+      { id: referralId, status: 'pending', resultingAppointmentId: null },
+      { status: 'cancelled', cancelledReason: input.reason },
+    );
+    if (updated.count !== 1) {
+      throw new HttpError(409, 'This referral is no longer pending.');
+    }
+
+    await auditService.record(tx, actor, {
+      entityType: 'Referral',
+      entityId: referralId,
+      action: 'referral.withdraw',
+      fromState: 'pending',
+      toState: 'cancelled',
+      metadata: { reason: input.reason },
+    });
+
+    return referralsRepo.findReferralById(tx, referralId);
+  });
+}
+
 export async function listMine(userId: string) {
   const patientProfile = await patientsService.getMyPatientProfile(userId);
   return referralsRepo.listReferralsForPatient(patientProfile.id);
@@ -428,6 +467,40 @@ function decodeIncomingCursor(cursor: string): { createdAt: Date; id: string } {
 
 function readableSnapshotNotes(value: string): string {
   return isEncrypted(value) ? decryptField(value) ?? value : value;
+}
+
+export async function getReferralDetail(
+  actor: auditService.AuditActor,
+  referralId: string,
+  patientProfileId?: string,
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const referral = await referralsRepo.findReferralById(prisma, referralId);
+  if (!referral) throw new HttpError(404, 'Referral not found.');
+
+  let authorized = false;
+  if (actor.role === 'admin') {
+    authorized = true;
+  } else if (actor.role === 'doctor') {
+    const doctor = await doctorsService.getMyDoctorProfile(actor.userId);
+    authorized = doctor.id === referral.referringDoctorId || doctor.id === referral.targetDoctorId;
+  } else if (actor.role === 'patient') {
+    const actingProfile = await patientsService.resolveActingProfile(actor.userId, patientProfileId);
+    authorized = actingProfile.id === referral.patientProfileId;
+  }
+
+  if (!authorized) throw new HttpError(404, 'Referral not found.');
+
+  auditService.recordAccess({
+    accessedBy: actor.userId,
+    patientProfileId: referral.patientProfileId,
+    entityType: 'Referral',
+    entityId: referral.id,
+    route: 'GET /referrals/:referralId',
+    detail: 'referral detail read',
+  });
+
+  return { ...referral, snapshotNotes: readableSnapshotNotes(referral.snapshotNotes) };
 }
 
 export interface IncomingReferralFilters {
