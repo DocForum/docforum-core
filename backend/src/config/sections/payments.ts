@@ -106,6 +106,10 @@ export const payments = {
   refundGraceHours: Number(process.env.PAYMENT_REFUND_GRACE_HOURS ?? 24),
   // Expiry sweep cadence (src/jobs/payment-intents.ts).
   prepareExpirySweepIntervalSeconds: Number(process.env.PAYMENT_PREPARE_EXPIRY_SWEEP_INTERVAL_SECONDS ?? 60),
+  // Issue #24: how long a `funding` claim may stay unresolved before
+  // scripts/reconcile-escrows.ts reports it. Generous — a slow testnet RPC
+  // must not look like a crash.
+  escrowFundingStaleAfterSeconds: Number(process.env.ESCROW_FUNDING_STALE_AFTER_SECONDS ?? 15 * 60),
   payoutPrivacyMode,
   payoutPrivacyPoolAddress: process.env.PAYOUT_PRIVACY_POOL_ADDRESS,
   walletLinkUnverifiedFundingCutoff: parseWalletLinkCutoff(

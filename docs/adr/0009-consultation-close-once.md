@@ -60,6 +60,15 @@ The decisions that need recording are not really about columns:
   work), the answer should be a new, reviewed migration — for example an
   append-only history keyed by `supersedes_*` — not a quiet relaxation of the
   unique constraint.
+- **Open consultations can be closed via a conditional update.** When a
+  consultation was opened without an outcome (Phase 3's slice via
+  `POST /consultations`), it can be closed by the treating doctor via
+  `POST /appointments/:id/consultation` (or `createConsultation`). The close is
+  enforced by a conditional DB update where `outcome IS NULL`. Concurrent
+  close attempts race on the row update; exactly one succeeds and the loser
+  receives `409` (`A consultation for this appointment has already been closed.`),
+  preserving the close-once guarantee. Existing encrypted notes are retained
+  unless the close request provides new notes.
 - **Access is doctor-only, own-appointment-only.** The consultations module
   never queries `Appointment`; it asks
   `appointmentsService.getAppointmentForDoctor(userId, appointmentId)`, which

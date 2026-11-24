@@ -6,7 +6,10 @@
 // and sessions — it calls into these services for user creation, never the
 // other way round.
 import { prisma } from '../../../db/prisma-client';
-import type { Role } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
+import * as auditService from '../../audit/services';
+
+type Db = typeof prisma | Prisma.TransactionClient;
 
 export function findUserById(id: string) {
   return prisma.user.findUnique({ where: { id } });
@@ -19,6 +22,60 @@ export function findUserByEmail(email: string) {
 /** Active = not deactivated. Used for the "last active admin" guard. */
 export function countActiveUsersByRole(role: Role) {
   return prisma.user.count({ where: { role, deactivatedAt: null } });
+}
+
+export interface AdminUserQuery {
+  role?: Role;
+  state?: 'active' | 'deactivated' | 'deleted';
+  emailPrefix?: string;
+  /** Keyset position: return accounts strictly older than this one. */
+  before?: { createdAt: Date; id: string };
+  take: number;
+}
+
+/**
+ * One keyset page of the admin account directory (issue #275).
+ *
+ * The selection is the whole point: account-level fields only. Credentials
+ * (`passwordHash`, `tokenVersion`), TOTP secrets and every clinical relation
+ * are deliberately not selectable here, so a future controller change can't
+ * accidentally widen the response.
+ */
+export function findAdminUsersPage(query: AdminUserQuery) {
+  const where: Prisma.UserWhereInput = {};
+  if (query.role) where.role = query.role;
+  if (query.state === 'active') {
+    where.deactivatedAt = null;
+    where.deletedAt = null;
+  } else if (query.state === 'deactivated') {
+    where.deactivatedAt = { not: null };
+    where.deletedAt = null;
+  } else if (query.state === 'deleted') {
+    where.deletedAt = { not: null };
+  }
+  if (query.emailPrefix) where.email = { startsWith: query.emailPrefix };
+  if (query.before) {
+    where.OR = [
+      { createdAt: { lt: query.before.createdAt } },
+      { createdAt: query.before.createdAt, id: { lt: query.before.id } },
+    ];
+  }
+  return prisma.user.findMany({
+    where,
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      locale: true,
+      emailVerifiedAt: true,
+      deactivatedAt: true,
+      deletedAt: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: query.take,
+  });
 }
 
 export function setUserDeactivated(userId: string, deactivatedAt: Date) {
@@ -45,18 +102,21 @@ export function setUserReactivated(userId: string, at: Date) {
 /** Creates the invite and retires any outstanding invite for the same
  * address, in one transaction — issuing a new link shouldn't leave two live
  * ones. Retiring means setting `consumedAt`, never deleting. */
-export function replaceAdminInvite(input: {
-  email: string;
-  tokenHash: string;
-  expiresAt: Date;
-  invitedByUserId: string;
-}) {
+export function replaceAdminInvite(
+  input: {
+    email: string;
+    tokenHash: string;
+    expiresAt: Date;
+    invitedByUserId: string;
+  },
+  actor?: auditService.AuditActor,
+) {
   return prisma.$transaction(async (tx) => {
     await tx.adminInvite.updateMany({
       where: { email: input.email, consumedAt: null },
       data: { consumedAt: new Date() },
     });
-    return tx.adminInvite.create({
+    const invite = await tx.adminInvite.create({
       data: {
         email: input.email,
         tokenHash: input.tokenHash,
@@ -64,11 +124,100 @@ export function replaceAdminInvite(input: {
         invitedByUserId: input.invitedByUserId,
       },
     });
+    if (actor) {
+      await auditService.record(tx, actor, {
+        entityType: 'AdminInvite',
+        entityId: invite.id,
+        action: 'admin_invite.created',
+        fromState: null,
+        toState: 'pending',
+      });
+    }
+    return invite;
   });
 }
 
 export function findAdminInviteByTokenHash(tokenHash: string) {
   return prisma.adminInvite.findUnique({ where: { tokenHash } });
+}
+
+export function findAdminInviteById(id: string, db: Db = prisma) {
+  return db.adminInvite.findUnique({ where: { id } });
+}
+
+export interface AdminInviteQuery {
+  status: 'pending' | 'redeemed' | 'expired' | 'revoked';
+  now: Date;
+  /** Keyset position: return invites strictly older than this one. */
+  before?: { createdAt: Date; id: string };
+  take: number;
+}
+
+/** One keyset page of admin invites, newest first, with the token hash
+ * deliberately absent from the selection — it must never leave the module. */
+export function findAdminInvitesPage(query: AdminInviteQuery) {
+  const where: Prisma.AdminInviteWhereInput = {};
+  if (query.status === 'pending') {
+    where.consumedAt = null;
+    where.revokedAt = null;
+    where.expiresAt = { gt: query.now };
+  } else if (query.status === 'expired') {
+    where.consumedAt = null;
+    where.revokedAt = null;
+    where.expiresAt = { lte: query.now };
+  } else if (query.status === 'redeemed') {
+    where.consumedAt = { not: null };
+  } else {
+    where.revokedAt = { not: null };
+  }
+  if (query.before) {
+    where.OR = [
+      { createdAt: { lt: query.before.createdAt } },
+      { createdAt: query.before.createdAt, id: { lt: query.before.id } },
+    ];
+  }
+  return prisma.adminInvite.findMany({
+    where,
+    select: {
+      id: true,
+      email: true,
+      expiresAt: true,
+      consumedAt: true,
+      revokedAt: true,
+      invitedByUserId: true,
+      createdAt: true,
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: query.take,
+  });
+}
+
+/** Revokes an invite atomically, only while it is neither redeemed nor
+ * already revoked. Returns the number of rows changed (0 = lost the race or
+ * not revocable), so the caller can distinguish 409 from success. */
+export function revokeAdminInviteIfUsable(tx: Prisma.TransactionClient, id: string, revokedAt: Date) {
+  return tx.adminInvite.updateMany({
+    where: { id, consumedAt: null, revokedAt: null },
+    data: { revokedAt },
+  });
+}
+
+/** Retention prune (issue #276): deletes up to `batchSize` invites whose
+ * expiry, consumption or revocation is older than `cutoff`. A live invite
+ * (unexpired and unconsumed) never matches. Raw SQL because Prisma cannot
+ * express `DELETE ... LIMIT`; the bounded batch keeps locks short. */
+export function pruneExpiredAdminInvites(options: { cutoff: Date; batchSize: number }) {
+  return prisma.$executeRaw`
+    DELETE FROM "AdminInvite"
+    WHERE "id" IN (
+      SELECT "id" FROM "AdminInvite"
+      WHERE "expiresAt" < ${options.cutoff}
+         OR ("consumedAt" IS NOT NULL AND "consumedAt" < ${options.cutoff})
+         OR ("revokedAt" IS NOT NULL AND "revokedAt" < ${options.cutoff})
+      ORDER BY "expiresAt" ASC
+      LIMIT ${options.batchSize}
+    )
+  `;
 }
 
 /** Consumes the invite and creates the admin account atomically: a
@@ -88,8 +237,11 @@ export function consumeAdminInviteAndCreateAdmin(input: {
   consumedAt: Date;
 }) {
   return prisma.$transaction(async (tx) => {
+    // Issue #277: a revoked invite is never redeemable. This conditional
+    // update and revokeAdminInviteIfUsable are the two writers of the same
+    // row, so under a race exactly one of them changes it.
     const consumed = await tx.adminInvite.updateMany({
-      where: { id: input.inviteId, consumedAt: null },
+      where: { id: input.inviteId, consumedAt: null, revokedAt: null },
       data: { consumedAt: input.consumedAt },
     });
     if (consumed.count !== 1) return null;

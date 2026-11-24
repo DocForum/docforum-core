@@ -1,0 +1,2 @@
+Phase 8: record AuditEvents for admin account actions ([issue #273](https://github.com/DocForum/docforum-core/issues/273)).
+Wired transactional `auditService.record` calls into admin user deactivation (`user.deactivated`), reactivation (`user.reactivated`), admin invite creation (`admin_invite.created`), admin session revocations (`user.sessions_revoked`), and login throttle clears (`login_throttle.cleared`). Removed interim console.info logging and ensured idempotent no-ops emit no audit events.

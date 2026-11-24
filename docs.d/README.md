@@ -79,9 +79,12 @@ after: "| `POST /intake` | patient |"
 
 Several fragments may target the same place; they go in filename order.
 
-CI (`Docs fragments`) checks that every fragment folds cleanly against the
-current docs, so a typo in a heading fails your PR instead of the fold. To
-check locally:
+CI (`Docs fragments`) checks that your fragments fold cleanly against the
+current docs. A problem in a fragment (a heading that doesn't exist, an
+`after:` line that matches twice, missing front matter) is a **warning** with a
+suggested fix, shown on the PR's Files tab: it doesn't block your PR, and a
+maintainer can correct it when folding, though fixing it yourself helps. Only
+adding new lines straight to a shared doc fails the check. To check locally:
 
 ```bash
 node scripts/docs-fragments.mjs check origin/main
@@ -97,4 +100,5 @@ node scripts/docs-fragments.mjs fold             # apply and delete the fragment
 Commit the result in its own PR, together with the `changelog.d/` fold if one
 is due. Maintainer PRs skip the "no new lines" rule (CI passes `--maintainer`
 when the PR's branch is in this repo rather than a fork, or its author is an
-org owner or public member), but fragments are still validated.
+org owner or public member), and for them fragment problems are errors, so
+fix every fragment warning before folding.

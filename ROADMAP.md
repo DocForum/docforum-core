@@ -64,7 +64,7 @@ and issue links.
 - [x] Accepted referral auto-generates a pre-populated `Appointment` against the target doctor/specialty — patient does not re-enter intake (PRD FR-8, the core value prop) — folded into issue #7 above. **Done:** accept books through `appointments`' `bookForReferral` → the same `claimOpenSlot` conditional UPDATE as a direct booking (`origin: 'referral'`), with the slot belonging to the target doctor enforced; no shortcut writes an `Appointment` row.
 - [x] Referral expiry job (addresses PRD §8.1.3 "orphaned" pattern for referrals specifically). Tracked as [issue #8](https://github.com/DocForum/docforum-core/issues/8) (Medium, 150 pts) — depends on #5. **Done:** an interval sweep (`src/jobs/referral-expiry.ts`, no queue) expires `pending` referrals untouched for `REFERRAL_PENDING_TTL_DAYS` (default 14) via one conditional UPDATE; `expired` + `expiredReason = 'ttl'` is distinct from `declined`/`cancelled`, and the no-show cascade now records `no_show`. `accepted` referrals are never swept. Flagging the patient waits on Phase 6 notifications (the referring doctor's `referringDoctorNotifiedAt` seam is set).
 - [x] Referral loop detection + max-hop limit (PRD §8.1.2). Tracked as [issue #65](https://github.com/DocForum/docforum-core/issues/65) (High, 200 pts). **Done:** lineage via `parent_referral_id`, bounded CTE walk, strict rule (repeat doctor/specialty anywhere in the chain — including the GP return — flags for the admin queue), hard `422` on self-referral and on chains over `REFERRAL_MAX_HOPS` (default 4).
-- [x] Multiple simultaneous referrals from one consultation (PRD §8.2.4). Tracked as [issue #66](https://github.com/DocForum/docforum-core/issues/66) (High, 200 pts). **Done, including its ADR:** [`docs/adr/0006-multiple-referrals-per-consultation.md`](docs/adr/0006-multiple-referrals-per-consultation.md) records the decision (allowed; independent lifecycles, atomic all-or-none creation, grouped only for the patient view; no bundle table). Implementation: one snapshot copy per target, duplicate-specialty/doctor rejection, independent per-referral acceptance, patient list grouped by source consultation.
+- [x] Multiple simultaneous referrals from one consultation (PRD §8.2.4). Tracked as [issue #66](https://github.com/DocForum/docforum-core/issues/66) (High, 200 pts). **Done, including its ADR:** [`docs/adr/0017-multiple-referrals-per-consultation.md`](docs/adr/0017-multiple-referrals-per-consultation.md) records the decision (allowed; independent lifecycles, atomic all-or-none creation, grouped only for the patient view; no bundle table). Implementation: one snapshot copy per target, duplicate-specialty/doctor rejection, independent per-referral acceptance, patient list grouped by source consultation.
 - [x] Cascade rules when a referral-origin appointment is cancelled or no-shows (PRD §8.2.3). Tracked as [issue #67](https://github.com/DocForum/docforum-core/issues/67) (High, 200 pts). **Done:** run inside the appointment's status transaction; cancelled → referral back to `pending` with the slot released, first no-show → `pending` + `noShowCount`, second → `expired` + `referringDoctorNotifiedAt` (threshold is a v1 default, not a tuned value); all writes conditional so a doubled hook no-ops.
 - [x] Admin referral operations: queue, reassign stuck referrals, override routing, audited. Tracked as [issue #68](https://github.com/DocForum/docforum-core/issues/68) (Medium, 150 pts). **Done:** `GET /referrals/admin/queue` (status / `olderThan` / `loopFlagged` filters, derived reason + age), `POST /referrals/admin/:id/reassign` (pending only, target column only — snapshot untouched), `POST /referrals/admin/:id/cancel` (closes a live appointment through the appointments service), `GET /referrals/admin/:id/audit-events`; reassign/cancel write the first `AuditEvent` rows (new table — ARCHITECTURE.md §4.10).
 - [x] Doc reconciliation: ARCHITECTURE.md §4.2/§4.3/§4.4/§4.10/§5.2/§6, ARCHITECTURE_ESSENTIALS.md data model map + known gaps, PRD §8.1.2/§8.1.3/§8.1.4/§8.2.1–§8.2.4, `docs/api/README.md`. Done in this change — #6's ADR is *not* part of it and the gap is deliberately left noted.
@@ -76,16 +76,28 @@ and issue links.
 - [x] Specialist UI: issue prescription/lab order from a consultation. Tracked as [issue #10](https://github.com/DocForum/docforum-core/issues/10) (Medium, 150 pts) — depends on #9. **Backend done:** `POST /orders/consultations/:consultationId/{prescriptions,lab-orders}` go through the append-only issuance path, are limited to the consultation's treating doctor (verified profile), and refuse consultations whose appointment isn't `completed` (409) or an unknown/wrong-type facility (400). Tested in `backend/tests/integration/orders-issuance.test.mts`. The doctor screen is tracked in `docforum-web`.
 - [ ] Patient UI: view active/past orders. Tracked as [issue #11](https://github.com/DocForum/docforum-core/issues/11) (Medium, 150 pts) — depends on #9.
 - [x] Facility fulfillment proof & patient confirmation/dispute workflow. Tracked as issue #76. Facility fulfillment requires reference number and optional attachment. Patient confirm-receipt/dispute are mutually exclusive via DB conditional update. Derived `confirmedSignal` boolean. Idempotent expiry job for unconfirmed orders. Admin dispute queue and append-only resolution logs.
+- [x] Medication catalog: a controlled prescription vocabulary imported from
+  openFDA NDC (public domain; `backend/scripts/import-medications.mjs`,
+  licence-checked before import) with `GET /medications?q=` autocomplete over
+  a trigram index, and `PrescriptionItem.medicationId` plus a
+  pharmacist-review flag for the explicit unlisted-medication path. The
+  issued `drugName` stays a display snapshot, so catalog edits never rewrite
+  an issued prescription. The 30k-row autocomplete p95 is asserted under
+  500 ms in `backend/tests/integration/medications.test.mts`. Tracked as
+  [issue #69](https://github.com/DocForum/docforum-core/issues/69)
+  (High, 200 pts) — **Done**. The catalog is a picker, not an interaction
+  checker (PRD §8.2.8 stays deferred).
+- [x] Abnormal lab result escalation and doctor acknowledgement tracking (PRD §8.2.7), tracked as [issue #72](https://github.com/DocForum/docforum-core/issues/72) — **Done.** `LabResult.abnormality` (`normal|abnormal|critical`) is set by the fulfilling facility at attach time; abnormal/critical results create one `LabResultAcknowledgement` for the ordering doctor in the same transaction and notify them. `POST /lab-results/:id/acknowledge` is a one-shot conditional write with a `lab_result.acknowledged` audit event; `GET /lab-results/unacknowledged` is the doctor's list and (for admins) the escalation queue. An interval sweep marks overdue tasks escalated (`lab_result.escalated`), and `overdue` is derived from `escalationDueAt` so a missed tick cannot hide a task. Critical results are deliberately **not** withheld from the patient (decision recorded in PRD §8.2.7). Migration: `20261120120000_lab_result_abnormality_acknowledgement`.
 
 ## Phase 5 — Facilities & fulfillment
 **Status: In progress — #13 (typed `FulfillmentRecord` order FKs, ADR 0012) and #14 (admin-only facility creation + fail-closed capability matching) are done; #15 (facility fulfillment UI/transition) and #16 (lab result attachment) are still open. Two independently-scoped items added later — #73 (partial fulfillment) and #74 (facility distance sorting) — have landed ahead of them, built on ADR 0012's `FulfillmentRecord` shape.**
 - [x] Resolve the polymorphic `FulfillmentRecord` design smell flagged in ARCHITECTURE.md §6.1.3 **before** building this phase — decide: keep polymorphic with constraints, or split into `PrescriptionFulfillment` / `LabOrderFulfillment`. Record the decision as an ADR in `docs/adr/`. Tracked as [issue #13](https://github.com/DocForum/docforum-core/issues/13) (High, 200 pts) — the prerequisite for the rest of this phase. **Done — decision: one table, no polymorphism** (`docs/adr/0012-fulfillment-record-typed-order-fks.md`): `order_type`/`order_id` are replaced by real `prescription_id`/`lab_order_id` FKs (each `UNIQUE`, a PostgreSQL `CHECK` requires exactly one — the mechanism `PaymentIntent` got in #85) plus the `facility_id` FK §4.7 left as a TODO, all three `RESTRICT`. Splitting was weighed and rejected: two tables mean two implementations of the §5.3 step-5 transition and a cross-table union for a facility's queue. Schema + migration landed; no code reads the row yet — #14 creates it, #15 owns the transition, #16 attaches `LabResult` through its existing table.
 - [x] Facility account creation (admin-invited only per PRD OQ-2 — no self-serve facility signup in v1) + `FacilityCapability` matching (patient sees only qualified facilities for their specific order, PRD FR-13). Tracked as [issue #14](https://github.com/DocForum/docforum-core/issues/14) (Medium, 150 pts) — depends on #13. **Done —** admin-only `POST /facilities` (User + profile + capabilities + `facility.created` audit row, one transaction; `POST /auth/signup` still refuses the role) and fail-closed capability matching in `GET /facilities/eligible` + `listEligibleFacilitiesForOrderKind`: facilities missing/mismatching capability data show for nothing. ADR 0012's "`#14 creates the row at selection`" is **not** in this issue — no selection endpoint exists yet; the `FulfillmentRecord` write and the `→ fulfilled` transition land with #15. See `changelog.d/14-facility-creation-capability-matching.md`.
 - [ ] Facility fulfillment UI: view assigned orders, mark in-progress/fulfilled/rejected, enforcing that `status` transitions to `fulfilled` **only** via the facility-confirmed path (ARCHITECTURE.md §5.3 step 5 — patient/doctor cannot self-mark). Tracked as [issue #15](https://github.com/DocForum/docforum-core/issues/15) (Medium, 150 pts) — depends on #13/#14.
-- [x] Lab result attachment (object storage integration — ARCHITECTURE.md §2 File/result storage row). Tracked as [issue #16](https://github.com/DocForum/docforum-core/issues/16) (Medium, 150 pts) — depends on #13. **Done —** provider: Amazon S3, private SSE bucket (`docs/adr/0014`), behind `utils/object-storage.ts`. `POST /orders/lab-orders/:labOrderId/result` lets only the order's own facility attach, once. `GET` on the same path serves the file to the patient, the ordering doctor and the fulfilling facility only, with no public or presigned URL. The response is access-logged and audited. The `LabOrder` and its `FulfillmentRecord` are untouched (`fulfilled` stays #15's). New scope noted in ARCHITECTURE.md §6.2.6: the export doesn't include the file bytes, and guardians can't read results. See `changelog.d/16-lab-result-attachment.md`.
+- [x] Lab result attachment (object storage integration — ARCHITECTURE.md §2 File/result storage row). Tracked as [issue #16](https://github.com/DocForum/docforum-core/issues/16) (Medium, 150 pts) — depends on #13. **Done —** provider: Amazon S3, private SSE bucket (`docs/adr/0018`), behind `utils/object-storage.ts`. `POST /orders/lab-orders/:labOrderId/result` lets only the order's own facility attach, once. `GET` on the same path serves the file to the patient, the ordering doctor and the fulfilling facility only, with no public or presigned URL. The response is access-logged and audited. The `LabOrder` and its `FulfillmentRecord` are untouched (`fulfilled` stays #15's). New scope noted in ARCHITECTURE.md §6.2.6: the export doesn't include the file bytes, and guardians can't read results. See `changelog.d/16-lab-result-attachment.md`.
 - [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1 — addressed by issue #14's admin-only gating; document any remaining gap in that issue's PR.
 - [x] **Partial fulfillment: item-level dispensing for multi-item prescriptions.** Tracked as [issue #73](https://github.com/DocForum/docforum-core/issues/73) — **Done**. `FulfillmentItem` rows under a `FulfillmentRecord` now carry dispensed quantity + status per routed item; order status derives from items (`partially_fulfilled` / `fulfilled`) via a forward-only conditional update applied through the prescriptions/lab-orders module services; the patient can route remaining items to a second facility; a DB unique index on `(orderType, dispensedKey)` makes double-dispense by two facilities a constraint-level 409 (proven under concurrency in `backend/tests/integration/fulfillment.test.mts`). Payment-release rule documented in ARCHITECTURE.md §5.3: no release until the whole order derives `fulfilled`. Re-seated onto #13's resolved ADR 0012 shape (typed order FKs, not the old polymorphic pair); the ADR's "one record per order" UNIQUE became one per **(order, facility)** so a split order can hold a record at each facility — see the ADR's 2026-10-26 amendment.
-- [x] **Facility location and distance-sorted facility selection.** Tracked as [issue #74](https://github.com/DocForum/docforum-core/issues/74) — **Done**. `FacilityProfile.address/latitude/longitude` (nullable) + composite index; `GET /facilities/eligible?near=lat,lng&radiusKm=` with an indexed bounding box + haversine (PostGIS rejected — justification and the privacy/no-storage rule in ARCHITECTURE.md §5.4); facilities without coordinates appear, sorted last; seeded fictional coordinates via `npx prisma db seed`; measured over ~3 000 facilities in `backend/tests/integration/facility-distance.test.mts` (single-digit-millisecond p50/p95, well inside the test's 500 ms ceiling).
+- [x] **Facility location and distance-sorted facility selection.** Tracked as [issue #74](https://github.com/DocForum/docforum-core/issues/74) — **Done**. `FacilityProfile.address/latitude/longitude` (nullable) + composite index; `GET /facilities/eligible?near=lat,lng&radiusKm=` with an indexed bounding box + haversine (PostGIS rejected — justification and the privacy/no-storage rule in ARCHITECTURE.md §5.5); facilities without coordinates appear, sorted last; seeded fictional coordinates via `npx prisma db seed`; measured over ~3 000 facilities in `backend/tests/integration/facility-distance.test.mts` (single-digit-millisecond p50/p95, well inside the test's 500 ms ceiling).
 
 ## Phase 5.5 — Payments (consumer side)
 **Status: Payment order linkage, automatic intent issuance, configuration hardening, and platform signer abstraction are implemented; fulfillment-triggered release remains pending.** See docs/adr/0004-custodial-payments-v1.md. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
@@ -95,17 +107,17 @@ and issue links.
 - [x] [Issue #88] Harden payments configuration: typed network/RPC/contract/asset settings, mainnet opt-in guard, startup reachability check, and intent-recorded contract ids for release/refund.
 - [x] Soroban contract-event poller, per-deployment persisted cursors, unmatched release/refund alerts, and admin event view (issue #86). Contract deployments must include their deployment ledger; RPC retention gaps are surfaced for operator reconciliation.
 - [x] On patient funding action, call SDK to move funds into escrow (`escrowed` status), store `stellarTxHash` — except it's not a *patient* action in this design (custodial v1, ADR 0004): `POST /payments/intents/:id/fund`, admin-triggered, funds from `docforum-core`'s own platform payer identity.
-- [x] On `FulfillmentRecord` reaching `fulfilled`, trigger SDK release call (`released` status) — except there's no `FulfillmentRecord` yet (Phase 5), so v1 exposes `POST /payments/intents/:id/release` as an admin-triggered action instead. ADR 0002's "don't let it drift into a manual/admin-triggered release" goal is **not yet met** — this is the honest interim, not the destination; revisit once Phase 5 exists.
-- [x] Refund path for rejected/expired orders — `POST /payments/intents/:id/refund`, same admin-triggered caveat as release.
-- [ ] Idempotent escrow funding + on-chain reconcile job (`fundPaymentIntent` is check-then-act — docforum-escrow threat model §5). Tracked as [issue #24](https://github.com/DocForum/docforum-core/issues/24) (High, 200 pts).
-- [ ] ADR: releaser key custody — multisig, KMS, or per-period rotation (threat model T1/T2). Tracked as [issue #25](https://github.com/DocForum/docforum-core/issues/25) (Medium, 150 pts).
+- [x] Automatic escrow release when fulfillment is confirmed (issue #83) — **done**: the order's `fulfilled` transition publishes `order.fulfilled` in the same transaction; the transactional-outbox worker calls SDK `release` with bounded retries/backoff and a conditional intent update, so a killed worker resumes rather than losing or duplicating the task. Only a whole order (all items across every facility) releases — partial fulfillment never does. `POST /payments/intents/:id/release` remains an audited admin override; `NotFunded` is a terminal reconcile. See `docs.d/83-automatic-settlement.md`.
+- [x] Automatic refund for rejected or expired orders (issue #84) — **done**: a wholesale rejection with nothing dispensed (and no still-open fulfillment record) and a lab order expiring unfulfilled each publish `order.rejected`/`order.expired` in their own transaction; the same durable worker refunds through the releaser (consistent audit trail) and notifies the patient on completion. Escrow already released is never refunded — the conditional status update is the guard. `POST /payments/intents/:id/refund` remains an audited admin override.
+- [x] Idempotent escrow funding + on-chain reconcile job (`fundPaymentIntent` is check-then-act — docforum-escrow threat model §5). Tracked as [issue #24](https://github.com/DocForum/docforum-core/issues/24) (High, 200 pts) — **Done:** the intent is claimed `created -> funding` by one conditional UPDATE that commits before `create_escrow`, so N concurrent fund requests make exactly one chain call (integration test, 8 concurrent requests); a failed chain call returns it to `created` (audited), and a crash between the call and the settle write is resolved explicitly with `npm run reconcile:escrows` (`--adopt` an escrow the event poller observed, or `--abandon` a claim that never reached the chain) — never by retrying the chain call. New `funding` status + `fundingStartedAt` column; no on-chain list API exists in SDK 0.2.0, so the report reads the `EscrowChainEvent` observations the poller already records.
+- [x] ADR: releaser key custody — multisig, KMS, or per-period rotation (threat model T1/T2). Tracked as [issue #25](https://github.com/DocForum/docforum-core/issues/25) (Medium, 150 pts) — **Done:** [`docs/adr/0016-releaser-key-custody.md`](docs/adr/0016-releaser-key-custody.md) chooses a 2-of-4 Stellar multisig releaser for production escrows (three custodied signers + offline master, medium/high threshold 2), records the expiry deadline is met by ADR 0015's paid database, rejects KMS/HSM for v1 and per-period rotation as the primary control, and lists the code follow-ups (SDK multi-signer support, `PaymentIntent`-recorded releaser public key, two-step settlement approval). Staging/preview keep a single-signer testnet releaser.
 - [x] Checksum-validate facility wallet keys, not just regex. Tracked as [issue #26](https://github.com/DocForum/docforum-core/issues/26) (Trivial, 100 pts) — validated via `StrKey.isValidEd25519PublicKey` in payments Zod schemas (`backend/src/modules/payments/validation.ts`), rejecting invalid CRC16 checksums, malformed prefixes and bad lengths.
 - [x] Patient payment history and facility payout ledger APIs, with ownership-scoped pagination, on-chain references, and BigInt-safe SQL totals. Tracked as [issue #90](https://github.com/DocForum/docforum-core/issues/90) — **implemented; `refundAfter` remains null until a payment model/contract version supports deadlines**.
 - [x] Nightly/manual testnet payment verification with fresh Friendbot-funded identities and deduplicated failure tracking. Tracked as [issue #91](https://github.com/DocForum/docforum-core/issues/91).
 - [x] Payout privacy prototype: testnet-only pooled payout support in the escrow funding path, with direct facility payouts as the default in production/local environments. Tracked as [issue #92](https://github.com/DocForum/docforum-core/issues/92).
 - [ ] Non-custodial patient payments (v2): patients fund escrows from their own Stellar wallet, custodial kept as fallback. **Proposed** in `docs/adr/0005-non-custodial-patient-payments.md`; implementation issues to be opened once it's Accepted.
 - [x] Multi-asset intents (USDC + native XLM per-environment allowlist, payee trustline checks) and the patient-signed prepare half of ADR 0005. Tracked as [issue #79](https://github.com/DocForum/docforum-core/issues/79) and [issue #80](https://github.com/DocForum/docforum-core/issues/80). Prepare returns `503 ESCROW_SDK_PREPARE_UNSUPPORTED` against SDK 0.2.0 until #32 lands; submit/fee-bump is out of scope for #80.
-- [ ] Upgrade to `@docforum/escrow-sdk` 0.3.0 and the current testnet contract (`refund_after`, balance-delta check, `getEscrow`) — step 1 of ADR 0005's plan, but worth doing regardless. Tracked as [issue #32](https://github.com/DocForum/docforum-core/issues/32) (Medium, 150 pts); depends on `docforum-escrow` publishing `sdk-v0.3.0`.
+- [ ] Upgrade to `@docforum/escrow-sdk` 0.3.0 and the current testnet contract (`refund_after`, balance-delta check, `getEscrow`) — step 1 of ADR 0005's plan, but worth doing regardless. Tracked as [issue #32](https://github.com/DocForum/docforum-core/issues/32) (Medium, 150 pts); depends on `docforum-escrow` publishing `sdk-v0.3.0`. **Blocked (2026-11-20): `sdk-v0.3.0` is still unpublished** (only `sdk-v0.1.0` and `sdk-v0.2.0` exist), so the bump cannot be made. Core-side capability that issue #32 depends on is covered meanwhile: release/refund pin the contract id recorded on the intent, proven for legacy-contract intents in `backend/tests/integration/payments-assets.test.mts`.
 - [ ] Doc reconciliation: PRD §8.1.6 (facility fulfillment integrity) — not marked resolved; this phase proves the payment *mechanism* works, not the fulfillment-integrity question, which still needs real `FulfillmentRecord`/facility-matching (Phase 5) to actually address.
 
 ## Phase 6 — Notifications
@@ -147,19 +159,33 @@ and issue links.
 - [x] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts). Done: the `RefreshSession` store that `POST /auth/refresh` checks (#143) plus `User.tokenVersion` (#140).
 - [x] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — **investigated, not applicable as currently designed.** Phase 1's `claimOpenSlot` claims a slot directly via a single conditional `UPDATE ... WHERE status = 'open'` inside the booking transaction (proven by `backend/tests/integration/booking.test.mts`: 8 concurrent attempts, exactly 1 wins) — there is no intermediate `held` status, so an abandoned hold cannot exist and there is nothing for a TTL job to release. No hold state was introduced to give this issue something to do. Revisit if a multi-step booking flow (e.g. reserving a slot while a patient fills out Phase 2 intake) introduces a `held` state; that flow would need a `heldAt`/`holdExpiresAt` column plus a sweep job, and this issue should be reopened then.
 - [x] Access-control test suite: who may read intake, consultation and payment data. Integration tests (`tests/integration/access-control.test.mts`) establishing the test harness and access-control patterns for the three PHI data categories; intake/consultation test cases are scaffolded as placeholders until Phase 2/3 routes exist, payment-intent access cases exercise the live admin-gated routes. Tracked as [issue #44](https://github.com/DocForum/docforum-core/issues/44) — **Done**.
-- [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. **One Phase 3 access path is now worth auditing (`GET /consultations/:id` — treating doctor + that appointment's patient only, and referral snapshot exposure on `GET /referrals/mine` / `/created`), but intake and orders remain unbuilt, so the audit as scoped stays blocked.** Not yet scoped into an issue.
+- [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. **One Phase 3 access path is now worth auditing (`GET /consultations/:id` — treating doctor + that appointment's patient only, and referral snapshot exposure on `GET /referrals/mine` / `/created` / `/incoming` — issue #306 logs target-doctor reads), but intake and orders remain unbuilt, so the audit as scoped stays blocked.** Not yet scoped into an issue.
 - [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence). Tracked as [issue #20](https://github.com/DocForum/docforum-core/issues/20) (Trivial, 100 pts) — a decision task, unblocked now.
 - [x] Feature flags for staged rollouts (DB-backed, per environment and per user cohort). Tracked as [issue #132](https://github.com/DocForum/docforum-core/issues/132) (High, 200 pts) — **Done:** `FeatureFlag` table + `modules/flags` (boolean and sticky hash-percentage flags, role and user-id targeting, in-memory cache with a short TTL, evaluation that never throws and defaults to off), `GET /admin/feature-flags` and `PATCH /admin/feature-flags/:key` with a `feature_flag.*` audit event per change, `GET /me/flags` for the frontend, and the wallet payment mode (`payments.wallet_funding`, seeded off) as the first flag user.
+- [x] TOTP two-factor authentication (RFC 6238) with single-use recovery
+  codes. Enrolment returns a provisioning URI and confirms with one valid
+  code; login becomes two-step (`mfaRequired` + a short-lived `mfa_pending`
+  token that no other route accepts). Replay is blocked by claiming the
+  TOTP time step with one conditional `updateMany`, not by a client flag.
+  Secrets are encrypted with the existing field-encryption key; recovery
+  codes are SHA-256 hashed and single-use. `TOTP_REQUIRE_FOR_ADMIN` can
+  force enrolment for admin accounts through a narrow `mfa_enrollment`
+  token that only the setup/enable routes accept. Implemented without a new
+  dependency (`node:crypto`). Tracked as
+  [issue #36](https://github.com/DocForum/docforum-core/issues/36)
+  (High, 200 pts) — **Done**. Tests:
+  `backend/tests/unit/totp.test.ts` (RFC 4226/6238 vectors) and
+  `backend/tests/integration/two-factor.test.mts`.
 
 ## Phase 9 — Deploy & CI
 **Status: In progress. Structured JSON logging (request IDs + PHI redaction) landed; load tests (k6) for search, slot listing and booking contention added; automated Postgres backups with a tested restore drill are now implemented (issue #107). A Render free-tier preview exists — see note. Production deploy still Not started. Remaining items scoped into issues #21–#22.**
 - [x] Localization foundation ([issue #133](https://github.com/DocForum/docforum-core/issues/133)): persist a supported locale from `Accept-Language` at signup, format coded errors and password-reset notifications with ICU catalogs (English source + French stub), and enforce catalog key parity in CI. Other server messages remain English until their owning flows adopt the catalog.
 - [x] **PR malware scan** — `.github/workflows/pr-malware-scan.yml` + `.github/scripts/pr-malware-scan.cjs`, on every PR push. Flags editor/devcontainer autorun tasks, npm install hooks, typosquatted packages and Actions, non-registry dependency sources, payloads disguised as fonts/images, base64/whitespace obfuscation, exfiltration endpoints, reverse shells and miners. HIGH findings fail the `Malware scan` check, label the PR `security-review` and @mention the author; one comment per PR, updated in place. Reads the PR as data only (never checks out or runs it). Added 2026-10-20 after a VS Code autorun payload (escrow #163) and a typosquatted action (escrow #176). Manual backfill (Actions → PR malware scan → Run workflow, `prs: all`) scans PRs opened before the scanner and records a `Malware scan` commit status, which satisfies the required check.
 - [ ] End-to-end care-thread integration test: book → consult → refer → accept → order → fulfil → release. A single self-contained test (`backend/tests/integration/care-thread.test.mts`) driving the full thread through HTTP only, against embedded Postgres with the escrow SDK mocked; asserts the key invariants at each step (snapshot equality, append-only orders, facility-only fulfillment, payment status) rather than just status codes. Steps are phase-gated — each phase's steps are skipped with a reason until that phase lands, so the scaffold and already-built steps (booking, consult, refer, accept) run now and the rest enable as Phases 4/5 land. Runs as part of `test:integration` in CI, runtime kept under a minute. Tracked as [issue #69](https://github.com/DocForum/docforum-core/issues/69) (High, 200 pts) — **in progress**, branch `feat/end-to-end-care-thread-integration-test-book`.
-- [ ] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Still not resolved.** A Render free-tier web service + Postgres now runs `backend/`, so `docforum-web`'s GitHub Pages preview has a live API to call — see `docs/adr/0003-render-preview-deployment.md`. This is explicitly a preview, not the production decision: no secrets manager, no backups, no staging/prod split, free-tier Postgres expires 2026-12-04 (renewed 2026-11-04; 30 days, 14-day grace period) unless recreated/upgraded before then — renewal steps in ADR 0003's "Renewing the free database" section. Tracked as [issue #22](https://github.com/DocForum/docforum-core/issues/22) (Medium, 150 pts).
-- [x] Real CI pipeline (replaced `.github/workflows/ci.yml` placeholder — was `pull_request`-only, `echo "TODO"`, never once run). Now runs on push to `main` and on PRs: `npm audit --omit=dev` at high severity (`audit:prod`, Phase 8 issue #47) → `prisma:generate` → `typecheck` → unit tests → **integration tests (the self-contained embedded-Postgres double-booking proof)** → `build`. Verified locally end-to-end before pushing (14 unit + 1 integration test passing) and confirmed green in Actions. No lint script exists yet in `backend/package.json` — not added; `tsc --noEmit` is the closest static check currently available. Lint now tracked as [issue #28](https://github.com/DocForum/docforum-core/issues/28) (Trivial, 100 pts). Closes [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
-- [ ] Staging environment. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
-- [ ] Production environment + secrets management. Blocked on issue #22's decision landing first — not yet scoped into its own issue.
+- [x] Choose deployment target (ARCHITECTURE.md §8 open decision) — record as an ADR. **Done:** [`docs/adr/0015-production-deployment-target.md`](docs/adr/0015-production-deployment-target.md) decides **Render, paid tier** (one Pro workspace, Blueprint-defined `docforum-core-staging` + `docforum-core-production`, one paid Render Postgres per environment, secrets in per-environment environment groups with the password manager as source of record). Paid Postgres removes the free-tier 30-day expiry (the 2026-12-04 deadline is the last one), gives 7-day PITR, and ADR 0007's encrypted off-platform dumps + weekly restore drill now target a real environment. The free preview from `docs/adr/0003-render-preview-deployment.md` is unchanged and stays preview-only. Tracked as [issue #22](https://github.com/DocForum/docforum-core/issues/22) (Medium, 150 pts). Alternative recorded, not chosen: Fly.io + Neon, and AWS with Secrets Manager for a later KMS/audit story.
+- [x] Real CI pipeline (replaced `.github/workflows/ci.yml` placeholder — was `pull_request`-only, `echo "TODO"`, never once run). Now runs on push to `main` and on PRs: `npm audit --omit=dev` at high severity (`audit:prod`, Phase 8 issue #47) → `prisma:generate` → `typecheck` → unit tests → **integration tests (the self-contained embedded-Postgres double-booking proof)** → `build`. Verified locally end-to-end before pushing (14 unit + 1 integration test passing) and confirmed green in Actions. The "no lint script exists yet" gap was closed by [issue #28](https://github.com/DocForum/docforum-core/issues/28) (Trivial, 100 pts): `npm run lint` runs ESLint 9 with type-aware `typescript-eslint` from an isolated `backend/tools/lint` toolchain (pinned to the TypeScript 6 compatibility API — TS 7 has no compiler API for it to load), and CI runs it after `typecheck`. Closes [issue #21](https://github.com/DocForum/docforum-core/issues/21) (Medium, 150 pts).
+- [ ] Staging environment. **Unblocked:** issue #22's decision landed (ADR 0015 — Render paid, Blueprint-defined staging service + paid staging Postgres). Provisioning it is the next item; not yet scoped into its own issue.
+- [ ] Production environment + secrets management. **Unblocked:** ADR 0015 decides the topology and the environment-group/password-manager secret handling. Provisioning, 2FA/access review and the rotation runbook are the remaining work; not yet scoped into its own issue.
 - [x] **Automated Postgres backups with a tested restore drill** — `scripts/backup-postgres.sh` takes an encrypted logical backup (`pg_dump --format=custom` piped through `gpg --symmetric`, so the plaintext dump never touches disk) with a retention window; `scripts/restore-drill.sh` restores the latest backup into a scratch database with explicit confirmation and name guards (the target must end in `_drill`/`_scratch` and must not be the source database), then runs integrity checks (row counts, `_prisma_migrations`, a sample booking query). `.github/workflows/backup-restore-drill.yml` runs the round-trip daily (and on demand) against a seeded throwaway Postgres service. It does not touch the Render preview database yet, because there's no production target (see the deployment decision above). Design and RPO/RTO notes are in `docs/adr/0007-postgres-backups-and-restore-drill.md` and `infra/backup/README.md`. Tracked as [issue #107](https://github.com/DocForum/docforum-core/issues/107) — **Done**.
 - [x] Docs site deployed — `docs/site/` (VitePress) via `.github/workflows/deploy-docs.yml`, live at https://docforum.github.io/docforum-core/. Unrelated to the production-deploy decision above; this is a static site with no backend of its own.
 - [x] Cross-repo docs-site rebuild ([issue #29](https://github.com/DocForum/docforum-core/issues/29)): `.github/workflows/deploy-docs.yml` accepts `repository_dispatch` (`upstream-docs-updated`, `docs-sync`) from sibling repositories (`docforum-web`, `docforum-escrow`); token setup and dispatch workflow documented in `docs/site/README.md`.
@@ -490,7 +516,7 @@ and issue links.
   depends on, the `Referral` relation fields, and the `Consultation`↔
   appointment link) and left two `AuditEvent` models in one schema — the
   `prisma generate` failure CI reported (P1012). The branch is now
-  `main` + two commits (Phase 3 referral core, ADR 0006) with the union of
+  `main` + two commits (Phase 3 referral core, ADR 0017) with the union of
   both sides' work, and the referral audit events go into `main`'s single
   `AuditEvent` table instead of a second one.
 - 2026-10-17 — Built the Phase 3 referral core on branch
@@ -519,7 +545,7 @@ and issue links.
   impossible to enforce and is noted as such rather than faked.
   Issue #8 (time-based expiry) remains open: only the no-show cascade
   reaches `expired`. The multi-referral decision (#66's ADR requirement)
-  is recorded as `docs/adr/0006-multiple-referrals-per-consultation.md`,
+  is recorded as `docs/adr/0017-multiple-referrals-per-consultation.md`,
   and the referral status machine is drawn out in ARCHITECTURE.md §4.4
   (#67's state-diagram DoD). Docs reconciled in the same change:
   ARCHITECTURE.md §4.2–§4.4/§4.10/§5.2/§6.1.2/§6.2.2/§6.2.4,
@@ -560,7 +586,7 @@ and issue links.
   wire the remaining state changes. Tests: two new integration cases
   asserting the audit rows (the accept's two events, the decline's one)
   against the real `AuditEvent` table.
-- 2026-10-20 — Docs site: `docs/site/scripts/sync-docs.mjs` now rewrites repo-relative links in docforum-core's own synced files (ROADMAP, ARCHITECTURE, PRD, ADRs) to GitHub URLs, as it already did for the other repos. #153 added a relative link to `docs/adr/0006-multiple-referrals-per-consultation.md` in ROADMAP.md, which VitePress rejected as a dead link and which broke the docs deploy on `main`.
+- 2026-10-20 — Docs site: `docs/site/scripts/sync-docs.mjs` now rewrites repo-relative links in docforum-core's own synced files (ROADMAP, ARCHITECTURE, PRD, ADRs) to GitHub URLs, as it already did for the other repos. #153 added a relative link to `docs/adr/0017-multiple-referrals-per-consultation.md` in ROADMAP.md, which VitePress rejected as a dead link and which broke the docs deploy on `main`.
 - 2026-10-21 — Phase 2: in-person check-in and live queue position. `POST /appointments/:id/check-in` records `checkedInAt` within a window around the appointment start (patient, own appointment only); the doctor's start/complete transitions now stamp `startedAt`/`completedAt`; `GET /appointments/:id/queue` returns the patient's own position and an estimated wait derived from the doctor's running-average delay (explainable, not ML). Patients never see other patients' details through the queue endpoint. Queue changes are pollable — the notification stream is Phase 6 and doesn't exist yet, so no push path was added. Schema: `Appointment.checkedInAt`/`startedAt`/`completedAt` (ARCHITECTURE.md §4.2), endpoints in `docs/api/README.md`. Unit tests cover position and estimate calculations; integration tests cover check-in window enforcement and queue access control.
 - 2026-10-21 — Fixed a syntax error in `backend/src/modules/appointments/routes/index.ts` (TS1109/TS1161: an unterminated regular expression literal at line 29) that failed the local syntax check before push. No roadmap-tracked behavior changed; the check-in/queue work described above is unaffected.
 - 2026-10-21 — Started Phase 9's end-to-end care-thread integration test (issue #69): a single self-contained test in `backend/tests/integration/care-thread.test.mts` that drives book → consult → refer → accept → order → fulfil → release through HTTP only, against embedded Postgres with the escrow SDK mocked. Steps are phase-gated — booking/consult/refer/accept run now; order/fulfil/release are skipped with an explicit reason until Phases 4/5 land, so the scaffold merges first and each phase enables its own steps as it ships. Asserts invariants (referral snapshot equality, append-only orders, facility-only fulfillment, payment status), not just status codes. Runs as part of `test:integration` in CI, runtime under a minute.
@@ -892,7 +918,7 @@ and issue links.
 - 2026-10-27 — Added the admin-only `GET /admin/metrics` endpoint with UTC date windows, a minimum-cell suppression threshold, and current booking lead-time/no-show aggregates. Metrics requiring missing or unapproved instrumentation are reported as unavailable.
 - 2026-10-28 — Phase 5: lab result attachment on object storage
   ([issue #16](https://github.com/DocForum/docforum-core/issues/16)).
-  Provider decision, recorded in `docs/adr/0014-lab-result-object-storage.md`:
+  Provider decision, recorded in `docs/adr/0018-lab-result-object-storage.md`:
   **Amazon S3**, one private, SSE-S3-encrypted bucket per environment, reached
   through the official `@aws-sdk/client-s3` (new dependency). The SDK is wrapped
   by `backend/src/utils/object-storage.ts` and nothing else imports it. Any
@@ -948,7 +974,7 @@ and issue links.
   `/pharmacy-orders` fulfillment routes and the `GET /facilities/eligible`
   `near`/`radiusKm`/`limit`/`capabilityType` params (bounding box + haversine,
   no PostGIS — justification and the never-store-the-patient's-point rule are
-  in ARCHITECTURE.md §5.4), a dev seed of fictional facility coordinates
+  in ARCHITECTURE.md §5.5), a dev seed of fictional facility coordinates
   (`npx prisma db seed`), and two new integration test files
   (`fulfillment.test.mts`, `facility-distance.test.mts`). Payment-release rule
   decided and documented in ARCHITECTURE.md §5.3: no release until the whole
@@ -993,3 +1019,98 @@ and issue links.
 - 2026-11-19 — The Prisma schema is now a folder, `backend/prisma/schema/`, with one `.prisma`
   file per module (see its README) instead of one `schema.prisma` that every
   feature PR edited. Models and enums moved unchanged.
+- 2026-11-20 — Phase 9: ESLint now runs in CI ([issue #28](https://github.com/DocForum/docforum-core/issues/28)).
+  `backend/tools/lint` holds an isolated ESLint 9 + type-aware
+  `typescript-eslint` toolchain pinned to the TypeScript 6 compatibility API
+  (`@typescript/typescript6`), because `typescript-eslint` cannot load
+  TypeScript 7 — which has no compiler API — while the app stays on `tsc` 7.
+  `npm run lint` and a CI lint step after `typecheck` use it; the baseline turns
+  `no-floating-promises` on as an error and leaves `no-explicit-any`,
+  `no-console` and `no-unused-expressions` off (reasons in the config header).
+  Adopting it surfaced real defects, now fixed: a literal-backspace regex in
+  `patients/services` that never matched SQLSTATE 23001, `@ts-ignore` in
+  `payments/validation.ts` that could hide an unrelated error, an undefined
+  `iteration`/`__VU_ITER` in the k6 load scripts, and `kf6/*` imports in those
+  scripts (they were loading nothing). No runtime or schema change.
+- 2026-11-20 — Phase 5.5: escrow contract pinning tested ahead of the SDK 0.3.0 upgrade
+  ([issue #32](https://github.com/DocForum/docforum-core/issues/32)).
+  **The upgrade itself is blocked**: `docforum-escrow` has never published
+  `sdk-v0.3.0` (the only releases are `sdk-v0.1.0` and `sdk-v0.2.0`), and this
+  issue depends on that release. Nothing here fabricates the bump. What is
+  done: release and refund already build the `EscrowClient` from the contract id
+  recorded on the intent (`requireRecordedContractId`), so intents funded before
+  a contract rotation still settle against their own contract; a new integration
+  case in `tests/integration/payments-assets.test.mts` funds an intent, points
+  it at `ESCROW_LEGACY_CONTRACT_IDS`, and asserts both release and refund use
+  that legacy id rather than the active one. The roadmap item stays unchecked
+  until `sdk-v0.3.0` exists.
+- 2026-11-20 — Phase 8: TOTP two-factor authentication
+  ([issue #36](https://github.com/DocForum/docforum-core/issues/36)).
+  Dependency-free RFC 6238 implementation (`node:crypto`) with enrolment,
+  two-step login, single-use recovery codes and `TOTP_REQUIRE_FOR_ADMIN`
+  enforced admin enrolment. `User` gains `totpSecret` (encrypted with the
+  existing field-encryption key), `totpEnabledAt` and `totpLastUsedStep`, plus a
+  `TwoFactorRecoveryCode` table (SHA-256 hashes, single-use). Replay is blocked
+  by claiming the accepted time step with one conditional `updateMany`, not by
+  client state. Half-authenticated `mfa_pending`/`mfa_enrollment` tokens carry a
+  `typ` claim and are rejected by `verifyAccessToken`, so they cannot be used as
+  access tokens. New routes: `POST /auth/2fa/{setup,enable,verify,disable}` and
+  `GET /auth/2fa/status`; `POST /auth/login` now returns `mfaRequired` +
+  `mfaToken` (or `enrollmentRequired` + `enrollmentToken`) for such accounts.
+  Settings: `TOTP_ISSUER`, `TOTP_REQUIRE_FOR_ADMIN`,
+  `TOTP_MFA_TOKEN_TTL_MINUTES`. Tests: RFC vectors in
+  `tests/unit/totp.test.ts`, full flow in
+  `tests/integration/two-factor.test.mts`.
+- 2026-11-20 — Phase 4: medication catalog
+  ([issue #69](https://github.com/DocForum/docforum-core/issues/69)).
+  New `medications` module with `GET /medications?q=` autocomplete (trigram
+  index, 30k-row p95 asserted under 500 ms) and a `Medication` model imported by
+  `backend/scripts/import-medications.mjs` from openFDA NDC — public-domain
+  source, licence checked before import; RxNorm is deliberately not used because
+  its CUIs are not openly licensed. `PrescriptionItem` gains `medicationId` and
+  `flaggedForPharmacistReview`: prescribing from the catalog snapshots
+  "generic name + strength + form" into the unchanged `drugName` display field,
+  while an unlisted medicine keeps the prescriber's free text and is flagged for
+  pharmacist review. An unknown `medicationId` is a `400` before any row is
+  written, and catalog edits never rewrite an issued prescription. The catalog
+  is a picker, not an interaction checker (PRD §8.2.8 stays deferred). Migration
+  `20261120111332_medication_catalog` creates `pg_trgm` and the GIN index; tests
+  in `backend/tests/integration/medications.test.mts`.
+- 2026-11-20 — Phase 5.5: automatic escrow settlement — release on confirmed fulfillment
+  (issue #83) and refund on rejection or expiry (issue #84). The order
+  transition writes `order.fulfilled` / `order.rejected` / `order.expired` in
+  its own transaction; the existing transactional-outbox worker (issue #94,
+  verified still in place) claims it with `FOR UPDATE SKIP LOCKED`, retries with
+  bounded backoff, and its lease recovers a killed worker without losing or
+  duplicating the task. Release requires a whole order to derive `fulfilled`
+  (partial fulfillment never releases); rejection refunds only when nothing was
+  dispensed and no record is still open; lab-order expiry refunds inside the
+  expiry update. Intent updates are conditional, so release and a timeout refund
+  cannot both commit locally, and an on-chain `NotFunded` is a terminal `failed`
+  reconcile with an audit row rather than a retry loop. Refund completion
+  notifies the patient in-app. The admin `release`/`refund` endpoints stay as
+  audited manual overrides.
+  Phase 4: abnormal lab result escalation and doctor acknowledgement
+  (issue #72, PRD §8.2.7). `LabResult.abnormality` is set by the facility at
+  attach time; abnormal/critical results open one acknowledgement task for the
+  ordering doctor (same transaction), notify them, and escalate to the admin
+  queue after `LAB_RESULT_ESCALATION_HOURS` (default 24). New endpoints
+  `POST /lab-results/:id/acknowledge` and `GET /lab-results/unacknowledged`;
+  acknowledgement and escalation are one-shot conditional writes with audit
+  events, and `overdue` is derived from the deadline so a missed job tick is
+  visible. Migration adds the enum, the `LabResult` column and the
+  `LabResultAcknowledgement` table. Critical results are **not** withheld from
+  the patient.
+- 2026-11-20 — CI: fork PRs' workflow runs are now approved automatically once they pass
+  security review (`PR CI auto-approval`, the same workflow docforum-web uses
+  since #350). The workflow runs after `PR malware scan` succeeds. It re-runs
+  the scanner, then checks the diff and every commit in the PR's history for
+  workflow, editor-config, font, payload-loader, npm-script, lockfile
+  (npm/crates.io) and Go `replace` changes, and requires every commit to come
+  from the PR author, a known AI coding tool account or a GitHub update merge. A
+  PR that fails any check is labelled `ci-needs-manual-approval` and waits for a
+  maintainer, as before.
+- 2026-11-20 — Tests: `medications` and `two-factor` integration tests move to their own
+  embedded-Postgres ports (5472, 5473). They had reused 5470 and 5471, already
+  taken by `automatic-settlement` and `lab-result-escalation`, so whichever test
+  started second could time out in `beforeAll`.

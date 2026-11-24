@@ -1,6 +1,6 @@
 /**
  * Object storage client wrapper for lab result files (Phase 5, issue #16).
- * Provider decision: docs/adr/0014-lab-result-object-storage.md — a private
+ * Provider decision: docs/adr/0018-lab-result-object-storage.md — a private
  * AWS S3 bucket (any S3-compatible endpoint works through the same client),
  * server-side encrypted, never public. Business code only sees the
  * `ObjectStorage` interface below; nothing outside this file imports the SDK.

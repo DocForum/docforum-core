@@ -3,6 +3,7 @@ import { prisma, runWithRlsContext } from '../../../db/prisma-client';
 import type { PatientProfile } from '@prisma/client';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
+import { versionConflict } from '../../../middleware/optimistic-concurrency';
 import * as patientsRepo from '../repositories';
 import { ChunkWriter, EXPORT_SCHEMA_VERSION, ExportSectionError, writeExportBundle } from './export-bundle';
 import { listExportSections, type PatientExportSection } from './export-registry';
@@ -32,6 +33,20 @@ export async function getMyPatientProfile(userId: string) {
   // deleted.
   if (!profile || profile.anonymizedAt) throw new HttpError(404, 'No patient profile for this account.');
   return profile;
+}
+
+export async function updateMyPatientProfile(
+  userId: string,
+  version: number,
+  input: { fullName?: string; dateOfBirth?: Date },
+) {
+  const current = await getMyPatientProfile(userId);
+  if (input.dateOfBirth && input.dateOfBirth.getTime() > Date.now()) {
+    throw new HttpError(400, 'dateOfBirth cannot be in the future.');
+  }
+  const updated = await patientsRepo.updatePatientProfile(current.id, version, input);
+  if (!updated) throw versionConflict();
+  return updated;
 }
 
 /** This module's own export section: the profile itself. A single item. */
@@ -301,6 +316,31 @@ export async function getPatientProfileById(id: string) {
   return profile;
 }
 
+/** Non-throwing userId lookup by patientProfileId — for cross-module calls. */
+export function getPatientUserIdByProfileId(patientProfileId: string): Promise<string | null> {
+  return patientsRepo.findPatientProfileOwner(patientProfileId).then((row) => row?.userId ?? null);
+}
+
+/** Non-throwing patient profile lookup by userId — for cross-module calls. */
+export function findPatientProfileByUserId(userId: string) {
+  return patientsRepo.findPatientProfileByUserId(userId);
+}
+
+/** Batch id -> { id, fullName } lookup for other modules. Anonymised profiles return 'Deleted patient'. */
+export async function getPatientSummariesByIds(ids: string[]): Promise<Map<string, { id: string; fullName: string }>> {
+  if (ids.length === 0) return new Map();
+  const rows = await patientsRepo.findPatientSummariesByIds([...new Set(ids)]);
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        id: row.id,
+        fullName: row.anonymizedAt ? 'Deleted patient' : row.fullName,
+      },
+    ]),
+  );
+}
+
 // --- Account deletion (Phase 8, issue #41, docs/adr/0010) ----------------
 
 /**
@@ -371,7 +411,7 @@ export function listRetentionHolds(): RetentionHold[] {
 export function isForeignKeyRefusal(err: unknown): boolean {
   if (err instanceof Prisma.PrismaClientKnownRequestError) return err.code === 'P2003';
   if (err instanceof Prisma.PrismaClientUnknownRequestError) {
-    return /23001|violates RESTRICT setting of foreign key constraint/.test(err.message);
+    return /\b23001\b|violates RESTRICT setting of foreign key constraint/.test(err.message);
   }
   return false;
 }

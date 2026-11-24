@@ -1,8 +1,16 @@
 import type { Request, Response } from 'express';
 import * as ordersService from '../services';
 import * as labResultsService from '../services/lab-results';
-import { consultationSchema, labOrderSchema, prescriptionSchema } from '../validation';
+import * as labResultAcknowledgementsService from '../services/lab-result-acknowledgements';
+import {
+  attachLabResultQuerySchema,
+  consultationSchema,
+  labOrderSchema,
+  prescriptionSchema,
+  unacknowledgedResultsQuerySchema,
+} from '../validation';
 import { getParam } from '../../../request-params';
+import { HttpError } from '../../../http-error';
 import { auditActor } from '../../../middleware/request-id';
 
 function serialize(value: unknown) {
@@ -44,10 +52,32 @@ export async function disputeOrder(req: Request, res: Response) {
 }
 
 export async function attachLabResult(req: Request, res: Response) {
-  const result = await labResultsService.attachLabResult(auditActor(req), getParam(req, 'labOrderId'), {
-    body: req.body, contentType: req.headers['content-type'],
-  });
+  const { abnormality } = attachLabResultQuerySchema.parse(req.query);
+  const result = await labResultsService.attachLabResult(
+    auditActor(req),
+    getParam(req, 'labOrderId'),
+    { body: req.body, contentType: req.headers['content-type'] },
+    abnormality,
+  );
   res.status(201).json(result);
+}
+
+export async function acknowledgeLabResult(req: Request, res: Response) {
+  const acknowledgement = await labResultAcknowledgementsService.acknowledgeLabResult(
+    auditActor(req),
+    getParam(req, 'labResultId'),
+  );
+  res.status(200).json(serialize(acknowledgement));
+}
+
+export async function listUnacknowledgedLabResults(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const { limit } = unacknowledgedResultsQuerySchema.parse(req.query);
+  const items = await labResultAcknowledgementsService.listUnacknowledgedResults(
+    { ...auditActor(req), role: req.user.role },
+    { take: limit },
+  );
+  res.status(200).json({ items: serialize(items) });
 }
 
 export async function downloadLabResult(req: Request, res: Response) {

@@ -7,13 +7,18 @@ import { startPatientExportJobs } from './jobs/patient-exports';
 import { startEscrowEventPoller } from './jobs/escrow-events';
 import { validatePlatformSigners } from './modules/payments/services/platform-signers';
 import { startOutboxEventJobs } from './jobs/outbox-events';
+import { startLabResultEscalationJobs } from './jobs/lab-result-escalation';
 import { validateSep10Config, validateWalletLinkConfig, verifyPaymentsNetwork } from './modules/payments/services';
 import { startAccountPurgeJob } from './jobs/account-purge';
 import { startPaymentIntentJobs } from './jobs/payment-intents';
 import { startReferralExpiryJob } from './jobs/referral-expiry';
 import { startOrderExpiryJob } from './jobs/order-expiry';
+import { startFollowUpExpiryJob } from './jobs/follow-up-expiry';
+import { startConsultationSignOffJob } from './jobs/consultation-sign-off';
+import { startAuthTokenPruneJob } from './jobs/auth-token-prune';
 import { expireUnfulfilledOrders } from './jobs/lab-order-expiry';
 import { prisma } from './db/prisma-client';
+import { startNotificationFanout } from './modules/notifications/services';
 
 const app = createApp();
 
@@ -34,6 +39,16 @@ const stopPaymentIntentJobs = startPaymentIntentJobs();
 const stopReferralExpiry = startReferralExpiryJob();
 // Unconfirmed order expiry job (auto-confirm when window elapses with no dispute).
 const stopOrderExpiry = startOrderExpiryJob();
+// Follow-up requests unbooked past their window (Phase 2, issue #63).
+const stopFollowUpExpiry = startFollowUpExpiryJob();
+// Notes unsigned after the grace period (Phase 2, issue #64).
+const stopConsultationSignOff = startConsultationSignOffJob();
+// Expired/consumed auth tokens, revoked sessions and stale SEP-10
+// challenges, in bounded batches (Phase 8, issue #276).
+const stopAuthTokenPrune = startAuthTokenPruneJob();
+// Cross-instance real-time notification fan-out (Phase 6, issue #330): a
+// dedicated Postgres LISTEN connection, reconnected on loss.
+const stopNotificationFanout = startNotificationFanout();
 
 async function startServer() {
   await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork(), validateSep10Config()]);
@@ -64,6 +79,10 @@ async function shutdown(signal: string) {
   stopPaymentIntentJobs();
   stopReferralExpiry();
   stopOrderExpiry();
+  stopFollowUpExpiry();
+  stopConsultationSignOff();
+  stopAuthTokenPrune();
+  await stopNotificationFanout();
   if (server) {
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => server?.closeAllConnections(), 10_000);
@@ -134,6 +153,9 @@ pruneTimer.unref();
 startPatientExportJobs();
 startEscrowEventPoller();
 startOutboxEventJobs();
+// Abnormal lab result escalation (Phase 4, issue #72): an unacknowledged
+// abnormal/critical result moves to the admin queue once its deadline passes.
+startLabResultEscalationJobs();
 // Deleted-account tombstone purge (Phase 8, issue #41, docs/adr/0010).
 startAccountPurgeJob();
 // Prepared-transaction expiry (Phase 5.5, issue #80): an unsigned

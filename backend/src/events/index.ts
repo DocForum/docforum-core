@@ -4,8 +4,25 @@ import { prisma } from '../db/prisma-client';
 
 const uuid = z.string().uuid();
 
+const orderPayload = z
+	.object({ orderType: z.enum(['prescription', 'lab_order']), orderId: uuid })
+	.strict();
+
 export const eventPayloadSchemas = {
 	'appointment.booked': z.object({ appointmentId: uuid, patientUserId: uuid }).strict(),
+	// Phase 2, issue #61 — the notification hook point for the async thread.
+	// `recipientUserId` is null for a dependent profile (no login, #42).
+	'consultation.message.created': z
+		.object({ consultationId: uuid, messageId: uuid, senderUserId: uuid, recipientUserId: uuid.nullable() })
+		.strict(),
+	// Issues #83/#84: the durable settlement trigger. `fulfilled` asks the
+	// payments worker to release the escrow; `rejected`/`expired` ask it to
+	// refund. Producers publish only when the order's own state machine says
+	// the transition is true (and, for a rejection, that nothing was
+	// dispensed), so the worker never has to read another module's tables.
+	'order.fulfilled': orderPayload,
+	'order.rejected': orderPayload,
+	'order.expired': orderPayload,
 } as const;
 
 export type DomainEventType = keyof typeof eventPayloadSchemas;

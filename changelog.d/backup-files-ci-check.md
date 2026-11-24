@@ -1,0 +1,1 @@
+CI now fails when an editor backup or merge artefact (`*.bak`, `*.orig`, `*.rej`) is tracked: `node scripts/check-no-backup-files.mjs`, ported from docforum-web #354. It reports the files and how to remove them. This is an ordinary CI check, not a malware-scan finding: a leftover `.orig` from resolving a conflict is a mistake to fix, not a reason to block CI approval.

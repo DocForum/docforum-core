@@ -16,6 +16,8 @@
     "test:integration:payments-testnet": "DATABASE_URL_TEST=postgresql://docforum:docforum@localhost:5435/docforum_payments_test vitest run tests/testnet-integration",
     "test:all": "vitest run",
     "db:seed": "tsx prisma/seed.ts",
+    "reconcile:escrows": "tsx scripts/reconcile-escrows.ts",
+    "new:module": "node scripts/new-module.mjs",
     "test:properties": "vitest run tests/unit/availability-slots.property.test.ts tests/unit/state-machines.property.test.ts",
     "audit:prod": "node scripts/audit-gate.mjs",
     "i18n:check": "node scripts/check-i18n-catalogues.mjs",
@@ -23,6 +25,7 @@
     "openapi:generate": "node scripts/gen-openapi.mjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "lint": "node tools/lint/node_modules/eslint/bin/eslint.js --config tools/lint/eslint.config.mjs .",
     "test:mutation": "stryker run"
   },
   "dependencies": {
@@ -45,6 +48,11 @@
     "zod": "^4.6.7",
     "@opentelemetry/api": "^1.10.0",
     "@opentelemetry/sdk-node": "^0.300.0"
+  },
+  "overrides": {
+    "@prisma/config": {
+      "effect": "^3.22.1"
+    }
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

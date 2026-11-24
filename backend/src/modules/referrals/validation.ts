@@ -28,6 +28,10 @@ export const acceptReferralSchema = z.object({
   availabilitySlotId: z.string().min(1),
 });
 
+export const referralDetailQuerySchema = z.object({
+  patientProfileId: z.string().min(1).optional(),
+});
+
 // The reason travels into the audit trail as a metadata value, and the
 // audit module caps metadata strings at 200 characters (ARCHITECTURE.md
 // §4.10). Bound it here so an over-long reason is a 400, not a failed
@@ -41,8 +45,18 @@ export const adminCancelSchema = z.object({
   reason: z.string().trim().min(1).max(200),
 });
 
+const referralStatusSchema = z.enum(['pending', 'accepted', 'declined', 'completed', 'expired', 'cancelled']);
+
+export const incomingReferralsQuerySchema = z
+  .object({
+    status: referralStatusSchema.optional(),
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+    cursor: z.string().min(1).max(512).optional(),
+  })
+  .strict();
+
 export const adminQueueQuerySchema = z.object({
-  status: z.enum(['pending', 'accepted', 'declined', 'completed', 'expired', 'cancelled']).optional(),
+  status: referralStatusSchema.optional(),
   olderThan: z.string().regex(/^\d+[hd]$/).optional(),
   loopFlagged: z
     .enum(['true', 'false'])

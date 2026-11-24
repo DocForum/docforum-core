@@ -6,7 +6,11 @@
 // a refresh only succeeds while its session row is present and unrevoked —
 // which is exactly when revocation has to bite, because that's the
 // operation that mints new tokens.
+import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
+import { prisma } from '../../../db/prisma-client';
+import * as auditService from '../../audit/services';
+import type { AuditActor } from '../../audit/services';
 import {
   createRefreshSession,
   findRefreshSessionById,
@@ -32,8 +36,11 @@ export interface SessionSummary {
   current: boolean;
 }
 
+/** Starts a session, evicting the user's least-recently-used sessions if
+ * this login would exceed `MAX_ACTIVE_SESSIONS_PER_USER` (issue #278). The
+ * eviction is part of the same transaction as the insert. */
 export function startSession(input: { userId: string } & SessionContext): Promise<{ id: string }> {
-  return createRefreshSession(input);
+  return createRefreshSession({ ...input, maxActiveSessions: config.sessions.maxActivePerUser });
 }
 
 /**
@@ -95,8 +102,24 @@ export async function revokeOtherSessions(input: {
   return result.count;
 }
 
-/** Admin escape hatch: revoke every session for a user (issue #38). */
-export async function revokeAllUserSessions(userId: string): Promise<number> {
-  const result = await revokeRefreshSessionsForUser({ userId });
-  return result.count;
+/** Admin escape hatch: revoke every session for a user (issue #38).
+ * Writes an AuditEvent in the transaction if any sessions were revoked. */
+export async function revokeAllUserSessions(userId: string, actor?: AuditActor): Promise<number> {
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.refreshSession.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    if (result.count > 0 && actor) {
+      await auditService.record(tx, actor, {
+        entityType: 'User',
+        entityId: userId,
+        action: 'user.sessions_revoked',
+        fromState: null,
+        toState: null,
+        metadata: { clearedCount: result.count },
+      });
+    }
+    return result.count;
+  });
 }

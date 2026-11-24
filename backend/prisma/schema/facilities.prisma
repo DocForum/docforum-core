@@ -1,4 +1,5 @@
-// Facilities, capabilities and prices (backend/src/modules/facilities).
+// Facilities, capabilities, prices and the medication catalog
+// (backend/src/modules/facilities, medications).
 
 enum FacilityType {
   lab
@@ -47,8 +48,50 @@ model FacilityProfile {
   // of the distance query (issue #74). Chosen over PostGIS: no extension
   // dependency on every deployment (incl. the Render free-tier preview),
   // and a bounding box + haversine is exact for the ORDER BY once the box
-  // is a superset of the radius. See ARCHITECTURE.md §5.4.
+  // is a superset of the radius. See ARCHITECTURE.md §5.5.
   @@index([latitude, longitude])
+}
+
+/// Controlled medication vocabulary (issue #69, PRD FR-10). Prescription
+/// items point at a row here instead of relying on free text alone, so a
+/// pharmacy reads one unambiguous drug/strength/form/route, and the catalog
+/// can later be matched against `FacilityCapability` (issue #320).
+///
+/// An issued `PrescriptionItem` stores its own display snapshot, so editing
+/// or re-importing a catalog row never rewrites an already-issued order.
+/// Rows are therefore RESTRICT-referenced by prescription items: a medication
+/// that has been prescribed can't be deleted out from under the history.
+///
+/// `genericName` is trigram-indexed (see the migration — Prisma can't express
+/// a `gin_trgm_ops` index); search is measured in
+/// `backend/tests/integration/medications.test.mts`.
+model Medication {
+  id           String   @id @default(uuid())
+  /// Generic (non-proprietary) name, e.g. "Amoxicillin".
+  genericName  String
+  /// Free-text strength as dispensed, e.g. "500 mg".
+  strength     String
+  /// Dosage form, e.g. "capsule", "tablet", "oral solution".
+  form         String
+  /// Route of administration, e.g. "oral", "topical", "intravenous".
+  route        String
+  /// Optional external identifier: RxNorm CUIs are not openly licensed, so
+  /// the importer records whatever open code its source dataset provides
+  /// (for the bundled openFDA NDC import that is the NDC product code).
+  externalCode String?  @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  prescriptionItems PrescriptionItem[]
+
+  // A drug's identity for prescriptions is generic name + strength + form +
+  // route; that tuple is what the importer upserts on.
+  @@unique([genericName, strength, form, route])
+  // The trigram index behind `GET /medications?q=` (issue #69). Declared here
+  // rather than only in raw migration SQL so `scripts/check-migration-drift.mjs`
+  // does not see a phantom index; the `pg_trgm` extension it needs is created
+  // in the `medication_catalog` migration (Prisma has no extension syntax).
+  @@index([genericName(ops: raw("gin_trgm_ops"))], type: Gin, map: "Medication_genericName_trgm_idx")
 }
 
 model FacilityCapability {
@@ -85,6 +128,9 @@ model FacilityPrice {
   asset           String
   amount          BigInt
   effectiveFrom   DateTime
+  // When true this version marks the item as retired from effectiveFrom
+  // onward. Append-only: a new retired row supersedes the last live price.
+  retired         Boolean         @default(false)
   createdAt       DateTime        @default(now())
 
   // Two versions of the same item/asset cannot share an effective instant.

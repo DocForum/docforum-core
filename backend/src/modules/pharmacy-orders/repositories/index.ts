@@ -6,16 +6,8 @@ import type { FulfillmentStatus, OrderType, Prisma } from '@prisma/client';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
-/** Reads FacilityProfile directly — a Phase 1 core identity model, not
- * something the (still-placeholder) facilities module exclusively owns.
- * (Same precedent as payments/repositories.) */
-export function findFacilityProfileByUserId(userId: string) {
-  return prisma.facilityProfile.findUnique({ where: { userId } });
-}
-
-export function findFacilityProfileById(id: string) {
-  return prisma.facilityProfile.findUnique({ where: { id } });
-}
+// findFacilityProfileByUserId and findFacilityProfileById removed in
+// issue #318 — pharmacy-orders now calls facilitiesService directly.
 
 export function findFulfillmentRecordById(id: string) {
   return prisma.fulfillmentRecord.findUnique({
@@ -36,10 +28,30 @@ export function listDispensedOrderItemIds(orderType: string, orderItemIds: strin
     .then((rows) => rows.map((row) => row.orderItemId));
 }
 
-export function countDispensedOrderItems(orderType: string, orderItemIds: string[]) {
+export function countDispensedOrderItems(
+  orderType: string,
+  orderItemIds: string[],
+  db: DbClient = prisma,
+) {
   if (orderItemIds.length === 0) return Promise.resolve(0);
-  return prisma.fulfillmentItem.count({
+  return db.fulfillmentItem.count({
     where: { orderType, orderItemId: { in: orderItemIds }, status: 'dispensed' },
+  });
+}
+
+/** Fulfillment records for this order that can still change (issue #84).
+ * A rejection refunds only when this is 0 — otherwise another facility may
+ * still dispense, and the money must stay in escrow. */
+export function countOpenRecordsForOrder(
+  db: DbClient,
+  orderType: 'prescription' | 'lab_order',
+  orderId: string,
+) {
+  return db.fulfillmentRecord.count({
+    where: {
+      ...(orderType === 'prescription' ? { prescriptionId: orderId } : { labOrderId: orderId }),
+      status: { in: ['pending', 'in_progress'] },
+    },
   });
 }
 
@@ -164,6 +176,17 @@ export async function createFulfillmentProof(
       attachmentUrl: data.attachmentUrl,
       notes: data.notes,
     },
+  });
+}
+
+/** All fulfillment records for one order — patient list endpoint (issue #323). */
+export function listFulfillmentRecordsForOrder(orderType: 'prescription' | 'lab_order', orderId: string) {
+  const where =
+    orderType === 'prescription' ? { prescriptionId: orderId } : { labOrderId: orderId };
+  return prisma.fulfillmentRecord.findMany({
+    where,
+    include: { items: { orderBy: { createdAt: 'asc' } }, facility: { select: { id: true, name: true } } },
+    orderBy: { createdAt: 'asc' },
   });
 }
 

@@ -38,9 +38,22 @@ export type AuditEntityType =
   | 'FacilityPrice'
   // Issue #14: admin-only facility account creation (`facility.created`).
   | 'FacilityProfile'
+  // Issue #320: admin add/remove facility capabilities.
+  | 'FacilityCapability'
   | 'Order'
   | 'OrderDispute'
-  | 'FeatureFlag';
+  | 'FeatureFlag'
+  // Issue #277: an admin revoking a pending invite (`admin_invite.revoked`).
+  | 'AdminInvite'
+  | 'DoctorSpecialty'
+  | 'Specialty'
+  // Issue #60: admin edits to the curated symptom -> specialty vocabulary.
+  | 'Symptom'
+  | 'User'
+  | 'AdminInvite'
+  | 'LoginAttempt'
+  // Issue #328: facility payout-wallet changes (`wallet_link.linked|changed`).
+  | 'WalletLink';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;

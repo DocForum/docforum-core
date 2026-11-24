@@ -61,6 +61,8 @@ describe('payment assets (issue #79)', () => {
   let payoutWallet: string;
 
   const sdkCalls: Array<{ token: string; amount: bigint }> = [];
+  // The contract each EscrowClient was constructed with (issue #32).
+  const clientContractIds: string[] = [];
   const trustlineCalls: Array<{ account: string; code: string }> = [];
   let trustlineResult = true;
 
@@ -102,6 +104,10 @@ describe('payment assets (issue #79)', () => {
     process.env.PLATFORM_PAYER_SECRET = Keypair.random().secret();
     process.env.PLATFORM_RELEASER_SECRET = Keypair.random().secret();
     process.env.ESCROW_CONTRACT_ID = 'CTESTCONTRACT';
+    // Issue #32: intents funded under an earlier contract keep pointing at
+    // that contract after a rotation, so release/refund must use the id
+    // recorded on the intent, not whichever contract is currently active.
+    process.env.ESCROW_LEGACY_CONTRACT_IDS = 'CLEGACYCONTRACT';
     process.env.ESCROW_TOKEN_ID = NATIVE_SAC;
 
     const dbModule = await import('../../src/db/prisma-client.js');
@@ -111,10 +117,15 @@ describe('payment assets (issue #79)', () => {
     paymentsService.setEscrowSdkForTests({
       Keypair,
       EscrowClient: class {
+        constructor(options: { contractId: string }) {
+          clientContractIds.push(options.contractId);
+        }
         async createEscrow(params: { token: string; amount: bigint }) {
           sdkCalls.push({ token: params.token, amount: params.amount });
           return { escrowId: 7n, txHash: 'funded-hash' };
         }
+        async release() {}
+        async refund() {}
       },
     } as never);
     paymentsService.setTrustlineCheckerForTests(async (account, asset) => {
@@ -207,6 +218,31 @@ describe('payment assets (issue #79)', () => {
     expect(funded.status).toBe('escrowed');
     expect(trustlineCalls).toHaveLength(0);
     expect(sdkCalls).toEqual([{ token: NATIVE_SAC, amount: 500_000n }]);
+  });
+
+  it('releases and refunds against the contract recorded on the intent (issue #32)', async () => {
+    // Simulate an intent funded before the active contract rotated: the
+    // row still names the old (now legacy) contract.
+    const moveToLegacyContract = async (id: string) =>
+      prisma.paymentIntent.update({ where: { id }, data: { sorobanContractId: 'CLEGACYCONTRACT' } });
+
+    const toRelease = await createIntent({ kind: 'prescription', assetCode: 'XLM', amount: 2_000_000n });
+    await paymentsService.fundPaymentIntent(TEST_ACTOR, toRelease.id);
+    await moveToLegacyContract(toRelease.id);
+
+    clientContractIds.length = 0;
+    const released = await paymentsService.releasePaymentIntent(TEST_ACTOR, toRelease.id);
+    expect(released.status).toBe('released');
+    expect(clientContractIds).toEqual(['CLEGACYCONTRACT']);
+
+    const toRefund = await createIntent({ kind: 'prescription', assetCode: 'XLM', amount: 3_000_000n });
+    await paymentsService.fundPaymentIntent(TEST_ACTOR, toRefund.id);
+    await moveToLegacyContract(toRefund.id);
+
+    clientContractIds.length = 0;
+    const refunded = await paymentsService.refundPaymentIntent(TEST_ACTOR, toRefund.id);
+    expect(refunded.status).toBe('refunded');
+    expect(clientContractIds).toEqual(['CLEGACYCONTRACT']);
   });
 
   it('resolves the legacy null token contract to ESCROW_TOKEN_ID', async () => {

@@ -2,16 +2,26 @@ import { describe, expect, it } from 'vitest';
 import type { Express } from 'express';
 import * as moduleMounts from '../../src/mounts';
 import { adminAuthRouter, authRouter } from '../../src/modules/auth/routes';
-import { doctorsRouter, specialtiesRouter } from '../../src/modules/doctors/routes';
+import {
+  adminDoctorsRouter,
+  doctorsRouter,
+  specialtiesRouter,
+  symptomsRouter,
+} from '../../src/modules/doctors/routes';
 import { availabilityRouter } from '../../src/modules/availability/routes';
 import { appointmentsRouter } from '../../src/modules/appointments/routes';
-import { appointmentConsultationsRouter, consultationsRouter } from '../../src/modules/consultations/routes';
+import {
+  appointmentConsultationsRouter,
+  consultationsRouter,
+  followUpsRouter,
+} from '../../src/modules/consultations/routes';
 import { ordersRouter } from '../../src/modules/orders/routes';
 import { adminOrdersRouter } from '../../src/modules/orders/routes/admin';
+import { labResultsRouter } from '../../src/modules/orders/routes/lab-results';
 import { metricsRouter } from '../../src/modules/metrics/routes';
 import { pharmacyOrdersRouter } from '../../src/modules/pharmacy-orders/routes';
 import { labOrdersRouter } from '../../src/modules/lab-orders/routes';
-import { paymentsRouter } from '../../src/modules/payments/routes';
+import { paymentsAdminRouter, paymentsRouter } from '../../src/modules/payments/routes';
 import { escrowEventsRouter } from '../../src/modules/payments/routes/escrow-events';
 import { facilitiesRouter } from '../../src/modules/facilities/routes';
 import { patientsRouter } from '../../src/modules/patients/routes';
@@ -22,6 +32,7 @@ import { outboxAdminRouter } from '../../src/events/routes';
 import { notificationsRouter } from '../../src/modules/notifications/routes';
 import { adminFlagsRouter, meFlagsRouter } from '../../src/modules/flags/routes';
 import { intakeRouter } from '../../src/modules/intake/routes';
+import { medicationsRouter } from '../../src/modules/medications/routes';
 
 // Every (prefix, router) pair app.ts mounted before the module mounts
 // existed. A mount that goes missing, moves to another prefix or appears
@@ -29,13 +40,18 @@ import { intakeRouter } from '../../src/modules/intake/routes';
 const EXPECTED: Array<[string, unknown]> = [
   ['/auth', authRouter],
   ['/admin', adminAuthRouter],
+  ['/admin', adminDoctorsRouter],
   ['/doctors', doctorsRouter],
   ['/specialties', specialtiesRouter],
+  // Issue #60: public symptom vocabulary / autocomplete.
+  ['/symptoms', symptomsRouter],
   ['/availability', availabilityRouter],
   ['/appointments', appointmentsRouter],
   ['/appointments', appointmentConsultationsRouter],
   ['/intake', intakeRouter],
   ['/orders', ordersRouter],
+  ['/medications', medicationsRouter],
+  ['/lab-results', labResultsRouter],
   ['/pharmacy-orders', pharmacyOrdersRouter],
   ['/lab-orders', labOrdersRouter],
   ['/admin', adminOrdersRouter],
@@ -47,6 +63,7 @@ const EXPECTED: Array<[string, unknown]> = [
   ['/admin/outbox', outboxAdminRouter],
   ['/admin', auditRouter],
   ['/admin/payments', escrowEventsRouter],
+  ['/admin/payments', paymentsAdminRouter],
   ['/admin', adminAuditRouter],
   ['/patients', patientAuditRouter],
   ['/referrals', referralsRouter],
@@ -54,6 +71,7 @@ const EXPECTED: Array<[string, unknown]> = [
   ['/me', meFlagsRouter],
   ['/admin', adminFlagsRouter],
   ['/consultations', consultationsRouter],
+  ['/follow-ups', followUpsRouter],
 ];
 
 describe('module mounts (src/mounts.ts)', () => {

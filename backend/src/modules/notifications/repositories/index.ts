@@ -113,3 +113,11 @@ export function markAllNotificationsRead(userId: string) {
 		data: { readAt: new Date() },
 	});
 }
+
+/** Issue #330: publish one cross-instance fan-out message. pg_notify takes
+ * the channel as a parameter, so neither value is ever spliced into SQL.
+ * Runs on the shared pool (it is a one-shot statement); only LISTEN needs
+ * a dedicated connection. */
+export async function pgNotify(channel: string, payload: string): Promise<void> {
+	await prisma.$executeRaw`SELECT pg_notify(${channel}, ${payload})`;
+}

@@ -18,12 +18,15 @@ import { Prisma } from '@prisma/client';
 import type { FulfillmentItem, FulfillmentStatus, Role } from '@prisma/client';
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
+import { publish } from '../../../events';
 import { storageService, type UploadAttachmentOptions } from '../../../utils/storage';
 import { computeConfirmedSignal, formatOrderResponse } from '../../../utils/order-utils';
 import { record as recordAudit, type AuditActor } from '../../audit/services';
 import * as repo from '../repositories';
 import * as prescriptionsService from '../../prescriptions/services';
 import * as labOrdersService from '../../lab-orders/services';
+import * as facilitiesService from '../../facilities/services';
+import * as patientsService from '../../patients/services';
 
 export type OrderType = 'prescription' | 'lab_order';
 export type DerivedOrderStatus = 'issued' | 'partially_fulfilled' | 'fulfilled';
@@ -51,7 +54,7 @@ async function getOrderItems(orderType: OrderType, orderId: string): Promise<Ord
 /** The caller's own FacilityProfile id, or null for non-facility roles. */
 async function getOwnFacilityId(requester: Requester): Promise<string | null> {
   if (requester.role !== 'facility') return null;
-  const profile = await repo.findFacilityProfileByUserId(requester.userId);
+  const profile = await facilitiesService.findFacilityProfileByUserId(requester.userId);
   return profile?.id ?? null;
 }
 
@@ -122,7 +125,7 @@ export async function createFulfillment(
   if (requester.role !== 'patient' && requester.role !== 'admin') {
     throw new HttpError(403, 'You do not have permission to perform this action.');
   }
-  const facility = await repo.findFacilityProfileById(input.facilityId);
+  const facility = await facilitiesService.findFacilityProfileById(input.facilityId);
   if (!facility) throw new HttpError(404, 'Facility not found.');
 
   const orderItems = await getOrderItems(input.orderType, input.orderId);
@@ -191,6 +194,15 @@ export async function updateFulfillmentItem(
     throw new HttpError(400, 'quantityDispensed exceeds the quantity the order asked for.');
   }
 
+  // Typed order FKs (docs/adr/0012): exactly one of prescriptionId /
+  // labOrderId is set, which is the record's order reference.
+  const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
+  const orderId = record.prescriptionId ?? record.labOrderId;
+  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
+  // Only a terminal "nothing dispensed here" outcome can trigger the
+  // automatic refund (issue #84); read the item universe before the write.
+  const orderItems = input.status === 'unfulfilled' ? await getOrderItems(orderType, orderId) : [];
+
   const claimed = await prisma
     .$transaction(async (tx) => {
       try {
@@ -215,7 +227,26 @@ export async function updateFulfillmentItem(
         throw error;
       }
       const items = await repo.listRecordItems(tx, recordId);
-      await repo.updateRecordStatus(tx, recordId, deriveRecordStatus(items));
+      const nextStatus = deriveRecordStatus(items);
+      await repo.updateRecordStatus(tx, recordId, nextStatus);
+      // Last item of every record ended unfulfilled, and nothing was
+      // dispensed for the order anywhere: the order can never be fulfilled,
+      // so publish the refund trigger in this same transaction. Another
+      // facility's still-open record keeps the escrow alive (split routing).
+      if (input.status === 'unfulfilled' && nextStatus === 'rejected') {
+        const openRecords = await repo.countOpenRecordsForOrder(tx, orderType, orderId);
+        const dispensed =
+          openRecords === 0
+            ? await repo.countDispensedOrderItems(
+                orderType,
+                orderItems.map((candidate) => candidate.id),
+                tx,
+              )
+            : 1;
+        if (openRecords === 0 && dispensed === 0) {
+          await publish(tx, 'order.rejected', { orderType, orderId });
+        }
+      }
       return true;
     })
     .catch((error) => {
@@ -228,11 +259,6 @@ export async function updateFulfillmentItem(
 
   if (!claimed) throw new HttpError(409, 'This item was already updated by the facility.');
 
-  // Typed order FKs (docs/adr/0012): exactly one of prescriptionId /
-  // labOrderId is set, which is the record's order reference.
-  const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
-  const orderId = record.prescriptionId ?? record.labOrderId;
-  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
   const orderStatus = await applyOrderStatus(orderType, orderId);
   return {
     record: await repo.findFulfillmentRecordById(recordId),
@@ -255,6 +281,15 @@ export async function updateFulfillmentRecord(
   if (input.status === 'rejected' && record.items.some((item) => item.status === 'dispensed')) {
     throw new HttpError(409, 'Items were already dispensed under this record — it can only be marked partially fulfilled.');
   }
+  // Typed order FKs (docs/adr/0012): exactly one of the two is set.
+  const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
+  const orderId = record.prescriptionId ?? record.labOrderId;
+  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
+  // Read before the transaction: the item universe is used only to ask "was
+  // anything dispensed for this order?", which decides whether a rejection
+  // may trigger an automatic refund (issue #84).
+  const orderItems = input.status === 'rejected' ? await getOrderItems(orderType, orderId) : [];
+
   const updated = await prisma.$transaction(async (tx) => {
     const claimed = await tx.fulfillmentRecord
       .updateMany({
@@ -263,17 +298,94 @@ export async function updateFulfillmentRecord(
       })
       .then((result) => result.count === 1);
     if (!claimed) return null;
+    if (input.status === 'rejected') {
+      // Only publish when this rejection means the order cannot be fulfilled
+      // by any remaining record and nothing was dispensed anywhere: another
+      // facility's still-open record (split routing) keeps the escrow alive.
+      const openRecords = await repo.countOpenRecordsForOrder(tx, orderType, orderId);
+      const dispensed =
+        openRecords === 0
+          ? await repo.countDispensedOrderItems(
+              orderType,
+              orderItems.map((item) => item.id),
+              tx,
+            )
+          : 1;
+      if (openRecords === 0 && dispensed === 0) {
+        await publish(tx, 'order.rejected', { orderType, orderId });
+      }
+    }
     return repo.findFulfillmentRecordById(recordId);
   });
   if (!updated) throw new HttpError(409, 'This fulfillment record has already reached a terminal state.');
   return updated;
 }
 
-/** Read a record with its item rows. Owner facility or admin only — a
- * patient's access to their own order's fulfillment is blocked on Phase 4
- * linking PatientProfile to orders (documented gap, ARCHITECTURE.md §6.2). */
+/**
+ * Resolve the patientProfileId that owns a fulfillment record's underlying
+ * order — through the prescriptions or lab-orders service (hard rule 4).
+ */
+async function getOrderPatientProfileId(
+  orderType: OrderType,
+  orderId: string,
+): Promise<string | null> {
+  if (orderType === 'prescription') {
+    const prescription = await prescriptionsService.getPrescription(orderId).catch(() => null);
+    return prescription?.patientProfileId ?? null;
+  }
+  const labOrder = await labOrdersService.getLabOrder(orderId).catch(() => null);
+  return labOrder?.patientProfileId ?? null;
+}
+
+/**
+ * Read a record with its item rows. Owner facility, admin, or the order's
+ * patient (and their active guardian) may read (issue #323).
+ */
 export async function getFulfillment(recordId: string, requester: Requester) {
-  return requireOwnedRecord(recordId, requester);
+  if (requester.role === 'facility' || requester.role === 'admin') {
+    return requireOwnedRecord(recordId, requester);
+  }
+  if (requester.role !== 'patient') {
+    throw new HttpError(403, 'You do not have permission to view this fulfillment record.');
+  }
+  const record = await repo.findFulfillmentRecordById(recordId);
+  if (!record) throw new HttpError(404, 'Fulfillment record not found.');
+  const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
+  const orderId = record.prescriptionId ?? record.labOrderId;
+  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
+  const orderPatientProfileId = await getOrderPatientProfileId(orderType, orderId);
+  if (!orderPatientProfileId) throw new HttpError(404, 'Fulfillment record not found.');
+  // resolveActingProfile returns the profile the caller may act for (own or
+  // an active dependent), or throws 403/404 — same ownership check used by
+  // booking, appointments, etc.
+  const actingProfile = await patientsService.resolveActingProfile(requester.userId, orderPatientProfileId).catch(() => null);
+  if (!actingProfile || actingProfile.id !== orderPatientProfileId) {
+    throw new HttpError(404, 'Fulfillment record not found.');
+  }
+  return record;
+}
+
+/**
+ * List all fulfillment records for one order. The caller must be the order's
+ * patient (or their active guardian), or admin (issue #323).
+ */
+export async function listFulfillmentRecordsForOrder(
+  orderType: OrderType,
+  orderId: string,
+  requester: Requester,
+) {
+  if (requester.role !== 'patient' && requester.role !== 'admin') {
+    throw new HttpError(403, 'You do not have permission to view fulfillment records.');
+  }
+  if (requester.role === 'patient') {
+    const orderPatientProfileId = await getOrderPatientProfileId(orderType, orderId);
+    if (!orderPatientProfileId) throw new HttpError(404, 'Order not found.');
+    const actingProfile = await patientsService.resolveActingProfile(requester.userId, orderPatientProfileId).catch(() => null);
+    if (!actingProfile || actingProfile.id !== orderPatientProfileId) {
+      throw new HttpError(404, 'Order not found.');
+    }
+  }
+  return repo.listFulfillmentRecordsForOrder(orderType, orderId);
 }
 
 /** Derived order-level fulfillment state WITHOUT writing it back (read
@@ -312,12 +424,7 @@ export async function createPharmacyOrder(data: {
     throw new HttpError(400, 'Patient profile ID is required.');
   }
 
-  const patient = await prisma.patientProfile.findUnique({
-    where: { id: data.patientProfileId },
-  });
-  if (!patient) {
-    throw new HttpError(404, 'Patient profile not found.');
-  }
+  await patientsService.getPatientProfileById(data.patientProfileId);
 
   const order = await prisma.$transaction(async (tx) => {
     return repo.createOrder(tx, {
@@ -350,9 +457,7 @@ export async function fulfillPharmacyOrder(
     throw new HttpError(400, 'Reference number is required for fulfillment proof.');
   }
 
-  const facilityProfile = await prisma.facilityProfile.findUnique({
-    where: { userId: facilityUserId },
-  });
+  const facilityProfile = await facilitiesService.findFacilityProfileByUserId(facilityUserId);
   if (!facilityProfile) {
     throw new HttpError(403, 'Facility profile required.');
   }

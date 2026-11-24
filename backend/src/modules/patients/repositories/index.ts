@@ -7,6 +7,23 @@ export function findPatientProfileByUserId(userId: string) {
   return prisma.patientProfile.findUnique({ where: { userId } });
 }
 
+export function updatePatientProfile(
+  id: string,
+  version: number,
+  data: { fullName?: string; dateOfBirth?: Date },
+) {
+  return prisma.patientProfile
+    .updateManyAndReturn({
+      where: { id, version, anonymizedAt: null },
+      data: {
+        ...(data.fullName !== undefined ? { fullName: data.fullName } : {}),
+        ...(data.dateOfBirth !== undefined ? { dateOfBirth: data.dateOfBirth } : {}),
+        version: { increment: 1 },
+      },
+    })
+    .then((rows) => rows[0] ?? null);
+}
+
 // --- Patient data export (Phase 8, issue #40) ----------------------------
 // PatientExport / PatientExportChunk are owned by this module. Every
 // status change below is a conditional UPDATE (`updateMany` with the
@@ -192,6 +209,13 @@ export function deleteUnservableExportChunks(): Promise<number> {
 
 export function findPatientProfileById(id: string) {
   return prisma.patientProfile.findUnique({ where: { id } });
+}
+
+export function findPatientSummariesByIds(ids: string[]) {
+  return prisma.patientProfile.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, fullName: true, anonymizedAt: true },
+  });
 }
 /** One keyset page of anonymised profiles old enough to be purge
  * candidates. */

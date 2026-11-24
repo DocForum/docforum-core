@@ -15,3 +15,16 @@ export function transitionAppointmentStatus(
 ): AppointmentStatus | null {
   return transitions[current].includes(requested) ? requested : null;
 }
+
+/**
+ * Checks whether an appointment can transition to completed or no_show given its slot timing.
+ * Completed and no_show are only allowed once the slot has started (allowing a configurable grace window).
+ */
+export function canFinalizeAppointment(
+  slotStartTime: Date | null | undefined,
+  now = new Date(),
+  graceWindowMs = 0,
+): boolean {
+  if (!slotStartTime) return false;
+  return now.getTime() + graceWindowMs >= slotStartTime.getTime();
+}

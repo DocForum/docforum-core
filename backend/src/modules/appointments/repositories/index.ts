@@ -9,7 +9,7 @@ export function createAppointment(
     patientProfileId: string;
     doctorProfileId: string;
     availabilitySlotId: string;
-    origin?: 'direct_booking' | 'referral';
+    origin?: 'direct_booking' | 'referral' | 'follow_up';
     referralId?: string;
   },
 ) {
@@ -60,8 +60,16 @@ export function findAppointmentsForPatient(patientProfileId: string) {
   });
 }
 
+export function findAppointmentsForDoctor(doctorProfileId: string) {
+  return prisma.appointment.findMany({
+    where: { doctorProfileId },
+    include: { availabilitySlot: true },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
 /** Today's scheduled appointments for one doctor's own calendar. The
- * caller supplies the server-local day bounds; no patient-module data is
+ * caller supplies the doctor's local calendar day bounds; no patient-module data is
  * joined here, preserving the module boundary. */
 export function findAppointmentsForDoctorOnDay(doctorProfileId: string, start: Date, end: Date) {
   return prisma.appointment.findMany({
@@ -72,6 +80,27 @@ export function findAppointmentsForDoctorOnDay(doctorProfileId: string, start: D
     },
     include: { availabilitySlot: true },
     orderBy: [{ availabilitySlot: { startTime: 'asc' } }, { id: 'asc' }],
+  });
+}
+
+/** Appointments across an arbitrary date range in the doctor's calendar (issue #291). */
+export function findAppointmentsForDoctorSchedule(
+  doctorProfileId: string,
+  start: Date,
+  end: Date,
+  status?: AppointmentStatus,
+) {
+  return prisma.appointment.findMany({
+    where: {
+      doctorProfileId,
+      ...(status ? { status } : {}),
+      OR: [
+        { availabilitySlot: { is: { startTime: { gte: start, lt: end } } } },
+        { availabilitySlotId: null, updatedAt: { gte: start, lt: end } },
+      ],
+    },
+    include: { availabilitySlot: true },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
 }
 
@@ -90,6 +119,16 @@ export function findAppointmentDoctorContext(id: string) {
  */
 export function updateStatusIfScheduled(db: DbClient, id: string, status: AppointmentStatus) {
   return db.appointment.updateMany({ where: { id, status: 'scheduled' }, data: { status } });
+}
+
+/**
+ * Conditionally repoints an appointment's availabilitySlotId if it is still scheduled.
+ */
+export function rescheduleIfScheduled(db: DbClient, id: string, newSlotId: string) {
+  return db.appointment.updateMany({
+    where: { id, status: 'scheduled' },
+    data: { availabilitySlotId: newSlotId },
+  });
 }
 
 /**

@@ -26,12 +26,14 @@ import EmbeddedPostgres from 'embedded-postgres';
 
 const PORT = 5439; // distinct from the integration suites (5433/5435-5438) and gen-migration.mjs (5434)
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-drift-pg-'));
+const PRISMA_CLI = path.resolve('node_modules/prisma/build/index.js');
 const pg = new EmbeddedPostgres({
   databaseDir: dataDir,
   user: 'docforum',
   password: 'docforum',
   port: PORT,
-  persistent: false,
+  persistent: true,
+  initdbFlags: ['--encoding=UTF8'],
 });
 
 await pg.initialise();
@@ -43,15 +45,15 @@ const env = { ...process.env, DATABASE_URL: `postgresql://docforum:docforum@loca
 let drifted = true;
 try {
   console.log('Applying committed migrations with `prisma migrate deploy`…');
-  process.stdout.write(execFileSync('npx', ['prisma', 'migrate', 'deploy'], { env, encoding: 'utf-8' }));
+  process.stdout.write(execFileSync(process.execPath, [PRISMA_CLI, 'migrate', 'deploy'], { env, encoding: 'utf-8' }));
 
   console.log('Diffing the migrated database against prisma/schema/…');
   let diffOutput = '';
   let exitCode = 0;
   try {
     diffOutput = execFileSync(
-      'npx',
-      ['prisma', 'migrate', 'diff', '--from-config-datasource', '--to-schema', 'prisma/schema', '--exit-code'],
+      process.execPath,
+      [PRISMA_CLI, 'migrate', 'diff', '--from-config-datasource', '--to-schema', 'prisma/schema', '--exit-code'],
       { env, encoding: 'utf-8' },
     );
   } catch (error) {
@@ -72,6 +74,11 @@ try {
   }
 } finally {
   await pg.stop();
+  try {
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {
+    // Ignore temporary folder EBUSY cleanup on Windows
+  }
 }
 // Exit explicitly. Setting `process.exitCode` in the failure branch was not
 // enough: the script printed FAILED and still exited 0.

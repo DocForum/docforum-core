@@ -1,6 +1,5 @@
-import http from 'kf6/http';
-import { check, fail } from 'kf6';
-import exec from 'kf6/exec';
+import http from 'k6/http';
+import { check, fail } from 'k6';
 
 // Contention scenario: many virtual users compete for a small slot pool.
 // Correctness is asserted from the database after the run (exactly one booking per slot),
@@ -42,7 +41,7 @@ export default function () {
   // Each VU draws a slot from the pool and attempts to book it.
   // Many VUs will collide on the same slots, so the database must enforce
   // exactly-one-booking per slot regardless of response codes.
-  const slotIndex = (iteration % SLOTS_PER_VU-1) + 1;
+  const slotIndex = (__ITER % SLOTS_PER_VU) + 1;
   const slotId = `${SLOT_POOL_ID}-${slotIndex}`;
 
   const resp = http.post(

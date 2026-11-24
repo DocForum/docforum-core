@@ -7,6 +7,7 @@
 // state. See ARCHITECTURE.md §5.3.
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
+import { publish } from '../../../events';
 import { storageService } from '../../../utils/storage';
 import { record, type AuditActor } from '../../audit/services';
 import type { OrderStatus } from '@prisma/client';
@@ -15,6 +16,8 @@ import {
   formatOrderResponse,
   type FulfillOrderInput,
 } from '../../pharmacy-orders/services';
+import * as facilitiesService from '../../facilities/services';
+import * as patientsService from '../../patients/services';
 
 export async function getLabOrder(id: string) {
   const labOrder = await repo.findLabOrderById(id);
@@ -26,12 +29,27 @@ export async function getLabOrder(id: string) {
  * Applies the fulfillment-derived order status. Called by pharmacy-orders
  * AFTER its own item rows have been written — a facility never writes a
  * LabOrder row directly (hard rule 5).
+ *
+ * Issue #83: the `fulfilled` transition and its `order.fulfilled` outbox
+ * event commit together, so a lab order's escrow is released exactly when
+ * the facility's dispense is durably recorded. A repeat call is a no-op.
  */
 export async function applyFulfillmentStatus(
   labOrderId: string,
   status: Extract<OrderStatus, 'fulfilled'>,
 ): Promise<boolean> {
-  return repo.applyOrderStatusIf(labOrderId, ['issued', 'partially_fulfilled'], status);
+  return prisma.$transaction(async (tx) => {
+    const changed = await repo.applyOrderStatusIf(
+      labOrderId,
+      ['issued', 'partially_fulfilled'],
+      status,
+      tx,
+    );
+    if (changed) {
+      await publish(tx, 'order.fulfilled', { orderType: 'lab_order', orderId: labOrderId });
+    }
+    return changed;
+  });
 }
 
 export async function createLabOrder(data: {
@@ -43,12 +61,7 @@ export async function createLabOrder(data: {
     throw new HttpError(400, 'Patient profile ID is required.');
   }
 
-  const patient = await prisma.patientProfile.findUnique({
-    where: { id: data.patientProfileId },
-  });
-  if (!patient) {
-    throw new HttpError(404, 'Patient profile not found.');
-  }
+  await patientsService.getPatientProfileById(data.patientProfileId);
 
   const order = await prisma.$transaction(async (tx) => {
     return repo.createOrder(tx, {
@@ -81,9 +94,7 @@ export async function fulfillLabOrder(
     throw new HttpError(400, 'Reference number is required for fulfillment proof.');
   }
 
-  const facilityProfile = await prisma.facilityProfile.findUnique({
-    where: { userId: facilityUserId },
-  });
+  const facilityProfile = await facilitiesService.findFacilityProfileByUserId(facilityUserId);
   if (!facilityProfile) {
     throw new HttpError(403, 'Facility profile required.');
   }

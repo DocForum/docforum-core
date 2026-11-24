@@ -1,5 +1,5 @@
 import { z } from 'zod';
-// @ts-ignore TS1479: @stellar/stellar-sdk types are ESM-only but CJS runtime exports are present
+// @ts-expect-error TS1479: @stellar/stellar-sdk types are ESM-only but CJS runtime exports are present
 import { StrKey } from '@stellar/stellar-sdk';
 
 // Issue #78 — the typed-in address body is GONE. strictObject: a
@@ -66,11 +66,24 @@ const inclusiveEndDate = isoDateString.transform((value) => {
 
 export const paymentHistoryQuerySchema = z
   .object({
-    status: z.enum(['created', 'escrowed', 'released', 'refunded', 'failed']).optional(),
+    status: z.enum(['created', 'funding', 'escrowed', 'released', 'refunded', 'failed']).optional(),
     from: isoDate.optional(),
     to: inclusiveEndDate.optional(),
     cursor: z.string().min(1).max(512).optional(),
     limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .strict()
+  .refine((query) => !query.from || !query.to || query.from <= query.to, {
+    message: '`from` must not be after `to`.',
+  });
+
+/** GET /payments/facility/ledger.csv (issue #329): the ledger's filters
+ * without pagination — the CSV streams every matching row. */
+export const ledgerCsvQuerySchema = z
+  .object({
+    status: z.enum(['created', 'funding', 'escrowed', 'released', 'refunded', 'failed']).optional(),
+    from: isoDate.optional(),
+    to: inclusiveEndDate.optional(),
   })
   .strict()
   .refine((query) => !query.from || !query.to || query.from <= query.to, {

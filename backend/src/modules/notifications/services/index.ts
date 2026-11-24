@@ -14,6 +14,12 @@ import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import { formatMessage, resolveLocale } from '../../../i18n';
 import * as notificationsRepo from '../repositories';
+import { notificationBroker } from './fanout';
+
+// Cross-instance real-time fan-out (issue #330), exposed through this
+// module's service surface for src/server.ts and src/health/readiness.ts.
+export { getNotificationFanoutState, startNotificationFanout } from './fanout';
+export type { FanoutState } from './fanout';
 
 export interface NotificationMessage {
   to: string;
@@ -84,6 +90,14 @@ export const notificationPayloadSchemas = {
   referral_updated: z.object({ referralId: uuid }).strict(),
   order_ready: z.object({ orderId: uuid, orderType: z.enum(['prescription', 'lab_order']) }).strict(),
   results_available: z.object({ labOrderId: uuid }).strict(),
+  // Issue #72: told to the ordering doctor the moment an abnormal/critical
+  // result is attached; the acknowledgement task is the durable record.
+  lab_result_abnormal: z
+    .object({ labResultId: uuid, labOrderId: uuid, severity: z.enum(['abnormal', 'critical']) })
+    .strict(),
+  // Issue #84: the escrow refund completed. Identifiers only — never amounts
+  // or clinical detail (notifications are not a PHI surface).
+  payment_refunded: z.object({ paymentIntentId: uuid }).strict(),
 } as const;
 
 export type NotificationType = keyof typeof notificationPayloadSchemas;
@@ -131,6 +145,16 @@ export async function notify<T extends NotificationType>(
   };
 
   if (persisted.created) {
+    // Real-time push to the user's open streams on EVERY instance (issue
+    // #330). Ids only — the client fetches the notification over HTTP.
+    // Best-effort: the persisted row above is the record, so a failed
+    // publish never fails notify().
+    try {
+      await notificationBroker.publish({ notificationId: notification.id, userId, type });
+    } catch {
+      console.error(`[notifications] real-time fan-out publish failed for notification ${notification.id}`);
+    }
+
     const registeredAdapters = [...adapters];
     const results = await Promise.allSettled(
       registeredAdapters.map((adapter) => Promise.resolve().then(() => adapter.send(dispatch))),

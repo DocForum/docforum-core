@@ -75,6 +75,33 @@ The allowlist holds exactly one chain: `axios`, reached through
 repo, and no version bump here resolves it. Remove those entries once the
 escrow SDK ships a patched release.
 
+## `backend/scripts/reconcile-escrows.ts`
+
+Operator tool for escrow funding (Phase 5.5, issue #24), run with
+`tsx` through the backend's npm scripts:
+
+```
+cd backend
+npm run reconcile:escrows                       # read-only report
+npm run reconcile:escrows -- --adopt=<intentId> --escrow-id=<id> --contract-id=<C...> --confirm
+npm run reconcile:escrows -- --abandon=<intentId> --confirm
+```
+
+Funding claims a `PaymentIntent` `created -> funding` before calling
+`create_escrow` and writes `escrowed` after it. The report lists claims stuck
+in `funding` longer than `ESCROW_FUNDING_STALE_AFTER_SECONDS` (default 900)
+and every on-chain escrow the Soroban event poller observed with no
+`PaymentIntent` pointing at it. `--adopt` attaches an observed escrow to a
+stuck claim; `--abandon` returns a claim to `created` after you have confirmed
+no escrow exists. Mutations require `--confirm`.
+
+**Never "fix" a stuck claim by calling fund again** — that is a second
+`create_escrow`, i.e. a second escrow holding real funds. The tool refuses to
+adopt an escrow the poller has not observed on a registered contract, so a
+typo fails closed. Why the report reads `EscrowChainEvent` rather than the
+chain directly: `@docforum/escrow-sdk` 0.2.0 exposes no "list escrows" call.
+No secret or patient identifier is printed.
+
 ## `scripts/fold-changelog.mjs`
 
 Maintainer script. Contributors add their `ROADMAP.md` changelog entry as a

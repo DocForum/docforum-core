@@ -13,11 +13,55 @@ export function findUserById(id: string, db: typeof prisma | Prisma.TransactionC
   return db.user.findUnique({ where: { id } });
 }
 
-// --- Refresh sessions (Phase 8 #38) -------------------------------------
+// --- Refresh sessions (Phase 8 #38, #278) --------------------------------
 
-export function createRefreshSession(input: { userId: string; userAgent?: string; ip?: string }) {
-  return prisma.refreshSession.create({
-    data: { userId: input.userId, userAgent: input.userAgent, ip: input.ip },
+/**
+ * Creates a session and enforces the per-user active-session cap atomically
+ * (Phase 8, issue #278).
+ *
+ * The transaction takes a per-user advisory lock first: two concurrent logins
+ * for the same account would otherwise each count the pre-login sessions, both
+ * create a row, and between them evict too few — leaving the user above the
+ * cap. The lock serialises only session creation for that one user, so
+ * concurrent logins for different accounts are unaffected. The cap is applied
+ * after the insert, ordering by `lastUsedAt` (least recently used last), so
+ * the session just issued is never the one evicted.
+ */
+export function createRefreshSession(input: {
+  userId: string;
+  userAgent?: string;
+  ip?: string;
+  maxActiveSessions: number;
+}) {
+  return prisma.$transaction(async (tx) => {
+    // hashtext() keeps the lock key to an int; collisions only serialise
+    // unrelated users briefly, they never change the outcome.
+    // The lock function returns Postgres `void`, which Prisma's driver
+    // adapter cannot deserialize; cast it to text so the statement is a
+    // normal scalar SELECT.
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${input.userId}))::text AS lock`;
+
+    const session = await tx.refreshSession.create({
+      data: { userId: input.userId, userAgent: input.userAgent, ip: input.ip },
+    });
+
+    // The just-created session is excluded and counts as one of the cap, so
+    // a same-millisecond timestamp or an id sort can never evict the device
+    // the caller is signing in on. Everything else is evicted oldest-first.
+    const excess = await tx.refreshSession.findMany({
+      where: { userId: input.userId, revokedAt: null, id: { not: session.id } },
+      select: { id: true },
+      orderBy: [{ lastUsedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      skip: Math.max(0, input.maxActiveSessions - 1),
+    });
+    if (excess.length > 0) {
+      await tx.refreshSession.updateMany({
+        where: { id: { in: excess.map((row) => row.id) }, revokedAt: null },
+        data: { revokedAt: new Date(), revokedReason: 'max_active_sessions' },
+      });
+    }
+
+    return session;
   });
 }
 
@@ -233,6 +277,55 @@ export function pruneStaleLoginAttempts(before: Date) {
   return prisma.loginAttempt.deleteMany({ where: { lastFailedAt: { lt: before } } }).then((result) => result.count);
 }
 
+// --- Auth-artifact retention (Phase 8, issue #276) -----------------------
+// Every statement deletes at most `batchSize` rows, selected by an indexed
+// expiry/consumption column, and only rows past `cutoff`. Raw SQL is used
+// because Prisma has no `DELETE ... LIMIT`; the bounded batch is what keeps
+// a large backlog from taking one long table lock.
+
+/** Expired or consumed verification tokens past the grace period. A token
+ * that is still unexpired and unconsumed never matches. */
+export function pruneExpiredVerificationTokens(options: { cutoff: Date; batchSize: number }) {
+  return prisma.$executeRaw`
+    DELETE FROM "EmailVerificationToken"
+    WHERE "id" IN (
+      SELECT "id" FROM "EmailVerificationToken"
+      WHERE "expiresAt" < ${options.cutoff}
+         OR ("consumedAt" IS NOT NULL AND "consumedAt" < ${options.cutoff})
+      ORDER BY "expiresAt" ASC
+      LIMIT ${options.batchSize}
+    )
+  `;
+}
+
+/** Expired or used password-reset tokens past the grace period. */
+export function pruneExpiredPasswordResetTokens(options: { cutoff: Date; batchSize: number }) {
+  return prisma.$executeRaw`
+    DELETE FROM "PasswordResetToken"
+    WHERE "id" IN (
+      SELECT "id" FROM "PasswordResetToken"
+      WHERE "expiresAt" < ${options.cutoff}
+         OR ("usedAt" IS NOT NULL AND "usedAt" < ${options.cutoff})
+      ORDER BY "expiresAt" ASC
+      LIMIT ${options.batchSize}
+    )
+  `;
+}
+
+/** Revoked refresh sessions past the grace period. `revokedAt IS NOT NULL`
+ * is the guard that makes deleting an active session impossible. */
+export function pruneRevokedRefreshSessions(options: { cutoff: Date; batchSize: number }) {
+  return prisma.$executeRaw`
+    DELETE FROM "RefreshSession"
+    WHERE "id" IN (
+      SELECT "id" FROM "RefreshSession"
+      WHERE "revokedAt" IS NOT NULL AND "revokedAt" < ${options.cutoff}
+      ORDER BY "revokedAt" ASC
+      LIMIT ${options.batchSize}
+    )
+  `;
+}
+
 /**
  * Stores a new single-use reset token for a user, superseding any of that
  * user's outstanding ones in the same transaction — "requesting a second
@@ -286,6 +379,92 @@ export function consumePasswordResetToken(input: {
     });
     return true;
   });
+}
+
+// --- TOTP two-factor authentication (Phase 8, issue #36) -----------------
+// The secret is stored encrypted by the service (field-encryption, issue
+// #46); these functions never decrypt it, so a repository dump has no usable
+// secret. Recovery codes are stored as SHA-256 hashes only.
+
+export function setPendingTotpSecret(userId: string, encryptedSecret: string): Promise<boolean> {
+  return prisma.user
+    .updateMany({
+      where: { id: userId, totpEnabledAt: null, deletedAt: null },
+      data: { totpSecret: encryptedSecret },
+    })
+    .then((result) => result.count === 1);
+}
+
+/** Enables 2FA only from the "secret stored, not yet enabled" state, so a
+ * concurrent second enable call can't re-issue recovery codes over a live
+ * enrolment. Returns whether this call enabled it. */
+export function enableTotp(userId: string): Promise<boolean> {
+  return prisma.user
+    .updateMany({
+      where: { id: userId, totpEnabledAt: null, totpSecret: { not: null }, deletedAt: null },
+      data: { totpEnabledAt: new Date() },
+    })
+    .then((result) => result.count === 1);
+}
+
+/**
+ * Replay guard (issue #36): claims one TOTP time step for a user.
+ *
+ * A single conditional UPDATE — the step must be greater than the last one
+ * accepted. Two concurrent submissions of the same code therefore produce
+ * exactly one `count === 1`; accepting the ±1-step skew window never lets a
+ * code be replayed inside it. The same statement also guards a replayed
+ * *recovery* code, which the caller claims through `consumeRecoveryCode`
+ * instead.
+ */
+export function claimTotpStep(userId: string, step: number): Promise<boolean> {
+  return prisma.user
+    .updateMany({
+      where: {
+        id: userId,
+        OR: [{ totpLastUsedStep: null }, { totpLastUsedStep: { lt: step } }],
+      },
+      data: { totpLastUsedStep: step },
+    })
+    .then((result) => result.count === 1);
+}
+
+export function replaceRecoveryCodes(userId: string, codeHashes: string[]) {
+  return prisma.$transaction(async (tx) => {
+    // Regenerating replaces the whole set: an old, remembered code must not
+    // keep working after a re-enrolment.
+    await tx.twoFactorRecoveryCode.deleteMany({ where: { userId } });
+    await tx.twoFactorRecoveryCode.createMany({
+      data: codeHashes.map((codeHash) => ({ userId, codeHash })),
+    });
+  });
+}
+
+/** Single-use: matched by (user, hash) and only while unused. Returns whether
+ * this call consumed it. */
+export function consumeRecoveryCode(userId: string, codeHash: string): Promise<boolean> {
+  return prisma.twoFactorRecoveryCode
+    .updateMany({
+      where: { userId, codeHash, usedAt: null },
+      data: { usedAt: new Date() },
+    })
+    .then((result) => result.count === 1);
+}
+
+export async function disableTotp(userId: string, clearedSecret: null): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.user.updateMany({
+      where: { id: userId, totpEnabledAt: { not: null } },
+      data: { totpSecret: clearedSecret, totpEnabledAt: null, totpLastUsedStep: null },
+    });
+    if (result.count !== 1) return false;
+    await tx.twoFactorRecoveryCode.deleteMany({ where: { userId } });
+    return true;
+  });
+}
+
+export function countUnusedRecoveryCodes(userId: string): Promise<number> {
+  return prisma.twoFactorRecoveryCode.count({ where: { userId, usedAt: null } });
 }
 
 // --- Account deletion (Phase 8, issue #41, docs/adr/0010) ----------------

@@ -2,18 +2,23 @@ import type { Request, Response } from 'express';
 import * as authService from '../services';
 import {
   clearLoginAttemptsSchema,
+  confirmEmailChangeSchema,
   loginSchema,
   passwordResetConfirmSchema,
   passwordResetRequestSchema,
+  requestEmailChangeSchema,
   signupSchema,
   signupWithInviteSchema,
+  totpCodeSchema,
   verifyEmailSchema,
+  verifyTwoFactorSchema,
 } from '../validation';
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import { readCsrfHeader } from '../../../middleware/csrf';
 import { getParam } from '../../../request-params';
 import { resolveLocale } from '../../../i18n';
+import { auditActor } from '../../../middleware/request-id';
 
 const REFRESH_COOKIE = 'docforum_refresh';
 const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30d — matches config.jwt.refreshTtl
@@ -70,8 +75,19 @@ export async function login(req: Request, res: Response) {
     // Express's `req.ip` honours the `trust proxy` setting (app.ts) — it is
     // the whole reason the throttle keys on the IP the client believes it
     // is, rather than Render's proxy address (see config.trustProxy).
-    const session = await authService.login({ ...input, ip: req.ip }, sessionContext(req));
-    sessionResponse(res, session);
+    const outcome = await authService.login({ ...input, ip: req.ip }, sessionContext(req));
+    // Phase 8, issue #36: an enrolled user gets a half-authenticated token
+    // here, not a session; an admin who must enrol gets the narrow
+    // enrolment token. Neither is a cookie-bearing login.
+    if ('mfaRequired' in outcome) {
+      res.status(200).json(outcome);
+      return;
+    }
+    if ('enrollmentRequired' in outcome) {
+      res.status(200).json(outcome);
+      return;
+    }
+    sessionResponse(res, outcome);
   } catch (err) {
     // Phase 8, issue #35: a throttled attempt must tell the client how long
     // to wait, both as a header and in the message (see LoginThrottledError).
@@ -83,14 +99,10 @@ export async function login(req: Request, res: Response) {
 }
 
 /** Admin-only: clear a login lock/throttle bucket for an account or an IP.
- * Writes an audit line to the server log. Not wired into AuditEvent yet
- * (issue #43 covered booking, doctor verification and payments only — see
- * ARCHITECTURE.md §6.2.4), so this is the interim record. */
+ * Records an AuditEvent in the clear transaction. */
 export async function clearLoginAttempts(req: Request, res: Response) {
   const { email, ip } = clearLoginAttemptsSchema.parse(req.body);
-  const cleared = await authService.clearLoginAttempts({ email, ip });
-  // eslint-disable-next-line no-console
-  console.info(`[auth] admin ${req.user?.id ?? 'unknown'} cleared ${cleared} login-throttle bucket(s) (email=${email ?? '-'} ip=${ip ?? '-'})`);
+  const cleared = await authService.clearLoginAttempts({ email, ip }, auditActor(req));
   res.status(200).json({ cleared });
 }
 
@@ -128,6 +140,20 @@ export async function verifyEmail(req: Request, res: Response) {
 export async function resendVerificationEmail(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const result = await authService.resendVerificationEmail(req.user.id);
+  res.status(200).json(result);
+}
+
+// Phase 8, issue #271 — change account email.
+export async function requestEmailChange(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const input = requestEmailChangeSchema.parse(req.body);
+  const result = await authService.requestEmailChange(req.user.id, input, auditActor(req), req.ip);
+  res.status(200).json(result);
+}
+
+export async function confirmEmailChange(req: Request, res: Response) {
+  const input = confirmEmailChangeSchema.parse(req.body);
+  const result = await authService.confirmEmailChange(input, auditActor(req));
   res.status(200).json(result);
 }
 
@@ -171,6 +197,43 @@ export async function confirmPasswordReset(req: Request, res: Response) {
   // still holds the old one isn't left sending a dead token.
   res.clearCookie(REFRESH_COOKIE, config.cookie);
   res.status(200).json({ message: 'Password updated. Please sign in with your new password.' });
+}
+
+// --- TOTP two-factor authentication (Phase 8, issue #36) ----------------
+
+/** `POST /auth/2fa/setup` — returns the otpauth URI and the secret once. */
+export async function setupTwoFactor(req: Request, res: Response) {
+  const setup = await authService.startTwoFactorSetup(requireUserId(req));
+  res.status(200).json(setup);
+}
+
+/** `POST /auth/2fa/enable` — confirms with the first code and returns the
+ * ten single-use recovery codes (the only time they're visible). */
+export async function enableTwoFactor(req: Request, res: Response) {
+  const { code } = totpCodeSchema.parse(req.body);
+  const enrolment = await authService.enableTwoFactor(requireUserId(req), code);
+  res.status(200).json(enrolment);
+}
+
+/** `POST /auth/2fa/verify` — the second login step: half-token + code in,
+ * real session out. Unauthenticated by design; the half-token is the
+ * credential, and it can be used here and nowhere else. */
+export async function verifyTwoFactor(req: Request, res: Response) {
+  const { mfaToken, code } = verifyTwoFactorSchema.parse(req.body);
+  const session = await authService.verifySecondFactorLogin(mfaToken, code, sessionContext(req));
+  sessionResponse(res, session);
+}
+
+export async function twoFactorStatus(req: Request, res: Response) {
+  const status = await authService.getTwoFactorStatus(requireUserId(req));
+  res.status(200).json(status);
+}
+
+/** `POST /auth/2fa/disable` — requires a current code or recovery code. */
+export async function disableTwoFactor(req: Request, res: Response) {
+  const { code } = totpCodeSchema.parse(req.body);
+  await authService.disableTwoFactor(requireUserId(req), code);
+  res.status(204).send();
 }
 
 // --- Session management (Phase 8 #38) -----------------------------------
@@ -222,6 +285,6 @@ export async function revokeOtherSessions(req: Request, res: Response) {
 /** Admin: revoke every session a given user has. Mounted under /admin, not
  * /auth — it acts on someone else's sessions. */
 export async function revokeUserSessions(req: Request, res: Response) {
-  const revoked = await authService.revokeAllUserSessions(getParam(req, 'id'));
+  const revoked = await authService.revokeAllUserSessions(getParam(req, 'id'), auditActor(req));
   res.status(200).json({ revoked });
 }

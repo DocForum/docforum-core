@@ -14,6 +14,15 @@ adminRouter.use(authenticate, requireRole('admin'));
 // invite part.
 adminRouter.post('/invites', usersController.createInvite);
 
+// Phase 8, issue #277: see outstanding invites and revoke one that was sent
+// to the wrong address. The raw token/hash is never listed.
+adminRouter.get('/invites', usersController.listInvites);
+adminRouter.delete('/invites/:id', usersController.revokeInvite);
+
+// Phase 8, issue #275: read-only, paginated account directory (search by
+// email prefix/role/state) so support work no longer needs SQL access.
+adminRouter.get('/users', usersController.listUsers);
+
 // Operations overview: queue counts and oldest-item ages (issue #123).
 adminRouter.get('/overview', usersController.overview);
 

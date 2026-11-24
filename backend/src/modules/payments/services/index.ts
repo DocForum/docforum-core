@@ -19,16 +19,25 @@ import { loadEscrowSdk, type EscrowSdkKeypair } from './escrow-sdk-loader';
 import { hasTrustline } from './trustline';
 import { getPlatformSigners } from './platform-signers';
 import { resolveEscrowPayee } from './payout-privacy';
-import { getMyPatientProfile, paginate, type PatientExportSection } from '../../patients/services';
+import { getMyPatientProfile, getPatientUserIdByProfileId, findPatientProfileByUserId, paginate, type PatientExportSection } from '../../patients/services';
+import { findFacilityProfileByUserId, findFacilityProfileById, getFacilityNamesByIds } from '../../facilities/services';
 import { prisma } from '../../../db/prisma-client';
 import { parseStroopsAmount } from '../../../utils/stroops';
 import * as auditService from '../../audit/services';
 import * as flagsService from '../../flags/services';
+import * as notificationsService from '../../notifications/services';
 import type { Prisma } from '@prisma/client';
 import { transitionPaymentIntentStatus } from './state-machine';
+import { facilityLedgerCsvChunks, type LedgerCsvFilters } from './ledger-csv';
 // Types are inferred from the prisma instance; use 'as' assertions where needed
 
-import { assertWalletLinkFundingAllowed } from './wallet-link';
+import {
+  assertEscrowPayeeEffective,
+  assertWalletLinkFundingAllowed,
+  findEffectiveWalletLink,
+  requireEffectiveFacilityPayee,
+  writeWalletLink,
+} from './wallet-link';
 
 // SEP-10 Stellar Web Authentication (issue #77). Re-exported through
 // this module's service surface (not imported file-by-file from outside)
@@ -36,6 +45,7 @@ import { assertWalletLinkFundingAllowed } from './wallet-link';
 // module's token/throttle re-exports.
 export {
   createSep10Challenge,
+  pruneExpiredSep10Challenges,
   verifySep10Challenge,
   resetSep10AccountFetcher,
   setSep10AccountFetcher,
@@ -53,8 +63,13 @@ export {
   linkWalletViaSep10,
   validateWalletLinkConfig,
   walletLinkFundingAllowed,
+  // Issue #328: payout-change cool-down.
+  assertEscrowPayeeEffective,
+  findEffectiveWalletLink,
+  listPendingFacilityWalletLinks,
+  selectEffectiveWalletLink,
 } from './wallet-link';
-export type { WalletLinkOwner } from './wallet-link';
+export type { PendingWalletLinkChange, WalletLinkOwner } from './wallet-link';
 
 // Test seams re-exported through the service surface (same convention as the
 // auth module's setEmailSender) — see escrow-sdk-loader.ts and trustline.ts.
@@ -136,7 +151,7 @@ function requireRecordedContractId(intent: { sorobanContractId: string | null })
   return contractId;
 }
 export async function getOwnFacilityProfileId(userId: string): Promise<string> {
-  const profile = await paymentsRepo.findFacilityProfileByUserId(userId);
+  const profile = await findFacilityProfileByUserId(userId);
   if (!profile) throw new HttpError(403, 'No facility profile is associated with this account.');
   return profile.id;
 }
@@ -144,26 +159,24 @@ export async function getOwnFacilityProfileId(userId: string): Promise<string> {
 /** The caller's patient profile id — every patient-scoped payment read is
  * owned through this, never through a client-supplied profile id. */
 export async function getOwnPatientProfileId(userId: string): Promise<string> {
-  const profile = await paymentsRepo.findPatientProfileByUserId(userId);
+  const profile = await findPatientProfileByUserId(userId);
   if (!profile) throw new HttpError(403, 'No patient profile is associated with this account.');
   return profile.id;
 }
 
-export async function linkWallet(facilityId: string, stellarPublicKey: string) {
-  const now = new Date();
-  await paymentsRepo.deactivateActiveWalletLink('facility', facilityId, now);
-  return paymentsRepo.createWalletLink({
-    ownerType: 'facility',
-    ownerId: facilityId,
-    stellarPublicKey,
-    verificationMethod: 'sep10',
-    verifiedAt: now,
-    activeOwnerKey: `facility:${facilityId}`,
-  });
+/** Test-fixture helper (integration + testnet suites). Goes through the
+ * same writer as the SEP-10 flow, so it is audited and subject to the
+ * issue #328 cool-down like every other link. */
+export async function linkWallet(facilityId: string, stellarPublicKey: string, now = new Date()) {
+  return paymentsRepo.inTransaction((tx) =>
+    writeWalletLink(tx, auditService.SYSTEM_ACTOR, { ownerType: 'facility', ownerId: facilityId }, stellarPublicKey, now),
+  );
 }
 
+/** The facility's EFFECTIVE payout link (issue #328) — a link still inside
+ * its cool-down is never returned here. */
 export function getWalletLink(facilityId: string) {
-  return paymentsRepo.findActiveWalletLink('facility', facilityId);
+  return findEffectiveWalletLink('facility', facilityId);
 }
 
 export function getPatientWalletLink(patientProfileId: string) {
@@ -273,7 +286,7 @@ export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, i
   const amountStroops = parseStroopsAmount(input.amountStroops, 'amountStroops');
   const asset = resolveAsset('XLM');
   const catalogItemCode = input.catalogItemCode ?? null;
-  const facility = await tx.facilityProfile.findUnique({ where: { id: input.facilityProfileId }, select: { type: true } });
+  const facility = await findFacilityProfileById(input.facilityProfileId, tx);
   const expectedType = input.kind === 'prescription' ? 'pharmacy' : 'lab';
   if (!facility || facility.type !== expectedType) throw new HttpError(400, `The selected facility must be a ${expectedType} facility.`);
 
@@ -416,6 +429,15 @@ export async function listFacilityPaymentLedger(userId: string, filters: Payment
   };
 }
 
+/** GET /payments/facility/ledger.csv (issue #329). Resolves the caller's
+ * facility BEFORE returning, so a non-facility caller gets its 403 while
+ * the response is still a normal JSON error, then hands back a lazy chunk
+ * stream (never a buffered document). */
+export async function openFacilityLedgerCsv(userId: string, filters: LedgerCsvFilters): Promise<AsyncGenerator<string>> {
+  const facilityId = await getOwnFacilityProfileId(userId);
+  return facilityLedgerCsvChunks(facilityId, filters);
+}
+
 /** Public, non-identifying references only: the escrow is on a public
  * ledger anyway. No patient data, no secrets. */
 function intentAuditMetadata(intent: PaymentIntent) {
@@ -462,17 +484,27 @@ async function commitTransition(
   });
 }
 
-/** Funds the escrow from the platform's own payer identity. The intent must be `created` and its facility must have a linked wallet (the on-chain payee). */
+/** Funds the escrow from the platform's own payer identity. The intent must be `created` and its facility must have a linked wallet (the on-chain payee).
+ *
+ * Idempotency (issue #24): the check-then-act gap that used to sit in front
+ * of `createEscrow` is closed by claiming the intent `created -> funding`
+ * with ONE conditional UPDATE, committed BEFORE the chain call. Only the
+ * request whose UPDATE changed a row proceeds; every concurrent request, on
+ * any instance, gets a 409 and makes no chain call. The claim is released
+ * on a failed chain call so the caller can retry with the same id. */
 export async function fundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (transitionPaymentIntentStatus(intent.status, 'escrowed') !== 'escrowed') {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
   }
 
-  // The facility's ACTIVE link (issue #78: one per owner; replaced rows
-  // are history and must never be picked up here).
-  const walletLink = await paymentsRepo.findActiveWalletLink('facility', intent.facilityId);
-  if (!walletLink) throw new HttpError(409, 'The facility for this payment has no linked wallet.');
+  // The facility's EFFECTIVE link (issue #328): the newest link that has
+  // passed its cool-down. A link changed inside the window is never the
+  // payee — funding keeps using the previous effective address until then.
+  const walletLink = await requireEffectiveFacilityPayee(
+    intent.facilityId,
+    new HttpError(409, 'The facility for this payment has no linked wallet.'),
+  );
   assertWalletLinkFundingAllowed(walletLink);
 
   const { platformPayer, platformReleaser, escrowContractId } = await requirePaymentsConfig();
@@ -490,19 +522,65 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
 
   const client = await escrowClient(escrowContractId);
 
-  const { escrowId, txHash } = await client.createEscrow({
-    payer: platformPayer as unknown as EscrowSdkKeypair,
-    payee,
-    token: asset.tokenContractId,
-    amount: intent.amount,
-    // The PaymentIntent's own id is the opaque condition_ref — the
-    // contract never interprets it (docforum-escrow ADR 0001); it's
-    // just how we can trace an on-chain escrow back to this record.
-    conditionRef: intent.id,
-    releaser: platformReleaser.publicKey(),
+  // Everything above is read-only, so a rejected pre-flight never leaves a
+  // claim behind. The claim itself commits before the chain call.
+  const claimed = await prisma.$transaction(async (tx) => {
+    const row = await paymentsRepo.claimForFunding(tx, id, new Date());
+    if (!row) return null;
+    await auditService.record(tx, actor, {
+      entityType: 'PaymentIntent',
+      entityId: id,
+      action: 'payment_intent.funding_started',
+      fromState: 'created',
+      toState: 'funding',
+      metadata: intentAuditMetadata(row),
+    });
+    return row;
   });
+  if (!claimed) {
+    throw new HttpError(
+      409,
+      `PaymentIntent is no longer 'created' — another funding request already claimed it.`,
+    );
+  }
 
-  return commitTransition(actor, intent, 'payment_intent.funded', 'escrowed', (tx) =>
+  let escrowId: bigint;
+  let txHash: string;
+  try {
+    ({ escrowId, txHash } = await client.createEscrow({
+      payer: platformPayer as unknown as EscrowSdkKeypair,
+      payee,
+      token: asset.tokenContractId,
+      amount: intent.amount,
+      // The PaymentIntent's own id is the opaque condition_ref — the
+      // contract never interprets it (docforum-escrow ADR 0001); it's
+      // just how we can trace an on-chain escrow back to this record.
+      conditionRef: intent.id,
+      releaser: platformReleaser.publicKey(),
+    }));
+  } catch (error) {
+    // The chain call definitively failed, so no escrow exists: hand the
+    // claim back so the caller can retry. If this write also fails, the row
+    // stays `funding` and reconcile-escrows.ts reports it — it is never
+    // silently retried, because a retry could create a second escrow.
+    await prisma
+      .$transaction(async (tx) => {
+        const released = await paymentsRepo.releaseFundingClaim(tx, id);
+        if (!released) return;
+        await auditService.record(tx, actor, {
+          entityType: 'PaymentIntent',
+          entityId: id,
+          action: 'payment_intent.funding_failed',
+          fromState: 'funding',
+          toState: 'created',
+          metadata: intentAuditMetadata(released),
+        });
+      })
+      .catch(() => undefined);
+    throw error;
+  }
+
+  return commitTransition(actor, claimed, 'payment_intent.funded', 'escrowed', (tx) =>
     paymentsRepo.markEscrowed(tx, id, {
       escrowId,
       stellarTxHash: txHash,
@@ -639,14 +717,12 @@ export async function preparePaymentIntent(
     );
   }
 
-  const payeeWallet = await getWalletLink(intent.facilityId);
-  if (!payeeWallet) {
-    throw new HttpError(
-      409,
-      'The facility for this payment has no linked wallet.',
-      'FACILITY_WALLET_NOT_LINKED',
-    );
-  }
+  // Issue #328: the effective payee, never a link inside its cool-down.
+  const payeeWallet = await requireEffectiveFacilityPayee(
+    intent.facilityId,
+    new HttpError(409, 'The facility for this payment has no linked wallet.', 'FACILITY_WALLET_NOT_LINKED'),
+    now,
+  );
 
   const asset = resolveAssetForIntent(intent);
   await requirePayeeTrustline(payeeWallet.stellarPublicKey, asset);
@@ -693,12 +769,16 @@ export async function preparePaymentIntent(
   };
 }
 
-/** Releases the escrow to the facility's linked wallet. v1: admin-triggered (see ADR 0004 "Consequences") — no automatic FulfillmentRecord trigger yet, since that model doesn't exist. */
+/** Manual admin override: releases the escrow to the facility's linked wallet.
+ * The primary path is automatic (`releaseEscrowForFulfilledOrder`, issue #83);
+ * this remains for operators and is audited the same way. */
 export async function releasePaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (transitionPaymentIntentStatus(intent.status, 'released') !== 'released' || intent.escrowId === null) {
     throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
   }
+  // Issue #328: never release to a payee that is only a not-yet-effective link.
+  await assertEscrowPayeeEffective(intent);
 
   const { platformReleaser } = await requirePaymentsConfig();
   const client = await escrowClient(requireRecordedContractId(intent));
@@ -710,7 +790,8 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
   );
 }
 
-/** Refunds the escrow back toward the platform payer. v1: admin-triggered, same reasoning as release. */
+/** Manual admin override: refunds the escrow back toward the platform payer.
+ * Automatic refunds come from `refundEscrowForUnfulfilledOrder` (issue #84). */
 export async function refundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (transitionPaymentIntentStatus(intent.status, 'refunded') !== 'refunded' || intent.escrowId === null) {
@@ -725,6 +806,166 @@ export async function refundPaymentIntent(actor: auditService.AuditActor, id: st
   return commitTransition(actor, intent, 'payment_intent.refunded', 'refunded', (tx) =>
     paymentsRepo.markStatus(tx, id, 'escrowed', 'refunded'),
   );
+}
+
+// --- Automatic settlement (Phase 5.5, issues #83 and #84) -----------------
+//
+// The durable task IS a transactional-outbox event: the fulfillment/expiry
+// transition inserts `order.fulfilled` / `order.rejected` / `order.expired`
+// in its own transaction, and `src/jobs/outbox-events.ts` claims it with
+// `FOR UPDATE SKIP LOCKED`, retries with bounded exponential backoff, and
+// resumes a crashed claim after its lease expires. No second queue table is
+// invented for the same guarantee (see src/events/README.md).
+//
+// These functions are therefore called OUTSIDE a domain transaction, from the
+// outbox handler, and are idempotent: a duplicate delivery sees a non-
+// `escrowed` intent and does nothing, and the status write is one conditional
+// UPDATE, so release and a timeout refund can never both commit locally.
+
+export type AutomaticSettlementKind = 'release' | 'refund';
+export type AutomaticSettlementOutcome =
+  | 'no_intent'
+  | 'not_escrowed'
+  | 'settled'
+  | 'raced'
+  | 'not_funded_on_chain';
+
+/**
+ * Recognises the contract's NotFunded failure. The SDK is not typed to
+ * expose an error class for this (0.2.0), so the check is deliberately
+ * narrow on a stable code/name/message token rather than on any error text.
+ * A different failure is rethrown and retried by the outbox.
+ */
+function isNotFundedError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const errorCode = (error as { code?: unknown }).code;
+  const errorName = (error as { name?: unknown }).name;
+  const message = (error as { message?: unknown }).message;
+  const identitySaysNotFunded = [errorCode, errorName].some(
+    (value) => typeof value === 'string' && /not[_-]?funded/i.test(value),
+  );
+  const messageSaysNotFunded =
+    typeof message === 'string' && /(escrow|contract).{0,40}not[ _-]?funded|not[ _-]?funded/i.test(message);
+  return identitySaysNotFunded || messageSaysNotFunded;
+}
+
+/** One audit record + conditional status write in the same transaction. A
+ * lost race (another settlement already moved the row) returns null and is
+ * a normal no-op, never an error — the outbox must not retry it. */
+async function commitAutomaticSettlement(
+  intent: PaymentIntent,
+  kind: AutomaticSettlementKind,
+): Promise<PaymentIntent | null> {
+  const to: PaymentIntentStatus = kind === 'release' ? 'released' : 'refunded';
+  return prisma.$transaction(async (tx) => {
+    const updated = await paymentsRepo.markStatus(tx, intent.id, 'escrowed', to);
+    if (!updated) return null;
+    await auditService.record(tx, auditService.SYSTEM_ACTOR, {
+      entityType: 'PaymentIntent',
+      entityId: intent.id,
+      action: kind === 'release' ? 'payment_intent.released' : 'payment_intent.refunded',
+      fromState: 'escrowed',
+      toState: to,
+      metadata: {
+        ...intentAuditMetadata(updated),
+        settlementSource: 'automatic',
+        settlementKind: kind,
+      },
+    });
+    return updated;
+  });
+}
+
+/** Terminal reconcile for NotFunded: the chain says there is nothing to
+ * release/refund, so retrying cannot help. Move the intent to `failed` with
+ * an audit record and stop — never crash the worker. */
+async function reconcileNotFunded(
+  intent: PaymentIntent,
+  kind: AutomaticSettlementKind,
+): Promise<PaymentIntent | null> {
+  return prisma.$transaction(async (tx) => {
+    const updated = await paymentsRepo.markStatus(tx, intent.id, 'escrowed', 'failed');
+    if (!updated) return null;
+    await auditService.record(tx, auditService.SYSTEM_ACTOR, {
+      entityType: 'PaymentIntent',
+      entityId: intent.id,
+      action: 'payment_intent.settlement_not_funded',
+      fromState: 'escrowed',
+      toState: 'failed',
+      metadata: { ...intentAuditMetadata(updated), settlementKind: kind },
+    });
+    return updated;
+  });
+}
+
+/** Best-effort: a missing notification must never fail a completed refund.
+ * The intent's own status/audit record is the durable evidence; the in-app
+ * message is a courtesy to the patient. */
+async function notifyRefundCompleted(intent: PaymentIntent): Promise<void> {
+  try {
+    const userId = await getPatientUserIdByProfileId(intent.patientProfileId);
+    if (!userId) return;
+    await notificationsService.notify(userId, 'payment_refunded', { paymentIntentId: intent.id });
+  } catch {
+    console.error('[payments] refund-completed notification failed');
+  }
+}
+
+async function settleEscrowForOrder(
+  orderType: 'prescription' | 'lab_order',
+  orderId: string,
+  kind: AutomaticSettlementKind,
+): Promise<AutomaticSettlementOutcome> {
+  const intent = await paymentsRepo.findPaymentIntentByOrder(orderType, orderId);
+  if (!intent) return 'no_intent';
+  // Already terminal or never funded: nothing to do. This is also the
+  // duplicate-delivery guard, and the reason a release and a refund racing
+  // each other cannot both commit locally.
+  if (intent.status !== 'escrowed' || intent.escrowId === null) return 'not_escrowed';
+
+  // Issue #328: a release is held rather than sent to a payee that is only a
+  // not-yet-effective link: the throw makes the outbox retry with backoff
+  // and, after MAX_ATTEMPTS, dead-letter it for an operator (funds stay in
+  // escrow). Refunds go back to the payer, so they are not held.
+  if (kind === 'release') await assertEscrowPayeeEffective(intent);
+
+  const { platformReleaser } = await requirePaymentsConfig();
+  const client = await escrowClient(requireRecordedContractId(intent));
+  const caller = platformReleaser as unknown as EscrowSdkKeypair;
+
+  try {
+    if (kind === 'release') {
+      await client.release({ escrowId: intent.escrowId, caller });
+    } else {
+      await client.refund({ escrowId: intent.escrowId, caller });
+    }
+  } catch (error) {
+    if (!isNotFundedError(error)) throw error;
+    const reconciled = await reconcileNotFunded(intent, kind);
+    return reconciled ? 'not_funded_on_chain' : 'raced';
+  }
+
+  const settled = await commitAutomaticSettlement(intent, kind);
+  if (!settled) return 'raced';
+  if (kind === 'refund') await notifyRefundCompleted(settled);
+  return 'settled';
+}
+
+/** Outbox handler: the whole order derives `fulfilled`. Release its escrow. */
+export function releaseEscrowForFulfilledOrder(input: {
+  orderType: 'prescription' | 'lab_order';
+  orderId: string;
+}): Promise<AutomaticSettlementOutcome> {
+  return settleEscrowForOrder(input.orderType, input.orderId, 'release');
+}
+
+/** Outbox handler: the order was rejected with nothing dispensed, or a lab
+ * order expired unfulfilled. Refund its escrow. */
+export function refundEscrowForUnfulfilledOrder(input: {
+  orderType: 'prescription' | 'lab_order';
+  orderId: string;
+}): Promise<AutomaticSettlementOutcome> {
+  return settleEscrowForOrder(input.orderType, input.orderId, 'refund');
 }
 
 /**
@@ -743,7 +984,7 @@ export const paymentsExportSection: PatientExportSection = {
       pageSize,
       (cursor, take) => paymentsRepo.findPaymentIntentsPageForPatient(subject.patientProfileId, cursor, take),
       async (rows) => {
-        const facilities = await paymentsRepo.findFacilityNamesByIds([...new Set(rows.map((row) => row.facilityId))]);
+        const facilities = await getFacilityNamesByIds([...new Set(rows.map((row) => row.facilityId))]);
         const facilityNames = new Map(facilities.map((facility) => [facility.id, facility.name]));
         return rows.map((row) => ({
           id: row.id,
@@ -767,4 +1008,143 @@ export const paymentsExportSection: PatientExportSection = {
  * a patient who has any is never purged after deletion. */
 export function hasPaymentIntentsForPatient(patientProfileId: string): Promise<boolean> {
   return paymentsRepo.patientHasPaymentIntents(patientProfileId);
+}
+
+// --- Escrow funding reconciliation (issue #24) ----------------------------
+//
+// A fund request claims `created -> funding` before the chain call and writes
+// `escrowed` after it. A crash in between leaves a row in `funding` and an
+// escrow the database has never seen. Retrying the chain call would create a
+// SECOND escrow, so recovery is explicit:
+//   - `reportStuckFundingClaims` lists claims older than the stale window
+//     plus every escrow creation the event poller observed with no
+//     PaymentIntent pointing at it.
+//   - `adoptObservedEscrow` attaches an observed escrow id to a stuck claim
+//     (the operator has confirmed it is that intent's escrow).
+//   - `abandonStuckFundingClaim` returns a claim to `created` (the operator
+//     has confirmed no escrow was ever created for it).
+// `scripts/reconcile-escrows.ts` is the operator entry point for all three.
+
+export interface StuckFundingReport {
+  staleAfterSeconds: number;
+  /** Intents claimed for funding but never resolved, oldest first. */
+  stuckClaims: Array<{
+    id: string;
+    facilityId: string;
+    amount: string;
+    assetCode: string;
+    fundingStartedAt: Date | null;
+    sorobanContractId: string | null;
+  }>;
+  /** Observed on-chain escrows with no PaymentIntent referencing them. */
+  untrackedEscrows: Array<{
+    escrowId: string;
+    contractId: string;
+    eventType: string;
+    txHash: string | null;
+    ledger: number;
+    detectedAt: Date;
+  }>;
+}
+
+/** How long a `funding` claim may stay unresolved before it is reported.
+ * Deliberately generous: a busy testnet RPC can take tens of seconds. */
+function staleFundingCutoff(now: Date): Date {
+  return new Date(now.getTime() - config.payments.escrowFundingStaleAfterSeconds * 1000);
+}
+
+/** Escrow event types that mean "an escrow now exists" — the contract emits
+ * these from `create_escrow`. Matched case-insensitively because the decoder
+ * copies the raw topic symbol. */
+const ESCROW_CREATION_EVENT_TYPES = new Set(['created', 'create_escrow', 'funded', 'deposit']);
+
+/** Read-only: no status is changed here. An operator resolves each entry
+ * explicitly, because guessing would either double-fund or strand an escrow. */
+export async function reportStuckFundingClaims(now = new Date()): Promise<StuckFundingReport> {
+  const staleAfter = staleFundingCutoff(now);
+  const stuck = await paymentsRepo.findStaleFundingClaims(staleAfter, 200);
+  // Observed creations read directly from the ingestion table the event
+  // poller already owns — the SDK (0.2.0) exposes no "list escrows" call, so
+  // this is the only on-chain view this repo has.
+  const observed = await prisma.escrowChainEvent.findMany({
+    where: { paymentIntentId: null, state: { not: 'matched' } },
+    orderBy: [{ detectedAt: 'desc' }, { id: 'desc' }],
+    take: 500,
+  });
+  const untrackedEscrows = observed
+    .filter((event) => event.escrowId !== null && ESCROW_CREATION_EVENT_TYPES.has(event.eventType.toLowerCase()))
+    .map((event) => ({
+      escrowId: (event.escrowId as bigint).toString(),
+      contractId: event.contractId,
+      eventType: event.eventType,
+      txHash: event.txHash,
+      ledger: event.ledger,
+      detectedAt: event.detectedAt,
+    }));
+
+  return {
+    staleAfterSeconds: config.payments.escrowFundingStaleAfterSeconds,
+    stuckClaims: stuck.map((intent) => ({
+      id: intent.id,
+      facilityId: intent.facilityId,
+      amount: intent.amount.toString(),
+      assetCode: intent.assetCode,
+      fundingStartedAt: intent.fundingStartedAt,
+      sorobanContractId: intent.sorobanContractId,
+    })),
+    untrackedEscrows,
+  };
+}
+
+/** Resolves a stuck claim against an escrow the chain actually has. The
+ * escrow id is operator-supplied: the SDK cannot search by condition_ref and
+ * a wrong id must never be adopted automatically. It is only accepted when
+ * the event poller has already observed that escrow on a registered contract,
+ * so a typo fails closed instead of writing a bogus escrow id. Conditional on
+ * `funding`, so a request that resolved concurrently wins and this returns
+ * null. */
+export async function adoptObservedEscrow(input: {
+  paymentIntentId: string;
+  escrowId: string;
+  contractId: string;
+}): Promise<PaymentIntent | null> {
+  const intent = await getPaymentIntent(input.paymentIntentId);
+  if (intent.status !== 'funding') {
+    throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'funding' — nothing to reconcile.`);
+  }
+  if (!config.payments.contractIds.includes(input.contractId)) {
+    throw new HttpError(400, 'contractId is not a registered escrow contract.');
+  }
+  let escrowId: bigint;
+  try {
+    escrowId = BigInt(input.escrowId);
+  } catch {
+    throw new HttpError(400, 'escrowId must be a numeric escrow id.');
+  }
+  const observed = await prisma.escrowChainEvent.findFirst({
+    where: { contractId: input.contractId, escrowId },
+    orderBy: { detectedAt: 'desc' },
+  });
+  if (!observed) {
+    throw new HttpError(404, 'That escrow has not been observed on-chain for this contract — refusing to adopt it.');
+  }
+  return commitTransition(auditService.SYSTEM_ACTOR, intent, 'payment_intent.reconciled', 'escrowed', (tx) =>
+    paymentsRepo.markEscrowed(tx, intent.id, {
+      escrowId,
+      stellarTxHash: observed.txHash ?? `reconciled-${escrowId.toString()}`,
+      sorobanContractId: input.contractId,
+    }),
+  );
+}
+
+/** Resolves a stuck claim the operator has confirmed never reached the chain
+ * (no escrow exists) — the intent becomes fundable again. */
+export async function abandonStuckFundingClaim(paymentIntentId: string): Promise<PaymentIntent | null> {
+  const intent = await getPaymentIntent(paymentIntentId);
+  if (intent.status !== 'funding') {
+    throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'funding' — nothing to release.`);
+  }
+  return commitTransition(auditService.SYSTEM_ACTOR, intent, 'payment_intent.funding_abandoned', 'created', (tx) =>
+    paymentsRepo.releaseFundingClaim(tx, paymentIntentId),
+  );
 }
