@@ -45,6 +45,10 @@ export const adminCancelSchema = z.object({
   reason: z.string().trim().min(1).max(200),
 });
 
+export const withdrawReferralSchema = z.object({
+  reason: z.string().trim().min(1).max(200),
+});
+
 const referralStatusSchema = z.enum(['pending', 'accepted', 'declined', 'completed', 'expired', 'cancelled']);
 
 export const incomingReferralsQuerySchema = z

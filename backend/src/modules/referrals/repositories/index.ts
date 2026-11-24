@@ -60,6 +60,7 @@ export function updateReferralConditional(
     referringDoctorNotifiedAt?: Date;
     expiredAt?: Date;
     expiredReason?: ExpiryReason;
+    cancelledReason?: string;
   },
 ) {
   return db.referral.updateMany({
