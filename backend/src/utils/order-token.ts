@@ -49,4 +49,3 @@ export function verifyOrderToken(token: string): OrderTokenPayload {
   }
   return payload;
 }
-EOF

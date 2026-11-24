@@ -31,4 +31,3 @@ export async function searchLabTests(input: { q?: string; limit?: number }): Pro
 export function getLabTestByCode(code: string): LabTest | undefined {
   return CATALOG.find((t) => t.code === code);
 }
-EOF

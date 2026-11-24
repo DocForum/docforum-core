@@ -655,7 +655,7 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 // --- Order verification (issue #71) -------------------------------------
-import { issueOrderToken, verifyOrderToken } from '../../../utils/order-token';
+import { issueOrderToken, verifyOrderToken } from '../../../utils/order-token.js';
 export { issueOrderToken, verifyOrderToken };
 
 const verifyRateBuckets = new Map<string, { count: number; resetAt: number }>();
@@ -684,7 +684,7 @@ export async function verifyOrder(actor: auditService.AuditActor, token: string)
   const payload = verifyOrderToken(token);
 
   if (payload.kind === 'prescription') {
-    const { getPrescription } = await import('../../prescriptions/services');
+    const { getPrescription } = await import('../../prescriptions/services/index.js');
     const order = await getPrescription(payload.orderId);
     if (facility.type !== 'pharmacy') {
       return { valid: false, reason: 'ineligible_facility' };
@@ -700,7 +700,7 @@ export async function verifyOrder(actor: auditService.AuditActor, token: string)
     };
   }
 
-  const { getLabOrder } = await import('../../lab-orders/services');
+  const { getLabOrder } = await import('../../lab-orders/services/index.js');
   const order = await getLabOrder(payload.orderId);
   if (facility.type !== 'lab') {
     return { valid: false, reason: 'ineligible_facility' };
