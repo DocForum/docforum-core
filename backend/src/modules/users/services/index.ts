@@ -69,7 +69,7 @@ export async function createAdminInvite(
   input: CreateAdminInviteInput,
   actor?: AuditActor,
 ): Promise<CreatedAdminInvite> {
-  const email = input.email.trim();
+  const email = input.email.trim().toLowerCase();
   if (!email) throw new HttpError(400, 'An email address is required.');
 
   const existing = await usersRepo.findUserByEmail(email);
@@ -324,7 +324,7 @@ export async function redeemAdminInvite(input: RedeemAdminInviteInput): Promise<
 
   const user = await usersRepo.consumeAdminInviteAndCreateAdmin({
     inviteId: invite.id,
-    email: input.email.trim(),
+    email: input.email.trim().toLowerCase(),
     passwordHash: input.passwordHash,
     consumedAt: new Date(),
   });

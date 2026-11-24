@@ -15,25 +15,55 @@
     }
   ],
   "tags": [
-    {"name": "Health"},
-    {"name": "Auth"},
-    {"name": "Doctors"},
-    {"name": "Specialties"},
-    {"name": "Availability"},
-    {"name": "Appointments"},
-    {"name": "Consultations"},
-    {"name": "Referrals"},
-    {"name": "Orders"},
-    {"name": "Payments"},
-    {"name": "Patients"},
-    {"name": "Facilities"},
-    {"name": "Admin"},
-    {"name": "Audit"}
+    {
+      "name": "Health"
+    },
+    {
+      "name": "Auth"
+    },
+    {
+      "name": "Doctors"
+    },
+    {
+      "name": "Specialties"
+    },
+    {
+      "name": "Availability"
+    },
+    {
+      "name": "Appointments"
+    },
+    {
+      "name": "Consultations"
+    },
+    {
+      "name": "Referrals"
+    },
+    {
+      "name": "Orders"
+    },
+    {
+      "name": "Payments"
+    },
+    {
+      "name": "Patients"
+    },
+    {
+      "name": "Facilities"
+    },
+    {
+      "name": "Admin"
+    },
+    {
+      "name": "Audit"
+    }
   ],
   "paths": {
     "/health": {
       "get": {
-        "tags": ["Health"],
+        "tags": [
+          "Health"
+        ],
         "summary": "Health check",
         "responses": {
           "200": {
@@ -43,7 +73,12 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "status": {"type": "string", "enum": ["ok"]}
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok"
+                      ]
+                    }
                   }
                 }
               }
@@ -54,7 +89,9 @@
     },
     "/auth/signup": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "summary": "Sign up",
         "requestBody": {
           "required": true,
@@ -62,25 +99,56 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["role", "email", "password", "fullName"],
+                "required": [
+                  "role",
+                  "email",
+                  "password",
+                  "fullName"
+                ],
                 "properties": {
-                  "role": {"type": "string", "enum": ["patient", "doctor"]},
-                  "email": {"type": "string", "format": "email"},
-                  "password": {"type": "string", "minLength": 8},
-                  "fullName": {"type": "string"}
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "patient",
+                      "doctor"
+                    ]
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 72,
+                    "description": "Account password (min 8 characters, max 72 UTF-8 bytes, rejected if commonly breached)"
+                  },
+                  "fullName": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": {"description": "Success"}
+          "201": {
+            "description": "Account created successfully"
+          },
+          "400": {
+            "description": "Validation error or invalid password. See [Error Catalogue](/api/errors#password-errors)."
+          },
+          "409": {
+            "description": "Email already registered. See [Error Catalogue](/api/errors#EMAIL_ALREADY_REGISTERED)."
+          }
         }
       }
     },
     "/auth/login": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "summary": "Login",
         "requestBody": {
           "required": true,
@@ -88,77 +156,149 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["email", "password"],
+                "required": [
+                  "email",
+                  "password"
+                ],
                 "properties": {
-                  "email": {"type": "string", "format": "email"},
-                  "password": {"type": "string"}
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Login successful"
+          },
+          "400": {
+            "description": "Validation error. See [Error Catalogue](/api/errors#validation-errors)."
+          },
+          "401": {
+            "description": "Invalid email or password. See [Error Catalogue](/api/errors#AUTH_INVALID_CREDENTIALS)."
+          },
+          "429": {
+            "description": "Login attempts locked or throttled. See [Error Catalogue](/api/errors#RATE_LIMIT_EXCEEDED)."
+          }
         }
       }
     },
     "/auth/refresh": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "summary": "Refresh token",
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/auth/logout": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "summary": "Logout",
         "responses": {
-          "204": {"description": "No Content"}
+          "204": {
+            "description": "No Content"
+          }
         }
       }
     },
     "/doctors": {
       "get": {
-        "tags": ["Doctors"],
+        "tags": [
+          "Doctors"
+        ],
         "summary": "List public doctors",
         "parameters": [
-          {"name": "specialty", "in": "query", "schema": {"type": "string"}},
-          {"name": "q", "in": "query", "schema": {"type": "string"}},
-          {"name": "limit", "in": "query", "schema": {"type": "integer"}},
-          {"name": "cursor", "in": "query", "schema": {"type": "string"}}
+          {
+            "name": "specialty",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/specialties": {
       "get": {
-        "tags": ["Specialties"],
+        "tags": [
+          "Specialties"
+        ],
         "summary": "List specialties",
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/availability/doctors/{doctorProfileId}/slots": {
       "get": {
-        "tags": ["Availability"],
+        "tags": [
+          "Availability"
+        ],
         "summary": "List doctor slots",
         "parameters": [
-          {"name": "doctorProfileId", "in": "path", "required": true, "schema": {"type": "string"}}
+          {
+            "name": "doctorProfileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/appointments": {
       "post": {
-        "tags": ["Appointments"],
+        "tags": [
+          "Appointments"
+        ],
         "summary": "Book appointment",
         "requestBody": {
           "required": true,
@@ -166,47 +306,96 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["availabilitySlotId"],
+                "required": [
+                  "availabilitySlotId"
+                ],
                 "properties": {
-                  "availabilitySlotId": {"type": "string"},
-                  "patientProfileId": {"type": "string"}
+                  "availabilitySlotId": {
+                    "type": "string"
+                  },
+                  "patientProfileId": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
+          },
+          "403": {
+            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
+          }
         }
       }
     },
     "/appointments/mine": {
       "get": {
-        "tags": ["Appointments"],
+        "tags": [
+          "Appointments"
+        ],
         "summary": "My appointments",
         "parameters": [
-          {"name": "patientProfileId", "in": "query", "schema": {"type": "string"}}
+          {
+            "name": "patientProfileId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
+          },
+          "403": {
+            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
+          }
         }
       }
     },
     "/appointments/doctor/today": {
       "get": {
-        "tags": ["Appointments"],
+        "tags": [
+          "Appointments"
+        ],
         "summary": "Doctor's today appointments",
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
+          },
+          "403": {
+            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
+          }
         }
       }
     },
     "/appointments/{appointmentId}/consultation": {
       "post": {
-        "tags": ["Consultations"],
+        "tags": [
+          "Consultations"
+        ],
         "summary": "Close consultation",
         "parameters": [
-          {"name": "appointmentId", "in": "path", "required": true, "schema": {"type": "string"}}
+          {
+            "name": "appointmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -214,23 +403,45 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["outcome", "notes"],
+                "required": [
+                  "outcome",
+                  "notes"
+                ],
                 "properties": {
-                  "outcome": {"type": "string", "enum": ["resolved", "referred", "follow_up_needed"]},
-                  "notes": {"type": "string"}
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "resolved",
+                      "referred",
+                      "follow_up_needed"
+                    ]
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
+          },
+          "403": {
+            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
+          }
         }
       }
     },
     "/consultations": {
       "post": {
-        "tags": ["Consultations"],
+        "tags": [
+          "Consultations"
+        ],
         "summary": "Create consultation",
         "requestBody": {
           "required": true,
@@ -238,24 +449,47 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["appointmentId"],
+                "required": [
+                  "appointmentId"
+                ],
                 "properties": {
-                  "appointmentId": {"type": "string"},
-                  "outcome": {"type": "string", "enum": ["resolved", "referred", "follow_up_needed"]},
-                  "notes": {"type": "string"}
+                  "appointmentId": {
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "resolved",
+                      "referred",
+                      "follow_up_needed"
+                    ]
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
+          },
+          "403": {
+            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
+          }
         }
       }
     },
     "/referrals": {
       "post": {
-        "tags": ["Referrals"],
+        "tags": [
+          "Referrals"
+        ],
         "summary": "Create referral",
         "requestBody": {
           "required": true,
@@ -263,34 +497,65 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["sourceConsultationId", "snapshotNotes"],
+                "required": [
+                  "sourceConsultationId",
+                  "snapshotNotes"
+                ],
                 "properties": {
-                  "sourceConsultationId": {"type": "string"},
-                  "targetDoctorId": {"type": "string"},
-                  "targetSpecialtyId": {"type": "string"},
-                  "snapshotNotes": {"type": "string"}
+                  "sourceConsultationId": {
+                    "type": "string"
+                  },
+                  "targetDoctorId": {
+                    "type": "string"
+                  },
+                  "targetSpecialtyId": {
+                    "type": "string"
+                  },
+                  "snapshotNotes": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
+          },
+          "403": {
+            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
+          }
         }
       }
     },
     "/referrals/mine": {
       "get": {
-        "tags": ["Referrals"],
+        "tags": [
+          "Referrals"
+        ],
         "summary": "My referrals",
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
+          },
+          "403": {
+            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
+          }
         }
       }
     },
     "/orders/consultations": {
       "post": {
-        "tags": ["Orders"],
+        "tags": [
+          "Orders"
+        ],
         "summary": "Create consultation for orders",
         "requestBody": {
           "required": true,
@@ -298,24 +563,42 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["appointmentId"],
+                "required": [
+                  "appointmentId"
+                ],
                 "properties": {
-                  "appointmentId": {"type": "string"},
-                  "outcome": {"type": "string"},
-                  "notes": {"type": "string"}
+                  "appointmentId": {
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
+          },
+          "403": {
+            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
+          }
         }
       }
     },
     "/payments/wallet-link": {
       "post": {
-        "tags": ["Payments"],
+        "tags": [
+          "Payments"
+        ],
         "summary": "Link wallet",
         "requestBody": {
           "required": true,
@@ -323,40 +606,149 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["stellarPublicKey"],
+                "required": [
+                  "stellarPublicKey"
+                ],
                 "properties": {
-                  "stellarPublicKey": {"type": "string"}
+                  "stellarPublicKey": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
+          },
+          "403": {
+            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
+          }
         }
       }
     },
     "/patients/me/export": {
       "post": {
-        "tags": ["Patients"],
+        "tags": [
+          "Patients"
+        ],
         "summary": "Request data export",
         "responses": {
-          "202": {"description": "Accepted"}
+          "202": {
+            "description": "Accepted"
+          }
         }
       }
     },
     "/facilities/eligible": {
       "get": {
-        "tags": ["Facilities"],
+        "tags": [
+          "Facilities"
+        ],
         "summary": "Get eligible facilities",
         "parameters": [
-          {"name": "type", "in": "query", "required": true, "schema": {"type": "string", "enum": ["lab", "pharmacy"]}},
-          {"name": "catalogItemCode", "in": "query", "schema": {"type": "string"}},
-          {"name": "asset", "in": "query", "schema": {"type": "string"}},
-          {"name": "at", "in": "query", "schema": {"type": "string"}}
+          {
+            "name": "type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "lab",
+                "pharmacy"
+              ]
+            }
+          },
+          {
+            "name": "catalogItemCode",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "asset",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/auth/password": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Change password",
+        "description": "Authenticated password change endpoint. Re-verifies current password through throttled confirmPassword helper. Bumps tokenVersion and revokes other refresh sessions while keeping caller's current session alive. See [Error Catalogue](/api/errors#password-errors).",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "currentPassword",
+                  "newPassword"
+                ],
+                "properties": {
+                  "currentPassword": {
+                    "type": "string",
+                    "description": "Current account password"
+                  },
+                  "newPassword": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 72,
+                    "description": "New password (min 8 characters, max 72 UTF-8 bytes, not commonly breached)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password updated successfully"
+          },
+          "400": {
+            "description": "Invalid new password or identical to current password. See [Error Catalogue](/api/errors#password-errors)."
+          },
+          "401": {
+            "description": "Invalid current password. See [Error Catalogue](/api/errors#AUTH_INVALID_CREDENTIALS)."
+          },
+          "403": {
+            "description": "Account deactivated. See [Error Catalogue](/api/errors#ACCOUNT_DEACTIVATED)."
+          },
+          "429": {
+            "description": "Password change attempts throttled. See [Error Catalogue](/api/errors#RATE_LIMIT_EXCEEDED)."
+          }
         }
       }
     }

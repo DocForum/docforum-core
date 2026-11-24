@@ -48,6 +48,9 @@ authRouter.post('/logout', requireAllowedOrigin, authController.logout);
 authRouter.post('/password-reset/request', authController.requestPasswordReset);
 authRouter.post('/password-reset/confirm', authController.confirmPasswordReset);
 
+// Phase 8, issue #270 — authenticated password change.
+authRouter.post('/password', authenticate, authController.changePassword);
+
 // Session management (Phase 8 #38). Note the ordering: `DELETE /sessions`
 // (revoke all others) is registered before `DELETE /sessions/:id` — Express
 // matches in registration order, and `/sessions` must not be read as an id.

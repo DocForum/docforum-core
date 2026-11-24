@@ -13,7 +13,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import { sendPasswordResetLink } from '../../notifications/services';
-import { hashPassword } from './password';
+import { hashPassword, validatePasswordStrength } from './password';
 import {
   consumePasswordResetToken,
   createPasswordResetToken,
@@ -91,6 +91,8 @@ export async function confirmPasswordReset(input: ConfirmPasswordResetInput): Pr
   }
   if (record.usedAt) throw new HttpError(400, GENERIC_INVALID_TOKEN_MESSAGE);
   if (record.expiresAt.getTime() <= Date.now()) throw new HttpError(400, GENERIC_INVALID_TOKEN_MESSAGE);
+
+  validatePasswordStrength(input.newPassword);
 
   const passwordHash = await hashPassword(input.newPassword);
   const consumed = await consumePasswordResetToken({

@@ -19,6 +19,7 @@ on:
     branches: [main]
     paths:
       - 'docs/site/**'
+      - 'backend/openapi.json'
       - 'PRD.md'
       - 'ARCHITECTURE.md'
       - 'ARCHITECTURE_ESSENTIALS.md'

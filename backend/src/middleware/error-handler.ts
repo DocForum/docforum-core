@@ -88,7 +88,14 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
 
   if (err instanceof ZodError) {
     requestLogger.warn({ err }, 'Request validation failed');
-    res.status(400).json({ message: err.issues.map((issue) => issue.message).join('; ') });
+    const customIssue = err.issues.find(
+      (issue) => (issue as unknown as { params?: { code?: string } }).params?.code,
+    ) as unknown as { params?: { code?: string } } | undefined;
+    const code = customIssue?.params?.code;
+    const locale = resolveLocale(req.user?.locale, req.headers['accept-language']);
+    const message = err.issues.map((issue) => issue.message).join('; ');
+    const localized = code ? localizedErrorMessage(locale, code, message) : message;
+    res.status(400).json(code ? { message: localized, code } : { message });
     return;
   }
 

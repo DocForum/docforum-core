@@ -102,6 +102,21 @@ typo fails closed. Why the report reads `EscrowChainEvent` rather than the
 chain directly: `@docforum/escrow-sdk` 0.2.0 exposes no "list escrows" call.
 No secret or patient identifier is printed.
 
+## `backend/scripts/preflight-case-sensitive-emails.mjs`
+
+Preflight check for case-insensitive email uniqueness (Phase 8, issue #268).
+Runs against the database before applying the `20261124160000_case_insensitive_user_email`
+migration to verify no existing accounts collide when normalised to lowercase:
+
+```
+node backend/scripts/preflight-case-sensitive-emails.mjs
+```
+
+If duplicate groups exist (e.g. `Ana@x.com` and `ana@x.com`), the script
+reports every collision with account IDs and instructions for operators to
+resolve them (renaming or tombstoning obsolete accounts) before proceeding.
+Exits 0 when safe to migrate, 1 on collision.
+
 ## `scripts/fold-changelog.mjs`
 
 Maintainer script. Contributors add their `ROADMAP.md` changelog entry as a

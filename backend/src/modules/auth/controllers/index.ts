@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import * as authService from '../services';
 import {
+  changePasswordSchema,
   clearLoginAttemptsSchema,
   confirmEmailChangeSchema,
   loginSchema,
@@ -197,6 +198,37 @@ export async function confirmPasswordReset(req: Request, res: Response) {
   // still holds the old one isn't left sending a dead token.
   res.clearCookie(REFRESH_COOKIE, config.cookie);
   res.status(200).json({ message: 'Password updated. Please sign in with your new password.' });
+}
+
+/** `POST /auth/password` — Authenticated password change (Phase 8, issue #270). */
+export async function changePassword(req: Request, res: Response) {
+  const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
+  const userId = requireUserId(req);
+  const currentSessionId = authService.sessionIdFromRefreshToken(refreshCookieValue(req));
+  try {
+    const { refreshToken } = await authService.changePassword(
+      {
+        userId,
+        currentPassword,
+        newPassword,
+        ip: req.ip,
+        currentSessionId,
+      },
+      auditActor(req),
+    );
+
+    // If caller has an active session, update refresh cookie with the fresh token
+    if (refreshToken) {
+      setRefreshCookie(res, refreshToken);
+    }
+
+    res.status(200).json({ message: 'Password changed successfully.' });
+  } catch (err) {
+    if (err instanceof authService.LoginThrottledError) {
+      res.set('Retry-After', String(err.retryAfterSeconds));
+    }
+    throw err;
+  }
 }
 
 // --- TOTP two-factor authentication (Phase 8, issue #36) ----------------

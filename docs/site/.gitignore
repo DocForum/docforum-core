@@ -5,6 +5,7 @@ node_modules/
 # Synced at build time from each repo's own files — never committed, see
 # scripts/sync-docs.mjs. Committing these would create exactly the doc-
 # drift problem this repo's AGENTS.md is built to prevent.
+/public/openapi.json
 /product/
 /architecture/overview.md
 /architecture/essentials.md

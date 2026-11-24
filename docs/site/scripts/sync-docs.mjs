@@ -43,15 +43,200 @@ function rewriteRelativeLinks(markdown, repo) {
 async function fetchRemote(repo, filePath, to) {
   const url = `https://raw.githubusercontent.com/DocForum/${repo}/main/${filePath}`;
   const dest = path.join(SITE_ROOT, to);
-  const res = await fetch(url);
-  if (!res.ok) {
-    console.warn(`  SKIPPED (${res.status}) ${repo}/${filePath} — file may not exist on main`);
+  let res;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      res = await fetch(url);
+      break;
+    } catch (err) {
+      if (attempt === 3) {
+        console.warn(`  SKIPPED (${err.message}) ${repo}/${filePath} — network error after 3 attempts`);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 1000 * attempt));
+    }
+  }
+  if (!res || !res.ok) {
+    console.warn(`  SKIPPED (${res?.status}) ${repo}/${filePath} — file may not exist on main`);
     return;
   }
   const content = rewriteRelativeLinks(await res.text(), repo);
   await mkdir(path.dirname(dest), { recursive: true });
   await writeFile(dest, content);
   console.log(`  synced (remote) ${repo}/${filePath} -> docs/site/${to}`);
+}
+
+async function syncOpenApiAndApiPages() {
+  const openapiSrc = path.join(CORE_ROOT, 'backend/openapi.json');
+  if (!existsSync(openapiSrc)) {
+    throw new Error('Build failed: backend/openapi.json does not exist');
+  }
+
+  const rawSpec = await readFile(openapiSrc, 'utf8');
+  let parsedSpec;
+  try {
+    parsedSpec = JSON.parse(rawSpec);
+  } catch (err) {
+    throw new Error(`Build failed: backend/openapi.json is not valid JSON: ${err.message}`);
+  }
+
+  if (!parsedSpec.openapi || !parsedSpec.openapi.startsWith('3.')) {
+    throw new Error(`Build failed: backend/openapi.json missing valid OpenAPI 3.x version: ${parsedSpec.openapi}`);
+  }
+
+  if (!parsedSpec.info?.title) {
+    throw new Error('Build failed: backend/openapi.json missing info.title');
+  }
+
+  if (!parsedSpec.paths || typeof parsedSpec.paths !== 'object' || Object.keys(parsedSpec.paths).length === 0) {
+    throw new Error('Build failed: backend/openapi.json has no paths defined');
+  }
+
+  console.log(`  validated backend/openapi.json (${Object.keys(parsedSpec.paths).length} paths)`);
+
+  const publicDest = path.join(SITE_ROOT, 'public/openapi.json');
+  await mkdir(path.dirname(publicDest), { recursive: true });
+  await writeFile(publicDest, rawSpec);
+  console.log('  synced (local)  backend/openapi.json -> docs/site/public/openapi.json');
+
+  // 1. Narrative API Reference (formerly the hand-maintained reference)
+  await copyLocal('docs/api/README.md', 'api/narrative.md');
+
+  // 2. Interactive Reference page (renders OpenAPI spec)
+  const referenceContent = `---
+title: Interactive API Reference
+outline: false
+---
+
+# Interactive API Reference
+
+Interactive API reference rendered from the OpenAPI 3 specification.
+Explore endpoints, request payloads, and response status codes below.
+
+- [Narrative API Documentation](./narrative.md) — Module overview and architectural background
+- [Error Catalogue](./errors.md) — Standardized error codes and troubleshooting
+
+<ClientOnly>
+  <ApiReference />
+</ClientOnly>
+`;
+  const referenceDest = path.join(SITE_ROOT, 'api/reference.md');
+  await mkdir(path.dirname(referenceDest), { recursive: true });
+  await writeFile(referenceDest, referenceContent);
+  console.log('  synced (local)  generated -> docs/site/api/reference.md');
+
+  // 3. Error Catalogue page
+  const errorsContent = `---
+title: Error Catalogue
+outline: deep
+---
+
+# Error Catalogue
+
+Standardized error codes returned across DocForum API endpoints, grouped by domain. All error responses follow the standard error envelope:
+
+\`\`\`json
+{
+  "message": "Human-readable description of the error",
+  "code": "ERROR_CODE",
+  "details": {}
+}
+\`\`\`
+
+## Authentication & Session Errors {#auth-errors}
+
+### \`AUTH_INVALID_CREDENTIALS\`
+- **HTTP Status:** 401 Unauthorized
+- **Description:** Incorrect email or password provided during sign in.
+- **Resolution:** Verify credentials and retry. Repeated failures will trigger rate limiting.
+
+### \`ACCOUNT_DEACTIVATED\`
+- **HTTP Status:** 403 Forbidden
+- **Description:** Account has been administratively deactivated.
+- **Resolution:** Contact platform administration to review account status.
+
+### \`UNAUTHORIZED\`
+- **HTTP Status:** 401 Unauthorized
+- **Description:** Missing, expired, or invalid bearer token or session cookie.
+- **Resolution:** Obtain a fresh access token via \`POST /auth/login\` or \`POST /auth/refresh\`.
+
+### \`FORBIDDEN\`
+- **HTTP Status:** 403 Forbidden
+- **Description:** The authenticated user does not have sufficient role permissions for this resource.
+
+## Password & Validation Errors {#password-errors}
+
+### \`PASSWORD_TOO_LONG\`
+- **HTTP Status:** 400 Bad Request
+- **Description:** Password exceeds maximum allowed size of 72 UTF-8 bytes (Bcrypt password length bound).
+- **Resolution:** Choose a password containing 72 UTF-8 bytes or fewer.
+
+### \`PASSWORD_COMMONLY_BREACHED\`
+- **HTTP Status:** 400 Bad Request
+- **Description:** Password matches an entry in the static denylist of commonly breached passwords.
+- **Resolution:** Choose a unique, non-trivial passphrase.
+
+### \`PASSWORD_TOO_SHORT\`
+- **HTTP Status:** 400 Bad Request
+- **Description:** Password is shorter than the required minimum of 8 characters.
+- **Resolution:** Choose a password with at least 8 characters.
+
+### \`PASSWORD_UNCHANGED\`
+- **HTTP Status:** 400 Bad Request
+- **Description:** In \`POST /auth/password\`, the new password is identical to the current password.
+- **Resolution:** Enter a different new password.
+
+### \`VALIDATION_ERROR\` {#validation-errors}
+- **HTTP Status:** 400 Bad Request
+- **Description:** Request payload failed schema validation.
+- **Resolution:** Check field constraints in the endpoint documentation and the returned \`details\` object.
+
+## Email Verification & Invites {#email-errors}
+
+### \`EMAIL_NOT_VERIFIED\`
+- **HTTP Status:** 403 Forbidden
+- **Description:** Account email address has not been verified. Mutating clinical and payment actions are gated on email verification.
+- **Resolution:** Complete verification via the link sent to your registered email address, or request a new link via \`POST /auth/verify-email/resend\`.
+
+### \`EMAIL_ALREADY_VERIFIED\`
+- **HTTP Status:** 409 Conflict
+- **Description:** Attempted to resend verification or verify an already verified address.
+
+### \`EMAIL_ALREADY_REGISTERED\`
+- **HTTP Status:** 409 Conflict
+- **Description:** An account with this email address already exists (case-insensitive matching).
+- **Resolution:** Sign in to the existing account or use a different email address.
+
+### \`INVALID_VERIFICATION_TOKEN\`
+- **HTTP Status:** 400 Bad Request
+- **Description:** The verification token is invalid, unrecognized, or already consumed.
+
+### \`VERIFICATION_TOKEN_EXPIRED\`
+- **HTTP Status:** 400 Bad Request
+- **Description:** The verification token has expired. Request a new token via \`POST /auth/verify-email/resend\`.
+
+### \`INVITE_REVOKED\`
+- **HTTP Status:** 400 Bad Request
+- **Description:** The admin invite token was revoked by an administrator.
+
+## Rate Limiting {#rate-limiting}
+
+### \`RATE_LIMIT_EXCEEDED\`
+- **HTTP Status:** 429 Too Many Requests
+- **Description:** Client has exceeded the allowed request quota or failed login attempts threshold.
+- **Resolution:** Wait for the window specified in the \`Retry-After\` header before retrying.
+
+## Appointments & Clinical {#clinical-errors}
+
+### \`SLOT_ALREADY_BOOKED\`
+- **HTTP Status:** 409 Conflict
+- **Description:** The requested appointment slot has already been booked by another patient.
+- **Resolution:** Select another available availability slot from \`GET /availability/doctors/:id/slots\`.
+`;
+  const errorsDest = path.join(SITE_ROOT, 'api/errors.md');
+  await mkdir(path.dirname(errorsDest), { recursive: true });
+  await writeFile(errorsDest, errorsContent);
+  console.log('  synced (local)  generated -> docs/site/api/errors.md');
 }
 
 async function main() {
@@ -62,7 +247,7 @@ async function main() {
   await copyLocal('ARCHITECTURE.md', 'architecture/overview.md');
   await copyLocal('ARCHITECTURE_ESSENTIALS.md', 'architecture/essentials.md');
   await copyLocal('ROADMAP.md', 'roadmap/core.md');
-  await copyLocal('docs/api/README.md', 'api/reference.md');
+  await syncOpenApiAndApiPages();
   await copyLocal('docs/adr/0001-modular-monolith.md', 'architecture/adr/0001-modular-monolith.md');
   await copyLocal(
     'docs/adr/0002-stellar-escrow-for-fulfillment-payout.md',
