@@ -19,13 +19,13 @@ on:
     branches: [main]
     paths:
       - 'docs/site/**'
-      - 'backend/openapi.json'
       - 'PRD.md'
       - 'ARCHITECTURE.md'
       - 'ARCHITECTURE_ESSENTIALS.md'
       - 'ROADMAP.md'
       - 'docs/adr/**'
       - 'docs/api/**'
+      - 'docs/runbooks/**'
   workflow_dispatch:
   repository_dispatch:
     types:

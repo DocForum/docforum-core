@@ -32,6 +32,7 @@ export default defineConfig({
       { text: 'Architecture', link: '/architecture/overview' },
       { text: 'API', link: '/api/reference' },
       { text: 'Roadmap', link: '/roadmap/core' },
+      { text: 'Runbooks', link: '/runbooks/escrow-event-alerts' },
       { text: 'Repos', link: '/repos/core' },
     ],
 
@@ -70,16 +71,7 @@ export default defineConfig({
         },
       ],
 
-      '/api/': [
-        {
-          text: 'API Documentation',
-          items: [
-            { text: 'Interactive Reference', link: '/api/reference' },
-            { text: 'Narrative Overview', link: '/api/narrative' },
-            { text: 'Error Catalogue', link: '/api/errors' },
-          ],
-        },
-      ],
+      '/api/': [{ text: 'API', items: [{ text: 'Reference', link: '/api/reference' }] }],
 
       '/roadmap/': [
         {
@@ -88,6 +80,15 @@ export default defineConfig({
             { text: 'docforum-core', link: '/roadmap/core' },
             { text: 'docforum-web', link: '/repos/web/roadmap' },
             { text: 'docforum-escrow', link: '/repos/escrow/roadmap' },
+          ],
+        },
+      ],
+
+      '/runbooks/': [
+        {
+          text: 'Operator runbooks',
+          items: [
+            { text: 'Escrow event alerts', link: '/runbooks/escrow-event-alerts' },
           ],
         },
       ],

@@ -2,8 +2,8 @@
 // Pulls this site's content from each repo's own real docs — never a
 // hand-maintained copy. Runs before every dev/build (see package.json).
 // Everything it writes lands under docs/site/{product,architecture,api,
-// roadmap,repos}/ and is gitignored: the deployed site is always built
-// fresh from whatever's actually on `main` in each repo right now,
+// roadmap,runbooks,repos}/ and is gitignored: the deployed site is always
+// built fresh from whatever's actually on `main` in each repo right now,
 // there is no second copy to let drift.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -264,6 +264,12 @@ async function main() {
   await copyLocal(
     'docs/adr/0005-non-custodial-patient-payments.md',
     'architecture/adr/0005-non-custodial-patient-payments.md',
+  );
+
+  console.log('\nOperator runbooks (local — docs/runbooks/):');
+  await copyLocal(
+    'docs/runbooks/escrow-event-alerts.md',
+    'runbooks/escrow-event-alerts.md',
   );
 
   console.log('\ndocforum-web (remote — github.com/DocForum/docforum-web@main):');
