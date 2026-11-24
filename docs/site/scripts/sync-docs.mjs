@@ -81,6 +81,12 @@ async function main() {
     'architecture/adr/0005-non-custodial-patient-payments.md',
   );
 
+  console.log('\nOperator runbooks (local — docs/runbooks/):');
+  await copyLocal(
+    'docs/runbooks/escrow-event-alerts.md',
+    'runbooks/escrow-event-alerts.md',
+  );
+
   console.log('\ndocforum-web (remote — github.com/DocForum/docforum-web@main):');
   await fetchRemote('docforum-web', 'README.md', 'repos/web/readme.md');
   await fetchRemote('docforum-web', 'ARCHITECTURE_ESSENTIALS.md', 'repos/web/architecture.md');

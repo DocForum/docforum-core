@@ -11,7 +11,7 @@ to `main` that touches docs in this repo, manual `workflow_dispatch`, or
 ## The one rule this is built around
 
 **No content here is hand-maintained.** Every page under `product/`,
-`architecture/`, `api/`, `roadmap/`, and `repos/*/readme.md` /
+`architecture/`, `api/`, `roadmap/`, `runbooks/`, and `repos/*/readme.md` /
 `architecture.md` / `roadmap.md` / `adr-*.md` is synced at build time by
 `scripts/sync-docs.mjs` — this repo's own root docs are copied locally,
 `docforum-web`'s and `docforum-escrow`'s are fetched from their `main`
@@ -21,7 +21,8 @@ lost. Edit the source instead:
 
 - This repo's docs → `../../PRD.md`, `../../ARCHITECTURE.md`,
   `../../ARCHITECTURE_ESSENTIALS.md`, `../../ROADMAP.md`,
-  `../../docs/adr/*.md`, `../../docs/api/README.md`.
+  `../../docs/adr/*.md`, `../../docs/api/README.md`,
+  `../../docs/runbooks/*.md`.
 - `docforum-web`'s / `docforum-escrow`'s docs → their own repos.
 
 Only `.vitepress/` (config, theme) and the hand-authored pages
@@ -43,6 +44,13 @@ the synced content without starting/building anything.
 ## Rebuilding on upstream changes (cross-repo docs sync)
 
 The site deploys automatically when documentation changes land in `docforum-core`.
+That is limited by `.github/workflows/deploy-docs.yml`'s `paths:` filter, which
+lists `docs/site/**`, `PRD.md`, `ARCHITECTURE.md`, `ARCHITECTURE_ESSENTIALS.md`,
+`ROADMAP.md`, `docs/adr/**` and `docs/api/**` — `docs/runbooks/**` is not in it,
+so a push that only edits a runbook file does not redeploy the site and the
+deployed copy stays as it was. Adding `docs/runbooks/**` to that list (or
+running the workflow manually) picks it up.
+
 When documentation changes land on `main` in sibling repositories (`docforum-web`
 or `docforum-escrow`), the site is rebuilt via GitHub's `repository_dispatch` event
 ([issue #29](https://github.com/DocForum/docforum-core/issues/29)).
