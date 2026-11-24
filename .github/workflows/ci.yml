@@ -13,15 +13,18 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
       - run: npm ci
+
+      - name: Verify escrow SDK lockfile integrity
+        run: node -e "const p=require('./package-lock.json').packages['node_modules/@docforum/escrow-sdk']; if (!p || !p.integrity || !p.resolved.includes('docforum-escrow')) throw new Error('Escrow SDK must remain an integrity-checked release tarball'); console.log(p.resolved, p.integrity);"
 
       # Phase 8, issue #47: gate against high/critical advisories in
       # production dependencies (`npm audit --omit=dev --audit-level=high`
@@ -36,6 +39,15 @@ jobs:
 
       - name: Check message catalogue keys
         run: npm run i18n:check
+
+      - name: Check notification templates for PHI
+        run: npm run notifications:check
+
+      - name: Regenerate OpenAPI contract
+        run: npm run openapi:generate
+
+      - name: Check OpenAPI contract is committed
+        run: git diff --exit-code -- backend/openapi.json
 
       - run: npm run typecheck
 

@@ -44,6 +44,13 @@ import type { Prisma, Role } from '@prisma/client';
 export { verifyAccessToken } from './tokens';
 export type { AccessTokenPayload } from './tokens';
 
+/** Recipient lookup exposed for notification adapters; notifications never
+ * read the identity tables directly across the module boundary. */
+export async function getNotificationRecipient(userId: string) {
+  const user = await findUserById(userId);
+  return user ? { email: user.email, phone: user.phone } : null;
+}
+
 // Password reset (Phase 8 #33) lives in its own file; re-exported here so
 // controllers keep calling a single service surface.
 export {

@@ -63,6 +63,7 @@ model User {
   // Opposite of AccessLog.accessedByUser.
   accessLogs              AccessLog[]
   notifications           Notification[]
+  smsConsents             SmsConsent[]
   // Phase 8 (issue #42, docs/adr/0011): dependents this user is guardian of.
   guardianships           Guardianship[]
   sep10Challenges         Sep10Challenge[]

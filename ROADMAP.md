@@ -114,8 +114,8 @@ and issue links.
 - [ ] Trigger points per PRD FR-15/FR-16 (booking confirmed, referral created/accepted/declined, order ready, results available, new booking, lab results returned) — still blocked by Phases 3/4.
 - [x] Transactional outbox for domain events, starting with booking confirmed — [issue #94](https://github.com/DocForum/docforum-core/issues/94). Events publish in the booking transaction; a `SKIP LOCKED` worker retries at least-once handlers and dead-letters after five attempts.
 - [ ] Pick and integrate a real provider (email/SMS) behind the interface — provider choice is currently undecided (ARCHITECTURE.md §8). Tracked as [issue #17](https://github.com/DocForum/docforum-core/issues/17) (Trivial, 100 pts) — a decision task, unblocked now.
-- [ ] Email adapter, templates, and signed bounce/complaint webhook — [issue #95](https://github.com/DocForum/docforum-core/issues/95); depends on #17 and #93.
-- [ ] SMS adapter, delivery callbacks, consent/opt-out, and send cap — [issue #96](https://github.com/DocForum/docforum-core/issues/96); depends on #17 and #93.
+- [x] Email adapter, templates, and signed bounce/complaint webhook — [issue #95](https://github.com/DocForum/docforum-core/issues/95); depends on #17 and #93.
+- [x] SMS adapter, delivery callbacks, consent/opt-out, and send cap — [issue #96](https://github.com/DocForum/docforum-core/issues/96); depends on #17 and #93.
 **Status: In progress — provider decision made (see `docs/adr/0013-notification-provider.md`, issue #17). Trigger-point build-out still blocked by Phases 3 & 4 and deliberately left unscoped until those land.**
 - [ ] `Notification` model + dispatch interface (provider-agnostic, per ARCHITECTURE.md §2) — part of the trigger-point work, still blocked.
 - [ ] Trigger points per PRD FR-15/FR-16 (booking confirmed, referral created/accepted/declined, order ready, results available, new booking, lab results returned) — still blocked by Phases 3/4.

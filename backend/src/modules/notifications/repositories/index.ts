@@ -1,7 +1,55 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../../db/prisma-client';
+import { normalizedPhone } from '../../../config';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
+
+export async function setSmsConsent(userId: string, phone: string, status: 'opted_in' | 'opted_out') {
+	const normalized = normalizedPhone(phone);
+	return prisma.$executeRaw(Prisma.sql`
+		INSERT INTO "SmsConsent" ("id", "userId", "phone", "status", "updatedAt", "createdAt")
+		VALUES (gen_random_uuid(), ${userId}, ${normalized}, CAST(${status} AS "SmsConsentStatus"), NOW(), NOW())
+		ON CONFLICT ("userId", "phone") DO UPDATE SET "status" = EXCLUDED."status", "updatedAt" = NOW()
+	`);
+}
+
+export function setSmsConsentForPhone(phone: string, status: 'opted_in' | 'opted_out') {
+	return prisma.$executeRaw(Prisma.sql`
+		UPDATE "SmsConsent" SET "status" = CAST(${status} AS "SmsConsentStatus"), "updatedAt" = NOW()
+		WHERE "phone" = ${normalizedPhone(phone)}
+	`);
+}
+
+export async function hasSmsConsent(phone: string): Promise<boolean> {
+	const rows = await prisma.$queryRaw<Array<{ status: string }>>(Prisma.sql`
+		SELECT "status" FROM "SmsConsent" WHERE "phone" = ${normalizedPhone(phone)}
+		ORDER BY "updatedAt" DESC LIMIT 1
+	`);
+	return rows[0]?.status === 'opted_in';
+}
+
+export async function smsSentToday(phone: string): Promise<number> {
+	const rows = await prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+		SELECT COUNT(*)::bigint AS count FROM "NotificationDelivery"
+		WHERE "channel" = 'sms' AND "destination" = ${normalizedPhone(phone)}
+		AND "createdAt" >= CURRENT_DATE
+	`);
+	return Number(rows[0]?.count ?? 0);
+}
+
+export function recordDelivery(input: { notificationId: string; channel: 'email' | 'sms'; destination: string; status: string; providerMessageId?: string; error?: string }) {
+	return prisma.$executeRaw(Prisma.sql`
+		INSERT INTO "NotificationDelivery" ("id", "notificationId", "channel", "destination", "status", "providerMessageId", "error", "createdAt", "updatedAt")
+		VALUES (gen_random_uuid(), ${input.notificationId}, CAST(${input.channel} AS "NotificationChannel"), ${input.destination}, CAST(${input.status} AS "NotificationDeliveryStatus"), ${input.providerMessageId ?? null}, ${input.error ?? null}, NOW(), NOW())
+	`);
+}
+
+export function updateDeliveryByProviderId(providerMessageId: string, status: string, error?: string) {
+	return prisma.$executeRaw(Prisma.sql`
+		UPDATE "NotificationDelivery" SET "status" = CAST(${status} AS "NotificationDeliveryStatus"), "error" = ${error ?? null}, "updatedAt" = NOW()
+		WHERE "providerMessageId" = ${providerMessageId}
+	`);
+}
 
 export function createNotification(
 	userId: string,

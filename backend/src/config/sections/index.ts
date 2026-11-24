@@ -14,6 +14,7 @@ export * from './labResults';
 export * from './log';
 export * from './loginThrottle';
 export * from './objectStorage';
+export * from './notifications';
 export * from './orders';
 export * from './passwordReset';
 export * from './patientExport';

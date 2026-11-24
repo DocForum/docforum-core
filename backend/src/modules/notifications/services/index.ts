@@ -47,6 +47,18 @@ export function send(message: NotificationMessage): Promise<void> {
   return channel.send(message);
 }
 
+export async function optSmsIn(userId: string, phone: string) {
+	return notificationsRepo.setSmsConsent(userId, phone, 'opted_in');
+}
+
+export async function optSmsOut(userId: string, phone: string) {
+	return notificationsRepo.setSmsConsent(userId, phone, 'opted_out');
+}
+
+export async function canSendSms(phone: string): Promise<boolean> {
+	return notificationsRepo.hasSmsConsent(phone) && (await notificationsRepo.smsSentToday(phone)) < config.notifications.sms.dailyCap;
+}
+
 export async function sendPasswordResetLink(input: {
   email: string;
   token: string;
