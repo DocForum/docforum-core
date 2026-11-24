@@ -52,6 +52,16 @@ describe('generated access matrix (issue #357)', () => {
     // The lists are reads, so they skip the verified-email gate.
     expect(endpoint('GET', '/referrals/mine').verifiedEmail).toBe(false);
     expect(endpoint('GET', '/referrals/admin/queue').roles).toEqual(['admin']);
+
+    const withdraw = endpoint('POST', '/referrals/:referralId/withdraw');
+    expect(withdraw.roles).toEqual(['doctor']);
+    expect(withdraw.verifiedEmail).toBe(true);
+    // The detail route carries no `requireRole`: `getReferralDetail` decides by
+    // role in the service, so a row here can only say "any authenticated
+    // caller reaches the handler" — the limit the document states up front.
+    const detail = endpoint('GET', '/referrals/:referralId');
+    expect(detail.roles).toBeNull();
+    expect(detail.auth).toEqual(['authenticate']);
   });
 
   it('reports both gates on a booking write', () => {
