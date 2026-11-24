@@ -399,6 +399,45 @@ export async function declineReferral(actor: auditService.AuditActor, referralId
   });
 }
 
+export async function withdrawReferral(
+  actor: auditService.AuditActor,
+  referralId: string,
+  input: { reason: string },
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const referringDoctor = await doctorsService.getMyDoctorProfile(actor.userId);
+
+  return prisma.$transaction(async (tx) => {
+    const referral = await referralsRepo.findReferralById(tx, referralId);
+    if (!referral || referral.referringDoctorId !== referringDoctor.id) {
+      throw new HttpError(404, 'Referral not found.');
+    }
+    if (referral.status !== 'pending') {
+      throw new HttpError(409, 'Only a pending referral can be withdrawn.');
+    }
+
+    const updated = await referralsRepo.updateReferralConditional(
+      tx,
+      { id: referralId, status: 'pending', resultingAppointmentId: null },
+      { status: 'cancelled', cancelledReason: input.reason },
+    );
+    if (updated.count !== 1) {
+      throw new HttpError(409, 'This referral is no longer pending.');
+    }
+
+    await auditService.record(tx, actor, {
+      entityType: 'Referral',
+      entityId: referralId,
+      action: 'referral.withdraw',
+      fromState: 'pending',
+      toState: 'cancelled',
+      metadata: { reason: input.reason },
+    });
+
+    return referralsRepo.findReferralById(tx, referralId);
+  });
+}
+
 export async function listMine(userId: string) {
   const patientProfile = await patientsService.getMyPatientProfile(userId);
   return referralsRepo.listReferralsForPatient(patientProfile.id);
