@@ -62,6 +62,28 @@ what depends on what, and what's deliberately not yet scoped (and why).
 - Run `npm run typecheck && npm run test:all && npm run build` locally —
   this is exactly what CI checks.
 
+## 3.1 Generating a new module skeleton
+
+When an issue calls for a new backend module, start from the scaffold rather
+than copying an existing module by hand:
+
+```bash
+cd backend
+npm run new:module -- <name>   # lowercase kebab-case, e.g. lab-kits
+```
+
+This creates `backend/src/modules/<name>/` with `routes/`, `controllers/`,
+`services/`, `repositories/`, `validation.ts` and `mount.ts`. The name must be
+lowercase kebab-case; empty names, path separators, `..` and names that already
+exist are refused without writing anything.
+
+The generator deliberately does **not** edit shared files. It prints the exact
+lines to add by hand: the `src/mounts.ts` export, the `PatientExportSection`
+and retention-hold registry entries (only when the module holds patient data),
+and a `docs.d/` fragment for the module's API rows. Generated placeholders
+compile under `npm run typecheck`; replace them as the module's first real
+routes and services land.
+
 ## 4. Opening the PR
 
 - Branch off `main`.
