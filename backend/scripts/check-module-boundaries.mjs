@@ -27,7 +27,9 @@ function getModuleName(filePath) {
     if (parts.length >= 1) {
       return `modules/${parts[0]}`;
     }
-  } catch {}
+  } catch {
+    // Unresolvable path: treat as outside any module.
+  }
   return null;
 }
 
@@ -47,7 +49,9 @@ function resolveImportModule(importPath, fileDir) {
     if (parts.length >= 1) {
       return `modules/${parts[0]}`;
     }
-  } catch {}
+  } catch {
+    // Unresolvable path: treat as outside any module.
+  }
   return null;
 }
 
@@ -132,7 +136,7 @@ function getImports(filePath) {
 
   // Match import statements: import X from '...' or import { X } from '...'
   // Also match: import * as X from '...'
-  const importRegex = /import\s+[^\{]*?from\s+['"]([^'"]+)['"]/g;
+  const importRegex = /import\s+[^{]*?from\s+['"]([^'"]+)['"]/g;
   let match;
   while ((match = importRegex.exec(content)) !== null) {
     imports.add(match[1]);
