@@ -4,13 +4,22 @@ import {
   getCalendarDayBounds,
   parseScheduleDateRange,
 } from '../../src/modules/appointments/time-zones';
+import { isValidIanaTimeZone } from '../../src/utils/time-zones';
+import { signupSchema } from '../../src/modules/auth/validation';
+import { updateDoctorProfileSchema } from '../../src/modules/doctors/validation';
 
-describe('doctor time zones & day bounds (issues #290, #291)', () => {
-  it('validates IANA time zone identifiers', () => {
+describe('doctor time zones & day bounds (issues #290, #291, #360)', () => {
+  it('validates IANA time zone identifiers and rejects aliases', () => {
     expect(() => assertValidTimeZone('Africa/Lagos')).not.toThrow();
     expect(() => assertValidTimeZone('America/New_York')).not.toThrow();
     expect(() => assertValidTimeZone('Europe/London')).not.toThrow();
     expect(() => assertValidTimeZone('UTC')).not.toThrow();
+
+    expect(isValidIanaTimeZone('Africa/Lagos')).toBe(true);
+    expect(isValidIanaTimeZone('UTC')).toBe(true);
+    expect(isValidIanaTimeZone('EST')).toBe(false);
+    expect(isValidIanaTimeZone('US/Eastern')).toBe(false);
+    expect(isValidIanaTimeZone('Fake/Zone')).toBe(false);
 
     expect(() => assertValidTimeZone('Fake/Zone')).toThrowError(
       expect.objectContaining({
@@ -18,6 +27,105 @@ describe('doctor time zones & day bounds (issues #290, #291)', () => {
         code: 'INVALID_TIME_ZONE',
       }),
     );
+    expect(() => assertValidTimeZone('EST')).toThrowError(
+      expect.objectContaining({
+        status: 400,
+        code: 'INVALID_TIME_ZONE',
+      }),
+    );
+  });
+
+  describe('signupSchema timeZone validation (issue #360)', () => {
+    it('accepts doctor signup with valid timeZone', () => {
+      const res = signupSchema.safeParse({
+        role: 'doctor',
+        email: 'doc@example.com',
+        password: 'password123',
+        fullName: 'Dr. Test',
+        timeZone: 'Africa/Lagos',
+      });
+      expect(res.success).toBe(true);
+    });
+
+    it('accepts doctor signup without timeZone (defaults in service)', () => {
+      const res = signupSchema.safeParse({
+        role: 'doctor',
+        email: 'doc@example.com',
+        password: 'password123',
+        fullName: 'Dr. Test',
+      });
+      expect(res.success).toBe(true);
+    });
+
+    it('rejects doctor signup with invalid timeZone', () => {
+      const res = signupSchema.safeParse({
+        role: 'doctor',
+        email: 'doc@example.com',
+        password: 'password123',
+        fullName: 'Dr. Test',
+        timeZone: 'EST',
+      });
+      expect(res.success).toBe(false);
+    });
+
+    it('rejects patient signup with timeZone', () => {
+      const res = signupSchema.safeParse({
+        role: 'patient',
+        email: 'pat@example.com',
+        password: 'password123',
+        fullName: 'Patient Test',
+        timeZone: 'Africa/Lagos',
+      });
+      expect(res.success).toBe(false);
+    });
+
+    it('accepts patient signup without timeZone', () => {
+      const res = signupSchema.safeParse({
+        role: 'patient',
+        email: 'pat@example.com',
+        password: 'password123',
+        fullName: 'Patient Test',
+      });
+      expect(res.success).toBe(true);
+    });
+  });
+
+  describe('updateDoctorProfileSchema (issue #360)', () => {
+    it('accepts update with only timeZone', () => {
+      const res = updateDoctorProfileSchema.safeParse({ timeZone: 'America/New_York' });
+      expect(res.success).toBe(true);
+    });
+
+    it('accepts update with only fullName', () => {
+      const res = updateDoctorProfileSchema.safeParse({ fullName: 'Dr. Updated' });
+      expect(res.success).toBe(true);
+    });
+
+    it('accepts update with both fullName and timeZone', () => {
+      const res = updateDoctorProfileSchema.safeParse({
+        fullName: 'Dr. Both',
+        timeZone: 'Europe/Paris',
+      });
+      expect(res.success).toBe(true);
+    });
+
+    it('rejects update with empty object', () => {
+      const res = updateDoctorProfileSchema.safeParse({});
+      expect(res.success).toBe(false);
+    });
+
+    it('rejects update with invalid timeZone alias', () => {
+      const res = updateDoctorProfileSchema.safeParse({ timeZone: 'EST' });
+      expect(res.success).toBe(false);
+    });
+
+    it('rejects unexpected properties due to strict mode', () => {
+      const res = updateDoctorProfileSchema.safeParse({
+        fullName: 'Dr. Jane',
+        extra: 'field',
+      });
+      expect(res.success).toBe(false);
+    });
   });
 
   it('computes standard 24h calendar day bounds in Africa/Lagos (UTC+1)', () => {

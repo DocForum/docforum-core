@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { timeZoneSchema } from '../../utils/time-zones';
 
 export const setVerificationStatusSchema = z.object({
   status: z.enum(['pending', 'verified', 'rejected']),
@@ -20,9 +21,15 @@ export const publicDoctorListQuerySchema = z.object({
   availableBefore: z.coerce.date().optional(),
 }).strict();
 
-export const updateDoctorProfileSchema = z.object({
-  fullName: z.string().trim().min(1).max(200),
-}).strict();
+export const updateDoctorProfileSchema = z
+  .object({
+    fullName: z.string().trim().min(1).max(200).optional(),
+    timeZone: timeZoneSchema.optional(),
+  })
+  .strict()
+  .refine((data) => data.fullName !== undefined || data.timeZone !== undefined, {
+    message: 'At least one of fullName or timeZone must be provided.',
+  });
 
 export const setDoctorSpecialtyVerificationSchema = z
   .object({
