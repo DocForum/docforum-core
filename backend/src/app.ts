@@ -1,4 +1,5 @@
 import express from 'express';
+import { join } from 'node:path';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config';

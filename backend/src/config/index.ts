@@ -3,6 +3,7 @@ import * as sections from './sections';
 
 export type { PaymentAsset } from './sections/payments';
 export type { JwtSigningKey } from './sections/jwt';
+export { normalizedPhone } from './sections/notifications';
 
 // The app's configuration, read from the environment once at startup. Each
 // top-level key lives in its own file under sections/ (one per feature), so

@@ -63,7 +63,7 @@ export async function optSmsOut(userId: string, phone: string) {
 }
 
 export async function canSendSms(phone: string): Promise<boolean> {
-	return notificationsRepo.hasSmsConsent(phone) && (await notificationsRepo.smsSentToday(phone)) < config.notifications.sms.dailyCap;
+	return (await notificationsRepo.hasSmsConsent(phone)) && (await notificationsRepo.smsSentToday(phone)) < config.notifications.sms.dailyCap;
 }
 
 export async function sendPasswordResetLink(input: {

@@ -36,8 +36,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Run gitleaks
+        env:
+          SCAN_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: >-
-          docker run --rm
-          --volume "${GITHUB_WORKSPACE}:/repo:ro"
-          ghcr.io/gitleaks/gitleaks:v8.24.3
-          detect --source=/repo --no-banner --redact
+          git diff --unified=0 "${SCAN_BASE_SHA}...${GITHUB_SHA}" -- . |
+          docker run --rm -i ghcr.io/gitleaks/gitleaks:v8.24.3
+          stdin --no-banner --redact
