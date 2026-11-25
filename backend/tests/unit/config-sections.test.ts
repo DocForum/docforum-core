@@ -6,9 +6,9 @@ import { config } from '../../src/config';
 // you add a section.
 const KEYS = [
   'accessLog', 'accountPurge', 'adminInvites', 'appBaseUrl', 'appointments', 'auth', 'availability', 'consultations', 'cookie', 'corsOrigins',
-  'databaseUrl', 'expirySweeps', 'featureFlags', 'idempotency', 'jwt', 'labResults', 'log', 'loginThrottle', 'notificationFanout',
-  'objectStorage', 'orders', 'passwordReset', 'patientExport', 'patients', 'payments', 'port', 'rateLimit',
-  'referrals', 'securityHeaders', 'sep10', 'sessions', 'tokenPrune', 'trustProxy', 'twoFactor', 'walletLink',
+  'databaseUrl', 'expirySweeps', 'featureFlags', 'headersTimeout', 'idempotency', 'jwt', 'keepAliveTimeout', 'labResults', 'log',
+  'loginThrottle', 'notificationFanout', 'objectStorage', 'orders', 'passwordReset', 'patientExport', 'patients', 'payments', 'port',
+  'rateLimit', 'referrals', 'requestTimeout', 'securityHeaders', 'sep10', 'sessions', 'tokenPrune', 'trustProxy', 'twoFactor', 'walletLink',
 ];
 
 describe('config sections', () => {
