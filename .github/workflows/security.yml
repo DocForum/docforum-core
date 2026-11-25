@@ -36,6 +36,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          docker run --rm
+          --volume "${GITHUB_WORKSPACE}:/repo:ro"
+          ghcr.io/gitleaks/gitleaks:v8.24.3
+          detect --source=/repo --no-banner --redact
