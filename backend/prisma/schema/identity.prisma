@@ -75,6 +75,7 @@ model User {
   // Opposite of AccessLog.accessedByUser.
   accessLogs              AccessLog[]
   notifications           Notification[]
+  smsConsents             SmsConsent[]
   // Phase 2, issue #61/#64: clinical thread authorship.
   consultationMessages    ConsultationMessage[]    @relation("ConsultationMessageSender")
   consultationAddenda     ConsultationAddendum[]   @relation("ConsultationAddendumAuthor")

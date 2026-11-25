@@ -1,9 +1,9 @@
 {
-  "openapi": "3.0.3",
+  "openapi": "3.1.0",
   "info": {
     "title": "DocForum API",
     "description": "DocForum backend API - modular monolith",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "contact": {
       "name": "DocForum"
     }
@@ -15,25 +15,58 @@
     }
   ],
   "tags": [
-    {"name": "Health"},
-    {"name": "Auth"},
-    {"name": "Doctors"},
-    {"name": "Specialties"},
-    {"name": "Availability"},
-    {"name": "Appointments"},
-    {"name": "Consultations"},
-    {"name": "Referrals"},
-    {"name": "Orders"},
-    {"name": "Payments"},
-    {"name": "Patients"},
-    {"name": "Facilities"},
-    {"name": "Admin"},
-    {"name": "Audit"}
+    {
+      "name": "Health"
+    },
+    {
+      "name": "Auth"
+    },
+    {
+      "name": "Doctors"
+    },
+    {
+      "name": "Specialties"
+    },
+    {
+      "name": "Availability"
+    },
+    {
+      "name": "Appointments"
+    },
+    {
+      "name": "Consultations"
+    },
+    {
+      "name": "Referrals"
+    },
+    {
+      "name": "Orders"
+    },
+    {
+      "name": "Payments"
+    },
+    {
+      "name": "Patients"
+    },
+    {
+      "name": "Facilities"
+    },
+    {
+      "name": "Admin"
+    },
+    {
+      "name": "Audit"
+    },
+    {
+      "name": "Notifications"
+    }
   ],
   "paths": {
     "/health": {
       "get": {
-        "tags": ["Health"],
+        "tags": [
+          "Health"
+        ],
         "summary": "Health check",
         "responses": {
           "200": {
@@ -43,7 +76,12 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "status": {"type": "string", "enum": ["ok"]}
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok"
+                      ]
+                    }
                   }
                 }
               }
@@ -54,7 +92,9 @@
     },
     "/auth/signup": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "summary": "Sign up",
         "requestBody": {
           "required": true,
@@ -62,25 +102,48 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["role", "email", "password", "fullName"],
+                "required": [
+                  "role",
+                  "email",
+                  "password",
+                  "fullName"
+                ],
                 "properties": {
-                  "role": {"type": "string", "enum": ["patient", "doctor"]},
-                  "email": {"type": "string", "format": "email"},
-                  "password": {"type": "string", "minLength": 8},
-                  "fullName": {"type": "string"}
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "patient",
+                      "doctor"
+                    ]
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8
+                  },
+                  "fullName": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/auth/login": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "summary": "Login",
         "requestBody": {
           "required": true,
@@ -88,77 +151,140 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["email", "password"],
+                "required": [
+                  "email",
+                  "password"
+                ],
                 "properties": {
-                  "email": {"type": "string", "format": "email"},
-                  "password": {"type": "string"}
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/auth/refresh": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "summary": "Refresh token",
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/auth/logout": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "summary": "Logout",
         "responses": {
-          "204": {"description": "No Content"}
+          "204": {
+            "description": "No Content"
+          }
         }
       }
     },
     "/doctors": {
       "get": {
-        "tags": ["Doctors"],
+        "tags": [
+          "Doctors"
+        ],
         "summary": "List public doctors",
         "parameters": [
-          {"name": "specialty", "in": "query", "schema": {"type": "string"}},
-          {"name": "q", "in": "query", "schema": {"type": "string"}},
-          {"name": "limit", "in": "query", "schema": {"type": "integer"}},
-          {"name": "cursor", "in": "query", "schema": {"type": "string"}}
+          {
+            "name": "specialty",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/specialties": {
       "get": {
-        "tags": ["Specialties"],
+        "tags": [
+          "Specialties"
+        ],
         "summary": "List specialties",
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/availability/doctors/{doctorProfileId}/slots": {
       "get": {
-        "tags": ["Availability"],
+        "tags": [
+          "Availability"
+        ],
         "summary": "List doctor slots",
         "parameters": [
-          {"name": "doctorProfileId", "in": "path", "required": true, "schema": {"type": "string"}}
+          {
+            "name": "doctorProfileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/appointments": {
       "post": {
-        "tags": ["Appointments"],
+        "tags": [
+          "Appointments"
+        ],
         "summary": "Book appointment",
         "requestBody": {
           "required": true,
@@ -166,47 +292,78 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["availabilitySlotId"],
+                "required": [
+                  "availabilitySlotId"
+                ],
                 "properties": {
-                  "availabilitySlotId": {"type": "string"},
-                  "patientProfileId": {"type": "string"}
+                  "availabilitySlotId": {
+                    "type": "string"
+                  },
+                  "patientProfileId": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          }
         }
       }
     },
     "/appointments/mine": {
       "get": {
-        "tags": ["Appointments"],
+        "tags": [
+          "Appointments"
+        ],
         "summary": "My appointments",
         "parameters": [
-          {"name": "patientProfileId", "in": "query", "schema": {"type": "string"}}
+          {
+            "name": "patientProfileId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/appointments/doctor/today": {
       "get": {
-        "tags": ["Appointments"],
+        "tags": [
+          "Appointments"
+        ],
         "summary": "Doctor's today appointments",
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/appointments/{appointmentId}/consultation": {
       "post": {
-        "tags": ["Consultations"],
+        "tags": [
+          "Consultations"
+        ],
         "summary": "Close consultation",
         "parameters": [
-          {"name": "appointmentId", "in": "path", "required": true, "schema": {"type": "string"}}
+          {
+            "name": "appointmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -214,23 +371,39 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["outcome", "notes"],
+                "required": [
+                  "outcome",
+                  "notes"
+                ],
                 "properties": {
-                  "outcome": {"type": "string", "enum": ["resolved", "referred", "follow_up_needed"]},
-                  "notes": {"type": "string"}
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "resolved",
+                      "referred",
+                      "follow_up_needed"
+                    ]
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          }
         }
       }
     },
     "/consultations": {
       "post": {
-        "tags": ["Consultations"],
+        "tags": [
+          "Consultations"
+        ],
         "summary": "Create consultation",
         "requestBody": {
           "required": true,
@@ -238,24 +411,41 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["appointmentId"],
+                "required": [
+                  "appointmentId"
+                ],
                 "properties": {
-                  "appointmentId": {"type": "string"},
-                  "outcome": {"type": "string", "enum": ["resolved", "referred", "follow_up_needed"]},
-                  "notes": {"type": "string"}
+                  "appointmentId": {
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "resolved",
+                      "referred",
+                      "follow_up_needed"
+                    ]
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          }
         }
       }
     },
     "/referrals": {
       "post": {
-        "tags": ["Referrals"],
+        "tags": [
+          "Referrals"
+        ],
         "summary": "Create referral",
         "requestBody": {
           "required": true,
@@ -263,34 +453,53 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["sourceConsultationId", "snapshotNotes"],
+                "required": [
+                  "sourceConsultationId",
+                  "snapshotNotes"
+                ],
                 "properties": {
-                  "sourceConsultationId": {"type": "string"},
-                  "targetDoctorId": {"type": "string"},
-                  "targetSpecialtyId": {"type": "string"},
-                  "snapshotNotes": {"type": "string"}
+                  "sourceConsultationId": {
+                    "type": "string"
+                  },
+                  "targetDoctorId": {
+                    "type": "string"
+                  },
+                  "targetSpecialtyId": {
+                    "type": "string"
+                  },
+                  "snapshotNotes": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          }
         }
       }
     },
     "/referrals/mine": {
       "get": {
-        "tags": ["Referrals"],
+        "tags": [
+          "Referrals"
+        ],
         "summary": "My referrals",
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
         }
       }
     },
     "/orders/consultations": {
       "post": {
-        "tags": ["Orders"],
+        "tags": [
+          "Orders"
+        ],
         "summary": "Create consultation for orders",
         "requestBody": {
           "required": true,
@@ -298,24 +507,36 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["appointmentId"],
+                "required": [
+                  "appointmentId"
+                ],
                 "properties": {
-                  "appointmentId": {"type": "string"},
-                  "outcome": {"type": "string"},
-                  "notes": {"type": "string"}
+                  "appointmentId": {
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          }
         }
       }
     },
     "/payments/wallet-link": {
       "post": {
-        "tags": ["Payments"],
+        "tags": [
+          "Payments"
+        ],
         "summary": "Link wallet",
         "requestBody": {
           "required": true,
@@ -323,40 +544,1537 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["stellarPublicKey"],
+                "required": [
+                  "stellarPublicKey"
+                ],
                 "properties": {
-                  "stellarPublicKey": {"type": "string"}
+                  "stellarPublicKey": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": {"description": "Created"}
+          "201": {
+            "description": "Created"
+          }
         }
       }
     },
     "/patients/me/export": {
       "post": {
-        "tags": ["Patients"],
+        "tags": [
+          "Patients"
+        ],
         "summary": "Request data export",
         "responses": {
-          "202": {"description": "Accepted"}
+          "202": {
+            "description": "Accepted"
+          }
         }
       }
     },
     "/facilities/eligible": {
       "get": {
-        "tags": ["Facilities"],
+        "tags": [
+          "Facilities"
+        ],
         "summary": "Get eligible facilities",
         "parameters": [
-          {"name": "type", "in": "query", "required": true, "schema": {"type": "string", "enum": ["lab", "pharmacy"]}},
-          {"name": "catalogItemCode", "in": "query", "schema": {"type": "string"}},
-          {"name": "asset", "in": "query", "schema": {"type": "string"}},
-          {"name": "at", "in": "query", "schema": {"type": "string"}}
+          {
+            "name": "type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "lab",
+                "pharmacy"
+              ]
+            }
+          },
+          {
+            "name": "catalogItemCode",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "asset",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": {"description": "Success"}
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/notifications": {
+      "get": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "List the authenticated user notifications",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notification page"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/notifications/unread-count": {
+      "get": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Get unread notification count",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unread count"
+          }
+        }
+      }
+    },
+    "/notifications/{id}/read": {
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Mark a notification read",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated notification"
+          }
+        }
+      }
+    },
+    "/notifications/webhooks/postmark": {
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Receive signed Postmark delivery events",
+        "security": [],
+        "responses": {
+          "204": {
+            "description": "Accepted"
+          },
+          "401": {
+            "description": "Invalid signature"
+          }
+        }
+      }
+    },
+    "/notifications/webhooks/twilio": {
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Receive signed Twilio delivery and opt-out events",
+        "security": [],
+        "responses": {
+          "204": {
+            "description": "Accepted"
+          },
+          "401": {
+            "description": "Invalid signature"
+          }
+        }
+      }
+    },
+    "/admin/audit-events": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "operationId": "audit_get_admin_audit_events",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/admin/access-logs/stats": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "operationId": "audit_get_admin_access_logs_stats",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/admin/access-logs": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "operationId": "audit_get_admin_access_logs",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/admin/access-logs/user": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "operationId": "audit_get_admin_access_logs_user",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/admin/me/access-log": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "operationId": "audit_get_admin_me_access_log",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/auth/signup-with-invite": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_post_auth_signup_with_invite",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/verify-email": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_post_auth_verify_email",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/verify-email/resend": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_post_auth_verify_email_resend",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login-attempts/clear": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_post_auth_login_attempts_clear",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password-reset/request": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_post_auth_password_reset_request",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password-reset/confirm": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_post_auth_password_reset_confirm",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sessions": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_get_auth_sessions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_delete_auth_sessions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/auth/sessions/:id": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_delete_auth_sessions_id",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/auth/users/:id/sessions": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_delete_auth_users_id_sessions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/availability/doctors/:doctorProfileId/slots": {
+      "get": {
+        "tags": [
+          "availability"
+        ],
+        "operationId": "availability_get_availability_doctors_doctorProfileId_slots",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/appointments/:consultationId": {
+      "get": {
+        "tags": [
+          "consultations"
+        ],
+        "operationId": "consultations_get_appointments_consultationId",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/doctors/me": {
+      "get": {
+        "tags": [
+          "doctors"
+        ],
+        "operationId": "doctors_get_doctors_me",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "doctors"
+        ],
+        "operationId": "doctors_patch_doctors_me",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/doctors/me/specialties": {
+      "put": {
+        "tags": [
+          "doctors"
+        ],
+        "operationId": "doctors_put_doctors_me_specialties",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/facilities/me/prices": {
+      "get": {
+        "tags": [
+          "facilities"
+        ],
+        "operationId": "facilities_get_facilities_me_prices",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/facilities/:facilityId/prices": {
+      "get": {
+        "tags": [
+          "facilities"
+        ],
+        "operationId": "facilities_get_facilities_facilityId_prices",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/me/flags": {
+      "get": {
+        "tags": [
+          "flags"
+        ],
+        "operationId": "flags_get_me_flags",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/me/feature-flags": {
+      "get": {
+        "tags": [
+          "flags"
+        ],
+        "operationId": "flags_get_me_feature_flags",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/me/feature-flags/:key": {
+      "patch": {
+        "tags": [
+          "flags"
+        ],
+        "operationId": "flags_patch_me_feature_flags_key",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/intake": {
+      "post": {
+        "tags": [
+          "intake"
+        ],
+        "operationId": "intake_post_intake",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/intake/mine": {
+      "get": {
+        "tags": [
+          "intake"
+        ],
+        "operationId": "intake_get_intake_mine",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/lab-orders": {
+      "post": {
+        "tags": [
+          "lab-orders"
+        ],
+        "operationId": "lab-orders_post_lab_orders",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/lab-orders/:id": {
+      "get": {
+        "tags": [
+          "lab-orders"
+        ],
+        "operationId": "lab-orders_get_lab_orders_id",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/lab-orders/:id/fulfill": {
+      "post": {
+        "tags": [
+          "lab-orders"
+        ],
+        "operationId": "lab-orders_post_lab_orders_id_fulfill",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/metrics": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "operationId": "metrics_get_admin_metrics",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/notifications/read-all": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "notifications_post_notifications_read_all",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/:id/read": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "notifications_post_notifications_id_read",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/stream": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "notifications_get_notifications_stream",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/patients/me/export/:exportId": {
+      "get": {
+        "tags": [
+          "patients"
+        ],
+        "operationId": "patients_get_patients_me_export_exportId",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/patients/me": {
+      "delete": {
+        "tags": [
+          "patients"
+        ],
+        "operationId": "patients_delete_patients_me",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/patients/me/dependents": {
+      "get": {
+        "tags": [
+          "patients"
+        ],
+        "operationId": "patients_get_patients_me_dependents",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/payments/escrow-events": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "operationId": "payments_get_payments_escrow_events",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/payments/mine": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "operationId": "payments_get_payments_mine",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/payments/facility/ledger": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "operationId": "payments_get_payments_facility_ledger",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/payments/intents/:id": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "operationId": "payments_get_payments_intents_id",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/pharmacy-orders/fulfillments/:id": {
+      "get": {
+        "tags": [
+          "pharmacy-orders"
+        ],
+        "operationId": "pharmacy-orders_get_pharmacy_orders_fulfillments_id",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/pharmacy-orders": {
+      "post": {
+        "tags": [
+          "pharmacy-orders"
+        ],
+        "operationId": "pharmacy-orders_post_pharmacy_orders",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pharmacy-orders/:id": {
+      "get": {
+        "tags": [
+          "pharmacy-orders"
+        ],
+        "operationId": "pharmacy-orders_get_pharmacy_orders_id",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/referrals/created": {
+      "get": {
+        "tags": [
+          "referrals"
+        ],
+        "operationId": "referrals_get_referrals_created",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/admin/invites": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "users_post_admin_invites",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/overview": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "users_get_admin_overview",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/admin/users/:id/deactivate": {
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "users_patch_admin_users_id_deactivate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/:id/reactivate": {
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "users_patch_admin_users_id_reactivate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
         }
       }
     }
@@ -371,6 +2089,11 @@
         "type": "apiKey",
         "in": "cookie",
         "name": "docforum_refresh"
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Authentication required."
       }
     }
   }
