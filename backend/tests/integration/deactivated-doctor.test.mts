@@ -83,7 +83,7 @@ async function setupApp(): Promise<{
   const doctorMe = await request(app).get('/doctors/me').set('Authorization', `Bearer ${doctorAccessToken}`);
   expect(doctorMe.status).toBe(200);
   const doctorProfileId = doctorMe.body.id as string;
-  const doctorUserId = doctorMe.body.user.id as string;
+  const doctorUserId = doctorSignup.body.user.id as string;
 
   // Signup and verify a patient
   const patientEmail = `deact-patient-${runId}@example.com`;
@@ -106,7 +106,7 @@ async function setupApp(): Promise<{
   });
   expect(patientLogin.status).toBe(200);
   const patientAccessToken = patientLogin.body.accessToken as string;
-  const patientUserId = patientLogin.body.user.id as string;
+  const patientUserId = patientSignup.body.user.id as string;
 
   const patientMe = await request(app).get('/patients/me').set('Authorization', `Bearer ${patientAccessToken}`);
   expect(patientMe.status).toBe(200);
