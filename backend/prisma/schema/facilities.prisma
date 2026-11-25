@@ -13,7 +13,7 @@ enum CapabilityType {
 
 model FacilityProfile {
   id        String       @id @default(uuid())
-  version     Int      @default(1)
+  version   Int          @default(1)
   userId    String       @unique
   name      String
   type      FacilityType
@@ -97,7 +97,7 @@ model Medication {
 model FacilityCapability {
   waitlistEntries   WaitlistEntry[]
   id                String          @id @default(uuid())
-  version     Int      @default(1)
+  version           Int             @default(1)
   facilityProfileId String
   capabilityType    CapabilityType
   // e.g. a lab test category, or a medication class — free text on purpose,
