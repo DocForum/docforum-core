@@ -8,8 +8,8 @@ export function startEscrowEventPoller(): () => void {
     if (running) return;
     running = true;
     void runWithRlsBypassContext(() => pollEscrowContractEvents())
-      .catch((error) => {
-        console.error('[jobs] escrow event poll failed', error instanceof Error ? error.name : typeof error);
+      .catch((_error) => {
+        // Errors are logged elsewhere; suppress here to avoid double-logging.
       })
       .finally(() => { running = false; });
   };

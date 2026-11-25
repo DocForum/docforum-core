@@ -17,10 +17,13 @@
     "test:all": "vitest run",
     "db:seed": "tsx prisma/seed.ts",
     "reconcile:escrows": "tsx scripts/reconcile-escrows.ts",
+    "new:module": "node scripts/new-module.mjs",
     "test:properties": "vitest run tests/unit/availability-slots.property.test.ts tests/unit/state-machines.property.test.ts",
     "audit:prod": "node scripts/audit-gate.mjs",
     "i18n:check": "node scripts/check-i18n-catalogues.mjs",
     "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "prisma:format:check": "prisma format --check",
     "prisma:migrate": "prisma migrate dev",
     "lint": "node tools/lint/node_modules/eslint/bin/eslint.js --config tools/lint/eslint.config.mjs .",
     "test:mutation": "stryker run"

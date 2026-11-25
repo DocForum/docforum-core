@@ -61,6 +61,38 @@ what depends on what, and what's deliberately not yet scoped (and why).
   rewrite other people's paragraphs. See `AGENTS.md` → "Shared docs".
 - Run `npm run typecheck && npm run test:all && npm run build` locally —
   this is exactly what CI checks.
+- Run `npm run prisma:validate && npm run prisma:format:check` to verify
+  the schema matches the migrations and is properly formatted. These checks
+  are also run in CI (see `.github/workflows/ci.yml`).
+
+- Run `node scripts/check-module-boundaries.mjs` to verify no new module
+  boundary violations are introduced. This check is also run in CI.
+
+If your change involves Prisma schema modifications, ensure the drift check
+(`node scripts/check-migration-drift.mjs`) passes, and that a migration
+exists for any new field or change.
+
+## 3.1 Generating a new module skeleton
+
+When an issue calls for a new backend module, start from the scaffold rather
+than copying an existing module by hand:
+
+```bash
+cd backend
+npm run new:module -- <name>   # lowercase kebab-case, e.g. lab-kits
+```
+
+This creates `backend/src/modules/<name>/` with `routes/`, `controllers/`,
+`services/`, `repositories/`, `validation.ts` and `mount.ts`. The name must be
+lowercase kebab-case; empty names, path separators, `..` and names that already
+exist are refused without writing anything.
+
+The generator deliberately does **not** edit shared files. It prints the exact
+lines to add by hand: the `src/mounts.ts` export, the `PatientExportSection`
+and retention-hold registry entries (only when the module holds patient data),
+and a `docs.d/` fragment for the module's API rows. Generated placeholders
+compile under `npm run typecheck`; replace them as the module's first real
+routes and services land.
 
 ## 4. Opening the PR
 
