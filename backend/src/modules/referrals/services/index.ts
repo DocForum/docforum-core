@@ -451,9 +451,23 @@ export async function withdrawReferral(
   });
 }
 
-export async function listMine(userId: string) {
-  const patientProfile = await patientsService.getMyPatientProfile(userId);
-  return referralsRepo.listReferralsForPatient(patientProfile.id);
+export async function listMine(userId: string, patientProfileId?: string) {
+  const patientProfile = patientProfileId
+    ? await patientsService.resolveActingProfile(userId, patientProfileId)
+    : await patientsService.getMyPatientProfile(userId);
+  const referrals = await referralsRepo.listReferralsForPatient(patientProfile.id);
+  const detail = patientProfile.userId === null ? 'referral list read (guardian)' : 'referral list read';
+  for (const referral of referrals) {
+    auditService.recordAccess({
+      accessedBy: userId,
+      patientProfileId: patientProfile.id,
+      entityType: 'Referral',
+      entityId: referral.id,
+      route: 'GET /referrals/mine',
+      detail,
+    });
+  }
+  return referrals;
 }
 
 export async function listCreated(userId: string) {
