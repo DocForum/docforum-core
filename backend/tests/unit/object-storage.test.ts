@@ -1,4 +1,4 @@
-// Object storage wrapper (Phase 5, issue #16 — docs/adr/0014). The S3 driver
+// Object storage wrapper (Phase 5, issue #16 — docs/adr/0018). The S3 driver
 // is exercised against a fake client: what matters here is what it *sends*
 // (bucket, server-side encryption, no ACL) and how it maps a missing object.
 import { describe, expect, it } from 'vitest';
