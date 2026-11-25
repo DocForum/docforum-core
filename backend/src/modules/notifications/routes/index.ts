@@ -2,8 +2,12 @@
 import { Router } from 'express';
 import { authenticate } from '../../../middleware/auth';
 import * as notificationsController from '../controllers';
+import * as webhooks from '../controllers/webhooks';
 
 export const notificationsRouter = Router();
+
+notificationsRouter.post('/webhooks/postmark', webhooks.postmark);
+notificationsRouter.post('/webhooks/twilio', webhooks.twilio);
 
 notificationsRouter.use(authenticate);
 notificationsRouter.get('/', notificationsController.list);

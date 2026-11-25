@@ -1,0 +1,44 @@
+name: Supply-chain security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL (TypeScript)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: github/codeql-action/init@945b7d9e1ef2ede408e4a42d45f0579c33fc53ec # v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/autobuild@945b7d9e1ef2ede408e4a42d45f0579c33fc53ec # v3
+      - uses: github/codeql-action/analyze@945b7d9e1ef2ede408e4a42d45f0579c33fc53ec # v3
+        with:
+          category: /language:javascript-typescript
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        env:
+          SCAN_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: >-
+          git diff --unified=0 "${SCAN_BASE_SHA}...${GITHUB_SHA}" -- . |
+          docker run --rm -i ghcr.io/gitleaks/gitleaks:v8.24.3
+          stdin --no-banner --redact
