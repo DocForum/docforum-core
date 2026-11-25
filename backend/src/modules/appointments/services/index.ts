@@ -899,19 +899,21 @@ export async function cancelByPatient(
   const fromState = appointment.status;
   return prisma.$transaction(async (tx) => {
     await applyScheduledTransition(tx, appointment, newStatus, actor, fromState);
-    const updated = await appointmentsRepo.findAppointmentById(tx, appointmentId)!;
-    await auditService.record(tx, actor, {
-      entityType: 'Appointment',
-      entityId: updated.id,
-      action: 'appointment.cancelled',
-      fromState,
-      toState: newStatus,
-      metadata: {
-        reason: 'patient',
-        patientProfileId: patientProfile.id,
-        slotId: appointment.availabilitySlotId,
-      },
-    });
+    const updated = await appointmentsRepo.findAppointmentById(tx, appointmentId);
+    if (updated) {
+      await auditService.record(tx, actor, {
+        entityType: 'Appointment',
+        entityId: updated.id,
+        action: 'appointment.cancelled',
+        fromState,
+        toState: newStatus,
+        metadata: {
+          reason: 'patient',
+          patientProfileId: patientProfile.id,
+          slotId: appointment.availabilitySlotId,
+        },
+      });
+    }
     return updated;
   });
 }
