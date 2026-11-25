@@ -19,6 +19,7 @@ const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const PORT = 5450;
 const runId = Date.now();
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-deact-pg-'));
+const emailedTokens = new Map<string, string>();
 
 const pg = new EmbeddedPostgres({
   databaseDir: dataDir,
@@ -57,10 +58,16 @@ async function setupApp(): Promise<{
 
   const appModule = await import('../../src/app.js');
   const dbModule = await import('../../src/db/prisma-client.js');
+  const authServices = await import('../../src/modules/auth/services/index.js');
   const app = appModule.createApp();
   const prisma = dbModule.prisma;
 
-  // Signup and verify a doctor
+  authServices.setEmailSender(async (message) => {
+    const match = /[?&]token=([^&\s]+)/.exec(message.text);
+    if (match) emailedTokens.set(message.to, decodeURIComponent(match[1]));
+  });
+
+  // Signup doctor (no email verification needed - accessToken available immediately)
   const doctorSignup = await request(app).post('/auth/signup').send({
     role: 'doctor',
     email: `deact-doctor-${runId}@example.com`,
@@ -68,18 +75,7 @@ async function setupApp(): Promise<{
     fullName: 'Deactivated Doctor',
   });
   expect(doctorSignup.status).toBe(200);
-
-  const doctorVerify = await request(app).post('/auth/verify-email').send({
-    token: doctorSignup.body.tokens?.emailVerificationToken,
-  });
-  expect(doctorVerify.status).toBe(200);
-
-  const doctorLogin = await request(app).post('/auth/login').send({
-    email: `deact-doctor-${runId}@example.com`,
-    password: 'longenough123',
-  });
-  expect(doctorLogin.status).toBe(200);
-  const doctorAccessToken = doctorLogin.body.accessToken as string;
+  const doctorAccessToken = doctorSignup.body.accessToken as string;
 
   const doctorMe = await request(app).get('/doctors/me').set('Authorization', `Bearer ${doctorAccessToken}`);
   expect(doctorMe.status).toBe(200);
@@ -87,21 +83,22 @@ async function setupApp(): Promise<{
   const doctorUserId = doctorMe.body.user.id as string;
 
   // Signup and verify a patient
+  const patientEmail = `deact-patient-${runId}@example.com`;
   const patientSignup = await request(app).post('/auth/signup').send({
     role: 'patient',
-    email: `deact-patient-${runId}@example.com`,
+    email: patientEmail,
     password: 'longenough123',
     fullName: 'Test Patient',
   });
   expect(patientSignup.status).toBe(200);
 
-  const patientVerify = await request(app).post('/auth/verify-email').send({
-    token: patientSignup.body.tokens?.emailVerificationToken,
-  });
+  const patientToken = emailedTokens.get(patientEmail);
+  expect(patientToken, `no verification email captured for ${patientEmail}`).toBeTruthy();
+  const patientVerify = await request(app).post('/auth/verify-email').send({ token: patientToken });
   expect(patientVerify.status).toBe(200);
 
   const patientLogin = await request(app).post('/auth/login').send({
-    email: `deact-patient-${runId}@example.com`,
+    email: patientEmail,
     password: 'longenough123',
   });
   expect(patientLogin.status).toBe(200);
@@ -130,10 +127,7 @@ describe('deactivated and soft-deleted doctors', () => {
   let app: App;
   let prisma: Prisma;
   let doctorProfileId: string;
-  let patientProfileId: string;
   let doctorUserId: string;
-  let patientUserId: string;
-  let doctorAccessToken: string;
   let patientAccessToken: string;
 
   beforeAll(async () => {
@@ -141,10 +135,7 @@ describe('deactivated and soft-deleted doctors', () => {
     app = setup.app;
     prisma = setup.prisma;
     doctorProfileId = setup.doctorProfileId;
-    patientProfileId = setup.patientProfileId;
     doctorUserId = setup.doctorUserId;
-    patientUserId = setup.patientUserId;
-    doctorAccessToken = setup.doctorAccessToken;
     patientAccessToken = setup.patientAccessToken;
   }, 120_000);
 
@@ -211,7 +202,6 @@ describe('deactivated and soft-deleted doctors', () => {
       // Create a follow-up booking via consultations
       const slotRes = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
       expect(slotRes.status).toBe(200);
-      const slotId = slotRes.body[0].id;
 
       const res = await request(app)
         .post('/consultations')
@@ -299,7 +289,6 @@ describe('deactivated and soft-deleted doctors', () => {
       // Create a follow-up booking
       const slotRes = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
       expect(slotRes.status).toBe(200);
-      const slotId = slotRes.body[0].id;
 
       const res = await request(app)
         .post('/consultations')
