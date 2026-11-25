@@ -438,14 +438,27 @@ export async function withdrawReferral(
   });
 }
 
+/**
+ * The patient's referral list. Each row gains a derived `expiresAt` (issue
+ * #361) — the deadline the expiry sweep will pick it up, from the same rule
+ * the sweep uses, so the warning a patient sees cannot disagree with when
+ * the referral actually dies.
+ */
 export async function listMine(userId: string) {
   const patientProfile = await patientsService.getMyPatientProfile(userId);
-  return referralsRepo.listReferralsForPatient(patientProfile.id);
+  const referrals = await referralsRepo.listReferralsForPatient(patientProfile.id);
+  return referrals.map((referral) => withExpiresAt(referral));
 }
 
+/**
+ * The referring doctor's list, with the same derived `expiresAt` (issue
+ * #361): a referral the patient never books is this doctor's problem, and
+ * they need the same deadline in front of them to re-refer in time.
+ */
 export async function listCreated(userId: string) {
   const referringDoctor = await doctorsService.getMyDoctorProfile(userId);
-  return referralsRepo.listReferralsCreatedBy(referringDoctor.id);
+  const referrals = await referralsRepo.listReferralsCreatedBy(referringDoctor.id);
+  return referrals.map((referral) => withExpiresAt(referral));
 }
 
 const DEFAULT_INCOMING_REFERRAL_STATUSES: ReferralStatus[] = ['pending', 'accepted'];
@@ -624,20 +637,63 @@ export async function applyAppointmentOutcome(
 // ---------------------------------------------------------------------------
 
 /**
+ * THE expiry rule, in one place: how long a `pending` referral survives from
+ * its last state change. The sweep below turns it into the cutoff that expires
+ * rows, and `pendingReferralExpiresAt` turns it into the deadline the API
+ * shows — both read `config.referrals.pendingTtlDays` at call time, so
+ * changing `REFERRAL_PENDING_TTL_DAYS` moves the two together instead of
+ * leaving patients with a deadline the sweeper no longer honours (issue #361).
+ *
+ * The clock is `updatedAt`, not `createdAt`: a referral the cascade returned
+ * to `pending` (cancelled/no-showed appointment, issue #67) or an admin
+ * reassigned (issue #68) gets a fresh window instead of being expired the
+ * moment it re-enters the queue.
+ */
+function pendingReferralExpiryDelayMs(): number {
+  return config.referrals.pendingTtlDays * 24 * 60 * 60 * 1000;
+}
+
+/** The `updatedAt` threshold a sweep running at `now` expires everything past. */
+function pendingReferralSweepCutoff(now: Date): Date {
+  return new Date(now.getTime() - pendingReferralExpiryDelayMs());
+}
+
+/**
+ * When a `pending` referral is due to expire (issue #361) — `updatedAt` plus
+ * the TTL. Derived rather than stored: a referral that re-enters `pending`
+ * gets a new deadline with no write, and the field can never point at a sweep
+ * that no longer happens. The two agree by construction, for any `now`:
+ * `expiresAt < now` exactly when `updatedAt < pendingReferralSweepCutoff(now)`,
+ * because both reduce to `now - updatedAt > TTL`.
+ *
+ * `null` for anything else: `accepted` is never swept (its appointment owns
+ * that lifecycle) and the terminal states are already done. This is a response
+ * field only — `expiredAt`/`expiredReason` stay the sweep's record of what
+ * actually happened, and no column is added to `Referral`.
+ */
+export function pendingReferralExpiresAt(referral: {
+  status: ReferralStatus;
+  updatedAt: Date;
+}): Date | null {
+  if (referral.status !== 'pending') return null;
+  return new Date(referral.updatedAt.getTime() + pendingReferralExpiryDelayMs());
+}
+
+function withExpiresAt<T extends { status: ReferralStatus; updatedAt: Date }>(referral: T) {
+  return { ...referral, expiresAt: pendingReferralExpiresAt(referral) };
+}
+
+/**
  * Expires referrals that have sat `pending` for longer than
- * `REFERRAL_PENDING_TTL_DAYS` (PRD §8.1.3 "orphaned" referrals). The clock is
- * `updatedAt`, not `createdAt`: a referral the cascade returned to `pending`
- * (cancelled/no-showed appointment, issue #67) or an admin reassigned
- * (issue #68) gets a fresh window instead of being expired the moment it
- * re-enters the queue. `accepted` referrals are never touched — they have an
- * appointment; that lifecycle belongs to the cascade.
+ * `REFERRAL_PENDING_TTL_DAYS` (PRD §8.1.3 "orphaned" referrals), using the
+ * shared cutoff above. `accepted` referrals are never touched.
  *
  * The result is `expired` with `expiredReason = 'ttl'` — a different terminal
  * state from `declined` (the patient said no) and `cancelled` (an admin
  * closed it). Safe to run from several processes and to re-run.
  */
 export async function expireStaleReferrals(now: Date = new Date()): Promise<{ expired: number }> {
-  const cutoff = new Date(now.getTime() - config.referrals.pendingTtlDays * 24 * 60 * 60 * 1000);
+  const cutoff = pendingReferralSweepCutoff(now);
   const result = await referralsRepo.expireStalePendingReferrals(prisma, cutoff, now);
   return { expired: result.count };
 }

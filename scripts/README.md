@@ -102,6 +102,30 @@ typo fails closed. Why the report reads `EscrowChainEvent` rather than the
 chain directly: `@docforum/escrow-sdk` 0.2.0 exposes no "list escrows" call.
 No secret or patient identifier is printed.
 
+## `backend/scripts/gen-access-matrix.ts`
+
+Regenerates `docs/api/access-matrix.md` — the endpoint-by-role table generated
+from the routers (Phase 9, issue #357). Run it from `backend/`:
+
+```
+cd backend
+npm run docs:access-matrix        # rewrite docs/api/access-matrix.md
+npm run docs:access-matrix:check  # exit non-zero if the committed file is stale
+```
+
+It builds the Express app with `createApp()`, replays `src/mounts.ts` to recover
+each router's mount prefix, then walks every route's middleware chain. Roles come
+from *calling* `requireRole` once per role rather than parsing it (the guard is
+an anonymous closure, so its name is no use), and `requireVerifiedEmail` /
+`idempotencyMiddleware` are read by name. It never connects to a database, so
+`DATABASE_URL` and the JWT secrets only have to be set, not real — which is why
+CI can run the staleness check before the integration suite.
+
+Run it whenever you add, remove or re-guard a route; CI fails the PR otherwise.
+The matrix covers endpoint-level guards only — the service-level ownership checks
+that narrow a response further are listed as a limitation at the bottom of the
+generated file.
+
 ## `scripts/fold-changelog.mjs`
 
 Maintainer script. Contributors add their `ROADMAP.md` changelog entry as a

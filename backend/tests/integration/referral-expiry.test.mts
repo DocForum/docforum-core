@@ -1,6 +1,8 @@
 // Referral expiry job (issue #8): a pending referral older than the TTL is
 // expired (reason `ttl`, distinct from declined), fresh/accepted/declined ones
-// are left alone, and the sweep is idempotent. Port 5455.
+// are left alone, and the sweep is idempotent. The lists additionally report
+// the derived `expiresAt` for pending referrals (issue #361), and stop doing so
+// once the sweep has run. Port 5455.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -169,5 +171,51 @@ describe('referral expiry job', () => {
     const slots = await generateSlots(app, doctorB, 1);
     const res = await acceptReferral(app, patient, id, slots[0]);
     expect(res.status).toBe(409);
+  });
+
+  // Issue #361: the deadline is reported, not just enforced. Same TTL the
+  // sweep just used, read off the real API responses for both lists.
+  it('reports the derived expiresAt on the patient and referring-doctor lists', async () => {
+    const id = await newReferral();
+    const ttlMs = ttlDays * DAY_MS;
+    type Row = {
+      id: string;
+      status: string;
+      updatedAt: string;
+      expiresAt: string | null;
+      expiredAt: string | null;
+    };
+
+    const mine = await request(app)
+      .get('/referrals/mine')
+      .set('Authorization', `Bearer ${patient.accessToken}`);
+    expect(mine.status).toBe(200);
+    const patientRow: Row = mine.body.referrals.find((row: Row) => row.id === id);
+    expect(patientRow, JSON.stringify(mine.body.referrals.map((r: Row) => r.id))).toBeTruthy();
+    expect(new Date(patientRow.expiresAt!).getTime() - new Date(patientRow.updatedAt).getTime()).toBe(ttlMs);
+    // The grouped view is built from the same rows, so it carries the field too.
+    const groupedRows = Object.values(mine.body.groupedByConsultation as Record<string, Row[]>).flat();
+    expect(groupedRows.find((row: Row) => row.id === id)?.expiresAt).toBe(patientRow.expiresAt);
+
+    const created = await request(app)
+      .get('/referrals/created')
+      .set('Authorization', `Bearer ${doctorA.accessToken}`);
+    expect(created.status).toBe(200);
+    const referringRow: Row = created.body.find((row: Row) => row.id === id);
+    expect(referringRow).toBeTruthy();
+    expect(new Date(referringRow.expiresAt!).getTime() - new Date(referringRow.updatedAt).getTime()).toBe(ttlMs);
+
+    // The sweep that expires the row also removes the deadline: `expiresAt`
+    // describes a pending referral's future, not a terminal one's past.
+    await age(id, ttlDays + 1);
+    await expireStaleReferrals();
+
+    const after = await request(app)
+      .get('/referrals/mine')
+      .set('Authorization', `Bearer ${patient.accessToken}`);
+    const expiredRow: Row = after.body.referrals.find((row: Row) => row.id === id);
+    expect(expiredRow.status).toBe('expired');
+    expect(expiredRow.expiresAt).toBeNull();
+    expect(expiredRow.expiredAt ?? null).not.toBeNull();
   });
 });
