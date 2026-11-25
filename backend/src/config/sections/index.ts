@@ -19,7 +19,7 @@ export * from './log';
 export * from './loginThrottle';
 export * from './notificationFanout';
 export * from './objectStorage';
-export * from './notifications';
+export { notifications } from './notifications';
 export * from './orders';
 export * from './passwordReset';
 export * from './patientExport';

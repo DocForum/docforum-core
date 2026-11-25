@@ -1,4 +1,5 @@
-import { config, normalizedPhone } from '../../../config';
+import { config } from '../../../config';
+import { normalizedPhone } from '../../../config/sections/notifications';
 import { templateFor } from '../templates';
 import type { NotificationChannelAdapter, NotificationDispatch } from '../services';
 import * as notificationsRepo from '../repositories';

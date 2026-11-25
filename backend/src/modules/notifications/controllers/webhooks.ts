@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { timingSafeEqual, createHmac } from 'node:crypto';
-import { config, normalizedPhone } from '../../../config';
+import { config } from '../../../config';
+import { normalizedPhone } from '../../../config/sections/notifications';
 import * as notificationsRepo from '../repositories';
 
 function validSignature(req: Request, secret: string | undefined): boolean {

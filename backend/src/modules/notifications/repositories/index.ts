@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../../db/prisma-client';
-import { normalizedPhone } from '../../../config';
+import { normalizedPhone } from '../../../config/sections/notifications';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
