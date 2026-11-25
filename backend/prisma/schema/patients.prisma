@@ -2,7 +2,7 @@
 
 model PatientProfile {
   id           String    @id @default(uuid())
-  version     Int      @default(1)
+  version      Int       @default(1)
   // Null for a dependent (Phase 8, issue #42, docs/adr/0011): a
   // guardian-owned profile with no login of its own. Still unique, so a
   // login owns at most one profile. A DB CHECK (see the
@@ -24,23 +24,23 @@ model PatientProfile {
   // (ADR 0010), and an accidental user delete must fail loudly rather than
   // take the clinical identity anchor with it. Optional since issue #42: a
   // dependent profile has no login.
-  user            User?              @relation(fields: [userId], references: [id], onDelete: Restrict)
-  appointments    Appointment[]
-  waitlistEntries WaitlistEntry[]
-  paymentIntents  PaymentIntent[]
-  prescriptions   Prescription[]
-  labOrders       LabOrder[]
-  dataExports     PatientExport[]
+  user             User?              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  appointments     Appointment[]
+  waitlistEntries  WaitlistEntry[]
+  paymentIntents   PaymentIntent[]
+  prescriptions    Prescription[]
+  labOrders        LabOrder[]
+  dataExports      PatientExport[]
   // Phase 3: the referrals this patient is the subject of (the opposite
   // side of Referral.patientProfileId).
-  referrals       Referral[]
+  referrals        Referral[]
   // ADR 0005 step 1 (issue #80): the patient's verified Stellar payer
   // address, when one has been linked. Optional because linking is a
   // separate flow that nothing creates rows for yet.
-  walletLink      PatientWalletLink?
-  intakes        IntakeForm[]
+  walletLink       PatientWalletLink?
+  intakes          IntakeForm[]
   // Phase 2, issue #63: follow-ups this patient must book.
-  followUpRequests FollowUpRequest[] @relation("FollowUpRequestsAsPatient")
+  followUpRequests FollowUpRequest[]  @relation("FollowUpRequestsAsPatient")
 
   // Phase 8 (issue #45): who viewed this patient's records.
   accessLogs AccessLog[]

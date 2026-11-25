@@ -73,4 +73,14 @@ jobs:
       - name: Migrations reproduce the schema (no drift)
         run: node scripts/check-migration-drift.mjs
 
+      # Prisma schema validation and formatting (issue #342)
+      - name: Prisma validate
+        run: npm run prisma:validate
+      - name: Prisma format check
+        run: npm run prisma:format:check
+
+      # Static module-boundary check (issue #340)
+      - name: Check module boundaries
+        run: node scripts/check-module-boundaries.mjs
+
       - run: npm run build

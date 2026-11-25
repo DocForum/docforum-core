@@ -46,7 +46,7 @@ model AvailabilitySlot {
 
 model Appointment {
   id                 String            @id @default(uuid())
-  version     Int      @default(1)
+  version            Int               @default(1)
   patientProfileId   String
   doctorProfileId    String
   // Nullable because a CANCELLED appointment releases its slot back to
@@ -83,7 +83,7 @@ model Appointment {
   consultation     Consultation?
   // Phase 2, issue #63: the follow-up request this appointment satisfied,
   // if it was booked that way (the FK lives on FollowUpRequest).
-  followUpRequest  FollowUpRequest? @relation("FollowUpBookedAppointment")
+  followUpRequest  FollowUpRequest?  @relation("FollowUpBookedAppointment")
 
   // TODO Phase 2: intakeId (FK -> IntakeForm). PRD FR-5 requires intake
   // before confirmation, not enforced yet — booking works without it in
