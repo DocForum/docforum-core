@@ -56,6 +56,9 @@ async function setupApp(): Promise<{
     stdio: 'pipe',
   });
 
+  // Must be set before the app module (and its PrismaClient) loads.
+  process.env.DATABASE_URL = databaseUrl;
+
   const appModule = await import('../../src/app.js');
   const dbModule = await import('../../src/db/prisma-client.js');
   const authServices = await import('../../src/modules/auth/services/index.js');
