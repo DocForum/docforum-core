@@ -22,6 +22,8 @@
     "test:properties": "vitest run tests/unit/availability-slots.property.test.ts tests/unit/state-machines.property.test.ts",
     "audit:prod": "node scripts/audit-gate.mjs",
     "i18n:check": "node scripts/check-i18n-catalogues.mjs",
+    "notifications:check": "node scripts/check-notification-templates.mjs",
+    "openapi:generate": "node scripts/gen-openapi.mjs",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:format:check": "prisma format --check",

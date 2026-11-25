@@ -653,3 +653,65 @@ export async function createFacilityAccount(
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code: unknown }).code === 'P2002';
 }
+
+// --- Order verification (issue #71) -------------------------------------
+import { issueOrderToken, verifyOrderToken } from '../../../utils/order-token.js';
+export { issueOrderToken, verifyOrderToken };
+
+const verifyRateBuckets = new Map<string, { count: number; resetAt: number }>();
+const VERIFY_RATE_LIMIT = 30;
+const VERIFY_RATE_WINDOW_MS = 60 * 1000;
+
+function checkVerifyRateLimit(facilityId: string): void {
+  const now = Date.now();
+  const bucket = verifyRateBuckets.get(facilityId);
+  if (!bucket || now > bucket.resetAt) {
+    verifyRateBuckets.set(facilityId, { count: 1, resetAt: now + VERIFY_RATE_WINDOW_MS });
+    return;
+  }
+  if (bucket.count >= VERIFY_RATE_LIMIT) {
+    throw new HttpError(429, 'Too many verification attempts.', 'VERIFY_RATE_LIMITED');
+  }
+  bucket.count += 1;
+}
+
+export async function verifyOrder(actor: auditService.AuditActor, token: string) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const facility = await findFacilityProfileByUserId(actor.userId);
+  if (!facility) throw new HttpError(403, 'No facility profile is linked to this account.');
+  checkVerifyRateLimit(facility.id);
+
+  const payload = verifyOrderToken(token);
+
+  if (payload.kind === 'prescription') {
+    const { getPrescription } = await import('../../prescriptions/services/index.js');
+    const order = await getPrescription(payload.orderId);
+    if (facility.type !== 'pharmacy') {
+      return { valid: false, reason: 'ineligible_facility' };
+    }
+    const valid = order.status === 'issued';
+    const reason = valid ? null : order.status === 'superseded' ? 'superseded' : order.status === 'fulfilled' ? 'fulfilled' : order.status === 'expired' ? 'expired' : order.status;
+    return {
+      valid,
+      reason,
+      order: valid
+        ? { id: order.id, type: 'prescription', status: order.status, createdAt: order.createdAt }
+        : { id: order.id, type: 'prescription', status: order.status },
+    };
+  }
+
+  const { getLabOrder } = await import('../../lab-orders/services/index.js');
+  const order = await getLabOrder(payload.orderId);
+  if (facility.type !== 'lab') {
+    return { valid: false, reason: 'ineligible_facility' };
+  }
+  const valid = order.status === 'issued';
+  const reason = valid ? null : order.status === 'superseded' ? 'superseded' : order.status === 'fulfilled' ? 'fulfilled' : order.status === 'expired' ? 'expired' : order.status;
+  return {
+    valid,
+    reason,
+    order: valid
+      ? { id: order.id, type: 'lab_order', status: order.status, createdAt: order.createdAt }
+      : { id: order.id, type: 'lab_order', status: order.status },
+  };
+}

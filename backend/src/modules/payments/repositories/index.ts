@@ -402,3 +402,37 @@ export function inTransaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T
   return prisma.$transaction(fn, { timeout: 15_000 });
 }
 
+
+export async function markSubmitting(
+  tx: Prisma.TransactionClient,
+  id: string,
+): Promise<PaymentIntent | null> {
+  const result = await tx.paymentIntent.updateMany({
+    where: { id, status: 'awaiting_signature' },
+    data: { status: 'submitting' },
+  });
+  return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
+}
+
+export async function markSubmitted(
+  tx: Prisma.TransactionClient,
+  id: string,
+  input: { escrowId: bigint; stellarTxHash: string; sorobanContractId: string },
+): Promise<PaymentIntent | null> {
+  const result = await tx.paymentIntent.updateMany({
+    where: { id, status: 'submitting' },
+    data: { status: 'escrowed', ...input, version: { increment: 1 } },
+  });
+  return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
+}
+
+export async function releaseSubmittingClaim(
+  tx: Prisma.TransactionClient,
+  id: string,
+): Promise<PaymentIntent | null> {
+  const result = await tx.paymentIntent.updateMany({
+    where: { id, status: 'submitting' },
+    data: { status: 'awaiting_signature' },
+  });
+  return result.count === 1 ? tx.paymentIntent.findUniqueOrThrow({ where: { id } }) : null;
+}
