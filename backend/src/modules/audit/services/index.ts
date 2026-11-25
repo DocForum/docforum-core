@@ -249,11 +249,14 @@ export function recordAccess(input: AccessLogInput): void {
       route: input.route ?? null,
       detail: input.detail ?? null,
     })
-    .catch((_err: unknown) => {
+    .catch((err: unknown) => {
       logFailureCount += 1;
       // Fail-open by design, but loudly: this is a privacy trail, so a
       // silent gap is worse than a noisy one.
-      logger.error(`[audit] FAILED to record access (${input.entityType} ${input.entityId})`);
+      logger.error(
+        { error: err instanceof Error ? err.name : typeof err },
+        `[audit] FAILED to record access (${input.entityType} ${input.entityId})`,
+      );
     });
 }
 
