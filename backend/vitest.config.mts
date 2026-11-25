@@ -88,15 +88,18 @@ export default defineConfig({
       // number. Appointments is up from 75.95 / 85.33 / 58.63 / 82.27 on `4a8cfbf`
       // because `#419` landed the doctor day-view and status-transition suite, so
       // its floor went up with it; that is the only direction this comment allows.
-      // Four green merged runs sit behind the table: two on `7f70e1b` (279.08s and
-      // 188.42s, both at 3 workers), one here at the default count, and CI's. The
-      // only number that moves between *green* runs of the *same* tree is payments —
-      // 79.26 / 70.37 / 83.23 against the 79.38 / 70.53 / 83.35 tabled here, a
-      // spread of 0.16 that also happens to be the local-vs-CI difference. The
-      // other two moved when the base moved: availability read 93.60 / 84.93 on
-      // `7f70e1b` and is 92.80 / 83.56 here with no change to any file in its own
-      // module (`#408` reworked `server.ts` and the Prisma schemas, so which of
-      // its lines execute shifted), and referrals moved to 90.21 / 81.05 / 96.22.
+      // Five green merged runs sit behind the table: two on `7f70e1b` (279.08s and
+      // 188.42s, both at 3 workers), one here at the default count, and two of CI's,
+      // sixteen minutes apart. The only number that moves between *green* runs of the
+      // *same* tree is payments — locally 79.26 / 70.37 / 83.23, in CI's first run of
+      // this base 79.38 / 70.53 / 83.35 (tabled above), and in its second 79.38 /
+      // 70.37 / 83.35. Those two CI runs instrument the same files and agreed on
+      // nineteen of the twenty cells; the twentieth is one branch out of 621. The
+      // spread is run-to-run, not arm64-vs-amd64, and 2 points is what absorbs it.
+      // The other two modules moved when the base moved: availability read 93.60 /
+      // 84.93 on `7f70e1b` and is 92.80 / 83.56 here with no change to any file in
+      // its own module (`#408` reworked `server.ts` and the Prisma schemas, so which
+      // of its lines execute shifted), and referrals moved to 90.21 / 81.05 / 96.22.
       // Every floor is under every measurement its own module has produced on
       // either tree, so this movement cannot turn a green run red by itself; the
       // tightest gap is 1.56 (availability branches) and the loosest 2.82 (orders
