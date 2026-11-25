@@ -1,11 +1,23 @@
 import { z } from 'zod';
+import { timeZoneSchema } from '../../utils/time-zones';
 
-export const signupSchema = z.object({
-  role: z.enum(['patient', 'doctor']),
-  email: z.string().email(),
-  password: z.string().min(8),
-  fullName: z.string().trim().min(1),
-});
+export const signupSchema = z
+  .object({
+    role: z.enum(['patient', 'doctor']),
+    email: z.string().email(),
+    password: z.string().min(8),
+    fullName: z.string().trim().min(1),
+    timeZone: timeZoneSchema.optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.role === 'patient' && data.timeZone !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'timeZone is only valid for doctor accounts.',
+        path: ['timeZone'],
+      });
+    }
+  });
 
 export const loginSchema = z.object({
   email: z.string().email(),
