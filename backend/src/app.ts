@@ -11,6 +11,12 @@ import { registerRetentionHolds } from './retention-holds';
 import { getReadiness } from './health/readiness';
 import { runWithRlsContext } from './db/prisma-client';
 import { HttpError } from './http-error';
+import * as authService from './modules/auth/services';
+import * as notificationsService from './modules/notifications/services';
+import { createPostmarkAdapter } from './modules/notifications/channels/postmark';
+import { createTwilioAdapter } from './modules/notifications/channels/twilio';
+
+let notificationAdaptersRegistered = false;
 
 export function createApp() {
   const app = express();
