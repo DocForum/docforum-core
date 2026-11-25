@@ -73,8 +73,9 @@ export default defineConfig({
       // fail an unrelated PR. Measured with `npm run test:coverage` on the
       // `bce31cc` tree this sits on (119 test files, 1173 tests, exit 0). These
       // are CI's own numbers, read out of the `coverage-report` artifact from the
-      // green `Backend` run of this branch, and they match a local arm64 run to
-      // the hundredth on nineteen of the twenty:
+      // green `Backend` run of this branch, and they match a local arm64 run to the
+      // hundredth on seventeen of the twenty (the three apart are payments, by at
+      // most 0.16):
       //
       //   module         statements  functions  branches  lines   floor s/f/b/l
       //   appointments       77.28       86.67     60.79   83.50     75/84/58/81
@@ -89,7 +90,7 @@ export default defineConfig({
       // its floor went up with it; that is the only direction this comment allows.
       // Four green merged runs sit behind the table: two on `7f70e1b` (279.08s and
       // 188.42s, both at 3 workers), one here at the default count, and CI's. The
-      // only number that moves between runs of the *same* tree is payments —
+      // only number that moves between *green* runs of the *same* tree is payments —
       // 79.26 / 70.37 / 83.23 against the 79.38 / 70.53 / 83.35 tabled here, a
       // spread of 0.16 that also happens to be the local-vs-CI difference. The
       // other two moved when the base moved: availability read 93.60 / 84.93 on
