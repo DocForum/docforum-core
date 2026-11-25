@@ -14,7 +14,7 @@ export async function listOpenSlots(
   // A non-existent doctor profile returns an empty list (200) rather than
   // 404, preserving the original public-listing behaviour used by the
   // access-control matrix test with placeholder ids.
-  const profile = await doctorsService.getDoctorProfileById(doctorProfileId).catch(() => null);
+  const profile = await doctorsService.getDoctorProfileById(doctorProfileId);
   if (profile) {
     if (profile.user.deactivatedAt || profile.user.deletedAt) {
       throw new HttpError(409, 'Doctor is not available for booking.');

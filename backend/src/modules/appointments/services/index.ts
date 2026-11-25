@@ -643,7 +643,7 @@ export async function bookForReferral(
     throw new HttpError(409, 'This slot is no longer available.');
   }
 
-const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
+  const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
   if (!slot) {
     throw new HttpError(404, 'Slot not found.');
   }
@@ -707,7 +707,7 @@ export async function bookForFollowUp(
     throw new HttpError(409, 'This slot is no longer available.');
   }
 
-const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
+  const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
   if (!slot) {
     throw new HttpError(404, 'Slot not found.');
   }
