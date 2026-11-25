@@ -59,7 +59,7 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
     }
 
     // Ensure the doctor is active (not deactivated or deleted)
-    await doctorsService.assertDoctorActive(slot.doctorProfileId);
+    await doctorsService.assertDoctorActive(slot.doctorProfileId, tx);
 
     const appointment = await appointmentsRepo.createAppointment(tx, {
       patientProfileId: patientProfile.id,
@@ -192,7 +192,7 @@ export async function rescheduleSlot(
     }
 
     // Ensure the doctor is active (not deactivated or deleted)
-    await doctorsService.assertDoctorActive(newSlot.doctorProfileId);
+    await doctorsService.assertDoctorActive(newSlot.doctorProfileId, tx);
 
     // Claim the new slot atomically
     const newClaimed = await availabilityService.claimOpenSlot(tx, newSlotId);
@@ -652,7 +652,7 @@ const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
   }
 
   // Ensure the doctor is active (not deactivated or deleted)
-  await doctorsService.assertDoctorActive(slot.doctorProfileId);
+  await doctorsService.assertDoctorActive(slot.doctorProfileId, db);
 
   const appointment = await appointmentsRepo.createAppointment(db, {
     patientProfileId: input.patientProfileId,
@@ -716,7 +716,7 @@ const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
   }
 
   // Ensure the doctor is active (not deactivated or deleted)
-  await doctorsService.assertDoctorActive(slot.doctorProfileId);
+  await doctorsService.assertDoctorActive(slot.doctorProfileId, db);
 
   const appointment = await appointmentsRepo.createAppointment(db, {
     patientProfileId: input.patientProfileId,
