@@ -34,7 +34,17 @@ const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_t
 type App = ReturnType<typeof import('../../src/app.js').createApp>;
 type Prisma = typeof import('../../src/db/prisma-client.js').prisma;
 
-async function setupApp(): Promise<{ app: App; prisma: Prisma; databaseUrl: string; doctorUserId: string; doctorProfileId: string; patientProfileId: string }> {
+async function setupApp(): Promise<{
+  app: App;
+  prisma: Prisma;
+  databaseUrl: string;
+  doctorUserId: string;
+  doctorProfileId: string;
+  doctorAccessToken: string;
+  patientUserId: string;
+  patientProfileId: string;
+  patientAccessToken: string;
+}> {
   await pg.initialise();
   await pg.start();
   await pg.createDatabase('docforum_test');
@@ -96,6 +106,7 @@ async function setupApp(): Promise<{ app: App; prisma: Prisma; databaseUrl: stri
   });
   expect(patientLogin.status).toBe(200);
   const patientAccessToken = patientLogin.body.accessToken as string;
+  const patientUserId = patientLogin.body.user.id as string;
 
   const patientMe = await request(app).get('/patients/me').set('Authorization', `Bearer ${patientAccessToken}`);
   expect(patientMe.status).toBe(200);
@@ -107,7 +118,7 @@ async function setupApp(): Promise<{ app: App; prisma: Prisma; databaseUrl: stri
     .set('Authorization', `Bearer ${doctorAccessToken}`)
     .send({ date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10), startHour: 8, endHour: 20, slotLengthMinutes: 30 });
 
-  return { app, prisma, databaseUrl, doctorUserId, doctorProfileId, patientProfileId };
+  return { app, prisma, databaseUrl, doctorUserId, doctorProfileId, doctorAccessToken, patientUserId, patientProfileId, patientAccessToken };
 }
 
 async function cleanupApp(pg: EmbeddedPostgres, dataDir: string) {
@@ -121,6 +132,9 @@ describe('deactivated and soft-deleted doctors', () => {
   let doctorProfileId: string;
   let patientProfileId: string;
   let doctorUserId: string;
+  let patientUserId: string;
+  let doctorAccessToken: string;
+  let patientAccessToken: string;
 
   beforeAll(async () => {
     const setup = await setupApp();
@@ -129,6 +143,9 @@ describe('deactivated and soft-deleted doctors', () => {
     doctorProfileId = setup.doctorProfileId;
     patientProfileId = setup.patientProfileId;
     doctorUserId = setup.doctorUserId;
+    patientUserId = setup.patientUserId;
+    doctorAccessToken = setup.doctorAccessToken;
+    patientAccessToken = setup.patientAccessToken;
   }, 120_000);
 
   afterAll(async () => {
@@ -148,7 +165,7 @@ describe('deactivated and soft-deleted doctors', () => {
     it('refuses POST /appointments for deactivated doctor', async () => {
       const res = await request(app)
         .post('/appointments')
-        .set('Authorization', `Bearer ${patientProfileId}`)
+        .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ availabilitySlotId: 'some-slot-id' });
       expect(res.status).toBe(409);
     });
@@ -161,14 +178,14 @@ describe('deactivated and soft-deleted doctors', () => {
 
       const bookRes = await request(app)
         .post('/appointments')
-        .set('Authorization', `Bearer ${patientProfileId}`)
+        .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ availabilitySlotId: slotId });
       expect(bookRes.status).toBe(201);
 
       // Now try to reschedule
       const res = await request(app)
         .post(`/appointments/${bookRes.body.id}/reschedule`)
-        .set('Authorization', `Bearer ${patientProfileId}`)
+        .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ newSlotId: slotId });
       expect(res.status).toBe(409);
     });
@@ -185,7 +202,7 @@ describe('deactivated and soft-deleted doctors', () => {
       // Accept the referral
       const acceptRes = await request(app)
         .post(`/referrals/${referralRes.body.id}/accept`)
-        .set('Authorization', `Bearer ${patientProfileId}`)
+        .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ availabilitySlotId: 'some-slot-id' });
       expect(acceptRes.status).toBe(409);
     });
@@ -194,10 +211,11 @@ describe('deactivated and soft-deleted doctors', () => {
       // Create a follow-up booking via consultations
       const slotRes = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
       expect(slotRes.status).toBe(200);
+      const slotId = slotRes.body[0].id;
 
       const res = await request(app)
         .post('/consultations')
-        .set('Authorization', `Bearer ${patientProfileId}`)
+        .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ appointmentId: 'some-appointment-id', outcome: 'follow_up_needed' });
       // The consultation creation may fail before booking, but the key point
       // is that doctor-related operations should be refused
@@ -235,7 +253,7 @@ describe('deactivated and soft-deleted doctors', () => {
     it('refuses POST /appointments for soft-deleted doctor', async () => {
       const res = await request(app)
         .post('/appointments')
-        .set('Authorization', `Bearer ${patientProfileId}`)
+        .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ availabilitySlotId: 'some-slot-id' });
       expect(res.status).toBe(409);
     });
@@ -248,14 +266,14 @@ describe('deactivated and soft-deleted doctors', () => {
 
       const bookRes = await request(app)
         .post('/appointments')
-        .set('Authorization', `Bearer ${patientProfileId}`)
+        .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ availabilitySlotId: slotId });
       expect(bookRes.status).toBe(201);
 
       // Now try to reschedule
       const res = await request(app)
         .post(`/appointments/${bookRes.body.id}/reschedule`)
-        .set('Authorization', `Bearer ${patientProfileId}`)
+        .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ newSlotId: slotId });
       expect(res.status).toBe(409);
     });
@@ -272,7 +290,7 @@ describe('deactivated and soft-deleted doctors', () => {
       // Accept the referral
       const acceptRes = await request(app)
         .post(`/referrals/${referralRes.body.id}/accept`)
-        .set('Authorization', `Bearer ${patientProfileId}`)
+        .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ availabilitySlotId: 'some-slot-id' });
       expect(acceptRes.status).toBe(409);
     });
@@ -281,10 +299,11 @@ describe('deactivated and soft-deleted doctors', () => {
       // Create a follow-up booking
       const slotRes = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
       expect(slotRes.status).toBe(200);
+      const slotId = slotRes.body[0].id;
 
       const res = await request(app)
         .post('/consultations')
-        .set('Authorization', `Bearer ${patientProfileId}`)
+        .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ appointmentId: 'some-appointment-id', outcome: 'follow_up_needed' });
       expect([409, 404]).toContain(res.status);
     });
