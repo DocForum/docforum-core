@@ -5,6 +5,7 @@ import * as labResultAcknowledgementsService from '../services/lab-result-acknow
 import {
   attachLabResultQuerySchema,
   consultationSchema,
+  labResultDownloadQuerySchema,
   labOrderSchema,
   prescriptionSchema,
   unacknowledgedResultsQuerySchema,
@@ -81,7 +82,13 @@ export async function listUnacknowledgedLabResults(req: Request, res: Response) 
 }
 
 export async function downloadLabResult(req: Request, res: Response) {
-  const file = await labResultsService.openLabResultFile(req.user!, getParam(req, 'labOrderId'), req.originalUrl);
+  const { patientProfileId } = labResultDownloadQuerySchema.parse(req.query);
+  const file = await labResultsService.openLabResultFile(
+    req.user!,
+    getParam(req, 'labOrderId'),
+    'GET /orders/lab-orders/:labOrderId/result',
+    patientProfileId,
+  );
   res.set({
     'Content-Type': file.contentType,
     'Content-Length': String(file.body.length),

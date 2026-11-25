@@ -82,13 +82,37 @@ While the guardianship is **active** (see below), the guardian can:
   `patientProfileId`);
 - list the dependent's appointments (`GET /appointments/mine?patientProfileId=`).
 
-Those are the only dependent-scoped surfaces that exist today. When later
-phases add intake, consultation notes, orders or exports, each must
-authorise through the same check, `patientsService.resolveActingProfile`,
-and decide in its own ADR or PR whether guardians see it. PRD §7's privacy
-rule applies: intake and consultation notes go to "the patient, the
-treating doctor(s), the fulfilling facility". For a minor, that patient is
-represented by their guardian.
+Issue #305 extends that list to the care that follows from those bookings,
+using the same `patientProfileId` query/body parameter and the same
+`resolveActingProfile` check:
+
+- read the consultation record (`GET /consultations/:id?patientProfileId=`);
+- list the dependent's referrals (`GET /referrals/mine?patientProfileId=`)
+  and accept/decline them (`POST /referrals/:id/{accept,decline}` with
+  `patientProfileId` in the body);
+- download a lab result (`GET /orders/lab-orders/:id/result?patientProfileId=`).
+
+The parameter is optional: without it every one of these paths keeps its
+previous meaning (the caller acting only for themselves). Naming a profile
+the caller isn't related to is `404`; naming a former dependent is
+`403 GUARDIANSHIP_INACTIVE` — checked by the service at request time, so
+access ends on revocation or at majority without a job. Guardian reads are
+PHI-access-logged with the guardian as `accessedBy` and the dependent as the
+record owner; consultation detail and referral-list reads now write those
+rows too, alongside the existing lab-result log. Referral accept/decline
+keep their append-only audit events, with the dependent's profile id in the
+metadata.
+
+Those are the dependent-scoped surfaces that exist today. When later
+phases add intake, exports or other record types, each must authorise
+through the same check, `patientsService.resolveActingProfile`, and decide
+in its own ADR or PR whether guardians see it. PRD §7's privacy rule
+applies: intake and consultation notes go to "the patient, the treating
+doctor(s), the fulfilling facility". For a minor, that patient is
+represented by their guardian. Issue #305 only opens records created by a
+booking the guardian made (or the specialist care that follows from it),
+not arbitrary pre-existing records — create-only guardianship remains the
+control that makes self-assertion tolerable in v1.
 
 A guardian never gains access to another guardian's dependent. Any
 `patientProfileId` that isn't the caller's own profile or an active
@@ -155,6 +179,11 @@ never a delete, so who had access and when stays on record.
 - `PatientProfile.userId` becomes nullable. Everything that resolves "my
   profile" still goes through `getMyPatientProfile(userId)`, which can never
   return a dependent, since a dependent has no `userId`.
+- Every dependent-scoped read resolves the acting profile **before** touching
+  the record. That matters for revoked guardianships: the RLS policies already
+  hide `Consultation`/`Appointment` rows from a revoked guardian, so a
+  post-read check would answer a generic `404` instead of the explicit
+  `GUARDIANSHIP_INACTIVE`.
 - `bookSlot` gains one authorisation step *before* its transaction:
   resolving which profile the caller may act for. The transaction itself,
   `claimOpenSlot`'s conditional `UPDATE` followed by the `Appointment`

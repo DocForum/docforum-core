@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
+import { createOrderFixture } from './order-fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const MIGRATIONS_DIR = path.join(BACKEND_ROOT, 'prisma', 'migrations');
@@ -75,6 +76,11 @@ describe('guardian and dependent profiles', () => {
   let prisma: Prisma;
   let doctorToken: string;
   let doctorProfileId: string;
+  let specialistToken: string;
+  let specialistProfileId: string;
+  let facilityToken: string;
+  let facilityProfileId: string;
+  let signAccessToken: typeof import('../../src/modules/auth/services/tokens.js').signAccessToken;
   let g1: Patient; // guardian with dependents
   let g2: Patient; // another guardian
   let adult: Patient; // ordinary patient, no dependents
@@ -83,6 +89,8 @@ describe('guardian and dependent profiles', () => {
   let d2: string; // g2's dependent
   let d1AppointmentId: string;
   const freeSlots: string[] = [];
+  const specialistSlots: string[] = [];
+  const PDF = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.from('guardian lab result')]);
 
   async function signup(role: 'patient' | 'doctor', label: string, verify = true) {
     const email = `${label}-${runId}@example.com`;
@@ -107,6 +115,75 @@ describe('guardian and dependent profiles', () => {
     return slot;
   };
 
+  /** Book → complete → close → refer, all over HTTP, for the dependent. */
+  async function setupClinicalRecords(dependentProfileId: string, label: string) {
+    const slot = await prisma.availabilitySlot.create({
+      data: {
+        doctorProfileId,
+        startTime: new Date(Date.now() - 3600_000),
+        endTime: new Date(Date.now() - 1800_000),
+        status: 'open',
+      },
+    });
+    const booked = await book(g1, { availabilitySlotId: slot.id, patientProfileId: dependentProfileId });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const appointmentId = booked.body.id as string;
+
+    const completed = await request(app)
+      .patch(`/appointments/${appointmentId}/status`)
+      .set(auth({ token: doctorToken }))
+      .send({ status: 'completed' });
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+
+    const note = `Consultation note for ${label}`;
+    const closed = await request(app)
+      .post(`/appointments/${appointmentId}/consultation`)
+      .set(auth({ token: doctorToken }))
+      .send({ outcome: 'referred', notes: note });
+    expect(closed.status, JSON.stringify(closed.body)).toBe(201);
+    const consultationId = closed.body.consultation.id as string;
+
+    const referred = await request(app)
+      .post('/referrals')
+      .set(auth({ token: doctorToken }))
+      .send({
+        sourceConsultationId: consultationId,
+        targetDoctorId: specialistProfileId,
+        snapshotNotes: `Referral note for ${label}`,
+      });
+    expect(referred.status, JSON.stringify(referred.body)).toBe(201);
+    return { appointmentId, consultationId, referralId: referred.body.id as string, note };
+  }
+
+  async function setupLabResult(dependentProfileId: string, label: string) {
+    const order = await createOrderFixture(prisma as never, {
+      patientProfileId: dependentProfileId,
+      facilityProfileId,
+      kind: 'lab_order',
+      amountStroops: 10_000_000n,
+      tag: `guardian-read-${label}-${runId}`,
+    });
+    const attached = await request(app)
+      .post(`/orders/lab-orders/${order.id}/result`)
+      .set(auth({ token: facilityToken }))
+      .set('Content-Type', 'application/pdf')
+      .send(PDF);
+    expect(attached.status, JSON.stringify(attached.body)).toBe(201);
+    return { labOrderId: order.id, resultId: attached.body.id as string };
+  }
+
+  /** recordAccess is fire-and-forget; poll briefly instead of racing it. */
+  async function waitForAccessLogs(entityType: string, entityId: string, accessedBy: string) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const rows = await prisma.accessLog.findMany({
+        where: { entityType: entityType as never, entityId, accessedBy },
+      });
+      if (rows.length > 0) return rows;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return prisma.accessLog.findMany({ where: { entityType: entityType as never, entityId, accessedBy } });
+  }
+
   beforeAll(async () => {
     await pg.initialise();
     await pg.start();
@@ -123,6 +200,8 @@ describe('guardian and dependent profiles', () => {
     const appModule = await import('../../src/app.js');
     const dbModule = await import('../../src/db/prisma-client.js');
     const authServices = await import('../../src/modules/auth/services/index.js');
+    const tokens = await import('../../src/modules/auth/services/tokens.js');
+    signAccessToken = tokens.signAccessToken;
     app = appModule.createApp();
     prisma = dbModule.prisma;
     authServices.setEmailSender(async (message) => {
@@ -140,6 +219,41 @@ describe('guardian and dependent profiles', () => {
       .send({ date: tomorrow, startHour: 8, endHour: 18, slotLengthMinutes: 30 });
     expect(generated.status).toBe(201);
     freeSlots.push(...((await request(app).get(`/availability/doctors/${doctorProfileId}/slots`)).body as { id: string }[]).map((s) => s.id));
+
+    // Issue #305: a second doctor to receive referrals, and a lab to attach
+    // dependent results. Both are needed to exercise the four read/act paths
+    // over HTTP rather than by writing the records straight into the DB.
+    const specialist = await signup('doctor', 'guardian-specialist');
+    specialistToken = specialist.token;
+    const specialistProfile = await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: specialist.userId } });
+    specialistProfileId = specialistProfile.id;
+    await prisma.doctorProfile.update({
+      where: { id: specialistProfileId },
+      data: { verificationStatus: 'verified' },
+    });
+    const specialistGeneration = await request(app)
+      .post(`/availability/doctors/${specialistProfileId}/slots/generate`)
+      .set('Authorization', `Bearer ${specialistToken}`)
+      .send({ date: tomorrow, startHour: 8, endHour: 18, slotLengthMinutes: 30 });
+    expect(specialistGeneration.status).toBe(201);
+    specialistSlots.push(
+      ...((await request(app).get(`/availability/doctors/${specialistProfileId}/slots`)).body as { id: string }[]).map((s) => s.id),
+    );
+
+    const labUser = await prisma.user.create({
+      data: {
+        email: `guardian-lab-${runId}@example.com`,
+        passwordHash: 'unused',
+        role: 'facility',
+        emailVerifiedAt: new Date(),
+      },
+    });
+    facilityToken = signAccessToken({ sub: labUser.id, role: 'facility' });
+    facilityProfileId = (
+      await prisma.facilityProfile.create({
+        data: { userId: labUser.id, name: 'Guardian Test Lab', type: 'lab' },
+      })
+    ).id;
 
     g1 = await signupPatient('guardian-one');
     g2 = await signupPatient('guardian-two');
@@ -258,6 +372,198 @@ describe('guardian and dependent profiles', () => {
     expect(named.status).toBe(201);
     expect(named.body.patientProfileId).toBe(adult.profileId);
     expect((await request(app).get('/appointments/mine').set(auth(adult))).body).toHaveLength(2);
+  });
+
+  // --- Issue #305: guardian read access to the care that follows a booking --
+  it('lets an active guardian read a dependent’s consultation, referrals and lab result, naming them as viewer in the access log', async () => {
+    const child = await createDependent(g1, { fullName: 'Child Read Access', dateOfBirth: yearsAgo(7) });
+    expect(child.status).toBe(201);
+    const dependentId = child.body.id as string;
+    const { consultationId, referralId, note } = await setupClinicalRecords(dependentId, 'read');
+    const { labOrderId, resultId } = await setupLabResult(dependentId, 'read');
+
+    const withoutProfile = await request(app).get(`/consultations/${consultationId}`).set(auth(g1));
+    expect(withoutProfile.status).toBe(403);
+    const withProfile = await request(app)
+      .get(`/consultations/${consultationId}?patientProfileId=${dependentId}`)
+      .set(auth(g1));
+    expect(withProfile.status, JSON.stringify(withProfile.body)).toBe(200);
+    expect(withProfile.body.notes).toBe(note);
+
+    const ownReferrals = await request(app).get('/referrals/mine').set(auth(g1));
+    expect(ownReferrals.status).toBe(200);
+    expect(ownReferrals.body.referrals).toEqual([]);
+    const dependentReferrals = await request(app)
+      .get(`/referrals/mine?patientProfileId=${dependentId}`)
+      .set(auth(g1));
+    expect(dependentReferrals.status).toBe(200);
+    expect(dependentReferrals.body.referrals.map((r: { id: string }) => r.id)).toEqual([referralId]);
+
+    const ownResult = await request(app).get(`/orders/lab-orders/${labOrderId}/result`).set(auth(g1));
+    expect(ownResult.status).toBe(404);
+    const dependentResult = await request(app)
+      .get(`/orders/lab-orders/${labOrderId}/result?patientProfileId=${dependentId}`)
+      .set(auth(g1))
+      .buffer(true);
+    expect(dependentResult.status).toBe(200);
+    expect(dependentResult.headers['content-type']).toBe('application/pdf');
+    expect(dependentResult.headers['cache-control']).toBe('no-store');
+
+    // The guardian is the viewer on every newly authorised read, and the
+    // record owner is still the dependent.
+    for (const [entityType, entityId] of [
+      ['Consultation', consultationId],
+      ['Referral', referralId],
+      ['LabResult', resultId],
+    ]) {
+      const logs = await waitForAccessLogs(entityType, entityId, g1.userId);
+      expect(logs.length).toBeGreaterThan(0);
+      expect(logs[0]).toMatchObject({ patientProfileId: dependentId, accessedBy: g1.userId });
+      expect(logs[0].detail).toContain('guardian');
+      expect(logs[0].route).toBeTruthy();
+    }
+
+    // No enumeration: another guardian and an ordinary patient get 404 even
+    // when they name the dependent explicitly.
+    for (const other of [g2, adult]) {
+      expect((await request(app).get(`/consultations/${consultationId}?patientProfileId=${dependentId}`).set(auth(other))).status).toBe(404);
+      expect((await request(app).get(`/referrals/mine?patientProfileId=${dependentId}`).set(auth(other))).status).toBe(404);
+      expect((await request(app).get(`/orders/lab-orders/${labOrderId}/result?patientProfileId=${dependentId}`).set(auth(other))).status).toBe(404);
+    }
+    expect((await request(app).get(`/consultations/${consultationId}?patientProfileId=not-a-uuid`).set(auth(g1))).status).toBe(400);
+  });
+
+  it('lets a guardian accept and decline a dependent’s referral through patientProfileId', async () => {
+    const child = await createDependent(g1, { fullName: 'Child Referral Actions', dateOfBirth: yearsAgo(6) });
+    expect(child.status).toBe(201);
+    const dependentId = child.body.id as string;
+    const accepting = await setupClinicalRecords(dependentId, 'accept');
+    const slot = specialistSlots.shift();
+    if (!slot) throw new Error('test ran out of specialist slots');
+    const accepted = await request(app)
+      .post(`/referrals/${accepting.referralId}/accept`)
+      .set(auth(g1))
+      .send({ availabilitySlotId: slot, patientProfileId: dependentId });
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    expect(accepted.body.status).toBe('accepted');
+    const newAppointment = await prisma.appointment.findUniqueOrThrow({ where: { id: accepted.body.resultingAppointmentId } });
+    expect(newAppointment).toMatchObject({ patientProfileId: dependentId, doctorProfileId: specialistProfileId });
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: { entityType: 'Referral', entityId: accepting.referralId, action: 'referral.accepted' },
+    });
+    expect(audit.actorUserId).toBe(g1.userId);
+    expect(audit.metadata).toMatchObject({ patientProfileId: dependentId });
+
+    const declining = await setupClinicalRecords(dependentId, 'decline');
+    const declined = await request(app)
+      .post(`/referrals/${declining.referralId}/decline`)
+      .set(auth(g1))
+      .send({ patientProfileId: dependentId });
+    expect(declined.status, JSON.stringify(declined.body)).toBe(200);
+    expect(declined.body.status).toBe('declined');
+
+    // Without the dependent's profile, the guardian is acting as themselves
+    // and cannot touch either referral.
+    expect((await request(app).post(`/referrals/${declining.referralId}/decline`).set(auth(g1)).send()).status).toBe(403);
+    const anotherSlot = specialistSlots.shift();
+    if (!anotherSlot) throw new Error('test ran out of specialist slots');
+    expect((await request(app).post(`/referrals/${declining.referralId}/accept`).set(auth(g1)).send({ availabilitySlotId: anotherSlot })).status).toBe(403);
+    specialistSlots.unshift(anotherSlot);
+    expect((await request(app).post(`/referrals/${declining.referralId}/decline`).set(auth(g2)).send({ patientProfileId: dependentId })).status).toBe(404);
+    expect(await prisma.appointment.count({ where: { patientProfileId: dependentId, origin: 'referral' } })).toBe(1);
+  });
+
+  it('ends a guardian’s read and act access at the age of majority', async () => {
+    const child = await createDependent(g1, { fullName: 'Child Becoming Adult', dateOfBirth: yearsAgo(9) });
+    expect(child.status).toBe(201);
+    const dependentId = child.body.id as string;
+    const { consultationId, referralId } = await setupClinicalRecords(dependentId, 'majority');
+    const { labOrderId } = await setupLabResult(dependentId, 'majority');
+
+    // The dependent turns 18. resolveActingProfile checks the DOB on every
+    // request, so access stops without any job or flag being flipped.
+    await prisma.patientProfile.update({
+      where: { id: dependentId },
+      data: { dateOfBirth: new Date(`${yearsAgo(18)}T00:00:00.000Z`) },
+    });
+
+    const consultationRead = await request(app)
+      .get(`/consultations/${consultationId}?patientProfileId=${dependentId}`)
+      .set(auth(g1));
+    expect(consultationRead.status).toBe(403);
+    expect(consultationRead.body.code).toBe('GUARDIANSHIP_INACTIVE');
+
+    const referralList = await request(app).get(`/referrals/mine?patientProfileId=${dependentId}`).set(auth(g1));
+    expect(referralList.status).toBe(403);
+    expect(referralList.body.code).toBe('GUARDIANSHIP_INACTIVE');
+
+    const slot = specialistSlots.shift();
+    if (!slot) throw new Error('test ran out of specialist slots');
+    const accept = await request(app)
+      .post(`/referrals/${referralId}/accept`)
+      .set(auth(g1))
+      .send({ availabilitySlotId: slot, patientProfileId: dependentId });
+    expect(accept.status).toBe(403);
+    expect(accept.body.code).toBe('GUARDIANSHIP_INACTIVE');
+    specialistSlots.unshift(slot);
+
+    const decline = await request(app)
+      .post(`/referrals/${referralId}/decline`)
+      .set(auth(g1))
+      .send({ patientProfileId: dependentId });
+    expect(decline.status).toBe(403);
+    expect(decline.body.code).toBe('GUARDIANSHIP_INACTIVE');
+
+    const download = await request(app)
+      .get(`/orders/lab-orders/${labOrderId}/result?patientProfileId=${dependentId}`)
+      .set(auth(g1));
+    expect(download.status).toBe(403);
+    expect(download.body.code).toBe('GUARDIANSHIP_INACTIVE');
+
+    // The record itself survives the end of access.
+    expect(await prisma.consultation.findUniqueOrThrow({ where: { id: consultationId } })).toBeTruthy();
+    expect(await prisma.labResult.count({ where: { labOrderId } })).toBe(1);
+  });
+
+  it('ends a guardian’s read and act access immediately on revocation', async () => {
+    const child = await createDependent(g1, { fullName: 'Child Revoked Reads', dateOfBirth: yearsAgo(5) });
+    expect(child.status).toBe(201);
+    const dependentId = child.body.id as string;
+    const { consultationId, referralId } = await setupClinicalRecords(dependentId, 'revoked');
+    const { labOrderId } = await setupLabResult(dependentId, 'revoked');
+    await prisma.guardianship.updateMany({
+      where: { dependentProfileId: dependentId, guardianUserId: g1.userId },
+      data: { revokedAt: new Date() },
+    });
+
+    const consultationRead = await request(app)
+      .get(`/consultations/${consultationId}?patientProfileId=${dependentId}`)
+      .set(auth(g1));
+    expect(consultationRead.status).toBe(403);
+    expect(consultationRead.body.code).toBe('GUARDIANSHIP_INACTIVE');
+    const referralList = await request(app).get(`/referrals/mine?patientProfileId=${dependentId}`).set(auth(g1));
+    expect(referralList.status).toBe(403);
+    expect(referralList.body.code).toBe('GUARDIANSHIP_INACTIVE');
+    const slot = specialistSlots.shift();
+    if (!slot) throw new Error('test ran out of specialist slots');
+    const accept = await request(app)
+      .post(`/referrals/${referralId}/accept`)
+      .set(auth(g1))
+      .send({ availabilitySlotId: slot, patientProfileId: dependentId });
+    expect(accept.status).toBe(403);
+    expect(accept.body.code).toBe('GUARDIANSHIP_INACTIVE');
+    specialistSlots.unshift(slot);
+    const decline = await request(app)
+      .post(`/referrals/${referralId}/decline`)
+      .set(auth(g1))
+      .send({ patientProfileId: dependentId });
+    expect(decline.status).toBe(403);
+    expect(decline.body.code).toBe('GUARDIANSHIP_INACTIVE');
+    const download = await request(app)
+      .get(`/orders/lab-orders/${labOrderId}/result?patientProfileId=${dependentId}`)
+      .set(auth(g1));
+    expect(download.status).toBe(403);
+    expect(download.body.code).toBe('GUARDIANSHIP_INACTIVE');
   });
 
   it('Issue #296: appointment detail endpoint returns ETag, slot times, doctor summary, and enforces role-scoped access', async () => {
