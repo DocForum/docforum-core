@@ -110,6 +110,7 @@ export interface CreateSelfServeUserInput {
   role: Extract<Role, 'patient' | 'doctor'>;
   fullName: string;
   locale?: string;
+  timeZone?: string;
 }
 
 /** Creates the User row and its matching profile row in one transaction —
@@ -132,7 +133,11 @@ export function createSelfServeUser(input: CreateSelfServeUserInput) {
       });
     } else {
       await tx.doctorProfile.create({
-        data: { userId: user.id, fullName: input.fullName, timeZone: 'UTC' },
+        data: {
+          userId: user.id,
+          fullName: input.fullName,
+          timeZone: input.timeZone ?? 'UTC',
+        },
       });
     }
 
