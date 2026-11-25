@@ -14,9 +14,12 @@ describe('doctor time zones & day bounds (issues #290, #291, #360)', () => {
     expect(() => assertValidTimeZone('America/New_York')).not.toThrow();
     expect(() => assertValidTimeZone('Europe/London')).not.toThrow();
     expect(() => assertValidTimeZone('UTC')).not.toThrow();
+    expect(() => assertValidTimeZone('Asia/Kolkata')).not.toThrow();
 
     expect(isValidIanaTimeZone('Africa/Lagos')).toBe(true);
     expect(isValidIanaTimeZone('UTC')).toBe(true);
+    expect(isValidIanaTimeZone('Asia/Kolkata')).toBe(true);
+    expect(isValidIanaTimeZone('Europe/Kyiv')).toBe(true);
     expect(isValidIanaTimeZone('EST')).toBe(false);
     expect(isValidIanaTimeZone('US/Eastern')).toBe(false);
     expect(isValidIanaTimeZone('Fake/Zone')).toBe(false);
