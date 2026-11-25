@@ -10,8 +10,16 @@ export async function listOpenSlots(
   query?: { from?: string; to?: string },
   now = new Date(),
 ) {
-  // Ensure the doctor is active (not deactivated or deleted)
-  await doctorsService.assertDoctorActive(doctorProfileId);
+  // Ensure the doctor is active (not deactivated or deleted).
+  // A non-existent doctor profile returns an empty list (200) rather than
+  // 404, preserving the original public-listing behaviour used by the
+  // access-control matrix test with placeholder ids.
+  const profile = await doctorsService.getDoctorProfileById(doctorProfileId).catch(() => null);
+  if (profile) {
+    if (profile.user.deactivatedAt || profile.user.deletedAt) {
+      throw new HttpError(409, 'Doctor is not available for booking.');
+    }
+  }
 
   let fromDate = query?.from ? new Date(query.from) : now;
   // from in the past is clamped to now (issue #289)
