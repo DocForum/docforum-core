@@ -9,6 +9,7 @@
 // same job end with exactly one generating it.
 import { config } from '../config';
 import { expireExports, onExportRequested, runExportWorker } from '../modules/patients/services';
+import { logger } from '../logger';
 
 /** Runs `task` unless a previous run is still going (no overlap within one
  * process — generation is sequential by design). */
@@ -20,8 +21,7 @@ function nonOverlapping(name: string, task: () => Promise<unknown>) {
     void task()
       .catch((err) => {
         // Error type only: a database error message can echo row data.
-        // eslint-disable-next-line no-console
-        console.error(`[jobs] ${name} failed: ${err instanceof Error ? err.name : typeof err}`);
+        logger.error(`[jobs] ${name} failed: ${err instanceof Error ? err.name : typeof err}`);
       })
       .finally(() => {
         running = false;
@@ -34,8 +34,7 @@ export function startPatientExportJobs(): () => void {
   const cleanup = nonOverlapping('patient-export cleanup', async () => {
     const { expired, orphanChunksDeleted } = await expireExports();
     if (expired > 0 || orphanChunksDeleted > 0) {
-      // eslint-disable-next-line no-console
-      console.log(`[jobs] expired ${expired} patient export(s), removed ${orphanChunksDeleted} orphan chunk(s)`);
+      logger.info(`[jobs] expired ${expired} patient export(s), removed ${orphanChunksDeleted} orphan chunk(s)`);
     }
   });
 

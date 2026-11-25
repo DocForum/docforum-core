@@ -12,6 +12,7 @@
 //    overdue result is visible even before this job has stamped it.
 import { config } from '../config';
 import { escalateOverdueResults } from '../modules/orders/services/lab-result-acknowledgements';
+import { logger } from '../logger';
 
 export function startLabResultEscalationJobs(): () => void {
   let running = false;
@@ -22,14 +23,12 @@ export function startLabResultEscalationJobs(): () => void {
     void escalateOverdueResults()
       .then(({ escalated }) => {
         if (escalated > 0) {
-          // eslint-disable-next-line no-console
-          console.log(`[jobs] escalated ${escalated} unacknowledged lab result(s)`);
+          logger.info(`[jobs] escalated ${escalated} unacknowledged lab result(s)`);
         }
       })
       .catch((err) => {
         // Error type only: a driver message can echo the row it was handling.
-        // eslint-disable-next-line no-console
-        console.error(
+        logger.error(
           `[jobs] lab-result escalation sweep failed: ${err instanceof Error ? err.name : typeof err}`,
         );
       })

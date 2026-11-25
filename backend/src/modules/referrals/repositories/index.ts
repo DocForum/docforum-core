@@ -232,20 +232,30 @@ export async function findParentReferralForConsultation(
   return rows[0]?.referralId ?? null;
 }
 
-/** Issue #68: stuck-referral / loop-flagged admin queues. Filters are
- * conjunctive; every one is optional so the same repo call serves both
- * the "stale pending" view and the "loop-flagged" view. */
+/** Issue #68 + #339: stuck-referral / loop-flagged admin queues with
+ * specialty and target-doctor filters. Every filter is optional; the
+ * specialty filter skips referrals whose targetSpecialtyId is null
+ * (named-doctor referrals). */
 export function listAdminQueue(filters: {
   status?: ReferralStatus;
   createdBefore?: Date;
   loopFlagged?: boolean;
+  targetSpecialtyId?: string;
+  targetDoctorId?: string;
 }) {
+  const where: Prisma.ReferralWhereInput = {
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.createdBefore ? { createdAt: { lt: filters.createdBefore } } : {}),
+    ...(filters.loopFlagged ? { loopFlaggedAt: { not: null } } : {}),
+    ...(filters.targetSpecialtyId
+      ? { targetSpecialtyId: filters.targetSpecialtyId }
+      : {}),
+    ...(filters.targetDoctorId
+      ? { targetDoctorId: filters.targetDoctorId }
+      : {}),
+  };
   return prisma.referral.findMany({
-    where: {
-      ...(filters.status ? { status: filters.status } : {}),
-      ...(filters.createdBefore ? { createdAt: { lt: filters.createdBefore } } : {}),
-      ...(filters.loopFlagged ? { loopFlaggedAt: { not: null } } : {}),
-    },
+    where,
     include: {
       sourceConsultation: { select: { id: true, outcome: true } },
     },

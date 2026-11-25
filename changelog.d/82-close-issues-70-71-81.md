@@ -1,0 +1,1 @@
+Phase 4/5.5: lab test catalog endpoint, verifiable order token verification, non-custodial submit endpoint, and fee-sponsor budget monitoring (issues #70, #71, #81, #82). Adds `GET /lab-tests`, `POST /facilities/me/verify-order`, `POST /payments/intents/:id/submit`, and `GET /admin/payments/fee-sponsor`.

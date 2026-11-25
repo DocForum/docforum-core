@@ -18,6 +18,7 @@ facilitiesRouter.post(
 // Price management is scoped to "my facility": the owner's profile is looked
 // up from the authenticated user, so there is no client-supplied id to forge.
 facilitiesRouter.get('/me/prices', authenticate, requireRole('facility'), facilitiesController.listOwnPrices);
+facilitiesRouter.post('/me/verify-order', authenticate, requireRole('facility'), facilitiesController.verifyOrder);
 facilitiesRouter.post(
   '/me/prices',
   authenticate,
