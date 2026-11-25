@@ -5,11 +5,14 @@ import * as doctorsService from '../../doctors/services';
 import { buildSlotRanges } from '../slot-generation';
 import { validateSlotGenerationDate } from '../validation';
 
-export function listOpenSlots(
+export async function listOpenSlots(
   doctorProfileId: string,
   query?: { from?: string; to?: string },
   now = new Date(),
 ) {
+  // Ensure the doctor is active (not deactivated or deleted)
+  await doctorsService.assertDoctorActive(doctorProfileId);
+
   let fromDate = query?.from ? new Date(query.from) : now;
   // from in the past is clamped to now (issue #289)
   if (fromDate < now) {

@@ -239,6 +239,19 @@ export async function assertDoctorVerifiedInSpecialty(doctorProfileId: string, s
   return profile;
 }
 
+/**
+ * Ensures the doctor's user account is active (not deactivated or deleted).
+ * Throws 409 if the doctor's account is deactivated or deleted, since the
+ * doctor cannot accept new bookings in that state.
+ */
+export async function assertDoctorActive(doctorProfileId: string) {
+  const profile = await getDoctorProfileById(doctorProfileId);
+  if (profile.user.deactivatedAt || profile.user.deletedAt) {
+    throw new HttpError(409, 'Doctor is not available for booking.');
+  }
+  return profile;
+}
+
 /** Throws 422 when `specialtyId` names no specialty in the catalog. Lets
  * callers (referral creation, issue #334) give a specific message instead of
  * relying on a foreign-key failure or a misleading downstream error. */
