@@ -131,6 +131,8 @@ describe('deactivated and soft-deleted doctors', () => {
   let prisma: Prisma;
   let doctorProfileId: string;
   let doctorUserId: string;
+  let referralId: string;
+  let doctorAccessToken: string;
   let patientAccessToken: string;
 
   beforeAll(async () => {
@@ -139,6 +141,9 @@ describe('deactivated and soft-deleted doctors', () => {
     prisma = setup.prisma;
     doctorProfileId = setup.doctorProfileId;
     doctorUserId = setup.doctorUserId;
+    doctorProfileId = setup.doctorProfileId;
+    doctorUserId = setup.doctorUserId;
+    doctorAccessToken = setup.doctorAccessToken;
     patientAccessToken = setup.patientAccessToken;
   }, 120_000);
 
@@ -149,11 +154,49 @@ describe('deactivated and soft-deleted doctors', () => {
   // Test deactivated doctor
   describe('deactivated doctor', () => {
     beforeAll(async () => {
-      // Deactivate the doctor
-      await prisma.user.update({
-        where: { id: doctorUserId },
-        data: { deactivatedAt: new Date() },
-      });
+  // Create a consultation and referral before deactivation
+  // Generate slots for doctor
+  await request(app)
+    .post(`/availability/doctors/${doctorProfileId}/slots/generate`)
+    .set('Authorization', `Bearer ${doctorAccessToken}`)
+    .send({ date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10), startHour: 8, endHour: 20, slotLengthMinutes: 30 });
+  
+  const slotsRes = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
+  const slotId = slotsRes.body[0].id;
+  
+  // Book an appointment
+  const bookRes = await request(app)
+    .post('/appointments')
+    .set('Authorization', `Bearer ${patientAccessToken}`)
+    .send({ availabilitySlotId: slotId });
+  const appointmentId = bookRes.body.id;
+  
+  // Complete the appointment
+  await prisma.availabilitySlot.update({ where: { id: slotId }, data: { startTime: new Date(Date.now() - 60000) } });
+  await request(app)
+    .patch(`/appointments/${appointmentId}/status`)
+    .set('Authorization', `Bearer ${doctorAccessToken}`)
+    .send({ status: 'completed' });
+  
+  // Create consultation
+  const consultRes = await request(app)
+    .post('/consultations')
+    .set('Authorization', `Bearer ${doctorAccessToken}`)
+    .send({ appointmentId, outcome: 'referred', notes: 'test' });
+  const consultationId = consultRes.body.id;
+  
+  // Create referral
+  const referralRes = await request(app)
+    .post('/referrals')
+    .set('Authorization', `Bearer ${doctorAccessToken}`)
+    .send({ sourceConsultationId: consultationId, targetDoctorId: doctorProfileId, snapshotNotes: 'test referral' });
+  referralId = referralRes.body.id;
+
+  // Deactivate the doctor
+  await prisma.user.update({
+    where: { id: doctorUserId },
+    data: { deactivatedAt: new Date() },
+  });
     });
 
     it('refuses POST /appointments for deactivated doctor', async () => {
@@ -185,17 +228,8 @@ describe('deactivated and soft-deleted doctors', () => {
     });
 
     it('refuses referral accept for deactivated doctor', async () => {
-      // Create a referral
-      const referralRes = await request(app).post('/referrals').set('Authorization', `Bearer ${doctorUserId}`).send({
-        targetDoctorId: doctorProfileId,
-        targetSpecialtyId: null,
-        snapshotNotes: 'test referral',
-      });
-      expect(referralRes.status).toBe(201);
-
-      // Accept the referral
       const acceptRes = await request(app)
-        .post(`/referrals/${referralRes.body.id}/accept`)
+        .post(`/referrals/${referralId}/accept`)
         .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ availabilitySlotId: 'some-slot-id' });
       expect(acceptRes.status).toBe(409);
@@ -227,21 +261,26 @@ describe('deactivated and soft-deleted doctors', () => {
     });
 
     it('next-available does not include deactivated doctor', async () => {
-      const res = await request(app).get('/availability/doctors/next-available').query({ now: new Date() });
+      const res = await request(app).get('/doctors').query({ q: 'Deactivated' });
       expect(res.status).toBe(200);
-      expect(res.body.some((d: { id: string }) => d.id === doctorProfileId)).toBe(false);
+      expect(res.body.items.some((d: { id: string }) => d.id === doctorProfileId)).toBe(false);
     });
   });
 
   // Test soft-deleted doctor
   describe('soft-deleted doctor', () => {
-    beforeAll(async () => {
-      // Soft-delete the doctor
-      await prisma.user.update({
-        where: { id: doctorUserId },
-        data: { deletedAt: new Date() },
-      });
+  beforeAll(async () => {
+    // Restore doctor to active first (was deactivated in previous block)
+    await prisma.user.update({
+      where: { id: doctorUserId },
+      data: { deactivatedAt: null },
     });
+    // Soft-delete the doctor
+    await prisma.user.update({
+      where: { id: doctorUserId },
+      data: { deletedAt: new Date() },
+    });
+  });
 
     it('refuses POST /appointments for soft-deleted doctor', async () => {
       const res = await request(app)
@@ -272,17 +311,8 @@ describe('deactivated and soft-deleted doctors', () => {
     });
 
     it('refuses referral accept for soft-deleted doctor', async () => {
-      // Create a referral
-      const referralRes = await request(app).post('/referrals').set('Authorization', `Bearer ${doctorUserId}`).send({
-        targetDoctorId: doctorProfileId,
-        targetSpecialtyId: null,
-        snapshotNotes: 'test referral',
-      });
-      expect(referralRes.status).toBe(201);
-
-      // Accept the referral
       const acceptRes = await request(app)
-        .post(`/referrals/${referralRes.body.id}/accept`)
+        .post(`/referrals/${referralId}/accept`)
         .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ availabilitySlotId: 'some-slot-id' });
       expect(acceptRes.status).toBe(409);
@@ -312,9 +342,9 @@ describe('deactivated and soft-deleted doctors', () => {
     });
 
     it('next-available does not include soft-deleted doctor', async () => {
-      const res = await request(app).get('/availability/doctors/next-available').query({ now: new Date() });
+      const res = await request(app).get('/doctors').query({ q: 'Deactivated' });
       expect(res.status).toBe(200);
-      expect(res.body.some((d: { id: string }) => d.id === doctorProfileId)).toBe(false);
+      expect(res.body.items.some((d: { id: string }) => d.id === doctorProfileId)).toBe(false);
     });
   });
 });
