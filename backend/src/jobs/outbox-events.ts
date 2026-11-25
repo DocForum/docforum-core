@@ -2,6 +2,7 @@ import { Prisma, type OutboxEventStatus } from '@prisma/client';
 import { prisma } from '../db/prisma-client';
 import { getHandler, type DomainEvent } from '../events';
 import { registerDomainEventHandlers } from '../events/handlers';
+import { logger } from '../logger';
 
 const BATCH_SIZE = 25;
 const MAX_ATTEMPTS = 5;
@@ -112,7 +113,7 @@ export function startOutboxEventJobs(): void {
 	const timer = setInterval(() => {
 		void dispatchOutboxOnce().catch(() => {
 			// Do not log event payloads or driver messages; they may contain sensitive data.
-			console.error('[jobs] outbox dispatch failed');
+			logger.error('[jobs] outbox dispatch failed');
 		});
 	}, WORKER_INTERVAL_MS);
 	timer.unref();

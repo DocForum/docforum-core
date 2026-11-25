@@ -18,6 +18,7 @@ import { HttpError } from '../../../http-error';
 import { getObjectStorage } from '../../../utils/object-storage';
 import * as auditService from '../../audit/services';
 import * as doctorsService from '../../doctors/services';
+import { logger } from '../../../logger';
 import * as facilitiesService from '../../facilities/services';
 import * as notificationsService from '../../notifications/services';
 import * as patientsService from '../../patients/services';
@@ -150,7 +151,7 @@ export async function attachLabResult(
               })
             : undefined,
         )
-        .catch(() => console.error('[orders] abnormal-result notification failed'));
+        .catch(() => logger.error('[orders] abnormal-result notification failed'));
     }
 
     return {

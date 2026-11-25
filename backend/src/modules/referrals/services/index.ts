@@ -399,6 +399,45 @@ export async function declineReferral(actor: auditService.AuditActor, referralId
   });
 }
 
+export async function withdrawReferral(
+  actor: auditService.AuditActor,
+  referralId: string,
+  input: { reason: string },
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const referringDoctor = await doctorsService.getMyDoctorProfile(actor.userId);
+
+  return prisma.$transaction(async (tx) => {
+    const referral = await referralsRepo.findReferralById(tx, referralId);
+    if (!referral || referral.referringDoctorId !== referringDoctor.id) {
+      throw new HttpError(404, 'Referral not found.');
+    }
+    if (referral.status !== 'pending') {
+      throw new HttpError(409, 'Only a pending referral can be withdrawn.');
+    }
+
+    const updated = await referralsRepo.updateReferralConditional(
+      tx,
+      { id: referralId, status: 'pending', resultingAppointmentId: null },
+      { status: 'cancelled', cancelledReason: input.reason },
+    );
+    if (updated.count !== 1) {
+      throw new HttpError(409, 'This referral is no longer pending.');
+    }
+
+    await auditService.record(tx, actor, {
+      entityType: 'Referral',
+      entityId: referralId,
+      action: 'referral.withdraw',
+      fromState: 'pending',
+      toState: 'cancelled',
+      metadata: { reason: input.reason },
+    });
+
+    return referralsRepo.findReferralById(tx, referralId);
+  });
+}
+
 export async function listMine(userId: string) {
   const patientProfile = await patientsService.getMyPatientProfile(userId);
   return referralsRepo.listReferralsForPatient(patientProfile.id);
@@ -613,6 +652,8 @@ export interface AdminQueueFilters {
    * duration are returned. */
   olderThan?: string;
   loopFlagged?: boolean;
+  targetSpecialtyId?: string;
+  targetDoctorId?: string;
 }
 
 function parseDuration(value: string): number {
@@ -622,14 +663,16 @@ function parseDuration(value: string): number {
   return match[2] === 'h' ? amount * 60 * 60 * 1000 : amount * 24 * 60 * 60 * 1000;
 }
 
-/** Issue #68 queue endpoint: stuck referrals (by status + age) and/or
- * loop-flagged ones, with a derived human-readable reason and age. */
+/** Issue #68 + #339 queue endpoint: stuck referrals (by status + age + specialty + doctor)
+ * and/or loop-flagged ones, with a derived human-readable reason and age. */
 export async function adminListReferrals(_userId: string, filters: AdminQueueFilters) {
   const createdBefore = filters.olderThan ? new Date(Date.now() - parseDuration(filters.olderThan)) : undefined;
   const rows = await referralsRepo.listAdminQueue({
     status: filters.status,
     createdBefore,
     loopFlagged: filters.loopFlagged,
+    targetSpecialtyId: filters.targetSpecialtyId,
+    targetDoctorId: filters.targetDoctorId,
   });
 
   const now = Date.now();

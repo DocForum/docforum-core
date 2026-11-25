@@ -3,6 +3,7 @@
 // outside this module.
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
+import { logger } from '../../../logger';
 import {
   anonymizeUser,
   consumeVerificationToken,
@@ -428,8 +429,7 @@ async function issueEmailVerification(user: { id: string; email: string; locale?
   } catch (err) {
     // A provider hiccup must not fail signup — the account exists and is
     // usable, and the user can hit resend. Logged without the message body.
-    // eslint-disable-next-line no-console
-    console.error('[auth] verification email dispatch failed:', err instanceof Error ? err.message : err);
+    logger.error('[auth] verification email dispatch failed');
   }
 }
 

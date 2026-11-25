@@ -25,6 +25,7 @@ on:
       - 'ROADMAP.md'
       - 'docs/adr/**'
       - 'docs/api/**'
+      - 'docs/runbooks/**'
   workflow_dispatch:
   repository_dispatch:
     types:
