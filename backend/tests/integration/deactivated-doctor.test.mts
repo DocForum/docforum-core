@@ -34,7 +34,7 @@ const databaseUrl = `postgresql://docforum:docforum@localhost:${PORT}/docforum_t
 type App = ReturnType<typeof import('../../src/app.js').createApp>;
 type Prisma = typeof import('../../src/db/prisma-client.js').prisma;
 
-async function setupApp(): Promise<{ app: App; prisma: Prisma; databaseUrl: string; doctorUserId: string; doctorProfileId: string; patientUserId: string; patientProfileId: string }> {
+async function setupApp(): Promise<{ app: App; prisma: Prisma; databaseUrl: string; doctorUserId: string; doctorProfileId: string; patientProfileId: string }> {
   await pg.initialise();
   await pg.start();
   await pg.createDatabase('docforum_test');
@@ -100,7 +100,6 @@ async function setupApp(): Promise<{ app: App; prisma: Prisma; databaseUrl: stri
   const patientMe = await request(app).get('/patients/me').set('Authorization', `Bearer ${patientAccessToken}`);
   expect(patientMe.status).toBe(200);
   const patientProfileId = patientMe.body.id as string;
-  const patientUserId = patientMe.body.user.id as string;
 
   // Generate slots for the doctor
   await request(app)
@@ -108,7 +107,7 @@ async function setupApp(): Promise<{ app: App; prisma: Prisma; databaseUrl: stri
     .set('Authorization', `Bearer ${doctorAccessToken}`)
     .send({ date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10), startHour: 8, endHour: 20, slotLengthMinutes: 30 });
 
-  return { app, prisma, databaseUrl, doctorUserId, doctorProfileId, patientUserId, patientProfileId };
+  return { app, prisma, databaseUrl, doctorUserId, doctorProfileId, patientProfileId };
 }
 
 async function cleanupApp(pg: EmbeddedPostgres, dataDir: string) {
@@ -122,7 +121,6 @@ describe('deactivated and soft-deleted doctors', () => {
   let doctorProfileId: string;
   let patientProfileId: string;
   let doctorUserId: string;
-  let patientUserId: string;
 
   beforeAll(async () => {
     const setup = await setupApp();
@@ -131,7 +129,6 @@ describe('deactivated and soft-deleted doctors', () => {
     doctorProfileId = setup.doctorProfileId;
     patientProfileId = setup.patientProfileId;
     doctorUserId = setup.doctorUserId;
-    patientUserId = setup.patientUserId;
   }, 120_000);
 
   afterAll(async () => {
@@ -197,7 +194,6 @@ describe('deactivated and soft-deleted doctors', () => {
       // Create a follow-up booking via consultations
       const slotRes = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
       expect(slotRes.status).toBe(200);
-      const slotId = slotRes.body[0].id;
 
       const res = await request(app)
         .post('/consultations')
@@ -285,7 +281,6 @@ describe('deactivated and soft-deleted doctors', () => {
       // Create a follow-up booking
       const slotRes = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
       expect(slotRes.status).toBe(200);
-      const slotId = slotRes.body[0].id;
 
       const res = await request(app)
         .post('/consultations')
