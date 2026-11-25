@@ -52,7 +52,12 @@ jobs:
       - name: Audit production dependencies (high+)
         run: npm run audit:prod
 
-      - run: npm run prisma:generate
+      - name: Generate Prisma client
+        # Prisma 7 loads the datasource URL from prisma.config.ts even though
+        # client generation does not connect to the database.
+        env:
+          DATABASE_URL: postgresql://docforum:docforum@localhost:5432/docforum
+        run: npm run prisma:generate
 
       - name: Check message catalogue keys
         run: npm run i18n:check
