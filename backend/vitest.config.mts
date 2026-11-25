@@ -71,48 +71,59 @@ export default defineConfig({
       // the measurement below rounded down to a whole percent, minus 2 points, so
       // a V8 or timing difference between a dev machine and the CI runner can't
       // fail an unrelated PR. Measured with `npm run test:coverage` on the
-      // `7f70e1b` tree this sits on (119 test files, exit 0):
+      // `bce31cc` tree this sits on (119 test files, 1173 tests, exit 0). These
+      // are CI's own numbers, read out of the `coverage-report` artifact from the
+      // green `Backend` run of this branch, and they match a local arm64 run to
+      // the hundredth on nineteen of the twenty:
       //
       //   module         statements  functions  branches  lines   floor s/f/b/l
       //   appointments       77.28       86.67     60.79   83.50     75/84/58/81
-      //   availability       93.60      100.00     84.93   94.74     91/98/82/92
-      //   referrals          89.92      100.00     81.15   95.92     88/98/79/94
+      //   availability       92.80      100.00     83.56   94.74     91/98/82/92
+      //   referrals          90.21      100.00     81.05   96.22     88/98/79/94
       //   orders             86.03       90.82     75.95   90.05     84/88/74/88
-      //   payments           79.26       91.16     70.37   83.23     77/89/68/81
+      //   payments           79.38       91.16     70.53   83.35     77/89/68/81
       //
       // That is a snapshot, not a live total — re-measure before changing a
       // number. Appointments is up from 75.95 / 85.33 / 58.63 / 82.27 on `4a8cfbf`
       // because `#419` landed the doctor day-view and status-transition suite, so
       // its floor went up with it; that is the only direction this comment allows.
-      // Two green merged runs of this tree (279.08s, then 188.42s) agree to the
-      // hundredth on seventeen of these twenty numbers. The three that move are
-      // payments: statements 79.26 to 79.38, branches 70.37 to 70.53, lines 83.23
-      // to 83.35 — so run-to-run movement is real but stays inside 0.16, and every
-      // floor below is under every measurement its own module has produced.
-      // Referrals is the one module whose floors came from a higher number than the
-      // tabled one: unchanged referral code measured 90.19 / 100.00 / 81.56 / 96.21
-      // on `4a8cfbf`, and 88/98/79/94 was kept rather than dropped to the 87/93 a
-      // flat "minus 2" off 89.92 / 95.92 would give, because a floor is not lowered
-      // to go green. Its headroom is therefore 1.92 / 2.00 / 2.15 / 1.92. Orders'
-      // branch floor is the other exception: 75.95 rounds to 76, so 74 sits 1.95
-      // below rather than a clean 2.
+      // Four green merged runs sit behind the table: two on `7f70e1b` (279.08s and
+      // 188.42s, both at 3 workers), one here at the default count, and CI's. The
+      // only number that moves between runs of the *same* tree is payments —
+      // 79.26 / 70.37 / 83.23 against the 79.38 / 70.53 / 83.35 tabled here, a
+      // spread of 0.16 that also happens to be the local-vs-CI difference. The
+      // other two moved when the base moved: availability read 93.60 / 84.93 on
+      // `7f70e1b` and is 92.80 / 83.56 here with no change to any file in its own
+      // module (`#408` reworked `server.ts` and the Prisma schemas, so which of
+      // its lines execute shifted), and referrals moved to 90.21 / 81.05 / 96.22.
+      // Every floor is under every measurement its own module has produced on
+      // either tree, so this movement cannot turn a green run red by itself; the
+      // tightest gap is 1.56 (availability branches) and the loosest 2.82 (orders
+      // functions). Two floors are not exactly "measurement minus 2" and both err
+      // the same way: availability keeps the 91/82 that its higher `7f70e1b`
+      // measurement earned rather than the 90/81 this run would give, and orders'
+      // branch floor is 1.95 under 75.95 because that rounds up to 76. A floor is
+      // never lowered to meet a dip.
       //
       // The gate is live, not decorative. Raising appointments' `lines` floor one
       // point above its own measurement (80 → 84, against 82.27) produced exactly
       // one error and nothing else: `ERROR: Coverage for lines (82.26%) does not
       // meet "src/modules/appointments/**" threshold (84%)`, with the same test
       // files passing and exit 1. As committed, the merged run exits 0 with all 119
-      // files green and no threshold error.
+      // files green and no threshold error — locally and in CI's
+      // `Coverage (unit + integration, merged)` step on this branch.
       //
       // One interaction to know about: these floors assume a green suite. On a run
       // where a module's own test file fails, that file's lines go uncovered and
       // the module measures lower — with `orders.test.mts` among 3 files failing,
       // orders' lines came out at 87.90% against its 88 floor and reported
       // `ERROR: Coverage for lines (87.9%) does not meet "src/modules/orders/**"
-      // threshold (88%)`. That only surfaces if you pass `--coverage.reportOnFailure`
-      // (vitest otherwise prints no table for a failing run), and the run was
-      // already exiting 1 on the test failure, so it is noise rather than a second
-      // gate — but it is why the floors are not set tighter than 2 points.
+      // threshold (88%)`; a later run with one referrals integration file failing
+      // measured referrals at 89.95 / 80.65 / 95.93 instead of 90.21 / 81.05 / 96.22.
+      // That only surfaces if you pass `--coverage.reportOnFailure` (vitest
+      // otherwise prints no table for a failing run), and the run was already
+      // exiting 1 on the test failure, so it is noise rather than a second gate —
+      // but it is why the floors are not set tighter than 2 points.
       //
       // Worker counts are not a fix for the suite's own flakiness, which is
       // load-dependent and lands in a different file each run: locally, plain
