@@ -9,7 +9,7 @@ ConsultationMessageAttachment
   object_key (UNIQUE, opaque, never returned to a client)
   file_name, content_type, size_bytes, created_at
 ```
-Bytes live in the private object store (§2 / docs/adr/0014) through
+Bytes live in the private object store (§2 / docs/adr/0018) through
 `utils/object-storage.ts`; no business code imports the SDK and no public or
 presigned storage URL is ever returned. Upload accepts JPEG, PNG and PDF only:
 the declared content type must be on that allowlist **and** match the sniffed

@@ -1,4 +1,4 @@
-# ADR 0014: Lab result file storage (object storage provider)
+# ADR 0018: Lab result file storage (object storage provider)
 
 - **Status:** Accepted
 - **Phase:** 5 — Facilities & fulfillment
