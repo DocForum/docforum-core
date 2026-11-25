@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import { formatMessage, resolveLocale } from '../../../i18n';
+import { logger } from '../../../logger';
 import * as notificationsRepo from '../repositories';
 import { notificationBroker } from './fanout';
 
