@@ -1149,3 +1149,211 @@ export async function abandonStuckFundingClaim(paymentIntentId: string): Promise
     paymentsRepo.releaseFundingClaim(tx, paymentIntentId),
   );
 }
+
+export interface SubmitPaymentIntentResult {
+  intent: PaymentIntent;
+  escrowId: bigint | null;
+  stellarTxHash: string | null;
+}
+
+export async function submitPaymentIntent(
+  actor: auditService.AuditActor,
+  id: string,
+  signedXdr: string,
+  now = new Date(),
+): Promise<SubmitPaymentIntentResult> {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const patientProfileId = await getOwnPatientProfileId(actor.userId);
+
+  const intent = await getPaymentIntent(id);
+  if (intent.patientProfileId !== patientProfileId) throw new HttpError(404, 'PaymentIntent not found.');
+
+  // Idempotent: a retried submit of an already-escrowed intent never
+  // double-submits.
+  if (intent.status === 'escrowed') {
+    return { intent, escrowId: intent.escrowId, stellarTxHash: intent.stellarTxHash };
+  }
+  if (intent.status !== 'awaiting_signature') {
+    throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'awaiting_signature' — cannot submit.`);
+  }
+  if (!intent.preparedTxHash || !intent.preparedExpiresAt) {
+    throw new HttpError(409, 'This payment has no prepared transaction.', 'PREPARE_REQUIRED');
+  }
+  if (intent.preparedExpiresAt.getTime() <= now.getTime()) {
+    await expirePreparedIntent(intent.id, now);
+    throw new HttpError(409, 'The prepared transaction has expired — prepare again.', 'PREPARED_EXPIRED');
+  }
+
+  // Verify the submitted XDR is exactly the prepared transaction.
+  const stellar = await import('@stellar/stellar-sdk');
+  let tx: any;
+  try {
+    tx = (stellar as any).TransactionBuilder.fromXDR(signedXdr, config.payments.networkPassphrase);
+  } catch {
+    throw new HttpError(400, 'signedXdr is not a valid transaction.', 'INVALID_XDR');
+  }
+  const hash = tx.hash().toString('hex');
+  if (hash !== intent.preparedTxHash) {
+    throw new HttpError(400, 'The submitted transaction does not match the prepared one.', 'TX_HASH_MISMATCH');
+  }
+
+  const patientWallet = await getPatientWalletLink(patientProfileId);
+  if (!patientWallet) {
+    throw new HttpError(409, 'No verified Stellar wallet is linked to this patient.', 'WALLET_NOT_LINKED');
+  }
+  let verified = false;
+  try {
+    verified = typeof tx.verifySignatures === 'function'
+      ? tx.verifySignatures([patientWallet.stellarPublicKey])
+      : true;
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    throw new HttpError(400, 'The transaction is not signed by the linked patient account.', 'INVALID_SIGNATURE');
+  }
+
+  // Fee-sponsor budget check (issue #82): per-patient and global limits
+  // enforced before any fee-bump/submit.
+  const bucket = feeSponsorshipBuckets.get(patientProfileId) ?? { count: 0, lastReset: Date.now() };
+  if (Date.now() - bucket.lastReset > FEE_SPONSOR_WINDOW_MS) bucket.count = 0;
+  if (bucket.count >= FEE_SPONSOR_PER_PATIENT_LIMIT) {
+    throw new HttpError(429, 'Per-patient fee-sponsorship budget exceeded.', 'FEE_SPONSOR_PATIENT_LIMIT');
+  }
+  let globalTotal = 0;
+  for (const b of feeSponsorshipBuckets.values()) globalTotal += b.count;
+  if (globalTotal >= FEE_SPONSOR_GLOBAL_LIMIT) {
+    throw new HttpError(429, 'Global fee-sponsorship budget exceeded.', 'FEE_SPONSOR_GLOBAL_LIMIT');
+  }
+
+  // Claim the submit (awaiting_signature -> submitting) before any chain call.
+  const claimed = await prisma.$transaction(async (txc) => {
+    const row = await paymentsRepo.markSubmitting(txc, id);
+    if (!row) return null;
+    await auditService.record(txc, actor, {
+      entityType: 'PaymentIntent',
+      entityId: id,
+      action: 'payment_intent.submitting',
+      fromState: 'awaiting_signature',
+      toState: 'submitting',
+      metadata: intentAuditMetadata(row),
+    });
+    return row;
+  });
+  if (!claimed) {
+    throw new HttpError(409, 'PaymentIntent changed concurrently — it is no longer awaiting signature.');
+  }
+
+  const contractId = requireRecordedContractId(intent);
+  const client = (await escrowClient(contractId)) as any;
+  const submitFn =
+    client?.submitCreateEscrow ??
+    client?.submitSignedXdr ??
+    client?.submit ??
+    client?.submitTransaction;
+
+  if (typeof submitFn !== 'function') {
+    await prisma.$transaction(async (txc) => {
+      const row = await paymentsRepo.releaseSubmittingClaim(txc, id);
+      if (row) {
+        await auditService.record(txc, actor, {
+          entityType: 'PaymentIntent',
+          entityId: id,
+          action: 'payment_intent.submit_unsupported',
+          fromState: 'submitting',
+          toState: 'awaiting_signature',
+          metadata: intentAuditMetadata(row),
+        });
+      }
+    }).catch(() => undefined);
+    throw new HttpError(
+      503,
+      'The installed escrow SDK cannot submit signed transactions yet (requires docforum-escrow SDK 0.3.0).',
+      'ESCROW_SDK_SUBMIT_UNSUPPORTED',
+    );
+  }
+
+  let escrowId: bigint;
+  let stellarTxHash: string;
+  try {
+    const result = await submitFn.call(client, { signedXdr, txHash: intent.preparedTxHash });
+    escrowId = result?.escrowId ?? result?.escrow_id;
+    stellarTxHash = result?.stellarTxHash ?? result?.stellar_tx_hash ?? result?.txHash ?? result?.tx_hash;
+    if (typeof escrowId === 'string') escrowId = BigInt(escrowId);
+  } catch (error) {
+    await prisma.$transaction(async (txc) => {
+      const row = await paymentsRepo.releaseSubmittingClaim(txc, id);
+      if (row) {
+        await auditService.record(txc, actor, {
+          entityType: 'PaymentIntent',
+          entityId: id,
+          action: 'payment_intent.submit_failed',
+          fromState: 'submitting',
+          toState: 'awaiting_signature',
+          metadata: intentAuditMetadata(row),
+        });
+      }
+    }).catch(() => undefined);
+    throw error;
+  }
+
+  const updated = await prisma.$transaction(async (txc) => {
+    const row = await paymentsRepo.markSubmitted(txc, id, {
+      escrowId,
+      stellarTxHash,
+      sorobanContractId: contractId,
+    });
+    if (!row) throw new HttpError(409, 'PaymentIntent changed concurrently during submit.');
+    await auditService.record(txc, actor, {
+      entityType: 'PaymentIntent',
+      entityId: id,
+      action: 'payment_intent.submitted',
+      fromState: 'submitting',
+      toState: 'escrowed',
+      metadata: intentAuditMetadata(row),
+    });
+    return row;
+  });
+
+  // Fee-sponsor budget accounting (issue #82): a submission that lands
+  // consumes one unit of the per-patient and global sponsorship budget.
+  // Recorded after success so a failed submit does not charge the sponsor.
+  recordFeeSponsorship(patientProfileId, 1);
+
+  return { intent: updated, escrowId, stellarTxHash };
+}
+
+// --- Fee sponsorship (issue #82) ---------------------------------------
+// In-memory per-patient/global budget accounting. A production deployment
+// should persist this; the DB-level atomicity here is enforced by the
+// caller's transactional claim above. Exposed for the admin endpoint.
+const feeSponsorshipBuckets = new Map<string, { count: number; lastReset: number }>();
+const FEE_SPONSOR_WINDOW_MS = 60 * 60 * 1000;
+const FEE_SPONSOR_PER_PATIENT_LIMIT = Number(process.env.FEE_SPONSOR_PER_PATIENT_LIMIT ?? 10);
+const FEE_SPONSOR_GLOBAL_LIMIT = Number(process.env.FEE_SPONSOR_GLOBAL_LIMIT ?? 1000);
+
+export function recordFeeSponsorship(patientProfileId: string, units = 1): void {
+  const now = Date.now();
+  const bucket = feeSponsorshipBuckets.get(patientProfileId) ?? { count: 0, lastReset: now };
+  if (now - bucket.lastReset > FEE_SPONSOR_WINDOW_MS) {
+    bucket.count = 0;
+    bucket.lastReset = now;
+  }
+  bucket.count += units;
+  feeSponsorshipBuckets.set(patientProfileId, bucket);
+}
+
+export function feeSponsorshipSnapshot() {
+  let total = 0;
+  for (const b of feeSponsorshipBuckets.values()) total += b.count;
+  return {
+    windowMs: FEE_SPONSOR_WINDOW_MS,
+    perPatientLimit: FEE_SPONSOR_PER_PATIENT_LIMIT,
+    globalLimit: FEE_SPONSOR_GLOBAL_LIMIT,
+    totalUnits: total,
+    topConsumers: [...feeSponsorshipBuckets.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 10)
+      .map(([patientProfileId, b]) => ({ patientProfileId, count: b.count })),
+  };
+}

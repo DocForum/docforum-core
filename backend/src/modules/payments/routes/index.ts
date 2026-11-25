@@ -39,6 +39,14 @@ paymentsRouter.post(
   requireVerifiedEmail,
   paymentsController.prepareIntent,
 );
+
+paymentsRouter.post(
+  '/intents/:id/submit',
+  authenticate,
+  requireRole('patient'),
+  requireVerifiedEmail,
+  paymentsController.submitIntent,
+);
 paymentsRouter.post(
   '/intents/:id/fund',
   authenticate,
@@ -89,3 +97,4 @@ paymentsRouter.post(
 // Issue #328: facility payout-wallet changes still inside their cool-down.
 export const paymentsAdminRouter = Router();
 paymentsAdminRouter.get('/wallet-links/pending', authenticate, requireRole('admin'), paymentsController.listPendingWalletLinks);
+paymentsAdminRouter.get('/fee-sponsor', authenticate, requireRole('admin'), paymentsController.getFeeSponsorStatus);
