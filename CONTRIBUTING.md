@@ -5,6 +5,10 @@ This is the backend of a 3-repo org (`docforum-core`, `docforum-web`,
 if you're an AI coding agent, read `AGENTS.md` instead (it has the actual
 architecture rules this file doesn't repeat).
 
+## Supported Node Versions
+
+`package.json` declares the supported Node engines: `node: ^20.19.0 || ^22.12.0 || >=24.0.0` (matching production deployment on Node 22). CI runs unit tests and typecheck across Node 20, 22, and 24 via a test matrix, while integration tests run on the production version (Node 22).
+
 ## 1. Set up locally
 
 ```bash
@@ -88,7 +92,7 @@ lowercase kebab-case; empty names, path separators, `..` and names that already
 exist are refused without writing anything.
 
 The generator deliberately does **not** edit shared files. It prints the exact
-lines to add by hand: the `src/mounts.ts` export, the `PatientExportSection`
+edges to add by hand: the `src/mounts.ts` export, the `PatientExportSection`
 and retention-hold registry entries (only when the module holds patient data),
 and a `docs.d/` fragment for the module's API rows. Generated placeholders
 compile under `npm run typecheck`; replace them as the module's first real

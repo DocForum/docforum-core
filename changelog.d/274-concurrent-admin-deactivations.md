@@ -1,2 +1,0 @@
-Phase 8: prevent concurrent admin deactivations from removing the last active admin ([issue #274](https://github.com/DocForum/docforum-core/issues/274)).
-Made last-admin check and update atomic in PostgreSQL via row locks (`FOR UPDATE` on active admin users ordered by id) inside a single transaction. Retains idempotent 200 and 409 conflict responses. Added concurrency integration test asserting at least one active admin always remains.
