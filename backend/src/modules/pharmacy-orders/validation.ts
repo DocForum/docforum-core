@@ -59,3 +59,7 @@ export const fulfillPharmacyOrderSchema = z.object({
 
 export type CreatePharmacyOrderBody = z.infer<typeof createPharmacyOrderSchema>;
 export type FulfillPharmacyOrderBody = z.infer<typeof fulfillPharmacyOrderSchema>;
+
+export const listOrderFulfillmentsQuerySchema = z.object({
+  orderType: z.enum(['prescription', 'lab_order']),
+});

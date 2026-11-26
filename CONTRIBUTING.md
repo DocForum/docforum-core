@@ -5,6 +5,10 @@ This is the backend of a 3-repo org (`docforum-core`, `docforum-web`,
 if you're an AI coding agent, read `AGENTS.md` instead (it has the actual
 architecture rules this file doesn't repeat).
 
+## Supported Node Versions
+
+`package.json` declares the supported Node engines: `node: ^20.19.0 || ^22.12.0 || >=24.0.0` (matching production deployment on Node 22). CI runs unit tests and typecheck across Node 20, 22, and 24 via a test matrix, while integration tests run on the production version (Node 22).
+
 ## 1. Set up locally
 
 ```bash
@@ -45,6 +49,18 @@ what depends on what, and what's deliberately not yet scoped (and why).
   especially for anything touching booking, referrals, or order-issuance
   (see `AGENTS.md`'s testing rules). These are the correctness-critical
   paths in this codebase.
+- `npm run test:coverage` (in `backend/`) runs the unit and integration suites
+  in one vitest process and writes the merged report to `backend/coverage/`:
+  `index.html` to browse, `coverage-summary.json` for the numbers. Every file
+  under `src/` is counted, so an untested path shows as 0% rather than going
+  missing. `vitest.config.mts` pins per-module floors for the
+  correctness-critical modules and the run fails below them — if a floor
+  blocks you, add the missing test; don't exclude files from the report.
+- Run `npm run prisma:generate` after `npm ci` and after pulling a schema
+  change. CI does it as its own step, but the generated client lives in
+  `node_modules`, so a fresh install without it fails every integration test
+  with `Cannot find module '.prisma/client/default'` rather than anything
+  about the schema.
 - If your change starts, completes, or blocks a roadmap-tracked item,
   tick or update that item's line in `ROADMAP.md` and add a changelog
   entry as a new file in `changelog.d/`, in the same PR. Don't append to
@@ -61,6 +77,38 @@ what depends on what, and what's deliberately not yet scoped (and why).
   rewrite other people's paragraphs. See `AGENTS.md` → "Shared docs".
 - Run `npm run typecheck && npm run test:all && npm run build` locally —
   this is exactly what CI checks.
+- Run `npm run prisma:validate && npm run prisma:format:check` to verify
+  the schema matches the migrations and is properly formatted. These checks
+  are also run in CI (see `.github/workflows/ci.yml`).
+
+- Run `node scripts/check-module-boundaries.mjs` to verify no new module
+  boundary violations are introduced. This check is also run in CI.
+
+If your change involves Prisma schema modifications, ensure the drift check
+(`node scripts/check-migration-drift.mjs`) passes, and that a migration
+exists for any new field or change.
+
+## 3.1 Generating a new module skeleton
+
+When an issue calls for a new backend module, start from the scaffold rather
+than copying an existing module by hand:
+
+```bash
+cd backend
+npm run new:module -- <name>   # lowercase kebab-case, e.g. lab-kits
+```
+
+This creates `backend/src/modules/<name>/` with `routes/`, `controllers/`,
+`services/`, `repositories/`, `validation.ts` and `mount.ts`. The name must be
+lowercase kebab-case; empty names, path separators, `..` and names that already
+exist are refused without writing anything.
+
+The generator deliberately does **not** edit shared files. It prints the exact
+edges to add by hand: the `src/mounts.ts` export, the `PatientExportSection`
+and retention-hold registry entries (only when the module holds patient data),
+and a `docs.d/` fragment for the module's API rows. Generated placeholders
+compile under `npm run typecheck`; replace them as the module's first real
+routes and services land.
 
 ## 4. Opening the PR
 

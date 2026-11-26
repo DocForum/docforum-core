@@ -1,4 +1,4 @@
-// Lab result attachment (Phase 5, issue #16 — docs/adr/0014).
+// Lab result attachment (Phase 5, issue #16 — docs/adr/0018).
 //
 // A facility attaches the result file for a lab order assigned to it; the
 // file goes to object storage and a `LabResult` row records its opaque key.
@@ -8,8 +8,9 @@
 //
 // Reading the file back is restricted the way consultation notes are (PRD §7):
 // the patient, the ordering doctor, and the fulfilling facility for this
-// specific order. Anyone else gets the same 404 as a missing order, so ids
-// can't be probed.
+// specific order — plus an active guardian reading a dependent's result via
+// `patientProfileId` (issue #305). Anyone else gets the same 404 as a missing
+// order, so ids can't be probed.
 import { randomUUID } from 'node:crypto';
 import type { LabResultAbnormality, Role } from '@prisma/client';
 import { config } from '../../../config';
@@ -18,6 +19,7 @@ import { HttpError } from '../../../http-error';
 import { getObjectStorage } from '../../../utils/object-storage';
 import * as auditService from '../../audit/services';
 import * as doctorsService from '../../doctors/services';
+import { logger } from '../../../logger';
 import * as facilitiesService from '../../facilities/services';
 import * as notificationsService from '../../notifications/services';
 import * as patientsService from '../../patients/services';
@@ -150,7 +152,7 @@ export async function attachLabResult(
               })
             : undefined,
         )
-        .catch(() => console.error('[orders] abnormal-result notification failed'));
+        .catch(() => logger.error('[orders] abnormal-result notification failed'));
     }
 
     return {
@@ -174,35 +176,50 @@ export async function attachLabResult(
 }
 
 /** True when `userId` is one of the parties PRD §7 allows to see this
- * order's result. Each role resolves only its own profile. */
+ * order's result. Each role resolves only its own profile, except that a
+ * patient may name an active dependent (issue #305) — through
+ * resolveActingProfile, never by trusting the query parameter. */
 async function canReadResult(
   user: { id: string; role: Role },
   order: { patientProfileId: string; orderingDoctorId: string; facilityProfileId: string },
   fulfillingFacilityId: string | undefined,
-): Promise<boolean> {
+  patientProfileId?: string,
+): Promise<{ allowed: boolean; viaGuardian: boolean }> {
   if (user.role === 'patient') {
-    const patient = await patientsService.getMyPatientProfile(user.id).catch(() => null);
-    return patient !== null && patient.id === order.patientProfileId;
+    const patient = patientProfileId
+      ? await patientsService.resolveActingProfile(user.id, patientProfileId)
+      : await patientsService.getMyPatientProfile(user.id).catch(() => null);
+    return {
+      allowed: patient !== null && patient.id === order.patientProfileId,
+      viaGuardian: patient !== null && patient.userId === null,
+    };
   }
   if (user.role === 'doctor') {
     const doctor = await doctorsService.getMyDoctorProfile(user.id).catch(() => null);
-    return doctor !== null && doctor.id === order.orderingDoctorId;
+    return { allowed: doctor !== null && doctor.id === order.orderingDoctorId, viaGuardian: false };
   }
   if (user.role === 'facility') {
     const facilityId = await facilitiesService.getOwnFacilityProfileId(user.id).catch(() => null);
-    return facilityId !== null && facilityId === order.facilityProfileId
-      && (fulfillingFacilityId === undefined || facilityId === fulfillingFacilityId);
+    return {
+      allowed: facilityId !== null && facilityId === order.facilityProfileId
+        && (fulfillingFacilityId === undefined || facilityId === fulfillingFacilityId),
+      viaGuardian: false,
+    };
   }
-  return false;
+  return { allowed: false, viaGuardian: false };
 }
 
 export async function openLabResultFile(
   user: { id: string; role: Role },
   labOrderId: string,
   route: string,
+  patientProfileId?: string,
 ): Promise<{ body: Buffer; contentType: string; filename: string }> {
   const order = await ordersRepo.findLabOrderWithResult(labOrderId);
-  if (!order || !(await canReadResult(user, order, order.result?.fulfillingFacilityId))) {
+  const access = order
+    ? await canReadResult(user, order, order.result?.fulfillingFacilityId, patientProfileId)
+    : { allowed: false, viaGuardian: false };
+  if (!order || !access.allowed) {
     throw new HttpError(404, NOT_FOUND);
   }
   const result = order.result;
@@ -221,7 +238,7 @@ export async function openLabResultFile(
     entityType: 'LabResult',
     entityId: result.id,
     route,
-    detail: 'lab result file download',
+    detail: access.viaGuardian ? 'lab result file download (guardian)' : 'lab result file download',
   });
 
   const extension = RESULT_FILE_SIGNATURES[result.resultContentType]?.extension ?? 'bin';

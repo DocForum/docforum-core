@@ -11,3 +11,5 @@ backend/node_modules/
 # infra/docker/README.md and backend/tests/integration/)
 .devdb/
 *.tsbuildinfo
+# vitest coverage report (npm run test:coverage) — generated, never committed
+backend/coverage/

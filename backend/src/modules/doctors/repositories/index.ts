@@ -197,6 +197,150 @@ export function searchVerifiedDoctorIds(input: {
   `;
 }
 
+// --- Symptom -> specialty mapping (issue #60) ----------------------------
+// A curated controlled vocabulary, not a diagnosis model. Search either
+// resolves a symptom to weighted specialties and ranks doctors by the
+// strongest mapping they hold, or falls back to the existing text ranking.
+
+export function findSymptomBySlug(slug: string, db: DbClient = prisma) {
+  return db.symptom.findUnique({
+    where: { slug },
+    include: {
+      specialties: {
+        select: { specialtyId: true, weight: true },
+      },
+    },
+  });
+}
+
+export function findSymptomById(id: string, db: DbClient = prisma) {
+  return db.symptom.findUnique({ where: { id } });
+}
+
+export function findSymptomByNameOrSlug(name: string, slug: string, db: DbClient = prisma) {
+  return db.symptom.findFirst({ where: { OR: [{ name }, { slug }] } });
+}
+
+export function findSymptomByName(name: string, excludeId?: string, db: DbClient = prisma) {
+  return db.symptom.findFirst({
+    where: { name, ...(excludeId ? { id: { not: excludeId } } : {}) },
+  });
+}
+
+export function createSymptom(data: { name: string; slug: string }, db: DbClient = prisma) {
+  return db.symptom.create({ data });
+}
+
+export function updateSymptom(
+  id: string,
+  data: { name?: string; isRetired?: boolean },
+  db: DbClient = prisma,
+) {
+  return db.symptom.update({ where: { id }, data });
+}
+
+export function findSymptomsForAdmin(db: DbClient = prisma) {
+  return db.symptom.findMany({
+    orderBy: { name: 'asc' },
+    include: {
+      specialties: {
+        orderBy: { weight: 'desc' },
+        select: { specialtyId: true, weight: true, specialty: { select: { name: true, slug: true } } },
+      },
+    },
+  });
+}
+
+/** Replaces a symptom's mapping set in one transaction (the caller owns the
+ * transaction). Weight and specialty ids are validated by the service first;
+ * this only writes. */
+export async function replaceSymptomSpecialties(
+  symptomId: string,
+  mappings: Array<{ specialtyId: string; weight: number }>,
+  db: DbClient,
+): Promise<void> {
+  await db.symptomSpecialty.deleteMany({ where: { symptomId } });
+  if (mappings.length === 0) return;
+  await db.symptomSpecialty.createMany({
+    data: mappings.map((mapping) => ({ symptomId, ...mapping })),
+  });
+}
+
+/** Autocomplete: prefix match for short terms and trigram similarity for
+ * anything longer, active symptoms only. `query === null` lists the
+ * vocabulary alphabetically (a picker, not a search). */
+export function searchSymptoms(query: string | null, take: number) {
+  return prisma.$queryRaw<{ id: string; name: string; slug: string; score: number }[]>`
+    SELECT
+      symptom."id",
+      symptom."name",
+      symptom."slug",
+      GREATEST(similarity(symptom."name", ${query}), similarity(symptom."slug", ${query})) AS score
+    FROM "Symptom" AS symptom
+    WHERE symptom."isRetired" = false
+      AND (
+        ${query}::text IS NULL
+        OR lower(symptom."name") LIKE lower(${query}) || '%'
+        OR lower(symptom."slug") LIKE lower(${query}) || '%'
+        OR (char_length(${query}) >= 3 AND symptom."name" % ${query})
+      )
+    ORDER BY score DESC, symptom."name" ASC
+    LIMIT ${take}
+  `;
+}
+
+/** Doctors holding at least one mapped specialty, ranked by the strongest
+ * mapping they hold (`score` = max weight), then by id for a stable keyset.
+ * Same cursor shape as `searchVerifiedDoctorIds` — the cursor row's score is
+ * the weight, so pagination is identical. */
+export function searchVerifiedDoctorIdsForSymptom(input: {
+  symptomId: string;
+  cursor: string | null;
+  take: number;
+  doctorIds?: string[] | null;
+}) {
+  const { symptomId, cursor, take, doctorIds = null } = input;
+  if (doctorIds !== null && doctorIds.length === 0) {
+    return Promise.resolve([]);
+  }
+  return prisma.$queryRaw<{ id: string; fullName: string; score: number }[]>`
+    WITH mapped AS (
+      SELECT mapping."specialtyId", MAX(mapping."weight")::float8 AS weight
+      FROM "SymptomSpecialty" AS mapping
+      WHERE mapping."symptomId" = ${symptomId}
+      GROUP BY mapping."specialtyId"
+    ), ranked AS (
+      SELECT
+        doctor."id",
+        doctor."fullName",
+        MAX(mapped.weight) AS score
+      FROM "DoctorProfile" AS doctor
+      JOIN "User" AS u ON u."id" = doctor."userId"
+      JOIN "DoctorSpecialty" AS assignment ON assignment."doctorProfileId" = doctor."id"
+      JOIN mapped ON mapped."specialtyId" = assignment."specialtyId"
+      WHERE doctor."verificationStatus" = 'verified'
+        AND u."deactivatedAt" IS NULL
+        AND u."deletedAt" IS NULL
+        AND (${doctorIds}::text[] IS NULL OR doctor."id" = ANY(${doctorIds}::text[]))
+      GROUP BY doctor."id"
+    ), cursor_row AS (
+      SELECT "id", score FROM ranked WHERE "id" = ${cursor}::text
+    )
+    SELECT ranked."id", ranked."fullName", ranked.score
+    FROM ranked
+    WHERE ${cursor}::text IS NULL
+      OR (
+        EXISTS (SELECT 1 FROM cursor_row)
+        AND (
+          ranked.score < (SELECT score FROM cursor_row)
+          OR (ranked.score = (SELECT score FROM cursor_row) AND ranked."id" > (SELECT "id" FROM cursor_row))
+        )
+      )
+    ORDER BY ranked.score DESC, ranked."id" ASC
+    LIMIT ${take}
+  `;
+}
+
 export async function findPublicDoctorDetails(ids: string[]) {
   if (ids.length === 0) return [];
   return prisma.doctorProfile.findMany({
@@ -217,14 +361,31 @@ export async function findPublicDoctorDetails(ids: string[]) {
 }
 
 export function findDoctorProfileById(id: string, db: DbClient = prisma) {
-  return db.doctorProfile.findUnique({ where: { id } });
+  return db.doctorProfile.findUnique({ 
+    where: { id },
+    include: { user: { select: { deactivatedAt: true, deletedAt: true } } },
+  });
 }
 
-export function updateDoctorProfile(id: string, version: number, fullName: string) {
+export interface UpdateDoctorProfileInput {
+  fullName?: string;
+  timeZone?: string;
+}
+
+export function updateDoctorProfile(id: string, version: number, input: UpdateDoctorProfileInput) {
+  const data: Prisma.DoctorProfileUpdateInput = {
+    version: { increment: 1 },
+  };
+  if (input.fullName !== undefined) {
+    data.fullName = input.fullName;
+  }
+  if (input.timeZone !== undefined) {
+    data.timeZone = input.timeZone;
+  }
   return prisma.doctorProfile
     .updateManyAndReturn({
       where: { id, version },
-      data: { fullName, version: { increment: 1 } },
+      data,
     })
     .then((rows) => rows[0] ?? null);
 }

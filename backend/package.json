@@ -2,7 +2,7 @@
   "name": "docforum-core-backend",
   "version": "0.0.0",
   "private": true,
-  "description": "DocForum backend — modular monolith. See ARCHITECTURE.md.",
+  "description": "DocForum backend \u2014 modular monolith. See ARCHITECTURE.md.",
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
@@ -13,13 +13,20 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
+    "test:coverage": "vitest run tests/unit tests/integration --coverage",
     "test:integration:payments-testnet": "DATABASE_URL_TEST=postgresql://docforum:docforum@localhost:5435/docforum_payments_test vitest run tests/testnet-integration",
     "test:all": "vitest run",
     "db:seed": "tsx prisma/seed.ts",
+    "reconcile:escrows": "tsx scripts/reconcile-escrows.ts",
+    "new:module": "node scripts/new-module.mjs",
     "test:properties": "vitest run tests/unit/availability-slots.property.test.ts tests/unit/state-machines.property.test.ts",
     "audit:prod": "node scripts/audit-gate.mjs",
     "i18n:check": "node scripts/check-i18n-catalogues.mjs",
+    "notifications:check": "node scripts/check-notification-templates.mjs",
+    "openapi:generate": "node scripts/gen-openapi.mjs",
     "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "prisma:format:check": "prisma format --check",
     "prisma:migrate": "prisma migrate dev",
     "lint": "node tools/lint/node_modules/eslint/bin/eslint.js --config tools/lint/eslint.config.mjs .",
     "test:mutation": "stryker run"
@@ -58,6 +65,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.5.1",
     "@types/supertest": "^7.2.1",
+    "@vitest/coverage-v8": "^4.1.11",
     "embedded-postgres": "^18.4.0-beta.17",
     "fast-check": "^3.23.2",
     "prisma": "^7.10.1",
@@ -67,13 +75,5 @@
     "vitest": "^4.1.11",
     "@stryker-mutator/core": "^9.2.0",
     "@stryker-mutator/vitest-runner": "^9.2.0"
-  },
-  "allowScripts": {
-    "prisma@7.10.1": true,
-    "esbuild@0.28.2": true,
-    "esbuild@0.25.12": true,
-    "protobufjs@7.6.6": true,
-    "@embedded-postgres/windows-x64@18.4.0-beta.17": true,
-    "@prisma/engines@7.10.1": true
   }
 }
