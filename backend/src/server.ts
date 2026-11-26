@@ -65,7 +65,7 @@ async function startServer() {
   // is listening, since Node's `app.listen` options are only accepted
   // during the listen call. We set them via the server object directly.
   if (server?.setTimeout) {
-    server.setTimeout(config.requestTimeout);
+    server.setTimeout(config.http.requestTimeout);
   }
   // Per-request socket timeouts are handled by the deadlineMiddleware
   // registered in app.ts, which overrides res.end to clear its timeout.
