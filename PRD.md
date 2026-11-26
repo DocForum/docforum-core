@@ -1,4 +1,4 @@
-# PRD.md — DocForum  
+# PRD.md — DocForum
 
 Status: Draft v0.1
 Owner: (unassigned)
