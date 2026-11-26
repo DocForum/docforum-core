@@ -20,6 +20,10 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 5. **Facilities write to their own `FulfillmentRecord` only** — never directly to `Prescription.status` / `LabOrder.status`.
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 7. **Mutable-record edits use optimistic concurrency (Phase 8, issue #49).** Individual-resource read returns a strong version `ETag` (`"4"`); PATCH/PUT must send it in `If-Match` — missing is `428`, weak/list/garbage is `400`, stale is `412`. Write it as ONE conditional `UPDATE ... WHERE id = ? AND version = ?` that increments `version` (Prisma: `updateManyAndReturn`); read-compare-write is forbidden. Status transitions that are *already* conditional (booking, payment status, verification) keep their own guard, don't get a second `If-Match` one, but still bump + republish the version. Append-only `Prescription`/`LabOrder` are excluded. See ARCHITECTURE.md §5.4.
+8. **A signed `Consultation` note is immutable.** Once `signedAt` is set, the
+   note and the sign-off cannot change (repository conditional UPDATE + DB
+   trigger); corrections are new append-only `ConsultationAddendum` rows.
+   Consultation messages and addenda are append-only in the same way.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` (including `locale`, default `en`, Phase 9 #133) → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
@@ -41,6 +45,18 @@ Account deletion (Phase 8, issue #41 — docs/adr/0010): anonymise in place (`Us
 `FacilityProfile` → `WalletLink` (payout address; a re-link becomes the payee only at `effectiveAt`, after `WALLET_LINK_COOLDOWN_HOURS` — issue #328) ; `PatientProfile` → `PatientWalletLink` (payer address, ADR 0005) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85), whose `amount` is in the smallest unit of a per-environment allowlisted `assetCode` (issue #79)
 
 Mutable records above (plus `Appointment` and `PaymentIntent`) carry a `version` int for the `ETag`/`If-Match` convention — hard rule 7, ARCHITECTURE.md §5.4. Mutable profile fields a new route exposes need a conditional write, not just a `.update()`.
+
+`Symptom` → `SymptomSpecialty` (issue #60 — curated, admin-managed symptom →
+specialty guidance with a 1–5 weight; public autocomplete via `/symptoms`,
+doctor search via `GET /doctors?symptom=<slug>` ranked by weight. A search
+aid, not a diagnosis and not ML; no PHI in either table — see ARCHITECTURE.md §4.15)
+
+`Consultation` (Phase 2, issues #61/#64) → `ConsultationMessage` (append-only,
+encrypted body) → `ConsultationMessageAttachment` (object storage; access-checked
+short-lived signed URLs), and → `ConsultationAddendum` (append-only, only after
+`Consultation.signedAt` is set). `Consultation` → `FollowUpRequest` (issue #63;
+one per consultation, immutable encrypted note snapshot, `open|booked|expired`,
+`bookedAppointmentId`) → `Appointment` with origin `follow_up`.
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
 - **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars today). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule. **Releaser custody is decided (issue #25, `docs/adr/0016-releaser-key-custody.md`):** a 2-of-4 Stellar multisig releaser for production escrows, per-escrow releaser recorded on the intent; until the SDK can collect the second signature, no production escrow is funded under the multisig.
@@ -80,3 +96,4 @@ Mutable records above (plus `Appointment` and `PaymentIntent`) carry a `version`
 - EscrowEventCursor stores one pagination cursor per contract deployment; configure each historical deployment as ESCROW_CONTRACTS=CONTRACT_ID@START_LEDGER,...
 - EscrowChainEvent stores deduplicated Soroban events. The admin endpoint is GET /admin/payments/escrow-events.
 - Unmatched release/refund events are high-severity alerts; RPC retention loss is surfaced as catchupError and must be reconciled explicitly.
+- Operator actions for both cases are in [docs/runbooks/escrow-event-alerts.md](docs/runbooks/escrow-event-alerts.md) (issue #356): reading the endpoint, triaging an unmatched release or refund, pausing wallet funding, and recovering from a retention gap. The runbook also lists the controls that do not exist yet (no acknowledgement workflow, no dead-letter requeue, no switch for already-escrowed settlements).
