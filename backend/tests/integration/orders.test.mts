@@ -257,8 +257,9 @@ describe('Orders integration tests', () => {
       .get('/admin/orders/disputes')
       .set('Authorization', `Bearer ${adminToken}`);
     expect(adminQueue.status).toBe(200);
-    expect(adminQueue.body.length).toBeGreaterThan(0);
-    const disputeItem = adminQueue.body.find((d: any) => d.orderId === orderId);
+    // Issue #311: the queue is keyset-paginated ({ items, nextCursor }).
+    expect(adminQueue.body.items.length).toBeGreaterThan(0);
+    const disputeItem = adminQueue.body.items.find((d: any) => d.orderId === orderId);
     expect(disputeItem).toBeTruthy();
     expect(disputeItem.reason).toBe('Sample results missing');
     expect(disputeItem.status).toBe('pending');
