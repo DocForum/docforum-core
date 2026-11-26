@@ -1,1 +1,0 @@
-Phase 6 notification delivery and Phase 9 CI hardening ([issues #95, #96, #111, and #112](https://github.com/DocForum/docforum-core/issues/112)). Added PHI-safe Postmark and Twilio adapters with signed callbacks, persistent delivery and SMS consent records, an OpenAPI 3.1 contract with drift checks, non-production contract serving, CodeQL, dependency review, and gitleaks gates.
