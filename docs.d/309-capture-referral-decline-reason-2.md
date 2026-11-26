@@ -1,0 +1,6 @@
+---
+file: docs/api/README.md
+section: Referrals (/referrals) — backend/src/modules/referrals
+---
+| `POST /referrals/:referralId/decline` | patient (the referred patient); active guardian with `patientProfileId` in the body | `{ patientProfileId?, reason?: { enum: 'cost' \| 'distance' \| 'second_opinion' \| 'other', note?: string } }` | Issue #309: an **optional** structured decline reason. The body may still be omitted entirely (declining without a reason, backwards compatible), or carry `reason.enum` alone, or `reason.enum` plus `reason.note` (max 200 chars; blank notes are stored as `null`). `reason` without `enum` and unknown enum values are `400`; an over-long note is `400` and writes nothing. The enum is stored on the referral (`declineReason`) and the note as `declineReasonNote` (bounded `varchar(200)`); the `referral.declined` audit row records the enum as `metadata.declineReason` and the note as `metadata.declineReasonText` (both within the 200-char metadata limit). |
+| `GET /referrals/created` | doctor | — | Referrals the caller created, including ones the cascade expired (see `referringDoctorNotifiedAt`) and ones the loop guard flagged. Issue #309: each row now carries `declineReason` and `declineReasonNote` so the referring doctor can see why the patient declined. |
