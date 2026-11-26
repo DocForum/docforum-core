@@ -49,7 +49,7 @@ model Consultation {
   // RESTRICT (Prisma's default for a required relation) is what the existing
   // migration created: a clinical record must not disappear because an
   // appointment row was deleted.
-  appointment   Appointment    @relation(fields: [appointmentId], references: [id])
+  appointment   Appointment            @relation(fields: [appointmentId], references: [id])
   prescriptions Prescription[]
   labOrders     LabOrder[]
   // Phase 3: the referrals that grew out of this consultation (the
@@ -77,8 +77,8 @@ model ConsultationMessage {
   body           String
   createdAt      DateTime                      @default(now())
 
-  consultation Consultation              @relation(fields: [consultationId], references: [id], onDelete: Restrict)
-  sender       User                      @relation("ConsultationMessageSender", fields: [senderUserId], references: [id], onDelete: Restrict)
+  consultation Consultation                    @relation(fields: [consultationId], references: [id], onDelete: Restrict)
+  sender       User                            @relation("ConsultationMessageSender", fields: [senderUserId], references: [id], onDelete: Restrict)
   attachments  ConsultationMessageAttachment[]
 
   // Keyset pagination order: (createdAt, id).
@@ -124,28 +124,28 @@ model ConsultationAddendum {
 // consultation closes as `follow_up_needed`. The notes and intake are
 // snapshots (copies), never live pointers — same rule as Referral.
 model FollowUpRequest {
-  id               String         @id @default(uuid())
+  id                  String         @id @default(uuid())
   // One follow-up per consultation: the close route creates it at most once.
-  consultationId   String         @unique
-  doctorProfileId  String
-  patientProfileId String
+  consultationId      String         @unique
+  doctorProfileId     String
+  patientProfileId    String
   // Encrypted copy of the consultation note at creation time.
-  notesSnapshot    String?
+  notesSnapshot       String?
   // Best-effort link to the patient's latest intake at creation. Appointment
   // has no intake FK yet (issue #2), so this is where the link is carried.
-  intakeFormId     String?
+  intakeFormId        String?
   // The window in which the patient is expected to book.
-  windowStart      DateTime
-  windowEnd        DateTime
-  status           FollowUpStatus @default(open)
-  bookedAppointmentId String?     @unique
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  windowStart         DateTime
+  windowEnd           DateTime
+  status              FollowUpStatus @default(open)
+  bookedAppointmentId String?        @unique
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
-  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Restrict)
-  doctorProfile DoctorProfile @relation("FollowUpRequestsAsDoctor", fields: [doctorProfileId], references: [id], onDelete: Restrict)
-  patientProfile PatientProfile @relation("FollowUpRequestsAsPatient", fields: [patientProfileId], references: [id], onDelete: Restrict)
-  bookedAppointment Appointment? @relation("FollowUpBookedAppointment", fields: [bookedAppointmentId], references: [id], onDelete: SetNull)
+  consultation      Consultation   @relation(fields: [consultationId], references: [id], onDelete: Restrict)
+  doctorProfile     DoctorProfile  @relation("FollowUpRequestsAsDoctor", fields: [doctorProfileId], references: [id], onDelete: Restrict)
+  patientProfile    PatientProfile @relation("FollowUpRequestsAsPatient", fields: [patientProfileId], references: [id], onDelete: Restrict)
+  bookedAppointment Appointment?   @relation("FollowUpBookedAppointment", fields: [bookedAppointmentId], references: [id], onDelete: SetNull)
 
   @@index([patientProfileId, status])
   @@index([doctorProfileId, status])

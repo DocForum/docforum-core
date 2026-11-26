@@ -3,9 +3,7 @@
 // outside this module.
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
-import { prisma } from '../../../db/prisma-client';
-import * as auditService from '../../audit/services';
-import type { AuditActor } from '../../audit/services';
+import { logger } from '../../../logger';
 import {
   anonymizeUser,
   consumeVerificationToken,
@@ -20,7 +18,7 @@ import {
   markUserEmailVerified,
   replaceVerificationToken,
 } from '../repositories';
-import { hashPassword, verifyPassword, validatePasswordStrength } from './password';
+import { hashPassword, verifyPassword } from './password';
 import { signAccessToken, signMfaToken, signRefreshToken, verifyMfaToken, verifyRefreshToken } from './tokens';
 import { assertSessionUsable, recordSessionUse, startSession, type SessionContext } from './sessions';
 import { generateVerificationToken, hashVerificationToken } from './verification-tokens';
@@ -58,6 +56,13 @@ export {
 } from './two-factor';
 export type { TwoFactorEnrolment, TwoFactorSetup, TwoFactorStatus } from './two-factor';
 
+/** Recipient lookup exposed for notification adapters; notifications never
+ * read the identity tables directly across the module boundary. */
+export async function getNotificationRecipient(userId: string) {
+  const user = await findUserById(userId);
+  return user ? { email: user.email, phone: user.phone } : null;
+}
+
 // Password reset (Phase 8 #33) lives in its own file; re-exported here so
 // controllers keep calling a single service surface.
 export {
@@ -80,14 +85,7 @@ export {
 // Hashing is auth's business (issue #14): the admin-only facility-creation
 // path in the facilities module hashes the initial password through this
 // service surface rather than depending on bcrypt directly.
-export {
-  hashPassword,
-  verifyPassword,
-  validatePasswordStrength,
-  isCommonPassword,
-  MAX_PASSWORD_BYTES,
-  MIN_PASSWORD_LENGTH,
-} from './password';
+export { hashPassword, verifyPassword } from './password';
 
 export {
   assertSessionUsable,
@@ -168,7 +166,7 @@ function toPublicUser(user: {
   };
 }
 
-export function issueTokensForSession(
+function issueTokensForSession(
   user: { id: string; role: Role; tokenVersion?: number; locale?: string },
   sessionId: string,
 ): { accessToken: string; refreshToken: string; csrfToken: string } {
@@ -201,10 +199,10 @@ export interface SignupInput {
   password: string;
   fullName: string;
   locale?: Locale;
+  timeZone?: string;
 }
 
 export async function signup(input: SignupInput, context: SessionContext = {}): Promise<AuthSession> {
-  validatePasswordStrength(input.password);
   // Facility accounts are admin-invited only (PRD OQ-2) — enforced here,
   // not just in docforum-web's UI. `Extract<Role, 'patient'|'doctor'>` on
   // the type already narrows this at compile time; this is the runtime
@@ -225,6 +223,7 @@ export async function signup(input: SignupInput, context: SessionContext = {}): 
     role: input.role,
     fullName: input.fullName,
     locale: input.locale,
+    timeZone: input.timeZone,
   });
 
   // Phase 8, issue #34: the account is created and usable for browsing
@@ -251,7 +250,6 @@ export interface SignupWithInviteInput {
 }
 
 export async function signupWithInvite(input: SignupWithInviteInput, context: SessionContext = {}): Promise<AuthSession> {
-  validatePasswordStrength(input.password);
   const passwordHash = await hashPassword(input.password);
   const user = await redeemAdminInvite({ token: input.token, email: input.email, passwordHash });
 
@@ -433,8 +431,7 @@ async function issueEmailVerification(user: { id: string; email: string; locale?
   } catch (err) {
     // A provider hiccup must not fail signup — the account exists and is
     // usable, and the user can hit resend. Logged without the message body.
-    // eslint-disable-next-line no-console
-    console.error('[auth] verification email dispatch failed:', err instanceof Error ? err.message : err);
+    logger.error('[auth] verification email dispatch failed');
   }
 }
 
@@ -649,7 +646,6 @@ export const accountExportSection: PatientExportSection = {
 export async function confirmPassword(userId: string, password: string, ip?: string | null): Promise<void> {
   const user = await findUserById(userId);
   if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
-  if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
 
   const throttleKeys = { emailKey: emailThrottleKey(user.email), ipKey: normalizeClientIp(ip) };
   const gate = await checkLoginThrottle(throttleKeys);
@@ -663,85 +659,6 @@ export async function confirmPassword(userId: string, password: string, ip?: str
     if (afterFailure.blocked) throw new LoginThrottledError(afterFailure.retryAfterSeconds);
     throw new HttpError(403, 'Password confirmation failed.', 'PASSWORD_CONFIRMATION_FAILED');
   }
-}
-
-export interface ChangePasswordInput {
-  userId: string;
-  currentPassword: string;
-  newPassword: string;
-  ip?: string | null;
-  currentSessionId?: string;
-}
-
-/**
- * Authenticated password change (Phase 8, issue #270).
- * Re-authenticates the current password via the throttled `confirmPassword` path,
- * rejects new passwords that equal the current one, updates `passwordHash`,
- * bumps `tokenVersion`, and revokes all other active sessions while keeping
- * the caller's own session alive.
- */
-export async function changePassword(
-  input: ChangePasswordInput,
-  actor?: AuditActor,
-): Promise<{ tokenVersion: number; refreshToken?: string }> {
-  if (input.currentPassword === input.newPassword) {
-    throw new HttpError(400, 'New password must be different from current password.', 'PASSWORD_UNCHANGED');
-  }
-
-  const user = await findUserById(input.userId);
-  if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
-  if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
-
-  await confirmPassword(input.userId, input.currentPassword, input.ip);
-  validatePasswordStrength(input.newPassword);
-  const passwordHash = await hashPassword(input.newPassword);
-
-  return prisma.$transaction(async (tx) => {
-    const updatedUser = await tx.user.update({
-      where: { id: input.userId },
-      data: {
-        passwordHash,
-        tokenVersion: { increment: 1 },
-      },
-      select: { tokenVersion: true },
-    });
-
-    const revokedResult = await tx.refreshSession.updateMany({
-      where: {
-        userId: input.userId,
-        revokedAt: null,
-        ...(input.currentSessionId ? { id: { not: input.currentSessionId } } : {}),
-      },
-      data: {
-        revokedAt: new Date(),
-        revokedReason: 'password_changed',
-      },
-    });
-
-    if (actor) {
-      await auditService.record(tx, actor, {
-        entityType: 'User',
-        entityId: input.userId,
-        action: 'user.password_changed',
-        fromState: null,
-        toState: null,
-        metadata: {
-          sessionsRevoked: revokedResult.count,
-        },
-      });
-    }
-
-    let refreshToken: string | undefined;
-    if (input.currentSessionId) {
-      const tokens = issueTokensForSession(
-        { id: user.id, role: user.role, tokenVersion: updatedUser.tokenVersion, locale: user.locale },
-        input.currentSessionId,
-      );
-      refreshToken = tokens.refreshToken;
-    }
-
-    return { tokenVersion: updatedUser.tokenVersion, refreshToken };
-  });
 }
 
 export async function isAccountDeleted(userId: string): Promise<boolean> {

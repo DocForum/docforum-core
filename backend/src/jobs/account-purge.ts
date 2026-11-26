@@ -6,6 +6,7 @@
 import { config } from '../config';
 import { purgeDeletedPatientAccounts } from '../modules/patients/services';
 import { runWithRlsBypassContext } from '../db/prisma-client';
+import { logger } from '../logger';
 
 export function startAccountPurgeJob(): () => void {
   let running = false;
@@ -16,13 +17,11 @@ export function startAccountPurgeJob(): () => void {
       .then(({ purged, held, failed }) => {
         if (purged > 0 || failed > 0) {
           // Counts only — never ids or personal fields.
-          // eslint-disable-next-line no-console
-          console.log(`[jobs] account purge: ${purged} purged, ${held} retained (records), ${failed} failed`);
+          logger.info(`[jobs] account purge: ${purged} purged, ${held} retained (records), ${failed} failed`);
         }
       })
       .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error(`[jobs] account purge failed: ${err instanceof Error ? err.name : typeof err}`);
+        logger.error(`[jobs] account purge failed: ${err instanceof Error ? err.name : typeof err}`);
       })
       .finally(() => {
         running = false;

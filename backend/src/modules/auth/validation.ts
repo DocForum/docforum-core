@@ -1,48 +1,23 @@
 import { z } from 'zod';
-import {
-  isCommonPassword,
-  MAX_PASSWORD_BYTES,
-  MIN_PASSWORD_LENGTH,
-} from './services/password';
+import { timeZoneSchema } from '../../utils/time-zones';
 
-// Issue #268: Normalise (trim + lowercase) emails once in the auth validation layer.
-export const emailSchema = z.string().trim().email().toLowerCase();
-
-// Issue #269: Shared password schema enforcing min 8 chars, max 72 UTF-8 bytes, and denylist check.
-export const passwordSchema = z
-  .string()
-  .superRefine((val, ctx) => {
-    if (val.length < MIN_PASSWORD_LENGTH) {
+export const signupSchema = z
+  .object({
+    role: z.enum(['patient', 'doctor']),
+    email: z.string().email(),
+    password: z.string().min(8),
+    fullName: z.string().trim().min(1),
+    timeZone: timeZoneSchema.optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.role === 'patient' && data.timeZone !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`,
-        params: { code: 'PASSWORD_TOO_SHORT' },
-      });
-      return;
-    }
-    if (Buffer.byteLength(val, 'utf8') > MAX_PASSWORD_BYTES) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Password must not exceed ${MAX_PASSWORD_BYTES} bytes.`,
-        params: { code: 'PASSWORD_TOO_LONG' },
-      });
-      return;
-    }
-    if (isCommonPassword(val)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'This password is too common and easily guessed. Choose a stronger password.',
-        params: { code: 'PASSWORD_COMMONLY_BREACHED' },
+        message: 'timeZone is only valid for doctor accounts.',
+        path: ['timeZone'],
       });
     }
   });
-
-export const signupSchema = z.object({
-  role: z.enum(['patient', 'doctor']),
-  email: emailSchema,
-  password: passwordSchema,
-  fullName: z.string().trim().min(1),
-});
 
 // Existing users with longer passwords can still log in: login does not restrict max bytes or denylist.
 export const loginSchema = z.object({
