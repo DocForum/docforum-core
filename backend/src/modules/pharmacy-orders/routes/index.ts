@@ -55,6 +55,19 @@ pharmacyOrdersRouter.get(
   pharmacyOrdersController.getOrderFulfillmentStatus,
 );
 
+// Issue #15: facility views its own assigned queue — all FulfillmentRecords
+// for the caller's facility profile. `fulfilled` is NEVER directly settable
+// via PATCH; it is derived from dispensed items only (§5.3 step 5 / issue
+// #73), enforced at the validation layer (updateFulfillmentRecordSchema
+// allows only 'in_progress' | 'rejected') and proven in the facility-queue
+// integration test. `/facility/queue` before `/:id` to avoid id capture.
+pharmacyOrdersRouter.get(
+  '/facility/queue',
+  authenticate,
+  requireRole('facility'),
+  pharmacyOrdersController.listFacilityQueue,
+);
+
 // Generic pharmacy order (Order model) creation and fulfillment proof.
 pharmacyOrdersRouter.post('/', authenticate, pharmacyOrdersController.createPharmacyOrder);
 pharmacyOrdersRouter.get('/:id', authenticate, pharmacyOrdersController.getPharmacyOrder);

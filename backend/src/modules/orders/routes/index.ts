@@ -61,6 +61,15 @@ ordersRouter.get(
   ordersController.downloadLabResult,
 );
 
+// Issue #11: patient-facing view of active/past orders, supersedes-chain resolved.
+// `/mine` before `/:id` so the literal is never captured as an order id.
+ordersRouter.get(
+  '/mine',
+  authenticate,
+  requireRole('patient'),
+  ordersController.listMineOrders,
+);
+
 ordersRouter.post(
   '/:id/confirm-receipt',
   authenticate,

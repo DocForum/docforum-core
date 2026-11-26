@@ -407,6 +407,30 @@ export async function getOrderFulfillmentSummary(
   return { orderType, orderId, totalItems: items.length, dispensedItems, status };
 }
 
+/**
+ * The facility's own fulfillment queue — all FulfillmentRecords assigned to
+ * the caller's facility (issue #15). Only facilities may call this; a 403
+ * is returned for any other role.
+ *
+ * Hard rule 5 applies: a facility sees ONLY its own records, never another
+ * facility's. `fulfilled` status is NEVER directly settable via the PATCH
+ * endpoint — it is derived from dispensed items (§5.3 step 5), and the
+ * test for this issue proves that invariant by attempting the forbidden path.
+ */
+export async function listFacilityQueue(
+  requester: Requester,
+  filters: { status?: FulfillmentStatus } = {},
+): Promise<Awaited<ReturnType<typeof repo.listFulfillmentRecordsForFacility>>> {
+  if (requester.role !== 'facility') {
+    throw new HttpError(403, 'Only facilities can view the fulfillment queue.');
+  }
+  const facilityId = await getOwnFacilityId(requester);
+  if (!facilityId) {
+    throw new HttpError(403, 'No facility profile is linked to this account.');
+  }
+  return repo.listFulfillmentRecordsForFacility(facilityId, filters);
+}
+
 export { computeConfirmedSignal, formatOrderResponse };
 
 export interface FulfillOrderInput {
