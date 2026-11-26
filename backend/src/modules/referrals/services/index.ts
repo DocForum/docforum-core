@@ -19,7 +19,8 @@ import * as appointmentsService from '../../appointments/services';
 import * as auditService from '../../audit/services';
 import * as doctorsService from '../../doctors/services';
 import * as patientsService from '../../patients/services';
-import { decryptField, isEncrypted } from '../../../utils/field-encryption';
+import * as intakeService from '../../intake/services';
+import { decryptField, encryptField, isEncrypted } from '../../../utils/field-encryption';
 import { evaluateReferralLoop, LoopGuardError, REFERRAL_MAX_HOPS } from '../loop';
 import { selectLeastLoaded } from '../routing';
 
@@ -49,6 +50,7 @@ interface PreparedReferral {
   targetDoctorId: string;
   targetSpecialtyId?: string;
   snapshotNotes: string;
+  snapshotIntake: string | null;
   parentReferralId?: string;
   loopFlaggedAt?: Date;
   loopFlagReason?: string;
@@ -203,6 +205,15 @@ async function prepareReferralTarget(
     }
   }
 
+  // Capture the patient's most-recent intake form as an immutable snapshot
+  // (issue #5, ARCHITECTURE.md §4.4). Null when no intake exists yet (issue
+  // #2 not yet enforced). Encrypted the same way as snapshotNotes so the
+  // referral row carries no plaintext PHI.
+  const latestIntake = await intakeService.findLatestIntakeForReferral(db, patientProfileId);
+  const snapshotIntake = latestIntake
+    ? (encryptField(JSON.stringify(latestIntake)) ?? null)
+    : null;
+
   return {
     patientProfileId,
     sourceConsultationId: consultation.id,
@@ -210,6 +221,7 @@ async function prepareReferralTarget(
     targetDoctorId,
     targetSpecialtyId: target.targetSpecialtyId,
     snapshotNotes: target.snapshotNotes,
+    snapshotIntake,
     parentReferralId,
     loopFlaggedAt,
     loopFlagReason,
@@ -496,6 +508,16 @@ function readableSnapshotNotes(value: string): string {
   return isEncrypted(value) ? decryptField(value) ?? value : value;
 }
 
+function readableSnapshotIntake(value: string | null): unknown {
+  if (!value) return null;
+  const raw = isEncrypted(value) ? decryptField(value) ?? value : value;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export async function getReferralDetail(
   actor: auditService.AuditActor,
   referralId: string,
@@ -527,7 +549,11 @@ export async function getReferralDetail(
     detail: 'referral detail read',
   });
 
-  return { ...referral, snapshotNotes: readableSnapshotNotes(referral.snapshotNotes) };
+  return {
+    ...referral,
+    snapshotNotes: readableSnapshotNotes(referral.snapshotNotes),
+    snapshotIntake: readableSnapshotIntake(referral.snapshotIntake),
+  };
 }
 
 export interface IncomingReferralFilters {
@@ -552,6 +578,7 @@ export async function listIncoming(userId: string, filters: IncomingReferralFilt
   const items = pageRows.map((row) => ({
     ...row,
     snapshotNotes: readableSnapshotNotes(row.snapshotNotes),
+    snapshotIntake: readableSnapshotIntake(row.snapshotIntake),
   }));
 
   for (const row of pageRows) {

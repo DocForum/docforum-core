@@ -23,8 +23,8 @@ enum ReferralExpiryReason {
 }
 
 // Phase 3 (issues #5/#65/#66/#67/#68). Snapshot rule (FR-7/FR-8, hard
-// rule 3): `snapshotNotes` is a copy taken at creation, never a live
-// reference — reassign/cancel/cascade never touch it.
+// rule 3): `snapshotNotes` and `snapshotIntake` are copies taken at
+// creation, never live references — reassign/cancel/cascade never touch them.
 model Referral {
   id                        String                @id @default(uuid())
   status                    ReferralStatus        @default(pending)
@@ -45,6 +45,12 @@ model Referral {
   // per-doctor specialty management.
   targetSpecialtyId         String?
   snapshotNotes             String
+  // Encrypted JSON snapshot of the patient's most-recent IntakeForm at
+  // referral creation time (issue #5 deviation-a close). Null when no
+  // intake form exists yet. Stored as an AES-256-GCM envelope (same as
+  // snapshotNotes) so it is never a live pointer and cannot drift if the
+  // source intake is later amended.
+  snapshotIntake            String?
   // Issue #65: the referral whose appointment produced the consultation
   // this referral came from — the chain loop detection walks (bounded).
   parentReferralId          String?
