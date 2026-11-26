@@ -22,12 +22,12 @@ model Prescription {
   supersedesPrescriptionId String?
   createdAt                DateTime    @default(now())
 
-  consultation      Consultation       @relation(fields: [consultationId], references: [id])
-  patientProfile    PatientProfile     @relation(fields: [patientProfileId], references: [id])
-  prescribingDoctor DoctorProfile      @relation(fields: [prescribingDoctorId], references: [id])
-  facilityProfile   FacilityProfile    @relation(fields: [facilityProfileId], references: [id])
-  supersedes        Prescription?      @relation("PrescriptionCorrections", fields: [supersedesPrescriptionId], references: [id])
-  correctedBy       Prescription?      @relation("PrescriptionCorrections")
+  consultation      Consultation        @relation(fields: [consultationId], references: [id])
+  patientProfile    PatientProfile      @relation(fields: [patientProfileId], references: [id])
+  prescribingDoctor DoctorProfile       @relation(fields: [prescribingDoctorId], references: [id])
+  facilityProfile   FacilityProfile     @relation(fields: [facilityProfileId], references: [id])
+  supersedes        Prescription?       @relation("PrescriptionCorrections", fields: [supersedesPrescriptionId], references: [id])
+  correctedBy       Prescription?       @relation("PrescriptionCorrections")
   items             PrescriptionItem[]
   paymentIntent     PaymentIntent?
   // One order → many fulfillment records (issue #73 split routing: one per
@@ -37,25 +37,27 @@ model Prescription {
   @@unique([supersedesPrescriptionId])
   @@index([patientProfileId, createdAt])
   @@index([consultationId])
+  @@index([prescribingDoctorId])
+  @@index([facilityProfileId])
 }
 
 model PrescriptionItem {
-  id             String @id @default(uuid())
-  prescriptionId String
+  id                         String  @id @default(uuid())
+  prescriptionId             String
   /// Display snapshot taken at issuance. When the item comes from the
   /// controlled vocabulary this is the catalog row's display name
   /// (generic name + strength + form); for the explicit "unlisted
   /// medication" path it is the prescriber's free text. It is stored, not
   /// joined, so a catalog edit never changes an issued prescription
   /// (issue #69).
-  drugName       String
-  dosage         String
-  frequency      String
-  duration       String
+  drugName                   String
+  dosage                     String
+  frequency                  String
+  duration                   String
   /// Controlled-vocabulary link (issue #69). Null means the prescriber used
   /// the explicit unlisted-medication path, which is then flagged for a
   /// pharmacist to review (`flaggedForPharmacistReview`).
-  medicationId   String?
+  medicationId               String?
   /// Set when the item was not chosen from the catalog, so a pharmacy can
   /// see that the drug needs a pharmacist's review before dispensing.
   flaggedForPharmacistReview Boolean @default(false)
@@ -82,12 +84,12 @@ model LabOrder {
   createdAt            DateTime    @default(now())
   expiresAt            DateTime?
 
-  consultation    Consultation       @relation(fields: [consultationId], references: [id])
-  patientProfile  PatientProfile     @relation(fields: [patientProfileId], references: [id])
-  orderingDoctor  DoctorProfile      @relation(fields: [orderingDoctorId], references: [id])
-  facilityProfile FacilityProfile    @relation(fields: [facilityProfileId], references: [id])
-  supersedes      LabOrder?          @relation("LabOrderCorrections", fields: [supersedesLabOrderId], references: [id])
-  correctedBy     LabOrder?          @relation("LabOrderCorrections")
+  consultation    Consultation        @relation(fields: [consultationId], references: [id])
+  patientProfile  PatientProfile      @relation(fields: [patientProfileId], references: [id])
+  orderingDoctor  DoctorProfile       @relation(fields: [orderingDoctorId], references: [id])
+  facilityProfile FacilityProfile     @relation(fields: [facilityProfileId], references: [id])
+  supersedes      LabOrder?           @relation("LabOrderCorrections", fields: [supersedesLabOrderId], references: [id])
+  correctedBy     LabOrder?           @relation("LabOrderCorrections")
   result          LabResult?
   paymentIntent   PaymentIntent?
   fulfillments    FulfillmentRecord[]
@@ -96,6 +98,7 @@ model LabOrder {
   @@index([patientProfileId, createdAt])
   @@index([consultationId])
   @@index([status, expiresAt])
+  @@index([facilityProfileId])
 }
 
 // Issue #72 (PRD §8.2.7): how serious the facility judged a result to be.
@@ -107,16 +110,16 @@ enum LabResultAbnormality {
 }
 
 model LabResult {
-  id                   String   @id @default(uuid())
-  labOrderId           String   @unique
+  id                   String               @id @default(uuid())
+  labOrderId           String               @unique
   fulfillingFacilityId String
   // Never written: a result file is not addressed by URL (issue #16).
   resultFileUrl        String?
-  // Issue #16 (docs/adr/0014): the file lives in a private object-storage
+  // Issue #16 (docs/adr/0018): the file lives in a private object-storage
   // bucket under this opaque, server-generated key — not a URL, never sent
   // to a client. It is read back only through
   // GET /orders/lab-orders/:labOrderId/result, which re-checks access.
-  resultObjectKey      String?  @unique
+  resultObjectKey      String?              @unique
   resultContentType    String?
   resultByteSize       Int?
   summary              String?
@@ -124,11 +127,13 @@ model LabResult {
   // acknowledgement. `normal` is the default so a facility that has not
   // judged the result is not silently treated as "abnormal".
   abnormality          LabResultAbnormality @default(normal)
-  createdAt            DateTime @default(now())
+  createdAt            DateTime             @default(now())
 
-  labOrder           LabOrder        @relation(fields: [labOrderId], references: [id])
-  fulfillingFacility FacilityProfile @relation(fields: [fulfillingFacilityId], references: [id])
+  labOrder           LabOrder                  @relation(fields: [labOrderId], references: [id])
+  fulfillingFacility FacilityProfile           @relation(fields: [fulfillingFacilityId], references: [id])
   acknowledgement    LabResultAcknowledgement?
+
+  @@index([fulfillingFacilityId])
 }
 
 /// Issue #72: the "did anyone look at this?" record for an abnormal or
@@ -144,17 +149,17 @@ model LabResult {
 /// admin list treats `escalationDueAt <= now` as overdue even before the job
 /// has written `escalatedAt`, and the job drains the backlog on startup.
 model LabResultAcknowledgement {
-  id               String                @id @default(uuid())
-  labResultId      String                @unique
-  orderingDoctorId String
-  severity         LabResultAbnormality
-  escalationDueAt  DateTime
-  acknowledgedAt   DateTime?
+  id                     String               @id @default(uuid())
+  labResultId            String               @unique
+  orderingDoctorId       String
+  severity               LabResultAbnormality
+  escalationDueAt        DateTime
+  acknowledgedAt         DateTime?
   // Which doctor actually acknowledged. Almost always the ordering doctor;
   // kept separate from `orderingDoctorId` so a future hand-off is auditable.
   acknowledgedByDoctorId String?
-  escalatedAt      DateTime?
-  createdAt        DateTime              @default(now())
+  escalatedAt            DateTime?
+  createdAt              DateTime             @default(now())
 
   labResult      LabResult     @relation(fields: [labResultId], references: [id], onDelete: Restrict)
   orderingDoctor DoctorProfile @relation("LabResultAcknowledgementOrderingDoctor", fields: [orderingDoctorId], references: [id], onDelete: Restrict)

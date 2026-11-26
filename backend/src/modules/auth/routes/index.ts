@@ -26,6 +26,10 @@ authRouter.post('/2fa/disable', authenticate, authController.disableTwoFactor);
 authRouter.post('/verify-email', authController.verifyEmail);
 authRouter.post('/verify-email/resend', authenticate, authController.resendVerificationEmail);
 
+// Phase 8, issue #271 — change account email.
+authRouter.post('/change-email/request', authenticate, authController.requestEmailChange);
+authRouter.post('/change-email/confirm', authController.confirmEmailChange);
+
 // Phase 8, issue #35 — admin escape hatch for a lock a legitimate user is
 // stuck behind (a documented script would do too, but an endpoint is easier
 // to use from the ops console and easier to test).

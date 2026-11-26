@@ -17,6 +17,7 @@ export { mount as facilities } from './modules/facilities/mount';
 export { mount as flags } from './modules/flags/mount';
 export { mount as intake } from './modules/intake/mount';
 export { mount as labOrders } from './modules/lab-orders/mount';
+export { mount as labTests } from './modules/lab-tests/mount';
 export { mount as medications } from './modules/medications/mount';
 export { mount as metrics } from './modules/metrics/mount';
 export { mount as notifications } from './modules/notifications/mount';

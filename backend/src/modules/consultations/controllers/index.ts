@@ -6,6 +6,8 @@ import {
   closeConsultationSchema,
   createConsultationSchema,
   createReferralsSchema,
+  getConsultationQuerySchema,
+  listConsultationsQuerySchema,
   listFollowUpsQuerySchema,
   listMessagesQuerySchema,
   postMessageSchema,
@@ -48,8 +50,27 @@ export async function create(req: Request, res: Response) {
 
 export async function getOne(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const consultation = await consultationsService.getConsultation(req.user.id, getParam(req, 'consultationId'));
+  const { patientProfileId } = getConsultationQuerySchema.parse(req.query);
+  const consultation = await consultationsService.getConsultation(
+    req.user.id,
+    getParam(req, 'consultationId'),
+    patientProfileId,
+  );
   res.status(200).json(consultation);
+}
+
+export async function listMine(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const query = listConsultationsQuerySchema.parse(req.query);
+  const result = await consultationsService.listMyConsultations(req.user.id, query);
+  res.status(200).json(result);
+}
+
+export async function listDoctor(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const query = listConsultationsQuerySchema.parse(req.query);
+  const result = await consultationsService.listDoctorConsultations(req.user.id, query);
+  res.status(200).json(result);
 }
 
 // --- Issue #61/#62: thread -------------------------------------------------

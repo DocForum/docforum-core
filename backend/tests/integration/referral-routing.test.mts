@@ -154,6 +154,25 @@ describe('referral routing (specialty only)', () => {
     expect(after).toBe(before);
   });
 
+  it('fails 422 SPECIALTY_NOT_FOUND, not a 500, for a specialty id that does not exist (issue #334)', async () => {
+    const { consultationId } = await consultationRitual(app, patient, gp);
+    const missingSpecialtyId = '00000000-0000-4000-8000-000000000334';
+
+    for (const target of [
+      { targetSpecialtyId: missingSpecialtyId },
+      { targetDoctorId: cardioA.profileId, targetSpecialtyId: missingSpecialtyId },
+    ]) {
+      const res = await createReferral(app, gp, {
+        sourceConsultationId: consultationId,
+        ...target,
+        snapshotNotes: 'Unknown specialty.',
+      });
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({ message: 'The target specialty does not exist.', code: 'SPECIALTY_NOT_FOUND' });
+    }
+    expect(await prisma.referral.count({ where: { sourceConsultationId: consultationId } })).toBe(0);
+  });
+
   it('refuses to route a referral back to the referring doctor', async () => {
     const { consultationId } = await consultationRitual(app, patient, gp);
     const res = await createReferral(app, gp, {

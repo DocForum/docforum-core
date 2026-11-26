@@ -1,0 +1,1 @@
+// lab-tests repositories — catalog is static in v1 (issue #70).

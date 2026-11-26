@@ -86,24 +86,86 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
     );
 
   let consultation;
+  let returnNotes: string | null = null;
   try {
-    consultation = await prisma.$transaction(async (tx) => {
+    const outcome = input.outcome ?? null;
+
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await consultationsRepo.findConsultationByAppointmentId(tx, input.appointmentId);
+      if (existing) {
+        if (existing.outcome !== null) {
+          throw new HttpError(409, 'A consultation for this appointment has already been closed.');
+        }
+
+        const updateData: { outcome: ConsultationOutcome; notes?: string | null } = {
+          outcome: (outcome ?? existing.outcome) as ConsultationOutcome,
+        };
+
+        if (input.notes !== undefined) {
+          updateData.notes = input.notes === null ? null : (encryptField(input.notes) ?? null);
+        }
+
+        if (outcome !== null) {
+          const updated = await consultationsRepo.closeOpenConsultation(tx, { appointmentId: input.appointmentId }, updateData);
+          if (!updated) {
+            throw new HttpError(409, 'A consultation for this appointment has already been closed.');
+          }
+
+          await auditService.record(tx, actor, {
+            entityType: 'Consultation',
+            entityId: updated.id,
+            action: 'consultation.closed',
+            fromState: null,
+            toState: updated.outcome,
+            metadata: { appointmentId: updated.appointmentId },
+          });
+
+          if (updated.outcome === 'follow_up_needed') {
+            await createFollowUpRequestForConsultation(tx, {
+              consultationId: updated.id,
+              doctorProfileId: appointment.doctorProfileId,
+              patientProfileId: appointment.patientProfileId,
+              notesCiphertext: updated.notes,
+              windowStart: followUpWindowStart,
+              windowEnd: followUpWindowEnd,
+            });
+          }
+
+          const plaintextNotes = (input.notes ?? (updated.notes ? decryptField(updated.notes) : null)) ?? null;
+
+          return { record: updated, plaintextNotes };
+        } else {
+          let updatedRecord = existing;
+          if (updateData.notes !== undefined) {
+            updatedRecord = await tx.consultation.update({
+              where: { appointmentId: input.appointmentId },
+              data: { notes: updateData.notes },
+            });
+          }
+          const plaintextNotes = (input.notes ?? (updatedRecord.notes ? decryptField(updatedRecord.notes) : null)) ?? null;
+
+          return { record: updatedRecord, plaintextNotes };
+        }
+      }
+
       const record = await consultationsRepo.createConsultation(tx, {
         appointmentId: input.appointmentId,
-        outcome: input.outcome ?? null,
+        outcome,
         notes: notesCiphertext,
       });
 
       // Phase 8 audit trail (issue #43): the state change and its event commit
       // together, so an event exists iff the consultation was actually closed.
-      await auditService.record(tx, actor, {
-        entityType: 'Consultation',
-        entityId: record.id,
-        action: 'consultation.closed',
-        fromState: null,
-        toState: record.outcome,
-        metadata: { appointmentId: record.appointmentId },
-      });
+      if (record.outcome !== null) {
+        await auditService.record(tx, actor, {
+          entityType: 'Consultation',
+          entityId: record.id,
+          action: 'consultation.closed',
+          fromState: null,
+          toState: record.outcome,
+          metadata: { appointmentId: record.appointmentId },
+        });
+      }
 
       // Issue #63: a follow-up outcome produces a bookable request in the
       // same transaction — the close and the request exist together or not
@@ -119,8 +181,11 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
         });
       }
 
-      return record;
+      return { record, plaintextNotes: notes };
     });
+
+    consultation = result.record;
+    returnNotes = result.plaintextNotes;
   } catch (err) {
     // The DB unique constraint is the actual guarantee; translate the race's
     // loser into a 409 rather than a 500.
@@ -132,7 +197,115 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
 
   // The caller just wrote these notes, so hand them back in plaintext rather
   // than leaking the stored ciphertext envelope.
-  return { consultation: { ...consultation, notes, addenda: [] }, appointment };
+  return {
+    consultation: {
+      ...consultation,
+      notes: returnNotes,
+      addenda: (consultation as unknown as { addenda?: unknown[] }).addenda ?? [],
+    },
+    appointment,
+  };
+}
+
+function encodeConsultationCursor(consultation: { createdAt: Date; id: string }): string {
+  return Buffer.from(`${consultation.createdAt.toISOString()}|${consultation.id}`, 'utf8').toString('base64url');
+}
+
+function decodeConsultationCursor(cursor: string): { createdAt: Date; id: string } {
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const separator = raw.indexOf('|');
+  const createdAt = new Date(raw.slice(0, separator));
+  const id = raw.slice(separator + 1);
+  if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
+    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+  }
+  return { createdAt, id };
+}
+
+export interface ListConsultationsFilters {
+  patientProfileId?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export async function listMyConsultations(userId: string, filters: ListConsultationsFilters) {
+  const limit = filters.limit ?? 20;
+  const appointmentMap = await appointmentsService.getAppointmentContextsForPatient(userId, filters.patientProfileId);
+  const appointmentIds = [...appointmentMap.keys()];
+  if (appointmentIds.length === 0) {
+    return { items: [], nextCursor: null };
+  }
+
+  const before = filters.cursor ? decodeConsultationCursor(filters.cursor) : undefined;
+  const rows = await consultationsRepo.findConsultationsPage(prisma, {
+    appointmentIds,
+    before,
+    take: limit + 1,
+  });
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+  const doctorIds = [...new Set(pageRows.map((r) => appointmentMap.get(r.appointmentId)!.doctorProfileId))];
+  const doctorSummaries = await doctorsService.getDoctorSummariesByIds(doctorIds);
+
+  const items = pageRows.map((row) => {
+    const ctx = appointmentMap.get(row.appointmentId)!;
+    return {
+      id: row.id,
+      appointmentId: row.appointmentId,
+      date: ctx.date.toISOString(),
+      doctorName: doctorSummaries.get(ctx.doctorProfileId)?.fullName ?? 'Unknown Doctor',
+      outcome: row.outcome,
+      createdAt: row.createdAt.toISOString(),
+    };
+  });
+
+  const last = pageRows.at(-1);
+  return {
+    items,
+    nextCursor: hasMore && last ? encodeConsultationCursor(last) : null,
+  };
+}
+
+export async function listDoctorConsultations(userId: string, filters: ListConsultationsFilters) {
+  const limit = filters.limit ?? 20;
+  const appointmentMap = await appointmentsService.getAppointmentContextsForDoctor(userId);
+  const appointmentIds = [...appointmentMap.keys()];
+  if (appointmentIds.length === 0) {
+    return { items: [], nextCursor: null };
+  }
+
+  const before = filters.cursor ? decodeConsultationCursor(filters.cursor) : undefined;
+  const rows = await consultationsRepo.findConsultationsPage(prisma, {
+    appointmentIds,
+    before,
+    take: limit + 1,
+  });
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+  const patientIds = [...new Set(pageRows.map((r) => appointmentMap.get(r.appointmentId)!.patientProfileId))];
+  const patientSummaries = await patientsService.getPatientSummariesByIds(patientIds);
+
+  const items = pageRows.map((row) => {
+    const ctx = appointmentMap.get(row.appointmentId)!;
+    return {
+      id: row.id,
+      appointmentId: row.appointmentId,
+      date: ctx.date.toISOString(),
+      patientName: patientSummaries.get(ctx.patientProfileId)?.fullName ?? 'Deleted patient',
+      outcome: row.outcome,
+      createdAt: row.createdAt.toISOString(),
+    };
+  });
+
+  const last = pageRows.at(-1);
+  return {
+    items,
+    nextCursor: hasMore && last ? encodeConsultationCursor(last) : null,
+  };
 }
 
 /** Service-to-service read for modules that hang records off a consultation
@@ -163,9 +336,18 @@ export function assertConsultationAcceptsOrders(consultation: { appointment: { s
 }
 
 /** Visible to the treating doctor and the patient of the underlying
- * appointment — nothing wider in v1. `notes` is decrypted for the reader;
- * the stored ciphertext never leaves this module. */
-export async function getConsultation(userId: string, consultationId: string) {
+ * appointment — nothing wider in v1. Issue #305: an active guardian reads a
+ * dependent's consultation by naming the dependent in `patientProfileId`,
+ * authorised through patientsService.resolveActingProfile (never by trusting
+ * the query parameter). `notes` is decrypted for the reader; the stored
+ * ciphertext never leaves this module. */
+export async function getConsultation(userId: string, consultationId: string, patientProfileId?: string) {
+  // Resolve first: a revoked guardianship also makes RLS hide the
+  // consultation from this caller, so checking only after the read would
+  // answer a generic 404 instead of GUARDIANSHIP_INACTIVE.
+  const actingPatient = patientProfileId
+    ? await patientsService.resolveActingProfile(userId, patientProfileId)
+    : null;
   const consultation = await consultationsRepo.findConsultationById(prisma, consultationId);
   if (!consultation) throw new HttpError(404, 'Consultation not found.');
 
@@ -178,10 +360,30 @@ export async function getConsultation(userId: string, consultationId: string) {
     }));
     const doctor = await doctorsService.getMyDoctorProfile(userId).catch(() => null);
     if (doctor && doctor.id === consultation.appointment.doctorProfileId) {
+      auditService.recordAccess({
+        accessedBy: userId,
+        patientProfileId: consultation.appointment.patientProfileId,
+        entityType: 'Consultation',
+        entityId: consultation.id,
+        route: 'GET /consultations/:consultationId',
+        detail: 'consultation detail read',
+      });
       return { ...consultation, notes: decryptField(consultation.notes), addenda };
     }
-    const patient = await patientsService.getMyPatientProfile(userId).catch(() => null);
+    // With no profile named, fall back to the caller's own profile so the
+    // long-standing self-read (and doctor read) stays unchanged. Naming one
+    // goes through resolveActingProfile: an ended guardianship throws
+    // GUARDIANSHIP_INACTIVE here, before any notes are decrypted.
+    const patient = actingPatient ?? await patientsService.getMyPatientProfile(userId).catch(() => null);
     if (patient && patient.id === consultation.appointment.patientProfileId) {
+      auditService.recordAccess({
+        accessedBy: userId,
+        patientProfileId: patient.id,
+        entityType: 'Consultation',
+        entityId: consultation.id,
+        route: 'GET /consultations/:consultationId',
+        detail: patient.userId === null ? 'consultation detail read (guardian)' : 'consultation detail read',
+      });
       return { ...consultation, notes: decryptField(consultation.notes), addenda };
     }
   }

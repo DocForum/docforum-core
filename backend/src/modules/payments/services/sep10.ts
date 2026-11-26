@@ -277,6 +277,18 @@ export interface Sep10VerifyResult {
   signers: string[];
 }
 
+/** Retention prune (issue #276): deletes at most `batchSize` challenge rows
+ * that expired or were consumed before `cutoff`. A challenge still within
+ * its window and unconsumed never matches, so an in-flight wallet link
+ * cannot lose its nonce. */
+export function pruneExpiredSep10Challenges(options: { now?: Date; batchSize?: number } = {}): Promise<number> {
+  const now = options.now ?? new Date();
+  return paymentsRepo.pruneExpiredSep10Challenges({
+    cutoff: new Date(now.getTime() - config.tokenPrune.graceHours * 60 * 60 * 1000),
+    batchSize: options.batchSize ?? config.tokenPrune.batchSize,
+  });
+}
+
 /** POST /payments/sep10/verify — the full SEP-10 server verification
  * list plus DocForum's own single-use/binding rules. On success the
  * caller has proven control of `account` (fundamentally: the same proof

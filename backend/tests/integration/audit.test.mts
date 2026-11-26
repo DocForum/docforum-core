@@ -308,16 +308,20 @@ describe('AuditEvent foundation', () => {
       expect((await post(intent.id, 'release')).status).toBe(200);
       const events = await prisma.auditEvent.findMany({ where: { entityId: intent.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
       expect(events.map((e) => [e.action, e.fromState, e.toState])).toEqual([
-        ['payment_intent.funded', 'created', 'escrowed'],
+        // Issue #24: the claim is audited, then the settle from that claim.
+        ['payment_intent.funding_started', 'created', 'funding'],
+        ['payment_intent.funded', 'funding', 'escrowed'],
         ['payment_intent.released', 'escrowed', 'released'],
       ]);
-      expect(events[0]).toMatchObject({
+      // The settle event carries the on-chain references; the claim event
+      // is the one that holds the request id.
+      expect(events[1]).toMatchObject({
         actorUserId: admin.id,
         actorRole: 'admin',
         requestId: `pay-fund-${runId}`,
         metadata: { orderType: 'lab_order', orderId: intent.labOrderId, amount: '5000', assetCode: 'XLM', stellarTxHash: TX_HASH, sorobanContractId: 'CTESTCONTRACT' },
       });
-      expect((events[0]!.metadata as Record<string, unknown>).escrowId).toMatch(/^\d+$/);
+      expect((events[1]!.metadata as Record<string, unknown>).escrowId).toMatch(/^\d+$/);
       const serialized = JSON.stringify(events);
       for (const secret of [PAYER_SECRET, RELEASER_SECRET, 'GPLATFORMRELEASERPUBLICKEY']) expect(serialized).not.toContain(secret);
     });
@@ -351,7 +355,14 @@ describe('AuditEvent foundation', () => {
       expect(await prisma.auditEvent.count({ where: { entityId: intent.id, action: 'payment_intent.released' } })).toBe(0);
       // An invalid transition is refused before anything happens, too.
       expect((await post(intent.id, 'fund')).status).toBe(409);
-      expect(await prisma.auditEvent.count({ where: { entityId: intent.id } })).toBe(1);
+      // Two rows for the one successful fund: the funding claim (issue #24)
+      // and the settle. The refused re-fund adds nothing.
+      const actions = (
+        await prisma.auditEvent.findMany({ where: { entityId: intent.id }, select: { action: true } })
+      )
+        .map((row) => row.action)
+        .sort();
+      expect(actions).toEqual(['payment_intent.funded', 'payment_intent.funding_started']);
     });
 
     it('records one release when two race for the same intent', async () => {

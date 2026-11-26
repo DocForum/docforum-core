@@ -33,7 +33,7 @@ function checkWindow(
 export const closeConsultationSchema = z
   .object({
     outcome: z.enum(['resolved', 'referred', 'follow_up_needed']),
-    notes: z.string().min(1).max(20000),
+    notes: z.string().min(1).max(20000).optional(),
     ...followUpWindowShape,
   })
   .superRefine(checkWindow);
@@ -50,6 +50,18 @@ export const createConsultationSchema = z
 
 export const createReferralsSchema = z.object({
   targets: z.array(referralTargetSchema).min(1),
+});
+
+export const listConsultationsQuerySchema = z.object({
+  patientProfileId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().optional(),
+});
+
+/** Issue #305: `patientProfileId` selects the patient being read for, and is
+ * authorised by patientsService.resolveActingProfile in the service. */
+export const getConsultationQuerySchema = z.object({
+  patientProfileId: z.string().uuid().optional(),
 });
 
 // --- Issue #61/#62: messages and attachments ----------------------------

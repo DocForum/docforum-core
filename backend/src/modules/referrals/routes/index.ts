@@ -41,6 +41,14 @@ referralsRouter.post(
   requireVerifiedEmail,
   referralsController.decline,
 );
+referralsRouter.post(
+  '/:referralId/withdraw',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  referralsController.withdraw,
+);
+referralsRouter.get('/incoming', authenticate, requireRole('doctor'), referralsController.listIncoming);
 referralsRouter.get('/mine', authenticate, requireRole('patient'), referralsController.listMine);
 // Referring doctors see the referrals they created — including ones the
 // cascade expired after repeated no-shows (referringDoctorNotifiedAt) and
@@ -73,3 +81,4 @@ referralsRouter.get(
   requireRole('admin'),
   referralsController.auditTrail,
 );
+referralsRouter.get('/:referralId', authenticate, referralsController.getOne);

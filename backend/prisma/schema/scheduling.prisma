@@ -44,12 +44,12 @@ model AvailabilitySlot {
   // in availability/services, inside a transaction (issue #285). See
   // ARCHITECTURE.md §5.1 and backend/tests/integration/booking.test.mts.
   @@unique([doctorProfileId, startTime, endTime])
-  @@index([doctorProfileId, status])
+  @@index([doctorProfileId, status, startTime])
 }
 
 model Appointment {
   id                 String            @id @default(uuid())
-  version     Int      @default(1)
+  version            Int               @default(1)
   patientProfileId   String
   doctorProfileId    String
   // Nullable because a CANCELLED appointment releases its slot back to
@@ -86,12 +86,15 @@ model Appointment {
   consultation     Consultation?
   // Phase 2, issue #63: the follow-up request this appointment satisfied,
   // if it was booked that way (the FK lives on FollowUpRequest).
-  followUpRequest  FollowUpRequest? @relation("FollowUpBookedAppointment")
+  followUpRequest  FollowUpRequest?  @relation("FollowUpBookedAppointment")
 
   // TODO Phase 2: intakeId (FK -> IntakeForm). PRD FR-5 requires intake
   // before confirmation, not enforced yet — booking works without it in
   // Phase 1 so the concurrency-safety work isn't blocked on IntakeForm
   // existing. Flagged, not silently dropped.
+
+  @@index([patientProfileId, createdAt])
+  @@index([doctorProfileId, status])
 }
 
 enum WaitlistStatus {
@@ -102,19 +105,19 @@ enum WaitlistStatus {
 }
 
 model WaitlistEntry {
-  id                  String   @id @default(uuid())
+  id                  String         @id @default(uuid())
   patientProfileId    String
   doctorProfileId     String?
   specialtyId         String?
-  status              String // pending | on_hold | accepted | expired
+  status              WaitlistStatus @default(pending)
   // Time window during which the patient is willing to accept a slot
   earliestAcceptable  DateTime
   latestAcceptable    DateTime
   // Time-boxed hold: when a slot is offered, it's held for this duration
   holdDurationMinutes Int
   // Audit trail
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   patientProfile       PatientProfile      @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
   doctorProfile        DoctorProfile?      @relation(fields: [doctorProfileId], references: [id], onDelete: SetNull)
@@ -124,7 +127,6 @@ model WaitlistEntry {
   availabilitySlot     AvailabilitySlot?   @relation(fields: [availabilitySlotId], references: [id])
   availabilitySlotId   String?
 
-  @@unique([patientProfileId, doctorProfileId, specialtyId])
   @@index([status])
   @@index([patientProfileId, status])
 }

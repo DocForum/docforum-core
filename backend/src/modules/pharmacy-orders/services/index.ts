@@ -26,6 +26,7 @@ import * as repo from '../repositories';
 import * as facilitiesService from '../../facilities/services';
 import * as prescriptionsService from '../../prescriptions/services';
 import * as labOrdersService from '../../lab-orders/services';
+import * as patientsService from '../../patients/services';
 
 export type OrderType = 'prescription' | 'lab_order';
 export type DerivedOrderStatus = 'issued' | 'partially_fulfilled' | 'fulfilled';
@@ -53,7 +54,7 @@ async function getOrderItems(orderType: OrderType, orderId: string): Promise<Ord
 /** The caller's own FacilityProfile id, or null for non-facility roles. */
 async function getOwnFacilityId(requester: Requester): Promise<string | null> {
   if (requester.role !== 'facility') return null;
-  const profile = await repo.findFacilityProfileByUserId(requester.userId);
+  const profile = await facilitiesService.findFacilityProfileByUserId(requester.userId);
   return profile?.id ?? null;
 }
 
@@ -319,11 +320,71 @@ export async function updateFulfillmentRecord(
   return updated;
 }
 
-/** Read a record with its item rows. Owner facility or admin only — a
- * patient's access to their own order's fulfillment is blocked on Phase 4
- * linking PatientProfile to orders (documented gap, ARCHITECTURE.md §6.2). */
+/**
+ * Resolve the patientProfileId that owns a fulfillment record's underlying
+ * order — through the prescriptions or lab-orders service (hard rule 4).
+ */
+async function getOrderPatientProfileId(
+  orderType: OrderType,
+  orderId: string,
+): Promise<string | null> {
+  if (orderType === 'prescription') {
+    const prescription = await prescriptionsService.getPrescription(orderId).catch(() => null);
+    return prescription?.patientProfileId ?? null;
+  }
+  const labOrder = await labOrdersService.getLabOrder(orderId).catch(() => null);
+  return labOrder?.patientProfileId ?? null;
+}
+
+/**
+ * Read a record with its item rows. Owner facility, admin, or the order's
+ * patient (and their active guardian) may read (issue #323).
+ */
 export async function getFulfillment(recordId: string, requester: Requester) {
-  return requireOwnedRecord(recordId, requester);
+  if (requester.role === 'facility' || requester.role === 'admin') {
+    return requireOwnedRecord(recordId, requester);
+  }
+  if (requester.role !== 'patient') {
+    throw new HttpError(403, 'You do not have permission to view this fulfillment record.');
+  }
+  const record = await repo.findFulfillmentRecordById(recordId);
+  if (!record) throw new HttpError(404, 'Fulfillment record not found.');
+  const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
+  const orderId = record.prescriptionId ?? record.labOrderId;
+  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
+  const orderPatientProfileId = await getOrderPatientProfileId(orderType, orderId);
+  if (!orderPatientProfileId) throw new HttpError(404, 'Fulfillment record not found.');
+  // resolveActingProfile returns the profile the caller may act for (own or
+  // an active dependent), or throws 403/404 — same ownership check used by
+  // booking, appointments, etc.
+  const actingProfile = await patientsService.resolveActingProfile(requester.userId, orderPatientProfileId).catch(() => null);
+  if (!actingProfile || actingProfile.id !== orderPatientProfileId) {
+    throw new HttpError(404, 'Fulfillment record not found.');
+  }
+  return record;
+}
+
+/**
+ * List all fulfillment records for one order. The caller must be the order's
+ * patient (or their active guardian), or admin (issue #323).
+ */
+export async function listFulfillmentRecordsForOrder(
+  orderType: OrderType,
+  orderId: string,
+  requester: Requester,
+) {
+  if (requester.role !== 'patient' && requester.role !== 'admin') {
+    throw new HttpError(403, 'You do not have permission to view fulfillment records.');
+  }
+  if (requester.role === 'patient') {
+    const orderPatientProfileId = await getOrderPatientProfileId(orderType, orderId);
+    if (!orderPatientProfileId) throw new HttpError(404, 'Order not found.');
+    const actingProfile = await patientsService.resolveActingProfile(requester.userId, orderPatientProfileId).catch(() => null);
+    if (!actingProfile || actingProfile.id !== orderPatientProfileId) {
+      throw new HttpError(404, 'Order not found.');
+    }
+  }
+  return repo.listFulfillmentRecordsForOrder(orderType, orderId);
 }
 
 /** Derived order-level fulfillment state WITHOUT writing it back (read
@@ -362,12 +423,7 @@ export async function createPharmacyOrder(data: {
     throw new HttpError(400, 'Patient profile ID is required.');
   }
 
-  const patient = await prisma.patientProfile.findUnique({
-    where: { id: data.patientProfileId },
-  });
-  if (!patient) {
-    throw new HttpError(404, 'Patient profile not found.');
-  }
+  await patientsService.getPatientProfileById(data.patientProfileId);
 
   const order = await prisma.$transaction(async (tx) => {
     return repo.createOrder(tx, {
@@ -400,9 +456,7 @@ export async function fulfillPharmacyOrder(
     throw new HttpError(400, 'Reference number is required for fulfillment proof.');
   }
 
-  const facilityProfile = await prisma.facilityProfile.findUnique({
-    where: { userId: facilityUserId },
-  });
+  const facilityProfile = await facilitiesService.findFacilityProfileByUserId(facilityUserId);
   if (!facilityProfile) {
     throw new HttpError(403, 'Facility profile required.');
   }

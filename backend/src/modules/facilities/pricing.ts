@@ -12,8 +12,10 @@ export const NATIVE_PRICE_ASSET = 'native';
 
 /** A stored price version, narrowed to what selection needs. */
 export interface PriceVersion {
+  id?: string;
   effectiveFrom: Date;
   amount: bigint;
+  retired?: boolean;
 }
 
 /**
@@ -56,5 +58,15 @@ export function priceOnRequestError(catalogItemCode: string): HttpError {
     422,
     `This facility has no price for '${catalogItemCode}' yet — price on request.`,
     'PRICE_ON_REQUEST',
+  );
+}
+
+/** 422 for a retired item — a stable `ITEM_RETIRED` code so callers
+ * distinguish "never had a price" from "stopped offering this item". */
+export function itemRetiredError(catalogItemCode: string): HttpError {
+  return new HttpError(
+    422,
+    `This facility no longer offers '${catalogItemCode}'.`,
+    'ITEM_RETIRED',
   );
 }

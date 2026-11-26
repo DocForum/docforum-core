@@ -3,6 +3,8 @@ import { prisma, runWithRlsContext } from '../../../db/prisma-client';
 import type { PatientProfile } from '@prisma/client';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
+import { versionConflict } from '../../../middleware/optimistic-concurrency';
+import { logger } from '../../../logger';
 import * as patientsRepo from '../repositories';
 import { ChunkWriter, EXPORT_SCHEMA_VERSION, ExportSectionError, writeExportBundle } from './export-bundle';
 import { listExportSections, type PatientExportSection } from './export-registry';
@@ -32,6 +34,20 @@ export async function getMyPatientProfile(userId: string) {
   // deleted.
   if (!profile || profile.anonymizedAt) throw new HttpError(404, 'No patient profile for this account.');
   return profile;
+}
+
+export async function updateMyPatientProfile(
+  userId: string,
+  version: number,
+  input: { fullName?: string; dateOfBirth?: Date },
+) {
+  const current = await getMyPatientProfile(userId);
+  if (input.dateOfBirth && input.dateOfBirth.getTime() > Date.now()) {
+    throw new HttpError(400, 'dateOfBirth cannot be in the future.');
+  }
+  const updated = await patientsRepo.updatePatientProfile(current.id, version, input);
+  if (!updated) throw versionConflict();
+  return updated;
 }
 
 /** This module's own export section: the profile itself. A single item. */
@@ -200,8 +216,7 @@ async function generateClaimedExport(
     // Log the error *type* only — a driver or section error message can
     // echo the data it was handling.
     const cause = err instanceof ExportSectionError ? err.cause : err;
-    // eslint-disable-next-line no-console
-    console.error(
+    logger.error(
       `[jobs] patient export ${exportId} attempt ${attempt} failed${section ? ` in section "${section}"` : ''}: ${
         cause instanceof Error ? cause.name : typeof cause
       }`,
@@ -299,6 +314,31 @@ export async function getPatientProfileById(id: string) {
   const profile = await patientsRepo.findPatientProfileById(id);
   if (!profile) throw new HttpError(404, 'Patient profile not found.');
   return profile;
+}
+
+/** Non-throwing userId lookup by patientProfileId — for cross-module calls. */
+export function getPatientUserIdByProfileId(patientProfileId: string): Promise<string | null> {
+  return patientsRepo.findPatientProfileOwner(patientProfileId).then((row) => row?.userId ?? null);
+}
+
+/** Non-throwing patient profile lookup by userId — for cross-module calls. */
+export function findPatientProfileByUserId(userId: string) {
+  return patientsRepo.findPatientProfileByUserId(userId);
+}
+
+/** Batch id -> { id, fullName } lookup for other modules. Anonymised profiles return 'Deleted patient'. */
+export async function getPatientSummariesByIds(ids: string[]): Promise<Map<string, { id: string; fullName: string }>> {
+  if (ids.length === 0) return new Map();
+  const rows = await patientsRepo.findPatientSummariesByIds([...new Set(ids)]);
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        id: row.id,
+        fullName: row.anonymizedAt ? 'Deleted patient' : row.fullName,
+      },
+    ]),
+  );
 }
 
 // --- Account deletion (Phase 8, issue #41, docs/adr/0010) ----------------
@@ -427,8 +467,7 @@ export async function purgeDeletedPatientAccounts(now = new Date()): Promise<Pur
           result.held += 1;
         } else {
           result.failed += 1;
-          // eslint-disable-next-line no-console
-          console.error(`[jobs] account purge failed for one profile: ${err instanceof Error ? err.name : typeof err}`);
+          logger.error(`[jobs] account purge failed for one profile: ${err instanceof Error ? err.name : typeof err}`);
         }
       }
     }

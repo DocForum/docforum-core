@@ -1,7 +1,9 @@
 import { HttpError } from '../../../http-error';
+import { config } from '../../../config';
 import * as availabilityRepo from '../repositories';
 import * as doctorsService from '../../doctors/services';
 import { buildSlotRanges } from '../slot-generation';
+import { validateSlotGenerationDate } from '../validation';
 
 function isOverlapOrUniqueViolation(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
@@ -13,10 +15,42 @@ function isOverlapOrUniqueViolation(error: unknown): boolean {
   return false;
 }
 
-export async function listOpenSlots(doctorProfileId: string) {
+export async function listOpenSlots(
+  doctorProfileId: string,
+  query?: { from?: string; to?: string },
+  now = new Date(),
+) {
+  let fromDate = query?.from ? new Date(query.from) : now;
+  // from in the past is clamped to now (issue #289)
+  if (fromDate < now) {
+    fromDate = now;
+  }
+
+  let toDate: Date;
+  if (query?.to) {
+    toDate = new Date(query.to);
+  } else {
+    // Default to the next 14 days
+    toDate = new Date(fromDate.getTime() + config.availability.slotsDefaultRangeDays * 24 * 60 * 60 * 1_000);
+  }
+
+  if (fromDate > toDate) {
+    throw new HttpError(400, 'from must be before or equal to to.', 'INVALID_DATE_RANGE');
+  }
+
+  const maxSpanMs = config.availability.slotsMaxRangeDays * 24 * 60 * 60 * 1_000;
+  if (toDate.getTime() - fromDate.getTime() > maxSpanMs) {
+    throw new HttpError(
+      400,
+      `Date range cannot exceed ${config.availability.slotsMaxRangeDays} days.`,
+      'DATE_RANGE_TOO_LARGE',
+    );
+  }
+
   const isVerified = await doctorsService.isDoctorVerified(doctorProfileId);
   if (!isVerified) return [];
-  return availabilityRepo.findOpenSlots(doctorProfileId);
+
+  return availabilityRepo.findOpenSlots(doctorProfileId, fromDate, toDate);
 }
 
 export interface GenerateSlotsInput {
@@ -35,10 +69,19 @@ export interface GenerateSlotsInput {
 }
 
 export async function generateSlots(input: GenerateSlotsInput) {
-  const { doctorProfileId } = input;
+  const { doctorProfileId, timeZone = 'UTC', date } = input;
+  validateSlotGenerationDate(date, timeZone);
+
+  // Today is allowed but slots already in the past today should be skipped (issue #288).
+  const inputWithCutoff = {
+    ...input,
+    timeZone,
+    skipBefore: new Date(),
+  };
+
   let proposedSlots: ReturnType<typeof buildSlotRanges>;
   try {
-    proposedSlots = buildSlotRanges(input);
+    proposedSlots = buildSlotRanges(inputWithCutoff);
   } catch (error) {
     throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
   }
@@ -51,7 +94,7 @@ export async function generateSlots(input: GenerateSlotsInput) {
   );
   let rows: ReturnType<typeof buildSlotRanges>;
   try {
-    rows = buildSlotRanges(input, existing);
+    rows = buildSlotRanges(inputWithCutoff, existing);
   } catch (error) {
     throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
   }
@@ -85,5 +128,13 @@ export async function getSlotTimesByIds(slotIds: string[]): Promise<Map<string, 
 }
 
 export async function assertCanGenerateFor(userId: string, doctorProfileId: string) {
-  await doctorsService.assertOwnsDoctorProfile(userId, doctorProfileId);
+  return doctorsService.assertOwnsDoctorProfile(userId, doctorProfileId);
+}
+
+export function getNextAvailableSlots(doctorProfileIds: string[], now = new Date()): Promise<Map<string, Date>> {
+  return availabilityRepo.findNextAvailableSlotTimes(doctorProfileIds, now);
+}
+
+export function getDoctorIdsWithAvailableSlotsBefore(before: Date, now = new Date()): Promise<string[]> {
+  return availabilityRepo.findDoctorProfileIdsWithAvailableSlotsBefore(before, now);
 }

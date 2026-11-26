@@ -16,8 +16,10 @@
 //      named like known payload loaders, .gitignore payload markers, npm
 //      lifecycle/dev/build/start scripts, lockfile entries from outside the
 //      npm registry or crates.io, Go module `replace` directives.
-//   5. The same path checks pass for every non-merge commit in the PR's
-//      history, so a payload added and then deleted still holds the PR.
+//   5. The same path checks pass for every commit in the PR's history except
+//      GitHub's own update-branch merges, so a payload added and then deleted
+//      still holds the PR. For a contributor's own merge of `main`, only what
+//      the merge adds beyond both parents is judged (see introducedPaths).
 //   6. Every commit was authored and committed by the PR author, a known AI
 //      coding tool identity, or GitHub itself (an update-branch merge). A
 //      commit from anyone else (a third-party pusher, a forged maintainer
@@ -138,15 +140,43 @@ async function review({ github, owner, repo, pr }) {
         break;
       }
       // History: payload files that were added and later removed.
-      const { data: detail } = await github.rest.repos.getCommit({ owner, repo, ref: c.sha });
-      for (const f of detail.files || []) {
-        if (f.status === 'removed') continue;
-        reasons.push(...pathReasons(f.filename, `commit ${short}`));
+      for (const path of await introducedPaths({ github, owner, repo, commit: c })) {
+        reasons.push(...pathReasons(path, `commit ${short}`));
       }
     }
   }
 
   return [...new Set(reasons)];
+}
+
+// Paths a commit adds or changes that the path rules should judge.
+//
+// For an ordinary commit that's every file it touches. A contributor's own
+// merge of `main` is different: GitHub lists its files against the first
+// parent (the PR branch), so everything `main` changed in between shows up as
+// if the contributor had written it, and any workflow change on `main` would
+// hold the PR. For a two-parent merge, only a file that differs from BOTH
+// parents counts: a conflict resolution, a file both sides edited, or
+// something slipped into the merge. A file identical to one parent's version
+// came from that side unchanged: `main`'s side is trusted, and the PR side's
+// commits are listed in the PR and checked one by one.
+//
+// When the comparison can't be complete (octopus merges, or more files than
+// the compare API returns), every file counts, as before.
+async function introducedPaths({ github, owner, repo, commit }) {
+  const { data: detail } = await github.rest.repos.getCommit({ owner, repo, ref: commit.sha });
+  const changed = (detail.files || []).filter((f) => f.status !== 'removed');
+  if (commit.parents.length !== 2) return changed.map((f) => f.filename);
+
+  const COMPARE_FILE_LIMIT = 300;
+  const { data: cmp } = await github.rest.repos.compareCommitsWithBasehead({
+    owner, repo, basehead: `${commit.parents[1].sha}...${commit.sha}`, per_page: 100,
+  });
+  const fromSecond = cmp.files || [];
+  if (fromSecond.length >= COMPARE_FILE_LIMIT) return changed.map((f) => f.filename);
+
+  const differsFromSecond = new Set(fromSecond.filter((f) => f.status !== 'removed').map((f) => f.filename));
+  return changed.map((f) => f.filename).filter((p) => differsFromSecond.has(p));
 }
 
 function pathReasons(path, where) {
@@ -177,4 +207,5 @@ function patchReasons(path, patch) {
 }
 
 module.exports.review = review;
+module.exports.introducedPaths = introducedPaths;
 module.exports.patchReasons = patchReasons;

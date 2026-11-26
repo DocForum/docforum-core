@@ -1,10 +1,27 @@
 import type { Request, Response } from 'express';
 import { once } from 'node:events';
 import * as patientsService from '../services';
-import { createDependentSchema, deleteAccountSchema } from '../validation';
+import { createDependentSchema, deleteAccountSchema, updatePatientProfileSchema } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { LoginThrottledError } from '../../auth/services';
+import { expectedVersion, setVersionEtag } from '../../../middleware/optimistic-concurrency';
+
+// Phase 2, issue #272: patient profile read/update with optimistic concurrency.
+export async function getMe(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const profile = await patientsService.getMyPatientProfile(req.user.id);
+  setVersionEtag(res, profile.version);
+  res.status(200).json(profile);
+}
+
+export async function updateMe(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const input = updatePatientProfileSchema.parse(req.body);
+  const profile = await patientsService.updateMyPatientProfile(req.user.id, expectedVersion(req), input);
+  setVersionEtag(res, profile.version);
+  res.status(200).json(profile);
+}
 
 // Phase 8, issue #40 — right of access. The subject is always `req.user`;
 // no route here accepts a patient id.

@@ -3,9 +3,13 @@ import type { Prisma } from '@prisma/client';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
-export function findOpenSlots(doctorProfileId: string) {
+export function findOpenSlots(doctorProfileId: string, from: Date, to: Date) {
   return prisma.availabilitySlot.findMany({
-    where: { doctorProfileId, status: 'open', startTime: { gte: new Date() } },
+    where: {
+      doctorProfileId,
+      status: 'open',
+      startTime: { gte: from, lte: to },
+    },
     orderBy: { startTime: 'asc' },
   });
 }
@@ -30,6 +34,47 @@ export function findExistingSlotRanges(doctorProfileId: string, startTime: Date,
 
 export function createSlots(rows: { doctorProfileId: string; startTime: Date; endTime: Date }[]) {
   return prisma.availabilitySlot.createMany({ data: rows });
+}
+
+export async function findNextAvailableSlotTimes(
+  doctorProfileIds: string[],
+  now = new Date(),
+): Promise<Map<string, Date>> {
+  if (doctorProfileIds.length === 0) return new Map();
+  const slots = await prisma.availabilitySlot.findMany({
+    where: {
+      doctorProfileId: { in: doctorProfileIds },
+      status: 'open',
+      startTime: { gte: now },
+    },
+    orderBy: { startTime: 'asc' },
+    select: { doctorProfileId: true, startTime: true },
+  });
+  const nextByDoctorId = new Map<string, Date>();
+  for (const slot of slots) {
+    if (!nextByDoctorId.has(slot.doctorProfileId)) {
+      nextByDoctorId.set(slot.doctorProfileId, slot.startTime);
+    }
+  }
+  return nextByDoctorId;
+}
+
+export async function findDoctorProfileIdsWithAvailableSlotsBefore(
+  before: Date,
+  now = new Date(),
+): Promise<string[]> {
+  const slots = await prisma.availabilitySlot.findMany({
+    where: {
+      status: 'open',
+      startTime: {
+        gte: now,
+        lt: before,
+      },
+    },
+    select: { doctorProfileId: true },
+    distinct: ['doctorProfileId'],
+  });
+  return slots.map((s) => s.doctorProfileId);
 }
 
 /**

@@ -1,22 +1,41 @@
 import express from 'express';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
 import { registerPatientExportSections } from './export-sections';
 import { requestId } from './middleware/request-id';
+import { securityHeaders } from './middleware/security-headers';
 import * as moduleMounts from './mounts';
 import { registerRetentionHolds } from './retention-holds';
 import { getReadiness } from './health/readiness';
 import { runWithRlsContext } from './db/prisma-client';
+import { HttpError } from './http-error';
+import * as authService from './modules/auth/services';
+import * as notificationsService from './modules/notifications/services';
+import { createPostmarkAdapter } from './modules/notifications/channels/postmark';
+import { createTwilioAdapter } from './modules/notifications/channels/twilio';
+
+let notificationAdaptersRegistered = false;
 
 export function createApp() {
   const app = express();
+  // Phase 8, issue #332: don't advertise the framework.
+  app.disable('x-powered-by');
 
   // Phase 8, issue #40: idempotent, so building the app twice is harmless.
   registerPatientExportSections();
   // Phase 8, issue #41: idempotent, so building the app twice is harmless.
   registerRetentionHolds();
+  // Provider adapters receive recipients through auth's exported service;
+  // they never cross the module boundary into the User repository.
+  if (!notificationAdaptersRegistered) {
+    notificationsService.registerChannelAdapter(createPostmarkAdapter(async (id) => (await authService.getNotificationRecipient(id))?.email ?? null));
+    notificationsService.registerChannelAdapter(createTwilioAdapter(async (id) => (await authService.getNotificationRecipient(id))?.phone ?? null));
+    notificationAdaptersRegistered = true;
+  }
 
   // Phase 8, issue #35: login throttling keys on the client IP, so the
   // proxy chain has to be resolved deliberately rather than guessed. See
@@ -31,6 +50,9 @@ export function createApp() {
   // issue #46: the same middleware attaches a request-scoped child logger
   // (`req.log`) so every log line in a request can be greped by that id.
   app.use(requestId);
+  // Phase 8, issue #332: before CORS and every route, so preflights, 401s
+  // and error responses carry the headers too.
+  app.use(securityHeaders(config.securityHeaders));
   app.use(cors({ origin: config.corsOrigins, credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
@@ -45,9 +67,24 @@ export function createApp() {
   });
   // Keep the original liveness path for existing monitors and clients.
   app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
+  if (config.notifications.openapi.expose) {
+    // Load the static contract once at startup. Keeping filesystem access out
+    // of the request handler avoids turning this public route into an
+    // unbounded per-request file read.
+    const openApiPath = join(process.cwd(), process.cwd().endsWith('/backend') ? 'openapi.json' : 'backend/openapi.json');
+    const openApiDocument = readFileSync(openApiPath, 'utf8');
+    app.get('/openapi.json', (_req, res) => res.type('application/json').send(openApiDocument));
+  }
 
   // Each module mounts its own routes (src/mounts.ts, one line per module).
   for (const mount of Object.values(moduleMounts)) mount(app);
+
+  // Issue #332: an unmatched route answers with the JSON error envelope
+  // instead of Express's built-in HTML page, so the API never serves HTML
+  // (and that page can't replace the security headers set above).
+  app.use(() => {
+    throw new HttpError(404, 'Not found.');
+  });
 
   // Must be registered last — Express only routes errors here once every
   // other handler has had a chance to run.

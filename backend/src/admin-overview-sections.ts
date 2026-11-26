@@ -24,5 +24,8 @@ const SECTIONS: AdminOverviewSectionDefinition[] = [
 ];
 
 export const getAdminOverview = createOverviewCache(() => runOverviewSections(SECTIONS));
+export const resetAdminOverviewCache = () => {
+  getAdminOverview.reset();
+};
 
 export type { AdminOverview };

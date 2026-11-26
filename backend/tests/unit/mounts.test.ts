@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { Express } from 'express';
 import * as moduleMounts from '../../src/mounts';
 import { adminAuthRouter, authRouter } from '../../src/modules/auth/routes';
-import { adminDoctorsRouter, doctorsRouter, specialtiesRouter } from '../../src/modules/doctors/routes';
+import {
+  adminDoctorsRouter,
+  doctorsRouter,
+  specialtiesRouter,
+  symptomsRouter,
+} from '../../src/modules/doctors/routes';
 import { availabilityRouter } from '../../src/modules/availability/routes';
 import { appointmentsRouter } from '../../src/modules/appointments/routes';
 import {
@@ -16,7 +21,8 @@ import { labResultsRouter } from '../../src/modules/orders/routes/lab-results';
 import { metricsRouter } from '../../src/modules/metrics/routes';
 import { pharmacyOrdersRouter } from '../../src/modules/pharmacy-orders/routes';
 import { labOrdersRouter } from '../../src/modules/lab-orders/routes';
-import { paymentsRouter } from '../../src/modules/payments/routes';
+import { labTestsRouter } from '../../src/modules/lab-tests/routes';
+import { paymentsAdminRouter, paymentsRouter } from '../../src/modules/payments/routes';
 import { escrowEventsRouter } from '../../src/modules/payments/routes/escrow-events';
 import { facilitiesRouter } from '../../src/modules/facilities/routes';
 import { patientsRouter } from '../../src/modules/patients/routes';
@@ -38,6 +44,8 @@ const EXPECTED: Array<[string, unknown]> = [
   ['/admin', adminDoctorsRouter],
   ['/doctors', doctorsRouter],
   ['/specialties', specialtiesRouter],
+  // Issue #60: public symptom vocabulary / autocomplete.
+  ['/symptoms', symptomsRouter],
   ['/availability', availabilityRouter],
   ['/appointments', appointmentsRouter],
   ['/appointments', appointmentConsultationsRouter],
@@ -47,6 +55,7 @@ const EXPECTED: Array<[string, unknown]> = [
   ['/lab-results', labResultsRouter],
   ['/pharmacy-orders', pharmacyOrdersRouter],
   ['/lab-orders', labOrdersRouter],
+  ['/lab-tests', labTestsRouter],
   ['/admin', adminOrdersRouter],
   ['/admin', metricsRouter],
   ['/payments', paymentsRouter],
@@ -56,6 +65,7 @@ const EXPECTED: Array<[string, unknown]> = [
   ['/admin/outbox', outboxAdminRouter],
   ['/admin', auditRouter],
   ['/admin/payments', escrowEventsRouter],
+  ['/admin/payments', paymentsAdminRouter],
   ['/admin', adminAuditRouter],
   ['/patients', patientAuditRouter],
   ['/referrals', referralsRouter],

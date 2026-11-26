@@ -1,6 +1,8 @@
+import { once } from 'node:events';
 import type { Request, Response } from 'express';
 import * as paymentsService from '../services';
-import { walletLinkSchema, paymentHistoryQuerySchema } from '../validation';
+import { walletLinkSchema, paymentHistoryQuerySchema, ledgerCsvQuerySchema } from '../validation';
+import { logger as rootLogger } from '../../../logger';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
@@ -42,7 +44,7 @@ export async function linkWallet(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   // strict schema: rejects any raw-address field outright.
   const { transaction } = walletLinkSchema.parse(req.body);
-  const link = await paymentsService.linkWalletViaSep10(req.user.id, req.user.role, transaction);
+  const link = await paymentsService.linkWalletViaSep10(req.user.id, req.user.role, transaction, auditActor(req));
   // Patient links always carry the ADR 0005 on-chain privacy notice,
   // verbatim, in the response body — a client cannot render success
   // without it (issue #78 requirement 3). Facility links (payout
@@ -59,6 +61,21 @@ export async function getOwnWallet(req: Request, res: Response) {
   const link = await paymentsService.getOwnWalletLink(req.user.id, req.user.role);
   if (!link) throw new HttpError(404, 'No wallet linked yet.');
   res.status(200).json(link);
+}
+
+/** GET /admin/payments/wallet-links/pending (issue #328): facility payout
+ * changes still inside their cool-down, with the address each replaces. */
+export async function listPendingWalletLinks(_req: Request, res: Response) {
+  res.status(200).json({ items: await paymentsService.listPendingFacilityWalletLinks() });
+}
+
+/** GET /admin/payments/fee-sponsor (issue #82): sponsor balance, spend per
+ * window and top consumers. */
+export async function getFeeSponsorStatus(_req: Request, res: Response) {
+  res.status(200).json({
+    sponsorPublicKey: process.env.PLATFORM_FEE_SPONSOR_PUBLIC_KEY ?? process.env.PLATFORM_PAYER_PUBLIC_KEY ?? null,
+    ...paymentsService.feeSponsorshipSnapshot(),
+  });
 }
 
 export async function getIntent(req: Request, res: Response) {
@@ -79,6 +96,19 @@ export async function prepareIntent(req: Request, res: Response) {
     xdr: prepared.xdr,
     txHash: prepared.txHash,
     expiryLedger: prepared.expiryLedger,
+  });
+}
+
+export async function submitIntent(req: Request, res: Response) {
+  const id = getParam(req, 'id');
+  const signedXdr = String((req.body as { signedXdr?: unknown })?.signedXdr ?? '');
+  if (!signedXdr) throw new HttpError(400, 'signedXdr is required.');
+  const result = await paymentsService.submitPaymentIntent(auditActor(req), id, signedXdr);
+  setVersionEtag(res, result.intent.version);
+  res.status(200).json({
+    ...serializeIntent(result.intent),
+    escrowId: result.escrowId?.toString() ?? null,
+    stellarTxHash: result.stellarTxHash,
   });
 }
 
@@ -113,6 +143,35 @@ export async function listFacilityLedger(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const filters = paymentHistoryQuerySchema.parse(req.query);
   res.status(200).json(await paymentsService.listFacilityPaymentLedger(req.user.id, filters));
+}
+
+/** GET /payments/facility/ledger.csv (issue #329). Streamed: each page is
+ * written as it is read, honouring backpressure, and the read loop stops
+ * as soon as the client disconnects. */
+export async function exportFacilityLedgerCsv(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const filters = ledgerCsvQuerySchema.parse(req.query);
+  // Authorises (403 for a non-facility caller) before any CSV header goes out.
+  const chunks = await paymentsService.openFacilityLedgerCsv(req.user.id, filters);
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="facility-ledger.csv"');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  try {
+    for await (const chunk of chunks) {
+      if (res.destroyed) break;
+      if (!res.write(chunk)) await once(res, 'drain');
+    }
+    res.end();
+  } catch (err) {
+    // Headers are already sent, so the JSON error envelope is impossible.
+    // Abort the connection: a truncated download must not look complete.
+    (req.log ?? rootLogger).error({ err }, 'Facility ledger CSV export failed mid-stream');
+    res.destroy();
+  }
 }
 
 // SEP-10 Stellar Web Authentication (issue #77) — see ./sep10.ts.

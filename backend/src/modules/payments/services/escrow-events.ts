@@ -1,6 +1,8 @@
 import { prisma } from '../../../db/prisma-client';
 import { config } from '../../../config';
 import { decodeEscrowRpcEvent } from './escrow-event-decoder';
+import { HttpError } from '../../../http-error';
+import { logger } from '../../../logger';
 
 type ContractConfig = (typeof config.payments.escrowContracts)[number];
 type ChainAlert = {
@@ -19,7 +21,7 @@ function isRetentionError(error: unknown): boolean {
 
 async function notifyUnmatched(alert: ChainAlert): Promise<void> {
   // Keep the alert useful without including patient data or secrets.
-  console.error('[security:high] unmatched escrow terminal event', alert);
+  logger.error({ alert }, '[security:high] unmatched escrow terminal event');
   const url = config.payments.escrowEventAlertWebhookUrl;
   if (!url) return;
   try {
@@ -29,9 +31,12 @@ async function notifyUnmatched(alert: ChainAlert): Promise<void> {
       body: JSON.stringify({ severity: 'high', kind: 'unmatched_escrow_event', ...alert }),
       signal: AbortSignal.timeout(5_000),
     });
-    if (!response.ok) console.error('[security:high] escrow alert hook returned non-success status', response.status);
+    if (!response.ok) logger.error({ status: response.status }, '[security:high] escrow alert hook returned non-success status');
   } catch (error) {
-    console.error('[security:high] escrow alert hook failed', error instanceof Error ? error.name : typeof error);
+    logger.error(
+      { error: error instanceof Error ? error.name : typeof error },
+      '[security:high] escrow alert hook failed',
+    );
   }
 }
 
@@ -136,26 +141,62 @@ export async function pollEscrowContractEvents(): Promise<void> {
           data: { catchupError },
         });
       }
-      console.error('[jobs] escrow event poll failed', {
-        contractId: contract.contractId,
-        error: error instanceof Error ? error.name : typeof error,
-      });
+      logger.error(
+        { contractId: contract.contractId, error: error instanceof Error ? error.name : typeof error },
+        '[jobs] escrow event poll failed',
+      );
     }
   }
   await reconcilePending();
 }
 
-export async function listEscrowEvents(limit: number, state?: 'pending' | 'matched' | 'unmatched') {
-  const [items, cursors] = await Promise.all([
+type EscrowEventsCursor = { detectedAt: Date; id: string };
+
+/** Opaque keyset cursor over the endpoint's `detectedAt desc, id desc` order. */
+export function encodeEscrowEventsCursor(item: { detectedAt: Date; id: string }): string {
+  return Buffer.from(`${item.detectedAt.toISOString()}|${item.id}`, 'utf8').toString('base64url');
+}
+
+export function decodeEscrowEventsCursor(cursor: string): EscrowEventsCursor {
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const separator = raw.indexOf('|');
+  const detectedAt = new Date(raw.slice(0, separator));
+  const id = raw.slice(separator + 1);
+  if (separator < 1 || Number.isNaN(detectedAt.getTime()) || !id) {
+    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+  }
+  return { detectedAt, id };
+}
+
+export async function listEscrowEvents(
+  limit: number,
+  state?: 'pending' | 'matched' | 'unmatched',
+  cursor?: string,
+) {
+  const after = cursor ? decodeEscrowEventsCursor(cursor) : undefined;
+  const [rows, cursors] = await Promise.all([
     prisma.escrowChainEvent.findMany({
-      where: state ? { state } : {},
+      where: {
+        ...(state ? { state } : {}),
+        ...(after
+          ? {
+              OR: [
+                { detectedAt: { lt: after.detectedAt } },
+                { detectedAt: after.detectedAt, id: { lt: after.id } },
+              ],
+            }
+          : {}),
+      },
       orderBy: [{ detectedAt: 'desc' }, { id: 'desc' }],
-      take: limit,
+      take: limit + 1,
     }),
     prisma.escrowEventCursor.findMany({ orderBy: { contractId: 'asc' } }),
   ]);
+  const items = rows.slice(0, limit);
+  const last = items[items.length - 1];
   return {
     items: items.map((event) => ({ ...event, escrowId: event.escrowId?.toString() ?? null })),
     cursors,
+    nextCursor: rows.length > limit && last ? encodeEscrowEventsCursor(last) : null,
   };
 }

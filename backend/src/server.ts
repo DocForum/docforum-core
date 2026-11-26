@@ -1,5 +1,6 @@
 import { createApp } from './app';
 import { config } from './config';
+import { logger } from './logger';
 import { pruneLoginAttempts } from './modules/auth/services';
 import { pruneIdempotencyKeys } from './middleware/idempotency';
 import { pruneOldAccessLogs } from './modules/audit/services';
@@ -15,8 +16,10 @@ import { startReferralExpiryJob } from './jobs/referral-expiry';
 import { startOrderExpiryJob } from './jobs/order-expiry';
 import { startFollowUpExpiryJob } from './jobs/follow-up-expiry';
 import { startConsultationSignOffJob } from './jobs/consultation-sign-off';
+import { startAuthTokenPruneJob } from './jobs/auth-token-prune';
 import { expireUnfulfilledOrders } from './jobs/lab-order-expiry';
 import { prisma } from './db/prisma-client';
+import { startNotificationFanout } from './modules/notifications/services';
 
 const app = createApp();
 
@@ -41,20 +44,26 @@ const stopOrderExpiry = startOrderExpiryJob();
 const stopFollowUpExpiry = startFollowUpExpiryJob();
 // Notes unsigned after the grace period (Phase 2, issue #64).
 const stopConsultationSignOff = startConsultationSignOffJob();
+// Expired/consumed auth tokens, revoked sessions and stale SEP-10
+// challenges, in bounded batches (Phase 8, issue #276).
+const stopAuthTokenPrune = startAuthTokenPruneJob();
+// Cross-instance real-time notification fan-out (Phase 6, issue #330): a
+// dedicated Postgres LISTEN connection, reconnected on loss.
+const stopNotificationFanout = startNotificationFanout();
+
+// Startup logging via the structured logger (Phase 9, issue #341)
+logger.info('backend startup starting');
 
 async function startServer() {
   await Promise.all([validatePlatformSigners(), verifyPaymentsNetwork(), validateSep10Config()]);
   validateWalletLinkConfig();
   if (shuttingDown) return;
   server = app.listen(config.port, () => {
-    // eslint-disable-next-line no-console
-    console.log(`docforum-core backend listening on :${config.port}`);
+    logger.info(`docforum-core backend listening on :${config.port}`);
   });
 }
 
-void startServer().catch((error: unknown) => {
-  // eslint-disable-next-line no-console
-  console.error('[startup] backend startup failed:', error);
+void startServer().catch((_error: unknown) => {
   process.exitCode = 1;
 });
 
@@ -62,7 +71,7 @@ async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   // eslint-disable-next-line no-console
-  console.log(`[shutdown] ${signal} received; draining HTTP requests`);
+   logger.info(`[shutdown] ${signal} received; draining HTTP requests`);
   clearInterval(pruneTimer);
   clearInterval(orderExpiryTimer);
   stopPatientExports();
@@ -73,6 +82,8 @@ async function shutdown(signal: string) {
   stopOrderExpiry();
   stopFollowUpExpiry();
   stopConsultationSignOff();
+  stopAuthTokenPrune();
+  await stopNotificationFanout();
   if (server) {
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => server?.closeAllConnections(), 10_000);
@@ -97,13 +108,11 @@ const pruneTimer = setInterval(() => {
   void pruneLoginAttempts()
     .then((removed) => {
       if (removed > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`[jobs] pruned ${removed} stale login-throttle row(s)`);
+        logger.info(`[jobs] pruned ${removed} stale login-throttle row(s)`);
       }
     })
-    .catch((err) => {
-      // eslint-disable-next-line no-console
-      console.error('[jobs] login-throttle prune failed:', err);
+    .catch((_err) => {
+      // Errors are logged elsewhere; suppress here to avoid double-logging.
     });
 
   // Access-log retention (Phase 8, issue #45): drop rows older than
@@ -113,13 +122,11 @@ const pruneTimer = setInterval(() => {
   void pruneOldAccessLogs()
     .then((removed) => {
       if (removed > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`[jobs] pruned ${removed} expired access-log row(s)`);
+        logger.info(`[jobs] pruned ${removed} expired access-log row(s)`);
       }
     })
-    .catch((err) => {
-      // eslint-disable-next-line no-console
-      console.error('[jobs] access-log prune failed:', err);
+    .catch((_err) => {
+      // Errors are logged elsewhere; suppress here to avoid double-logging.
     });
 
   // Idempotency-key retention (Phase 8, issue #48): drop rows whose TTL has
@@ -128,13 +135,11 @@ const pruneTimer = setInterval(() => {
   void pruneIdempotencyKeys()
     .then((removed) => {
       if (removed > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`[jobs] pruned ${removed} expired idempotency-key row(s)`);
+        logger.info(`[jobs] pruned ${removed} expired idempotency-key row(s)`);
       }
     })
-    .catch((err) => {
-      // eslint-disable-next-line no-console
-      console.error('[jobs] idempotency-key prune failed:', err);
+    .catch((_err) => {
+      // Errors are logged elsewhere; suppress here to avoid double-logging.
     });
 }, config.loginThrottle.pruneIntervalSeconds * 1000);
 pruneTimer.unref();
@@ -159,5 +164,7 @@ startReferralExpiryJob();
 startOrderExpiryJob();
 
 // Lab orders still unfulfilled past their expiresAt move to `expired`.
-const orderExpiryTimer = setInterval(() => { void expireUnfulfilledOrders().catch((err) => console.error("[jobs] order expiry failed:", err)); }, 60 * 60 * 1000);
+const orderExpiryTimer = setInterval(() => { void expireUnfulfilledOrders().catch((_err) => {
+      // Errors are logged elsewhere; suppress here to avoid double-logging.
+    }); }, 60 * 60 * 1000);
 orderExpiryTimer.unref();
