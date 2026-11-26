@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
+import { idempotency } from '../../../middleware/idempotency';
 import * as referralsController from '../controllers';
 
 export const referralsRouter = Router();
@@ -32,6 +33,7 @@ referralsRouter.post(
   authenticate,
   requireRole('patient'),
   requireVerifiedEmail,
+  idempotency(),
   referralsController.accept,
 );
 referralsRouter.post(
