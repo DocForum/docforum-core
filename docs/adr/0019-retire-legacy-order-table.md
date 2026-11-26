@@ -1,7 +1,7 @@
-# ADR 0015 — Retire the Legacy `Order` / `FulfillmentProof` / `OrderDispute` Tables
+# ADR 0019: Retire the Legacy `Order` / `FulfillmentProof` / `OrderDispute` Tables
 
 **Status:** Proposed  
-**Date:** 2024-01-01  
+**Date:** 2026-11-23  
 **Issue:** [#315](https://github.com/DocForum/docforum-core/issues/315)
 
 ## Context
