@@ -1,0 +1,1 @@
+Added all backend environment variables to `.env.example` and introduced a CI parity script (`npm run check:env`) to ensure `.env.example` stays in sync with `src/` configuration usage.
