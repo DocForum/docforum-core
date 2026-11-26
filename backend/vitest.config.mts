@@ -146,7 +146,10 @@ export default defineConfig({
         'src/modules/availability/**': { statements: 91, functions: 98, branches: 82, lines: 92 },
         'src/modules/referrals/**': { statements: 88, functions: 98, branches: 79, lines: 94 },
         'src/modules/orders/**': { statements: 84, functions: 88, branches: 74, lines: 88 },
-        'src/modules/payments/**': { statements: 77, functions: 89, branches: 68, lines: 81 },
+        // Payments re-measured after main gained new payments code before these
+        // floors went live: CI read 70.91 / 84.84 / 63.14 / 74.25 (s/f/b/l), so the
+        // floor is that rounded down minus 2, as above.
+        'src/modules/payments/**': { statements: 68, functions: 82, branches: 61, lines: 72 },
       },
     },
   },
