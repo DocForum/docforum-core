@@ -1,4 +1,4 @@
-// Lab result attachment (Phase 5, issue #16 — docs/adr/0014) — integration
+// Lab result attachment (Phase 5, issue #16 — docs/adr/0018) — integration
 // coverage against a real Postgres and the full HTTP stack, with the
 // in-process object store standing in for S3 (OBJECT_STORAGE_DRIVER=memory,
 // set in vitest.config.mts).

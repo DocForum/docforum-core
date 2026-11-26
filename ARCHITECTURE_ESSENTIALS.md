@@ -8,9 +8,9 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 - Auth: JWT access + refresh, roles = `patient | doctor | facility | admin`. The refresh cookie is `SameSite=None` cross-site, so `/auth/refresh` + `/auth/logout` require an `X-CSRF-Token` header (a per-session token bound into the refresh JWT) and an allowlisted `Origin` — see `backend/src/middleware/csrf.ts`. CORS is an explicit per-environment allowlist (`CORS_ORIGINS`).
 - Frontend: React + TypeScript + Vite, React Query + Zustand.
 - Video/voice, SMS/email, file storage: **third-party, behind an interface** — never build custom.
-- Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue. Existing interval jobs: login-throttle prune (`src/server.ts`), patient-export worker/cleanup (`src/jobs/patient-exports.ts`) and deleted-account tombstone purge (`src/jobs/account-purge.ts`), all started only from `server.ts`.
+- Jobs: keep it simple (cron/interval) until a real job exists; don't pre-install a queue — the transactional outbox in `src/jobs/outbox-events.ts` is the durable dispatch path, not an external queue. Currently started from `src/server.ts`: login-throttle + access-log + idempotency-key prune (`src/server.ts`), patient-export worker/cleanup (`src/jobs/patient-exports.ts`), escrow event poller (`escrow-events.ts`), outbox dispatcher (`outbox-events.ts`), lab-result escalation (`lab-result-escalation.ts`), deleted-account tombstone purge (`account-purge.ts`), prepared-payment expiry (`payment-intents.ts`), referral expiry (`referral-expiry.ts`), unconfirmed-order expiry (`order-expiry.ts`), lab-order expiry (`lab-order-expiry.ts`), follow-up expiry (`follow-up-expiry.ts`), consultation sign-off (`consultation-sign-off.ts`), auth-artifact prune (`auth-token-prune.ts`), and the Postgres LISTEN notification fan-out (`modules/notifications/services`). CI schedules (daily backup restore drill, nightly testnet payments, nightly property tests, 3-hourly PR conflict notifier) are separate; `infra/render.staging.yaml` defines no deploy-level scheduler.
 - New module holding patient data? Register a patient-export section (ARCHITECTURE.md §3.1) — right of access must stay complete.
-- File storage = **Amazon S3**, private bucket (`docs/adr/0014`, issue #16), only through `src/utils/object-storage.ts`. Never return an object key or a public/presigned URL: clinical files are served by the API after an access check.
+- File storage = **Amazon S3**, private bucket (`docs/adr/0018`, issue #16), only through `src/utils/object-storage.ts`. Never return an object key or a public/presigned URL: clinical files are served by the API after an access check.
 
 ## Hard rules (violating these = request changes on the PR)
 1. **Never mutate a `Prescription` or `LabOrder` after issuance.** Corrections = new row with `supersedes_*_id`.
@@ -20,6 +20,10 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 5. **Facilities write to their own `FulfillmentRecord` only** — never directly to `Prescription.status` / `LabOrder.status`.
 6. Every module = `routes/ controllers/ services/ repositories/`. Keep that shape.
 7. **Mutable-record edits use optimistic concurrency (Phase 8, issue #49).** Individual-resource read returns a strong version `ETag` (`"4"`); PATCH/PUT must send it in `If-Match` — missing is `428`, weak/list/garbage is `400`, stale is `412`. Write it as ONE conditional `UPDATE ... WHERE id = ? AND version = ?` that increments `version` (Prisma: `updateManyAndReturn`); read-compare-write is forbidden. Status transitions that are *already* conditional (booking, payment status, verification) keep their own guard, don't get a second `If-Match` one, but still bump + republish the version. Append-only `Prescription`/`LabOrder` are excluded. See ARCHITECTURE.md §5.4.
+8. **A signed `Consultation` note is immutable.** Once `signedAt` is set, the
+   note and the sign-off cannot change (repository conditional UPDATE + DB
+   trigger); corrections are new append-only `ConsultationAddendum` rows.
+   Consultation messages and addenda are append-only in the same way.
 
 ## Data model map (see ARCHITECTURE.md §4 for full field lists)
 `User` (including `locale`, default `en`, Phase 9 #133) → `PatientProfile | DoctorProfile | FacilityProfile`; `User` → `AdminInvite` (Phase 8, issue #39 — hashed/expiring/single-use; `User.deactivatedAt` soft-deactivates an account, refusing login/refresh/access tokens without deleting anything)
@@ -38,9 +42,21 @@ Quick-reference only. Full reasoning lives in `ARCHITECTURE.md`. Full product sc
 `LoginAttempt` (Phase 8, issue #35 — Postgres-backed login throttle buckets, one per normalised email and per client IP; counters move only via a conditional upsert).
 `PatientProfile` → `PatientExport` → `PatientExportChunk` (Phase 8, issue #40 — right-of-access export jobs + their chunked JSON bundle; each module contributes a section via its own service, registered in `src/export-sections.ts` — see ARCHITECTURE.md §3.1).
 Account deletion (Phase 8, issue #41 — docs/adr/0010): anonymise in place (`User.deletedAt`, `PatientProfile.anonymizedAt`), never cascade. `PatientProfile.userId` is ON DELETE RESTRICT; new patient-linked clinical tables must be RESTRICT too **and** register a retention hold in `src/retention-holds.ts`.
-`FacilityProfile` → `WalletLink` (payout address) ; `PatientProfile` → `PatientWalletLink` (payer address, ADR 0005) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85), whose `amount` is in the smallest unit of a per-environment allowlisted `assetCode` (issue #79)
+`FacilityProfile` → `WalletLink` (payout address; a re-link becomes the payee only at `effectiveAt`, after `WALLET_LINK_COOLDOWN_HOURS` — issue #328) ; `PatientProfile` → `PatientWalletLink` (payer address, ADR 0005) ; `Prescription` or `LabOrder` → exactly one typed `PaymentIntent` FK (issue #85), whose `amount` is in the smallest unit of a per-environment allowlisted `assetCode` (issue #79)
 
 Mutable records above (plus `Appointment` and `PaymentIntent`) carry a `version` int for the `ETag`/`If-Match` convention — hard rule 7, ARCHITECTURE.md §5.4. Mutable profile fields a new route exposes need a conditional write, not just a `.update()`.
+
+`Symptom` → `SymptomSpecialty` (issue #60 — curated, admin-managed symptom →
+specialty guidance with a 1–5 weight; public autocomplete via `/symptoms`,
+doctor search via `GET /doctors?symptom=<slug>` ranked by weight. A search
+aid, not a diagnosis and not ML; no PHI in either table — see ARCHITECTURE.md §4.15)
+
+`Consultation` (Phase 2, issues #61/#64) → `ConsultationMessage` (append-only,
+encrypted body) → `ConsultationMessageAttachment` (object storage; access-checked
+short-lived signed URLs), and → `ConsultationAddendum` (append-only, only after
+`Consultation.signedAt` is set). `Consultation` → `FollowUpRequest` (issue #63;
+one per consultation, immutable encrypted note snapshot, `open|booked|expired`,
+`bookedAppointmentId`) → `Appointment` with origin `follow_up`.
 
 ## Payments (Phase 5.5 — see docs/adr/0004-custodial-payments-v1.md)
 - **Custodial v1**: `docforum-core` holds its own Stellar payer + releaser identities (`PLATFORM_PAYER_SECRET`/`PLATFORM_RELEASER_SECRET` env vars today). Patients never hold or sign with a wallet — the only reason this is possible without violating `docforum-web`'s "no direct Stellar calls" hard rule. **Releaser custody is decided (issue #25, `docs/adr/0016-releaser-key-custody.md`):** a 2-of-4 Stellar multisig releaser for production escrows, per-escrow releaser recorded on the intent; until the SDK can collect the second signature, no production escrow is funded under the multisig.
@@ -55,7 +71,7 @@ Mutable records above (plus `Appointment` and `PaymentIntent`) carry a `version`
 - `AuditEvent` exists (§4.10 of ARCHITECTURE.md) and records booking (both booking paths), doctor verification, payment fund/release/refund, the patient's referral accept/decline and the referral admin actions — auth (the admin login-throttle clear), the referral's creation + cascade transitions, and the remaining Phase 4 order transitions are still unaudited. PRD §7 is not satisfied yet.
 - `IntakeForm` stores patient-owned structured symptoms and optional notes (issue #1); appointment linkage and booking-before-intake enforcement remain issue #2. `Referral.snapshotIntakeId` is still absent and must be an immutable copy when added.
 - ~~Polymorphic `FulfillmentRecord.order_id` is a sketch, not final — may need splitting into two tables~~ **Resolved (Phase 5 prerequisite, issue #13, `docs/adr/0012-fulfillment-record-typed-order-fks.md`):** one table, no polymorphism — `order_type`/`order_id` are replaced by real `prescription_id`/`lab_order_id` FKs (each unique, a CHECK requires exactly one) plus the `facility_id` FK, all `RESTRICT`. Splitting into two tables was considered and rejected. Consequences #14/#15 must honor: the row is created once per order by the facility-selection path, and `fulfilled` is reachable **only** through the facility's own conditional update (hard rule 5, ARCHITECTURE.md §5.3 step 5).
-- `AuditEvent` foundation exists (Phase 8, issue #43 — ARCHITECTURE.md §4.10): append-only (DB triggers), written by `auditService.record(tx, …)` **inside the same transaction** as the change. Wired for booking (direct and referral-origin), doctor verification, payment fund/release/refund, referral accept/decline and referral admin actions (`entity_type: 'Referral'`) — **Phase 4 transitions must call it when they're built.** There is one audit table: referral actions go into it, not into a second one. Never put PHI in `metadata`.
+- `AuditEvent` foundation exists (Phase 8, issue #43 — ARCHITECTURE.md §4.10): append-only (DB triggers), written by `auditService.record(tx, …)` **inside the same transaction** as the change. Wired for booking (direct and referral-origin), doctor verification, payment fund/release/refund, referral accept/decline and referral admin actions (`entity_type: 'Referral'`), and every wallet link (`entity_type: 'WalletLink'`, issue #328) — **Phase 4 transitions must call it when they're built.** There is one audit table: referral actions go into it, not into a second one. Never put PHI in `metadata`.
 - No email/SMS provider integrated yet (Phase 6, issue #17) — email verification (issue #34) therefore can't deliver its link on a hosted deployment; `backend/scripts/mark-email-verified.mjs` is the interim operator path.
 - One doctor = one calendar assumed; multi-facility doctors not modeled.
 - Non-custodial payments are only half-built: prepare exists (issue #80), submit/fee-bump does not, and the SEP-10 patient-wallet link flow that creates `PatientWalletLink` rows is not implemented. `PaymentIntent.refundAfter` uses the intent's `createdAt` as the order-expiry anchor because orders have no expiry field yet (Phase 4).
@@ -72,7 +88,7 @@ Mutable records above (plus `Appointment` and `PaymentIntent`) carry a `version`
 ## Where things live
 - Backend modules: `backend/src/modules/<name>/{routes,controllers,services,repositories}`
 - Data model source of truth: `backend/prisma/schema/` (one `.prisma` file per module; see its README)
-- Frontend: `frontend/src/{pages,components,features,hooks,services,store,types}`
+- Frontend: lives in [`docforum-web`](https://github.com/DocForum/docforum-web) (React + TypeScript + Vite); this repo is backend-only — see ROADMAP.md's org note and the superseded Phase 7.
 - Roadmap / status: `ROADMAP.md` — **must be updated on every contribution that changes scope or completes work**.
 
 
@@ -80,3 +96,4 @@ Mutable records above (plus `Appointment` and `PaymentIntent`) carry a `version`
 - EscrowEventCursor stores one pagination cursor per contract deployment; configure each historical deployment as ESCROW_CONTRACTS=CONTRACT_ID@START_LEDGER,...
 - EscrowChainEvent stores deduplicated Soroban events. The admin endpoint is GET /admin/payments/escrow-events.
 - Unmatched release/refund events are high-severity alerts; RPC retention loss is surfaced as catchupError and must be reconciled explicitly.
+- Operator actions for both cases are in [docs/runbooks/escrow-event-alerts.md](docs/runbooks/escrow-event-alerts.md) (issue #356): reading the endpoint, triaging an unmatched release or refund, pausing wallet funding, and recovering from a retention gap. The runbook also lists the controls that do not exist yet (no acknowledgement workflow, no dead-letter requeue, no switch for already-escrowed settlements).

@@ -66,13 +66,21 @@ export async function runOverviewSections(
 }
 
 /** Returns the cached overview while it is younger than the TTL, otherwise rebuilds it. */
-export function createOverviewCache(build: () => Promise<AdminOverview>, ttlMs = OVERVIEW_CACHE_TTL_MS, clock = Date.now) {
+export function createOverviewCache(
+  build: () => Promise<AdminOverview>,
+  ttlMs = OVERVIEW_CACHE_TTL_MS,
+  clock: () => number = () => Date.now(),
+) {
   let entry: { at: number; value: AdminOverview } | null = null;
-  return async (): Promise<AdminOverview> => {
+  const get = async (): Promise<AdminOverview> => {
     const current = clock();
     if (entry && current - entry.at < ttlMs) return entry.value;
     const value = await build();
     entry = { at: current, value };
     return value;
   };
+  get.reset = () => {
+    entry = null;
+  };
+  return get;
 }

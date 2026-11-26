@@ -54,6 +54,24 @@ and issue links.
 - [x] Doctor discovery: `GET /specialties`, `PUT /doctors/me/specialties`, and public verified-only `GET /doctors` with specialty, typo-tolerant name/specialty search, and keyset pagination. Tracked as [issue #23](https://github.com/DocForum/docforum-core/issues/23) and extended by [issue #128](https://github.com/DocForum/docforum-core/issues/128). `docforum-web` issue #1 can fetch slot details separately by doctor id.
 - [ ] Patient-facing view: my intake history. Not yet split into its own issue — small enough to fold into whichever of the above lands last, or split out later if it grows.
 - [x] In-person check-in + live queue position for the day's appointments. `POST /appointments/:id/check-in` (patient, own appointment, only within a window around the start — records `checkedInAt`), doctor start/complete transitions extended with `startedAt`/`completedAt` timestamps, and `GET /appointments/:id/queue` returning the patient's own position and an explainable estimated wait from the doctor's running-average delay (simple running average, not ML). Queue changes are exposed for polling; the notification stream (Phase 6) is not built yet, so no push path exists. Patients see only their own position — never other patients' details. Schema additions (`Appointment.checkedInAt`, `startedAt`, `completedAt`) recorded in ARCHITECTURE.md §4.2; endpoint docs in `docs/api/README.md`. Tracked as [issue #3](https://github.com/DocForum/docforum-core/issues/3) extension (High, 200 pts).
+- [x] Integration tests for the doctor's day view and the appointment status machine (issue #358): `GET /appointments/doctor/today` returns only the caller's own scheduled appointments that hold a slot, ordered by slot start, with the day taken from `DoctorProfile.timeZone` rather than the server or UTC; every legal transition out of `scheduled`, each illegal one (terminal status, too early, an unassignable status), an unknown id at 404 and another doctor at 403, and concurrent double transitions where exactly one request wins and the slot is freed once. `vi.useFakeTimers({ toFake: ['Date'] })` pins the clock so the suite does not depend on when CI runs. `backend/tests/integration/doctor-day-view-and-status-transitions.test.mts`.
+- [x] Symptom-to-specialty mapping for "search by symptom" ([issue #60](https://github.com/DocForum/docforum-core/issues/60)): a curated `Symptom` → `SymptomSpecialty` vocabulary (weights 1–5, admin-managed, starter set in the migration), `GET /symptoms?q=` autocomplete, `GET /doctors?symptom=` ranked by mapping strength, and admin CRUD at `/admin/symptoms`. Explicitly not ML (PRD §8.3.3) and never presented as medical advice; an unknown/retired/unmapped symptom is an empty result plus a `hint`, not an error. Models documented in ARCHITECTURE.md §4.15.
+- [x] Async consultation message thread between the patient and treating
+  doctor ([issue #61](https://github.com/DocForum/docforum-core/issues/61)).
+  Append-only `ConsultationMessage` with an encrypted body, cursor pagination,
+  participant-only access, a configurable closing window and a notification
+  outbox hook.
+- [x] Message attachments with access-checked, short-lived download URLs
+  ([issue #62](https://github.com/DocForum/docforum-core/issues/62)). JPEG/PNG/PDF
+  only with byte sniffing, EXIF/GPS stripping, per-user quota, signed URLs.
+- [x] Follow-up outcome creates a pre-filled follow-up booking request
+  ([issue #63](https://github.com/DocForum/docforum-core/issues/63)).
+  `FollowUpRequest` + immutable note snapshot, booking through the standard
+  conditional slot claim with origin `follow_up`, expiry sweep.
+- [x] Consultation note sign-off with append-only addenda
+  ([issue #64](https://github.com/DocForum/docforum-core/issues/64)).
+  `signedAt`, DB-level immutability after sign-off, `ConsultationAddendum`,
+  auto sign-off sweep.
 
 ## Phase 3 — Referrals
 **Status: In progress — issues #5, #7 and #65–#68 are implemented and tested (unit + 5 self-contained integration suites); #6 (routing ADR) and #8 (time-based expiry job) remain open. Original scope was #5–#8; #65–#68 were opened later against the same phase for loop detection, multi-referral, cascade and admin overrides.**
@@ -64,10 +82,12 @@ and issue links.
 - [x] Accepted referral auto-generates a pre-populated `Appointment` against the target doctor/specialty — patient does not re-enter intake (PRD FR-8, the core value prop) — folded into issue #7 above. **Done:** accept books through `appointments`' `bookForReferral` → the same `claimOpenSlot` conditional UPDATE as a direct booking (`origin: 'referral'`), with the slot belonging to the target doctor enforced; no shortcut writes an `Appointment` row.
 - [x] Referral expiry job (addresses PRD §8.1.3 "orphaned" pattern for referrals specifically). Tracked as [issue #8](https://github.com/DocForum/docforum-core/issues/8) (Medium, 150 pts) — depends on #5. **Done:** an interval sweep (`src/jobs/referral-expiry.ts`, no queue) expires `pending` referrals untouched for `REFERRAL_PENDING_TTL_DAYS` (default 14) via one conditional UPDATE; `expired` + `expiredReason = 'ttl'` is distinct from `declined`/`cancelled`, and the no-show cascade now records `no_show`. `accepted` referrals are never swept. Flagging the patient waits on Phase 6 notifications (the referring doctor's `referringDoctorNotifiedAt` seam is set).
 - [x] Referral loop detection + max-hop limit (PRD §8.1.2). Tracked as [issue #65](https://github.com/DocForum/docforum-core/issues/65) (High, 200 pts). **Done:** lineage via `parent_referral_id`, bounded CTE walk, strict rule (repeat doctor/specialty anywhere in the chain — including the GP return — flags for the admin queue), hard `422` on self-referral and on chains over `REFERRAL_MAX_HOPS` (default 4).
-- [x] Multiple simultaneous referrals from one consultation (PRD §8.2.4). Tracked as [issue #66](https://github.com/DocForum/docforum-core/issues/66) (High, 200 pts). **Done, including its ADR:** [`docs/adr/0006-multiple-referrals-per-consultation.md`](docs/adr/0006-multiple-referrals-per-consultation.md) records the decision (allowed; independent lifecycles, atomic all-or-none creation, grouped only for the patient view; no bundle table). Implementation: one snapshot copy per target, duplicate-specialty/doctor rejection, independent per-referral acceptance, patient list grouped by source consultation.
+- [x] Multiple simultaneous referrals from one consultation (PRD §8.2.4). Tracked as [issue #66](https://github.com/DocForum/docforum-core/issues/66) (High, 200 pts). **Done, including its ADR:** [`docs/adr/0017-multiple-referrals-per-consultation.md`](docs/adr/0017-multiple-referrals-per-consultation.md) records the decision (allowed; independent lifecycles, atomic all-or-none creation, grouped only for the patient view; no bundle table). Implementation: one snapshot copy per target, duplicate-specialty/doctor rejection, independent per-referral acceptance, patient list grouped by source consultation.
 - [x] Cascade rules when a referral-origin appointment is cancelled or no-shows (PRD §8.2.3). Tracked as [issue #67](https://github.com/DocForum/docforum-core/issues/67) (High, 200 pts). **Done:** run inside the appointment's status transaction; cancelled → referral back to `pending` with the slot released, first no-show → `pending` + `noShowCount`, second → `expired` + `referringDoctorNotifiedAt` (threshold is a v1 default, not a tuned value); all writes conditional so a doubled hook no-ops.
 - [x] Admin referral operations: queue, reassign stuck referrals, override routing, audited. Tracked as [issue #68](https://github.com/DocForum/docforum-core/issues/68) (Medium, 150 pts). **Done:** `GET /referrals/admin/queue` (status / `olderThan` / `loopFlagged` filters, derived reason + age), `POST /referrals/admin/:id/reassign` (pending only, target column only — snapshot untouched), `POST /referrals/admin/:id/cancel` (closes a live appointment through the appointments service), `GET /referrals/admin/:id/audit-events`; reassign/cancel write the first `AuditEvent` rows (new table — ARCHITECTURE.md §4.10).
 - [x] Doc reconciliation: ARCHITECTURE.md §4.2/§4.3/§4.4/§4.10/§5.2/§6, ARCHITECTURE_ESSENTIALS.md data model map + known gaps, PRD §8.1.2/§8.1.3/§8.1.4/§8.2.1–§8.2.4, `docs/api/README.md`. Done in this change — #6's ADR is *not* part of it and the gap is deliberately left noted.
+- [x] Incoming referrals inbox for target doctors (issue #306): `GET /referrals/incoming` is doctor-only, scoped to the caller's current `targetDoctorId`, defaults to `pending`/`accepted` with an explicit `status` filter for terminal referrals, and is keyset-paginated via `(createdAt, id)`. Snapshot notes are decrypted for the intended reader and each returned row writes a PHI access log; admin reassignment moves rows between inboxes automatically. Closes [issue #306](https://github.com/DocForum/docforum-core/issues/306).
+- [x] Referring doctor can withdraw their own pending referral (issue #308): `POST /referrals/:referralId/withdraw` requires a bounded reason and performs one conditional `pending → cancelled` update (guarding `resultingAppointmentId IS NULL`) plus a `referral.withdraw` AuditEvent in the same transaction. The existing `cancelled` status and `cancelledReason` column are reused, so no schema change; withdraw/accept race and authorisation are covered by integration tests. Closes [issue #308](https://github.com/DocForum/docforum-core/issues/308).
 
 ## Phase 4 — Orders: prescriptions & lab orders
 **Status: Partially implemented (issue #76: facility-side fulfillment proof, patient confirm/dispute, unconfirmed order expiry, admin dispute queue implemented and tested).**
@@ -94,10 +114,14 @@ and issue links.
 - [x] Resolve the polymorphic `FulfillmentRecord` design smell flagged in ARCHITECTURE.md §6.1.3 **before** building this phase — decide: keep polymorphic with constraints, or split into `PrescriptionFulfillment` / `LabOrderFulfillment`. Record the decision as an ADR in `docs/adr/`. Tracked as [issue #13](https://github.com/DocForum/docforum-core/issues/13) (High, 200 pts) — the prerequisite for the rest of this phase. **Done — decision: one table, no polymorphism** (`docs/adr/0012-fulfillment-record-typed-order-fks.md`): `order_type`/`order_id` are replaced by real `prescription_id`/`lab_order_id` FKs (each `UNIQUE`, a PostgreSQL `CHECK` requires exactly one — the mechanism `PaymentIntent` got in #85) plus the `facility_id` FK §4.7 left as a TODO, all three `RESTRICT`. Splitting was weighed and rejected: two tables mean two implementations of the §5.3 step-5 transition and a cross-table union for a facility's queue. Schema + migration landed; no code reads the row yet — #14 creates it, #15 owns the transition, #16 attaches `LabResult` through its existing table.
 - [x] Facility account creation (admin-invited only per PRD OQ-2 — no self-serve facility signup in v1) + `FacilityCapability` matching (patient sees only qualified facilities for their specific order, PRD FR-13). Tracked as [issue #14](https://github.com/DocForum/docforum-core/issues/14) (Medium, 150 pts) — depends on #13. **Done —** admin-only `POST /facilities` (User + profile + capabilities + `facility.created` audit row, one transaction; `POST /auth/signup` still refuses the role) and fail-closed capability matching in `GET /facilities/eligible` + `listEligibleFacilitiesForOrderKind`: facilities missing/mismatching capability data show for nothing. ADR 0012's "`#14 creates the row at selection`" is **not** in this issue — no selection endpoint exists yet; the `FulfillmentRecord` write and the `→ fulfilled` transition land with #15. See `changelog.d/14-facility-creation-capability-matching.md`.
 - [ ] Facility fulfillment UI: view assigned orders, mark in-progress/fulfilled/rejected, enforcing that `status` transitions to `fulfilled` **only** via the facility-confirmed path (ARCHITECTURE.md §5.3 step 5 — patient/doctor cannot self-mark). Tracked as [issue #15](https://github.com/DocForum/docforum-core/issues/15) (Medium, 150 pts) — depends on #13/#14.
-- [x] Lab result attachment (object storage integration — ARCHITECTURE.md §2 File/result storage row). Tracked as [issue #16](https://github.com/DocForum/docforum-core/issues/16) (Medium, 150 pts) — depends on #13. **Done —** provider: Amazon S3, private SSE bucket (`docs/adr/0014`), behind `utils/object-storage.ts`. `POST /orders/lab-orders/:labOrderId/result` lets only the order's own facility attach, once. `GET` on the same path serves the file to the patient, the ordering doctor and the fulfilling facility only, with no public or presigned URL. The response is access-logged and audited. The `LabOrder` and its `FulfillmentRecord` are untouched (`fulfilled` stays #15's). New scope noted in ARCHITECTURE.md §6.2.6: the export doesn't include the file bytes, and guardians can't read results. See `changelog.d/16-lab-result-attachment.md`.
+- [x] Lab result attachment (object storage integration — ARCHITECTURE.md §2 File/result storage row). Tracked as [issue #16](https://github.com/DocForum/docforum-core/issues/16) (Medium, 150 pts) — depends on #13. **Done —** provider: Amazon S3, private SSE bucket (`docs/adr/0018`), behind `utils/object-storage.ts`. `POST /orders/lab-orders/:labOrderId/result` lets only the order's own facility attach, once. `GET` on the same path serves the file to the patient, the ordering doctor and the fulfilling facility only, with no public or presigned URL. The response is access-logged and audited. The `LabOrder` and its `FulfillmentRecord` are untouched (`fulfilled` stays #15's). New scope noted in ARCHITECTURE.md §6.2.6: the export doesn't include the file bytes, and guardians can't read results. See `changelog.d/16-lab-result-attachment.md`.
 - [ ] Address PRD §8.1.6 (facility fulfillment integrity) — at minimum, restrict which facilities can be selected to the curated/admin-invited list; document what's still unresolved if full anti-fraud isn't in scope for v1 — addressed by issue #14's admin-only gating; document any remaining gap in that issue's PR.
 - [x] **Partial fulfillment: item-level dispensing for multi-item prescriptions.** Tracked as [issue #73](https://github.com/DocForum/docforum-core/issues/73) — **Done**. `FulfillmentItem` rows under a `FulfillmentRecord` now carry dispensed quantity + status per routed item; order status derives from items (`partially_fulfilled` / `fulfilled`) via a forward-only conditional update applied through the prescriptions/lab-orders module services; the patient can route remaining items to a second facility; a DB unique index on `(orderType, dispensedKey)` makes double-dispense by two facilities a constraint-level 409 (proven under concurrency in `backend/tests/integration/fulfillment.test.mts`). Payment-release rule documented in ARCHITECTURE.md §5.3: no release until the whole order derives `fulfilled`. Re-seated onto #13's resolved ADR 0012 shape (typed order FKs, not the old polymorphic pair); the ADR's "one record per order" UNIQUE became one per **(order, facility)** so a split order can hold a record at each facility — see the ADR's 2026-10-26 amendment.
-- [x] **Facility location and distance-sorted facility selection.** Tracked as [issue #74](https://github.com/DocForum/docforum-core/issues/74) — **Done**. `FacilityProfile.address/latitude/longitude` (nullable) + composite index; `GET /facilities/eligible?near=lat,lng&radiusKm=` with an indexed bounding box + haversine (PostGIS rejected — justification and the privacy/no-storage rule in ARCHITECTURE.md §5.4); facilities without coordinates appear, sorted last; seeded fictional coordinates via `npx prisma db seed`; measured over ~3 000 facilities in `backend/tests/integration/facility-distance.test.mts` (single-digit-millisecond p50/p95, well inside the test's 500 ms ceiling).
+- [x] **Facility location and distance-sorted facility selection.** Tracked as [issue #74](https://github.com/DocForum/docforum-core/issues/74) — **Done**. `FacilityProfile.address/latitude/longitude` (nullable) + composite index; `GET /facilities/eligible?near=lat,lng&radiusKm=` with an indexed bounding box + haversine (PostGIS rejected — justification and the privacy/no-storage rule in ARCHITECTURE.md §5.5); facilities without coordinates appear, sorted last; seeded fictional coordinates via `npx prisma db seed`; measured over ~3 000 facilities in `backend/tests/integration/facility-distance.test.mts` (single-digit-millisecond p50/p95, well inside the test's 500 ms ceiling).
+- [x] **Remove direct cross-module table access** (issue #318, Medium, 150 pts) — **Done.** `lab-orders`, `pharmacy-orders`, and `payments` modules no longer query `facilityProfile`, `patientProfile`, or related tables directly. All cross-module reads are routed through the owning module's service layer. See `changelog.d/318-remove-cross-module-table-access.md`.
+- [x] **Admin management of facility capabilities** (issue #320, Medium, 150 pts) — **Done.** `POST /facilities/:facilityId/capabilities` and `DELETE /facilities/:facilityId/capabilities/:capabilityId`, admin-only. Both operations record `FacilityCapability` audit events. See `changelog.d/320-admin-facility-capabilities.md`.
+- [x] **Retire a facility price-list item** (issue #321, Medium, 150 pts) — **Done.** New `retired` boolean on `FacilityPrice` (append-only). `resolveCurrentPrice` returns `{ retired: true }` for retired items; `requireCurrentPrice` throws `ITEM_RETIRED` (422). `POST /facilities/me/prices/retire` endpoint. See `changelog.d/321-retire-facility-price-item.md`.
+- [x] **Patient read access for fulfillment records** (issue #323, Medium, 150 pts) — **Done.** `getFulfillment` now allows patient/guardian access (ownership checked via `FulfillmentRecord` → typed FK → prescriptions/lab-orders service). Added `GET /pharmacy-orders/orders/:orderId/fulfillments` list endpoint. See `changelog.d/323-patient-read-fulfillment-records.md`.
 
 ## Phase 5.5 — Payments (consumer side)
 **Status: Payment order linkage, automatic intent issuance, configuration hardening, and platform signer abstraction are implemented; fulfillment-triggered release remains pending.** See docs/adr/0004-custodial-payments-v1.md. Verified against **live testnet**, not mocked — `npm run test:integration:payments-testnet` (3/3 passing): fund→release, fund→refund, and reject-when-no-wallet-linked.
@@ -119,6 +143,10 @@ and issue links.
 - [x] Multi-asset intents (USDC + native XLM per-environment allowlist, payee trustline checks) and the patient-signed prepare half of ADR 0005. Tracked as [issue #79](https://github.com/DocForum/docforum-core/issues/79) and [issue #80](https://github.com/DocForum/docforum-core/issues/80). Prepare returns `503 ESCROW_SDK_PREPARE_UNSUPPORTED` against SDK 0.2.0 until #32 lands; submit/fee-bump is out of scope for #80.
 - [ ] Upgrade to `@docforum/escrow-sdk` 0.3.0 and the current testnet contract (`refund_after`, balance-delta check, `getEscrow`) — step 1 of ADR 0005's plan, but worth doing regardless. Tracked as [issue #32](https://github.com/DocForum/docforum-core/issues/32) (Medium, 150 pts); depends on `docforum-escrow` publishing `sdk-v0.3.0`. **Blocked (2026-11-20): `sdk-v0.3.0` is still unpublished** (only `sdk-v0.1.0` and `sdk-v0.2.0` exist), so the bump cannot be made. Core-side capability that issue #32 depends on is covered meanwhile: release/refund pin the contract id recorded on the intent, proven for legacy-contract intents in `backend/tests/integration/payments-assets.test.mts`.
 - [ ] Doc reconciliation: PRD §8.1.6 (facility fulfillment integrity) — not marked resolved; this phase proves the payment *mechanism* works, not the fulfillment-integrity question, which still needs real `FulfillmentRecord`/facility-matching (Phase 5) to actually address.
+- [x] Integration tests for the escrow-events admin endpoint (issue #327): access, `state` filter, ordering, cursor pagination (`cursor`/`nextCursor` added), `catchupError` and unmatched-event flags, no network. `backend/tests/integration/escrow-events.test.mts`.
+- [x] Audit and cool-down for facility payout-wallet changes ([issue #328](https://github.com/DocForum/docforum-core/issues/328)): every link is audited (old + new address) in its own transaction; a facility re-link becomes the payee only after `WALLET_LINK_COOLDOWN_HOURS` (first-ever link immediate); `GET /admin/payments/wallet-links/pending` lists changes in the window.
+- [x] CSV export of the facility payout ledger ([issue #329](https://github.com/DocForum/docforum-core/issues/329)): `GET /payments/facility/ledger.csv`, same filters as the JSON ledger, streamed in keyset pages, formula-injection-safe cells.
+- [x] Operator runbook for the escrow event alerts and RPC retention gaps this phase produces (issue #356): `docs/runbooks/escrow-event-alerts.md` covers reading `GET /admin/payments/escrow-events` (items, cursors, `catchupError`), triaging an `unmatched` release or refund through the intent, audit trail, dead letters and `npm run reconcile:escrows`, when to pause `payments.wallet_funding` and what pausing does not stop, and how to recover a contract whose cursor stalled behind the RPC's retained history. Every step cites the code path it relies on, and the runbook ends with the operator controls that do not exist yet so nobody hunts for them. Linked from `ARCHITECTURE_ESSENTIALS.md`'s escrow monitoring section and from the docs site, which now syncs `docs/runbooks/`.
 
 ## Phase 6 — Notifications
 **Status: In progress. The owner-scoped in-app inbox, provider-agnostic dispatch interface, and booking transactional outbox are implemented. Email/SMS provider work remains blocked on issue #17's provider decision.**
@@ -126,12 +154,14 @@ and issue links.
 - [ ] Trigger points per PRD FR-15/FR-16 (booking confirmed, referral created/accepted/declined, order ready, results available, new booking, lab results returned) — still blocked by Phases 3/4.
 - [x] Transactional outbox for domain events, starting with booking confirmed — [issue #94](https://github.com/DocForum/docforum-core/issues/94). Events publish in the booking transaction; a `SKIP LOCKED` worker retries at least-once handlers and dead-letters after five attempts.
 - [ ] Pick and integrate a real provider (email/SMS) behind the interface — provider choice is currently undecided (ARCHITECTURE.md §8). Tracked as [issue #17](https://github.com/DocForum/docforum-core/issues/17) (Trivial, 100 pts) — a decision task, unblocked now.
-- [ ] Email adapter, templates, and signed bounce/complaint webhook — [issue #95](https://github.com/DocForum/docforum-core/issues/95); depends on #17 and #93.
-- [ ] SMS adapter, delivery callbacks, consent/opt-out, and send cap — [issue #96](https://github.com/DocForum/docforum-core/issues/96); depends on #17 and #93.
+- [x] Email adapter, templates, and signed bounce/complaint webhook — [issue #95](https://github.com/DocForum/docforum-core/issues/95); depends on #17 and #93.
+- [x] SMS adapter, delivery callbacks, consent/opt-out, and send cap — [issue #96](https://github.com/DocForum/docforum-core/issues/96); depends on #17 and #93.
 **Status: In progress — provider decision made (see `docs/adr/0013-notification-provider.md`, issue #17). Trigger-point build-out still blocked by Phases 3 & 4 and deliberately left unscoped until those land.**
 - [ ] `Notification` model + dispatch interface (provider-agnostic, per ARCHITECTURE.md §2) — part of the trigger-point work, still blocked.
 - [ ] Trigger points per PRD FR-15/FR-16 (booking confirmed, referral created/accepted/declined, order ready, results available, new booking, lab results returned) — still blocked by Phases 3/4.
 - [x] Pick and integrate a real provider (email/SMS) behind the interface — **decided:** email via Postmark (SMS deferred, no provider chosen); the adapter stays behind the provider-agnostic dispatch interface and no provider calls live in business logic. Tracked as [issue #17](https://github.com/DocForum/docforum-core/issues/17) (Trivial, 100 pts) — decision recorded in `docs/adr/0013-notification-provider.md`; integration itself is still to be built.
+- [x] Cross-instance real-time fan-out ([issue #330](https://github.com/DocForum/docforum-core/issues/330)): `notify()` publishes ids-only events with `pg_notify`; each instance `LISTEN`s on a dedicated connection, reconnects with backoff (clients get `resync`), and reports the listener state in `/health/ready`. Tested with two app instances on one Postgres.
+- [x] Integration tests for the notification SSE endpoint (issue #331): 401, exact per-user cap (`429 STREAM_LIMIT`), heartbeats, published-event delivery, `token-expired`, unsubscribe on disconnect. `backend/tests/integration/notification-stream.test.mts`.
 
 ## Phase 7 — Frontend: core flows end-to-end
 **Status: Superseded.** This phase predates the 3-repo org split (see the org note at the top of this file) — all frontend work described below is actually tracked in `docforum-web`'s own `ROADMAP.md` (Phases W2–W5, issues opened there). Left in place as a historical record rather than deleted, but no issues are or will be opened against it here.
@@ -159,7 +189,7 @@ and issue links.
 - [x] JWT refresh revocation list (ARCHITECTURE.md §6.1.4). Tracked as [issue #18](https://github.com/DocForum/docforum-core/issues/18) (Medium, 150 pts). Done: the `RefreshSession` store that `POST /auth/refresh` checks (#143) plus `User.tokenVersion` (#140).
 - [x] Held-slot TTL/release job (ARCHITECTURE.md §6.2.1). Tracked as [issue #19](https://github.com/DocForum/docforum-core/issues/19) (Medium, 150 pts) — **investigated, not applicable as currently designed.** Phase 1's `claimOpenSlot` claims a slot directly via a single conditional `UPDATE ... WHERE status = 'open'` inside the booking transaction (proven by `backend/tests/integration/booking.test.mts`: 8 concurrent attempts, exactly 1 wins) — there is no intermediate `held` status, so an abandoned hold cannot exist and there is nothing for a TTL job to release. No hold state was introduced to give this issue something to do. Revisit if a multi-step booking flow (e.g. reserving a slot while a patient fills out Phase 2 intake) introduces a `held` state; that flow would need a `heldAt`/`holdExpiresAt` column plus a sweep job, and this issue should be reopened then.
 - [x] Access-control test suite: who may read intake, consultation and payment data. Integration tests (`tests/integration/access-control.test.mts`) establishing the test harness and access-control patterns for the three PHI data categories; intake/consultation test cases are scaffolded as placeholders until Phase 2/3 routes exist, payment-intent access cases exercise the live admin-gated routes. Tracked as [issue #44](https://github.com/DocForum/docforum-core/issues/44) — **Done**.
-- [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. **One Phase 3 access path is now worth auditing (`GET /consultations/:id` — treating doctor + that appointment's patient only, and referral snapshot exposure on `GET /referrals/mine` / `/created`), but intake and orders remain unbuilt, so the audit as scoped stays blocked.** Not yet scoped into an issue.
+- [ ] Privacy access-control audit: confirm intake/consultation notes are visible only per PRD §7 (patient, treating doctor(s) in-thread, fulfilling facility for that specific order only) — write tests, not just code review. Still blocked — meaningfully auditable only once Phase 3/4/5 access paths exist. **One Phase 3 access path is now worth auditing (`GET /consultations/:id` — treating doctor + that appointment's patient only, and referral snapshot exposure on `GET /referrals/mine` / `/created` / `/incoming` — issue #306 logs target-doctor reads), but intake and orders remain unbuilt, so the audit as scoped stays blocked.** Not yet scoped into an issue.
 - [ ] Decide and document what's explicitly out of scope for v1 launch vs. genuinely blocking (e.g., drug-interaction checking, PRD §8.2.8 — needs an explicit go/no-go, not silence). Tracked as [issue #20](https://github.com/DocForum/docforum-core/issues/20) (Trivial, 100 pts) — a decision task, unblocked now.
 - [x] Feature flags for staged rollouts (DB-backed, per environment and per user cohort). Tracked as [issue #132](https://github.com/DocForum/docforum-core/issues/132) (High, 200 pts) — **Done:** `FeatureFlag` table + `modules/flags` (boolean and sticky hash-percentage flags, role and user-id targeting, in-memory cache with a short TTL, evaluation that never throws and defaults to off), `GET /admin/feature-flags` and `PATCH /admin/feature-flags/:key` with a `feature_flag.*` audit event per change, `GET /me/flags` for the frontend, and the wallet payment mode (`payments.wallet_funding`, seeded off) as the first flag user.
 - [x] TOTP two-factor authentication (RFC 6238) with single-use recovery
@@ -176,6 +206,12 @@ and issue links.
   (High, 200 pts) — **Done**. Tests:
   `backend/tests/unit/totp.test.ts` (RFC 4226/6238 vectors) and
   `backend/tests/integration/two-factor.test.mts`.
+- [x] Admin user directory: `GET /admin/users` with role / active / deactivated / deleted filters, indexed email-prefix search and keyset pagination; account-level fields only, tombstones marked `deleted` with a null email. Tracked as [issue #275](https://github.com/DocForum/docforum-core/issues/275) — **Done.**
+- [x] Auth-artifact retention: a batched, configurable prune for expired/consumed `EmailVerificationToken`, `PasswordResetToken` and `AdminInvite` rows, revoked `RefreshSession` rows and stale `Sep10Challenge` rows (`src/jobs/auth-token-prune.ts`). Live tokens and active sessions are never touched. Tracked as [issue #276](https://github.com/DocForum/docforum-core/issues/276) — **Done.**
+- [x] Admin invite list/revoke: `GET /admin/invites` and `DELETE /admin/invites/:id` (conditional revoke vs. redeem, audited), so an unredeemed invite can be cancelled. Tracked as [issue #277](https://github.com/DocForum/docforum-core/issues/277) — **Done.**
+- [x] Active refresh-session cap: `MAX_ACTIVE_SESSIONS_PER_USER` (default 10), enforced atomically with session creation by evicting the least recently used sessions under a per-user advisory lock. Tracked as [issue #278](https://github.com/DocForum/docforum-core/issues/278) — **Done.**
+- [x] Guardian read access to a dependent's consultations, referrals and lab results (issue #305): an optional `patientProfileId` on consultation detail, referral list/accept/decline and lab-result download authorises through `patientsService.resolveActingProfile`; ended guardianships get `403 GUARDIANSHIP_INACTIVE`, unrelated profiles `404`, and guardian reads are PHI-access-logged. Existing caller-only behaviour is unchanged. Closes [issue #305](https://github.com/DocForum/docforum-core/issues/305).
+- [x] Security response headers and `X-Powered-By` removal (issue #332): nosniff, `Referrer-Policy: no-referrer`, restrictive CSP, `X-Frame-Options: DENY`, `Cache-Control: no-store` on every response, HSTS in production only; unmatched routes return a JSON 404. `backend/src/middleware/security-headers.ts`.
 
 ## Phase 9 — Deploy & CI
 **Status: In progress. Structured JSON logging (request IDs + PHI redaction) landed; load tests (k6) for search, slot listing and booking contention added; automated Postgres backups with a tested restore drill are now implemented (issue #107). A Render free-tier preview exists — see note. Production deploy still Not started. Remaining items scoped into issues #21–#22.**
@@ -194,6 +230,10 @@ and issue links.
 - [x] **Load tests (k6)** — `backend/tests/load/` (`search.js`, `slots.js`, `booking-contention.js`), `backend/scripts/seed-load-test.mjs` (thousands of doctors + slots), and `.github/workflows/load-tests.yml` (manual/nightly, never against the shared Render preview). Thresholds enforce p95 latency on read paths and zero double-bookings; the contention scenario asserts correctness from the database afterwards (exactly one booking per slot), not just response codes. First results committed in `backend/tests/load/REPORT.md`.
 
 - [ ] Fixed-seed property tests for slot generation and appointment/payment state machines, with an expanded nightly run. Tracked as [issue #120](https://github.com/DocForum/docforum-core/issues/120).
+- [x] Generated OpenAPI 3.1 contract with CI drift detection and non-production `/openapi.json` serving ([issue #112](https://github.com/DocForum/docforum-core/issues/112)).
+- [x] Supply-chain security gates for CodeQL, high-severity dependency review, gitleaks, and SHA-pinned security actions ([issue #111](https://github.com/DocForum/docforum-core/issues/111)).
+- [x] Body-parser errors return 400/413/415 with stable codes instead of 500, logged at `warn` without the raw body ([issue #333](https://github.com/DocForum/docforum-core/issues/333)).
+- [x] Prisma not-found (`P2025` → 404) and foreign-key (`P2003` → 422) errors no longer surface as 500, with generic messages; referral creation answers `422 SPECIALTY_NOT_FOUND` for an unknown specialty (issue #334).
 
 ## Explicitly deferred (not on this roadmap, tracked so they aren't forgotten)
 - In-app video/voice consultation (PRD OQ-1 — v1 assumes in-person + async messaging).
@@ -516,7 +556,7 @@ and issue links.
   depends on, the `Referral` relation fields, and the `Consultation`↔
   appointment link) and left two `AuditEvent` models in one schema — the
   `prisma generate` failure CI reported (P1012). The branch is now
-  `main` + two commits (Phase 3 referral core, ADR 0006) with the union of
+  `main` + two commits (Phase 3 referral core, ADR 0017) with the union of
   both sides' work, and the referral audit events go into `main`'s single
   `AuditEvent` table instead of a second one.
 - 2026-10-17 — Built the Phase 3 referral core on branch
@@ -545,7 +585,7 @@ and issue links.
   impossible to enforce and is noted as such rather than faked.
   Issue #8 (time-based expiry) remains open: only the no-show cascade
   reaches `expired`. The multi-referral decision (#66's ADR requirement)
-  is recorded as `docs/adr/0006-multiple-referrals-per-consultation.md`,
+  is recorded as `docs/adr/0017-multiple-referrals-per-consultation.md`,
   and the referral status machine is drawn out in ARCHITECTURE.md §4.4
   (#67's state-diagram DoD). Docs reconciled in the same change:
   ARCHITECTURE.md §4.2–§4.4/§4.10/§5.2/§6.1.2/§6.2.2/§6.2.4,
@@ -586,7 +626,7 @@ and issue links.
   wire the remaining state changes. Tests: two new integration cases
   asserting the audit rows (the accept's two events, the decline's one)
   against the real `AuditEvent` table.
-- 2026-10-20 — Docs site: `docs/site/scripts/sync-docs.mjs` now rewrites repo-relative links in docforum-core's own synced files (ROADMAP, ARCHITECTURE, PRD, ADRs) to GitHub URLs, as it already did for the other repos. #153 added a relative link to `docs/adr/0006-multiple-referrals-per-consultation.md` in ROADMAP.md, which VitePress rejected as a dead link and which broke the docs deploy on `main`.
+- 2026-10-20 — Docs site: `docs/site/scripts/sync-docs.mjs` now rewrites repo-relative links in docforum-core's own synced files (ROADMAP, ARCHITECTURE, PRD, ADRs) to GitHub URLs, as it already did for the other repos. #153 added a relative link to `docs/adr/0017-multiple-referrals-per-consultation.md` in ROADMAP.md, which VitePress rejected as a dead link and which broke the docs deploy on `main`.
 - 2026-10-21 — Phase 2: in-person check-in and live queue position. `POST /appointments/:id/check-in` records `checkedInAt` within a window around the appointment start (patient, own appointment only); the doctor's start/complete transitions now stamp `startedAt`/`completedAt`; `GET /appointments/:id/queue` returns the patient's own position and an estimated wait derived from the doctor's running-average delay (explainable, not ML). Patients never see other patients' details through the queue endpoint. Queue changes are pollable — the notification stream is Phase 6 and doesn't exist yet, so no push path was added. Schema: `Appointment.checkedInAt`/`startedAt`/`completedAt` (ARCHITECTURE.md §4.2), endpoints in `docs/api/README.md`. Unit tests cover position and estimate calculations; integration tests cover check-in window enforcement and queue access control.
 - 2026-10-21 — Fixed a syntax error in `backend/src/modules/appointments/routes/index.ts` (TS1109/TS1161: an unterminated regular expression literal at line 29) that failed the local syntax check before push. No roadmap-tracked behavior changed; the check-in/queue work described above is unaffected.
 - 2026-10-21 — Started Phase 9's end-to-end care-thread integration test (issue #69): a single self-contained test in `backend/tests/integration/care-thread.test.mts` that drives book → consult → refer → accept → order → fulfil → release through HTTP only, against embedded Postgres with the escrow SDK mocked. Steps are phase-gated — booking/consult/refer/accept run now; order/fulfil/release are skipped with an explicit reason until Phases 4/5 land, so the scaffold merges first and each phase enables its own steps as it ships. Asserts invariants (referral snapshot equality, append-only orders, facility-only fulfillment, payment status), not just status codes. Runs as part of `test:integration` in CI, runtime under a minute.
@@ -918,7 +958,7 @@ and issue links.
 - 2026-10-27 — Added the admin-only `GET /admin/metrics` endpoint with UTC date windows, a minimum-cell suppression threshold, and current booking lead-time/no-show aggregates. Metrics requiring missing or unapproved instrumentation are reported as unavailable.
 - 2026-10-28 — Phase 5: lab result attachment on object storage
   ([issue #16](https://github.com/DocForum/docforum-core/issues/16)).
-  Provider decision, recorded in `docs/adr/0014-lab-result-object-storage.md`:
+  Provider decision, recorded in `docs/adr/0018-lab-result-object-storage.md`:
   **Amazon S3**, one private, SSE-S3-encrypted bucket per environment, reached
   through the official `@aws-sdk/client-s3` (new dependency). The SDK is wrapped
   by `backend/src/utils/object-storage.ts` and nothing else imports it. Any
@@ -974,7 +1014,7 @@ and issue links.
   `/pharmacy-orders` fulfillment routes and the `GET /facilities/eligible`
   `near`/`radiusKm`/`limit`/`capabilityType` params (bounding box + haversine,
   no PostGIS — justification and the never-store-the-patient's-point rule are
-  in ARCHITECTURE.md §5.4), a dev seed of fictional facility coordinates
+  in ARCHITECTURE.md §5.5), a dev seed of fictional facility coordinates
   (`npx prisma db seed`), and two new integration test files
   (`fulfillment.test.mts`, `facility-distance.test.mts`). Payment-release rule
   decided and documented in ARCHITECTURE.md §5.3: no release until the whole
@@ -1114,3 +1154,433 @@ and issue links.
   embedded-Postgres ports (5472, 5473). They had reused 5470 and 5471, already
   taken by `automatic-settlement` and `lab-result-escalation`, so whichever test
   started second could time out in `beforeAll`.
+- 2026-11-20 — Phase 2: preserve verified doctor specialties on update ([issue #279](https://github.com/DocForum/docforum-core/issues/279)).
+  `PUT /doctors/me/specialties` diffs requested specialties against existing assignments in a single transaction: removed specialties are deleted, only genuinely new specialties start as `pending`, and unchanged specialties retain their verification status, reviewer and review date intact. Re-adding a previously removed specialty starts fresh as pending. Removing a specialty does not alter or reroute existing referrals already routed to that doctor. Integration tests in `tests/integration/specialty-verification.test.mts`.
+- 2026-11-20 — Phase 8: trustworthy and audited specialty verification decisions ([issue #280](https://github.com/DocForum/docforum-core/issues/280)).
+  `PATCH /doctors/:id/specialties/:specialtyId/verification` derives reviewer identity directly from authenticated admin credentials (`req.user.id`) rather than untrusted request bodies, sets `reviewDate` server-side, and requires a bounded `rejectionReason` (up to 200 characters) when status is `rejected`. The update and an `AuditEvent` (`doctor_specialty.verification_changed`) commit together in a single transaction; same-status requests are safe no-ops and skip audit event emission.
+- 2026-11-20 — Phase 2: admin queue of doctors and specialties awaiting verification ([issue #281](https://github.com/DocForum/docforum-core/issues/281)).
+  New endpoint `GET /admin/doctors/verification-queue` lists pending doctor profiles and pending `DoctorSpecialty` links, ordered oldest first, with keyset pagination (`nextCursor`). Queries utilize existing indexes on `verificationStatus`. Responses include decision-relevant data (doctor name, requested specialties, queue age in seconds) with zero clinical details, filter by kind (`profile` vs `specialty`) and by specialty, and flag deactivated doctor accounts (`isDeactivated`).
+- 2026-11-20 — Phase 2: admin management of the specialty catalog ([issue #282](https://github.com/DocForum/docforum-core/issues/282)).
+  Admins can create specialties (`POST /admin/specialties`), rename them (`PATCH /admin/specialties/:id` with immutable slugs), and retire them (`POST /admin/specialties/:id/retire`). The `Specialty` model gains an `isRetired` boolean flag; retired specialties disappear from public `GET /specialties` and cannot be newly assigned to doctors, while existing doctor assignments and referrals remain intact. All catalog mutations record transactional `AuditEvent` entries (`specialty.created`, `specialty.renamed`, `specialty.retired`). Migration `20261120195109_admin_specialties_and_verification_queue`.
+- 2026-11-20 — Phase 2: async consultation message thread
+  ([issue #61](https://github.com/DocForum/docforum-core/issues/61)).
+  Adds an append-only `ConsultationMessage` (encrypted body) with cursor
+  pagination, participant-only read/write derived from the consultation's
+  appointment, a configurable closing window, and a `consultation.message.created`
+  outbox event as the Phase 6 notification hook. Messages and addenda are
+  append-only at the DB level.
+- 2026-11-20 — Phase 2: message attachments with access-checked short-lived URLs
+  ([issue #62](https://github.com/DocForum/docforum-core/issues/62)).
+  JPEG/PNG/PDF only, byte-sniffed, EXIF/GPS and PNG text metadata stripped on
+  upload, per-message cap and per-user quota. Downloads require thread membership
+  to mint an HMAC-signed URL that expires after `CONSULTATION_ATTACHMENT_URL_TTL_SECONDS`;
+  object keys are never returned.
+- 2026-11-20 — Phase 2: follow-up outcome creates a pre-filled booking request
+  ([issue #63](https://github.com/DocForum/docforum-core/issues/63)).
+  `follow_up_needed` now creates a `FollowUpRequest` with an immutable encrypted
+  note snapshot and the patient's latest intake id. `GET /follow-ups/mine` and
+  `POST /follow-ups/:id/book` let the patient book through the existing
+  conditional slot claim (new appointment origin `follow_up`); an interval sweep
+  expires unbooked requests past their window.
+- 2026-11-20 — Phase 2: consultation note sign-off with append-only addenda
+  ([issue #64](https://github.com/DocForum/docforum-core/issues/64)).
+  Adds `Consultation.signedAt`; notes are editable only while unsigned, enforced
+  by a conditional UPDATE and a DB trigger, then corrections are append-only
+  `ConsultationAddendum` rows. Adds an RLS UPDATE policy for the note workflow
+  (the RLS migration previously only had SELECT/INSERT on `Consultation`) and an
+  hourly auto sign-off sweep.
+- 2026-11-21 — Phase 8: read-only admin user directory (issue #275). `GET /admin/users`
+  filters by role, active/deactivated/deleted state and an indexed email
+  prefix, with audit-style keyset pagination. The response uses an explicit
+  account-level allowlist (no credentials, tokens, TOTP secrets or clinical
+  data), and tombstoned accounts are marked `deleted` with a null email
+  instead of exposing their internal placeholder address. Migration adds
+  `User_email_prefix_idx` (trigram GIN) so the prefix search is index-backed
+  under any collation.
+- 2026-11-21 — Phase 8: batched retention prune for auth artifacts (issue #276). A new
+  `src/jobs/auth-token-prune.ts` deletes expired/consumed
+  `EmailVerificationToken`, `PasswordResetToken` and `AdminInvite` rows,
+  revoked `RefreshSession` rows and stale `Sep10Challenge` rows once they are
+  past `AUTH_TOKEN_PRUNE_GRACE_HOURS`. Each table drains in
+  `AUTH_TOKEN_PRUNE_BATCH_SIZE`-row `DELETE ... LIMIT` statements, up to
+  `AUTH_TOKEN_PRUNE_MAX_BATCHES_PER_RUN` per tick. Every delete is conditional
+  on expiry/consumption/revocation, so live tokens and active sessions are
+  never removed (integration-tested). Logs counts only.
+- 2026-11-21 — Phase 8: list and revoke admin invites (issue #277). `GET /admin/invites`
+  returns pending/redeemed/expired/revoked invites without token hashes;
+  `DELETE /admin/invites/:id` marks an unredeemed invite revoked with one
+  conditional UPDATE and writes an `admin_invite.revoked` audit event in the
+  same transaction. Revoke and redeem race on the same condition, so exactly
+  one wins: a revoked invite can't be redeemed, and revoking a redeemed invite
+  returns 409. Migration adds `AdminInvite.revokedAt`; revoked rows are later
+  removed by the #276 prune.
+- 2026-11-21 — Phase 8: cap active refresh sessions per user (issue #278).
+  `MAX_ACTIVE_SESSIONS_PER_USER` (default 10) is enforced inside the session
+  creation transaction: a per-user `pg_advisory_xact_lock` serialises logins,
+  then the least recently used sessions beyond the cap are revoked with
+  `revokedReason = 'max_active_sessions'`. The newly issued session is never
+  evicted, concurrent logins cannot leave the account above the cap, and an
+  evicted refresh token gets a 401 at refresh. Migration adds
+  `RefreshSession.revokedReason`.
+- 2026-11-21 — Phase 2: input guard rails for slot generation ([issue #288](https://github.com/DocForum/docforum-core/issues/288)).
+  `POST /availability/doctors/:doctorProfileId/slots/generate` enforces bounds on `slotLengthMinutes` (5–240 minutes, configurable via `SLOT_MIN_DURATION_MINUTES` and `SLOT_MAX_DURATION_MINUTES`) and rejects windows where `(endHour - startHour) * 60` is not cleanly divisible by `slotLengthMinutes`. Dates in the past in the doctor's stored time zone are rejected (`SLOT_DATE_IN_PAST`), as are dates beyond a configurable horizon (`SLOT_MAX_HORIZON_DAYS`, default 365, `SLOT_DATE_BEYOND_HORIZON`). When generating for today in the doctor's time zone, slots whose start time has already passed are skipped. Documented partial-window remainder omission behavior in `buildSlotRanges`.
+- 2026-11-21 — Phase 2: date-range filter for doctor open slots ([issue #289](https://github.com/DocForum/docforum-core/issues/289)).
+  `GET /availability/doctors/:doctorProfileId/slots` adds optional `from` and `to` ISO date-time query parameters. Defaults to the next 14 days (`SLOTS_DEFAULT_RANGE_DAYS`); caps the requested span to at most 31 days (`SLOTS_MAX_RANGE_DAYS`); and clamps a past `from` timestamp to `now`. Replaced `(doctorProfileId, status)` index on `AvailabilitySlot` with composite `(doctorProfileId, status, startTime)` for index-backed range scans. Migration `20261120214621_slot_query_and_appointment_indexes`.
+- 2026-11-21 — Phase 2: doctor today view uses doctor's time zone ([issue #290](https://github.com/DocForum/docforum-core/issues/290)).
+  `GET /appointments/doctor/today` calculates calendar day boundaries (`00:00:00` to midnight next day) in the doctor's profile `timeZone` rather than server-local time, resolving midnight shifts for doctors in UTC+1 (Lagos) and UTC-5 (New York). Validates stored IANA time zone strings (`INVALID_TIME_ZONE`) and handles DST transition days with 23 or 25 hours.
+- 2026-11-21 — Phase 2: doctor schedule endpoint for arbitrary date range ([issue #291](https://github.com/DocForum/docforum-core/issues/291)).
+  New endpoint `GET /appointments/doctor?from=&to=&status=` lets authenticated doctors inspect their own appointments over an arbitrary date range (interpreted in their profile `timeZone`, capped at 31 days) and filter by `AppointmentStatus`. Returns slot start/end times and patient display name with zero clinical details. Cancelled appointments that released their slot return with `slot: null`. Added `(doctorProfileId, status)` index on `Appointment` in migration `20261120214621_slot_query_and_appointment_indexes`.
+- 2026-11-21 — Phase 2: route POST /appointments/:id/cancel through the appointment state machine ([issue #292](https://github.com/DocForum/docforum-core/issues/292)).
+  Both cancellation routes (`POST /:id/cancel` and `PATCH /:appointmentId/cancel`) now share conditional transitions through `applyScheduledTransition`, releasing future booked slots through `availabilityService` and dropping the slot reference to allow re-booking. Cancellations within the configurable cutoff window (`config.appointments.cutoffHours`) transition to `late_cancelled` with the slot kept booked while triggering referral cascades.
+- 2026-11-21 — Phase 2: fix inverted reschedule cutoff check and add concurrency/validations ([issue #293](https://github.com/DocForum/docforum-core/issues/293)).
+  `rescheduleSlot` now correctly evaluates the cutoff window using `config.appointments.cutoffHours`, rejecting last-minute attempts within the window and permitting far-future reschedules. Added validations requiring `scheduled` status, matching doctor profile, and future slot timing. Both old and new slots are updated conditionally through `availabilityService` in one transaction.
+- 2026-11-21 — Phase 2: fix waitlist leave authorization and conditional expiry ([issue #294](https://github.com/DocForum/docforum-core/issues/294)).
+  `leaveWaitlist` now resolves caller identity via patient profile IDs (and active guardianships) instead of user IDs, preventing false 403 authorization failures. The status transition to `expired` is now conditional on active waitlist states, preventing accepted entries from being cancelled.
+- 2026-11-21 — Phase 2: partial unique index for active waitlist entries and typed status enum
+  ([issue #295](https://github.com/DocForum/docforum-core/issues/295)).
+  Replaced `WaitlistEntry` table-wide unique constraint with a partial unique index
+  covering active entries (`pending`, `on_hold`) using PostgreSQL `NULLS NOT DISTINCT`
+  for null-safe doctor/specialty deduplication. Converted `status` to `WaitlistStatus` enum.
+  Patients can now re-join waitlists after leaving or acceptance, and concurrent duplicate
+  joins are prevented at the database level.
+- 2026-11-21 — ---
+  type: added
+  issue: 296
+  ---
+  Added role-scoped `GET /appointments/:id` detail endpoint with strong ETag, slot times, and doctor summary, accessible only by the patient, guardian, or treating doctor (non-participants and admins receive 404). Replaced list-and-find pattern in appointment check-in and queue controllers.
+- 2026-11-21 — ---
+  type: changed
+  issue: 297
+  ---
+  Authorised appointment cancellation (both `POST /appointments/:id/cancel` and `PATCH /appointments/:appointmentId/cancel`) and rescheduling (`POST /appointments/:id/reschedule`) for guardians of dependent minors via `patientsService.resolveActingProfile`, recording the guardian as the actor and the dependent's profile in audit metadata.
+- 2026-11-21 — ---
+  type: added
+  issue: 298
+  ---
+  Added indexes for unindexed foreign keys and filter columns on `Appointment` (`patientProfileId, createdAt` and `doctorProfileId, status`), `Prescription` (`prescribingDoctorId` and `facilityProfileId`), `LabOrder` (`facilityProfileId`), and `LabResult` (`fulfillingFacilityId`).
+- 2026-11-21 — Phase 2: prevent premature appointment completion and no-show marking before slot start time ([issue #299](https://github.com/DocForum/docforum-core/issues/299)).
+  `updateStatusByDoctor` now refuses `completed` and `no_show` status updates before the slot's `startTime` or when the appointment has a released slot, returning HTTP 409 with code `APPOINTMENT_NOT_STARTED`. Pre-start cancellation remains permitted.
+- 2026-11-21 — Phase 2: public doctor detail endpoint ([issue #301](https://github.com/DocForum/docforum-core/issues/301)).
+  Added `GET /doctors/:doctorProfileId`, returning public doctor fields (`id`, `fullName`, `specialties`, `nextAvailableAt`) for a single verified, active doctor without requiring authentication. Unverified, deactivated, deleted, or unknown doctor profiles return 404, matching search visibility rules.
+- 2026-11-21 — Phase 2: show each doctor's next available slot in search results and add availableBefore filter ([issue #302](https://github.com/DocForum/docforum-core/issues/302)).
+  `GET /doctors` now returns `nextAvailableAt` per item via a batched availability lookup and supports an optional `availableBefore` query filter while preserving keyset pagination.
+- 2026-11-21 — Phase 2: allow closing an open consultation record ([issue #303](https://github.com/DocForum/docforum-core/issues/303)).
+  `POST /appointments/:id/consultation` can now close a consultation opened earlier without an outcome via a conditional database update matching `outcome IS NULL`, retaining existing encrypted notes if new notes are not provided.
+- 2026-11-21 — Phase 2: list consultations for the patient and the treating doctor ([issue #304](https://github.com/DocForum/docforum-core/issues/304)).
+  Added keyset-paginated `GET /consultations/mine` for patients (including guardian view with `patientProfileId`) and `GET /consultations/doctor` for treating doctors. Responses return visit summaries (date, doctor/patient name, outcome) without decrypted clinical notes, resolving ownership through the appointments service and displaying anonymised patient profiles as `Deleted patient`.
+- 2026-11-21 — CI: `Docs fragments` now fails only when a PR adds lines straight to a shared
+  doc, which is the rule that prevents conflicts. A fragment that wouldn't fold
+  (unknown heading, ambiguous `after:`, missing front matter) is a warning with a
+  suggested fix (closest headings, or the shared doc that has the heading), shown
+  inline on the PR, and a maintainer corrects it when folding. Problems in
+  fragments already on main are never blamed on a PR. Maintainer mode (fold PRs)
+  stays strict. Same change as docforum-web#364.
+- 2026-11-21 — PR malware scan: flags unsigned commits that are attributed to a maintainer account (anyone with write access) on PRs opened by someone else, as the `unverified-maintainer-identity` note. Signed commits and web-flow merges pass; write access is read from the API, so the script stores no names or emails.
+- 2026-11-21 — Tests: integration files that share an embedded Postgres `const PORT` no
+  longer time out when vitest runs them in parallel. The test wrapper
+  (`backend/tests/helpers/restricted-embedded-postgres.mts`) holds a per-port
+  lock from `start()` to `stop()`, so the second file waits a few seconds for
+  the first instead of failing with "Hook timed out". Existing test files need
+  no changes; distinct ports are still preferred because they're faster.
+- 2026-11-22 — Phase 8: change account email with verification of the new address ([issue #271](https://github.com/DocForum/docforum-core/issues/271)).
+  Added `POST /auth/change-email/request` and `POST /auth/change-email/confirm` endpoints backed by expiring `EmailChangeToken` model. Re-verifies password with login throttle integration, sends confirmation to the new email and notice to the old email, swaps the address atomically, and records `email_change.requested` and `email_change.confirmed` AuditEvents.
+- 2026-11-22 — Phase 2: patient profile read and update endpoints with optimistic concurrency ([issue #272](https://github.com/DocForum/docforum-core/issues/272)).
+  Added `GET /patients/me` returning caller's profile with strong ETag and `PATCH /patients/me` requiring `If-Match` header to update `fullName` and `dateOfBirth` via a single conditional UPDATE on `id`, `version`, and `anonymizedAt: null`. Refuses anonymized profiles.
+- 2026-11-22 — Phase 8: record AuditEvents for admin account actions ([issue #273](https://github.com/DocForum/docforum-core/issues/273)).
+  Wired transactional `auditService.record` calls into admin user deactivation (`user.deactivated`), reactivation (`user.reactivated`), admin invite creation (`admin_invite.created`), admin session revocations (`user.sessions_revoked`), and login throttle clears (`login_throttle.cleared`). Removed interim console.info logging and ensured idempotent no-ops emit no audit events.
+- 2026-11-22 — Phase 8: prevent concurrent admin deactivations from removing the last active admin ([issue #274](https://github.com/DocForum/docforum-core/issues/274)).
+  Made last-admin check and update atomic in PostgreSQL via row locks (`FOR UPDATE` on active admin users ordered by id) inside a single transaction. Retains idempotent 200 and 409 conflict responses. Added concurrency integration test asserting at least one active admin always remains.
+- 2026-11-22 — CI now fails when an editor backup or merge artefact (`*.bak`, `*.orig`, `*.rej`) is tracked: `node scripts/check-no-backup-files.mjs`, ported from docforum-web #354. It reports the files and how to remove them. This is an ordinary CI check, not a malware-scan finding: a leftover `.orig` from resolving a conflict is a mistake to fix, not a reason to block CI approval.
+- 2026-11-23 — Phase 9: production deployment target decided (ADR 0015, closes
+  [issue #22](https://github.com/DocForum/docforum-core/issues/22)).
+  The target is Render on the paid tier — one Pro workspace, a Blueprint-defined
+  staging and production web service, and a paid Render Postgres per
+  environment. That removes the free-tier 30-day database expiry (the
+  2026-12-04 deadline is the last one) and gives 7-day PITR; ADR 0007's
+  encrypted `pg_dump` + weekly restore drill now run against a real
+  environment. Secrets live in per-environment Render environment groups with
+  the team password manager as the source of record. ADR 0003's free-tier
+  preview is unchanged and stays preview-only. `ARCHITECTURE.md` §8 and §7 now
+  point at the decision instead of listing it as open, and the Phase 9
+  staging/production items are unblocked (not yet provisioned).
+- 2026-11-23 — Phase 5.5: escrow funding is idempotent and reconcilable (closes
+  [issue #24](https://github.com/DocForum/docforum-core/issues/24)).
+  `fundPaymentIntent` now claims the intent `created -> funding` with one
+  conditional UPDATE that commits before `create_escrow`; of N concurrent fund
+  requests exactly one reaches the chain and the rest get `409` (proven with 8
+  concurrent requests against embedded Postgres and a fake SDK). A failed chain
+  call returns the intent to `created` and audits it; a crash between the call
+  and the settle write leaves `funding`, which `npm run reconcile:escrows`
+  reports and resolves explicitly (`--adopt` an escrow the event poller
+  observed, or `--abandon` a claim that never reached the chain). New
+  `funding` status and `fundingStartedAt` column; the admin history filter
+  accepts `status=funding`. No automatic retry of the chain call — that could
+  create a second escrow.
+- 2026-11-23 — Phase 5.5: releaser key custody decided (ADR 0016, closes
+  [issue #25](https://github.com/DocForum/docforum-core/issues/25)). Production
+  escrows will use a 2-of-4 Stellar multisig releaser (three custodied signer
+  keys plus an offline master key; medium/high threshold 2), so a single leaked
+  or lost key can neither drain nor lock open escrows. KMS/HSM is deferred as
+  a v1 choice, and per-period rotation is rejected as the primary control.
+  Prerequisites are recorded as follow-ups, not implied as done: the
+  `docforum-escrow` SDK must collect a second signature, `PaymentIntent` must
+  persist the releaser public key it was funded under so key rotation cannot
+  strand old escrows, and settlement needs a two-step approval. Payments stay
+  behind the feature flag until those land; staging and the preview keep a
+  single-signer testnet releaser.
+- 2026-11-23 — Phase 3: target doctors can see referrals aimed at them through `GET /referrals/incoming` ([issue #306](https://github.com/DocForum/docforum-core/issues/306)). The endpoint is scoped to the caller's own `DoctorProfile`, defaults to `pending`/`accepted`, accepts a `status` filter for terminal referrals, and uses `(createdAt, id)` keyset pagination over the existing `targetDoctorId` index. Snapshot notes are returned decrypted when encryption lands, and every returned row writes a PHI access log naming the target doctor as viewer. Reassignment changes only `targetDoctorId`, so moved referrals leave the old target's inbox and enter the new one. No schema changes.
+- 2026-11-23 — Removes all direct cross-module Prisma table accesses from lab-orders, pharmacy-orders, and payments — these modules now call the owning module's service layer instead (issue #318). Deleted the duplicated `findFacilityProfileByUserId`, `findPatientProfileByUserId`, `findPatientUserIdByProfileId`, and `findFacilityNamesByIds` helpers from the payments and pharmacy-orders repositories; added the canonical equivalents as exports on `facilities/services` and `patients/services`.
+- 2026-11-23 — Adds admin-only endpoints for managing facility capabilities (issue #320): `POST /facilities/:facilityId/capabilities` and `DELETE /facilities/:facilityId/capabilities/:capabilityId`. Both operations record `FacilityCapability` audit events. Added `addCapabilitySchema` validation and `CapabilityView` service type.
+- 2026-11-23 — Adds price-item retirement to the facility price list (issue #321). A new `retired` boolean on `FacilityPrice` (append-only: retirement inserts a new row). `resolveCurrentPrice` returns `{ retired: true }` when the current version is retired; `requireCurrentPrice` throws `ITEM_RETIRED` (422). Added `POST /facilities/me/prices/retire` endpoint (facility owner only).
+- 2026-11-23 — Lets patients (and active guardians) read fulfillment records for their own orders (issue #323). `getFulfillment` now allows patient/guardian access in addition to the owning facility and admin. Adds `GET /pharmacy-orders/orders/:orderId/fulfillments` list endpoint that returns all fulfillment records for one order.
+- 2026-11-23 — Phase 5.5: integration tests for `GET /admin/payments/escrow-events`
+  ([issue #327](https://github.com/DocForum/docforum-core/issues/327)).
+  `backend/tests/integration/escrow-events.test.mts` seeds `EscrowChainEvent` and
+  `EscrowEventCursor` rows directly and covers admin-only access (401/403 for
+  every other role), the `state` filter, `detectedAt desc, id desc` ordering,
+  pagination, query validation, `catchupError` on the affected cursor, and the
+  unmatched-event flag (`state: unmatched`, `paymentIntentId: null`,
+  `alertedAt` set) — including one produced by the RPC-free reconcile pass. No
+  network calls (`fetch` is asserted untouched). The endpoint previously had
+  only `limit`, so operators could not see past 200 rows: it now takes an
+  optional opaque `cursor` and returns `nextCursor` (additive; existing callers
+  unchanged). No schema changes.
+- 2026-11-23 — Phase 5.5: facility payout-wallet changes are audited and take effect after a cool-down
+  ([issue #328](https://github.com/DocForum/docforum-core/issues/328)).
+  Every wallet link now writes an `AuditEvent` (`entity_type: 'WalletLink'`,
+  `wallet_link.linked` / `wallet_link.changed`, previous and new address for
+  facilities) in the same transaction as the change. New column
+  `WalletLink.effectiveAt` (migration `20261123163830_wallet_link_effective_at`,
+  backfilled from `createdAt`): a facility re-link only becomes the escrow payee
+  after `WALLET_LINK_COOLDOWN_HOURS` (default 24). Until then funding and
+  prepare keep paying the previously effective address. The first-ever link for
+  a facility, and every patient link, are immediate. Re-linking inside the
+  window cancels the pending link. Escrows already funded stay bound to their
+  recorded payee. As defence in depth, both release paths refuse a payee that
+  is known only as a not-yet-effective link (`409 WALLET_LINK_COOLDOWN`). The
+  outbox retries a held automatic release and then dead-letters it, and the funds
+  stay in escrow. New admin endpoint
+  `GET /admin/payments/wallet-links/pending`.
+- 2026-11-23 — Phase 5.5: CSV export of the facility payout ledger
+  ([issue #329](https://github.com/DocForum/docforum-core/issues/329)).
+  `GET /payments/facility/ledger.csv` takes the ledger's `status`, `from` and
+  `to` filters and returns the same rows as `GET /payments/facility/ledger`.
+  Columns: date, intent id, status, asset, amount in the smallest unit, decimal
+  amount, transaction hash. It is streamed in keyset pages of 500, so memory
+  stays flat for any date range. Every cell is escaped against spreadsheet
+  formula injection (`=`, `+`, `-`, `@`, tab and CR get a leading `'`) by
+  `src/utils/csv.ts`. No schema changes.
+- 2026-11-23 — Phase 6: real-time notification events reach users on every backend instance
+  ([issue #330](https://github.com/DocForum/docforum-core/issues/330)).
+  `notify()` now publishes through a broker
+  (`modules/notifications/services/fanout.ts`). The default broker uses
+  `pg_notify` on the `docforum_notifications` channel, and each instance
+  `LISTEN`s on its own connection outside Prisma's pool and delivers to its local
+  SSE streams. Payloads are ids only (`notificationId`, `userId`, `type`), and
+  clients fetch the notification over HTTP. The listener reconnects with
+  exponential backoff and sends each local stream a `resync` event afterwards.
+  Its state is reported, but not gated, as `checks.notifications` in
+  `/health/ready`. New settings: `NOTIFICATION_FANOUT_DRIVER` (`pg` | `local`),
+  `NOTIFICATION_FANOUT_RECONNECT_MIN_MS` and `NOTIFICATION_FANOUT_RECONNECT_MAX_MS`.
+  No schema changes.
+- 2026-11-23 — Phase 6: integration tests for `GET /notifications/stream`
+  ([issue #331](https://github.com/DocForum/docforum-core/issues/331)).
+  `backend/tests/integration/notification-stream.test.mts` opens real SSE
+  connections against `createApp()` and covers 401 (missing/invalid token), the
+  stream headers and retry hint, heartbeats, delivery of a published event to
+  the recipient's streams only, the exact per-user cap (5 open, 6th is
+  `429 STREAM_LIMIT`, closing one frees exactly one slot, other users
+  unaffected), the `token-expired` event ending the stream, and unsubscribe on
+  client disconnect. Every connection is destroyed in `afterEach` and the hub
+  count is awaited back to zero. The heartbeat interval is now
+  `streamTimings.heartbeatMs` (still 15s) so the test can shorten it; the suite
+  runs in about 4s. No schema or endpoint changes.
+- 2026-11-23 — Phase 8: security response headers and `X-Powered-By` removal
+  ([issue #332](https://github.com/DocForum/docforum-core/issues/332)).
+  `backend/src/middleware/security-headers.ts`, registered in `createApp` right
+  after the request-id middleware, sets `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, `Content-Security-Policy: default-src 'none';
+  frame-ancestors 'none'`, `X-Frame-Options: DENY` and `Cache-Control: no-store`
+  on every response (login/refresh carry tokens without an `Authorization`
+  header, so no-store isn't limited to authenticated requests; a route can
+  still set its own). `Strict-Transport-Security` is sent only when
+  `NODE_ENV=production` (`config.securityHeaders`), never in local development.
+  `x-powered-by` is disabled. Unmatched routes now answer a JSON
+  `404 { message: 'Not found.' }` instead of Express's HTML page, so the API
+  never serves HTML. The SSE stream keeps streaming with
+  `Cache-Control: no-store, no-transform`. No dependency added (no helmet).
+  Tests: `backend/tests/unit/security-headers.test.ts`,
+  `backend/tests/integration/security-headers.test.mts`.
+- 2026-11-23 — Phase 9: malformed JSON and oversized request bodies no longer return 500
+  ([issue #333](https://github.com/DocForum/docforum-core/issues/333)).
+  `errorHandler` maps body-parser failures to stable codes:
+  `400 INVALID_JSON`, `413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_ENCODING`,
+  `415 UNSUPPORTED_CHARSET`, `400 REQUEST_ABORTED`, and `400 INVALID_REQUEST_BODY`
+  for a corrupt compressed body. These are logged at `warn` with only the
+  error type and status. The raw body, which body-parser attaches to parse
+  errors, is never logged. The lab-result raw-body route keeps
+  `LAB_RESULT_TOO_LARGE`. No schema or endpoint changes.
+- 2026-11-23 — Phase 9: Prisma not-found and foreign-key errors no longer surface as 500
+  ([issue #334](https://github.com/DocForum/docforum-core/issues/334)).
+  The error handler maps `P2025` to `404 Record not found.` and `P2003` to
+  `422 The request refers to a record that does not exist or is still in use.`
+  (alongside the existing `P2002` → `409`), from a single
+  `PRISMA_CLIENT_ERRORS` table. Messages are fixed strings: Prisma's message and
+  `meta` (table, column and constraint names) are only logged. Errors thrown
+  inside `$transaction` map the same way. Referral creation now checks the
+  target specialty exists first and answers
+  `422 SPECIALTY_NOT_FOUND` instead of the misleading "no verified doctor"
+  error. Postgres `ON DELETE RESTRICT` refusals (SQLSTATE 23001) arrive as an
+  *unknown* Prisma error and still return 500; call sites that can hit them
+  already catch them (`isForeignKeyRefusal`). Tests:
+  `backend/tests/unit/error-handler-prisma.test.ts`,
+  `backend/tests/integration/prisma-errors.test.mts` (real Postgres, one per
+  mapped code, inside and outside transactions) and a case in
+  `referral-routing.test.mts`.
+- 2026-11-23 — Phase 2: symptom-to-specialty mapping for "search by symptom" (closes
+  [issue #60](https://github.com/DocForum/docforum-core/issues/60)). A curated
+  `Symptom` / `SymptomSpecialty` vocabulary (weights 1–5, admin-managed,
+  reviewed starter set in the migration) with `GET /symptoms?q=` autocomplete
+  (prefix + trigram, retired symptoms hidden), `GET /doctors?symptom=<slug>`
+  ranked by mapping strength, and admin CRUD at `/admin/symptoms` (create,
+  rename/retire, replace mappings; all audited). Explicitly not ML
+  (PRD §8.3.3) and never presented as medical advice. An unknown, retired or
+  unmapped symptom is `200` with empty `items` and a `hint`, not an error. New
+  models documented in `ARCHITECTURE.md` §4.15; endpoints in
+  `docs/api/README.md`.
+- 2026-11-24 — Phase 3: role-scoped referral detail endpoint ([issue #307](https://github.com/DocForum/docforum-core/issues/307)).
+  Added `GET /referrals/:referralId`, returning one referral row — including `status`, `expiredAt`, `expiredReason`, `cancelledReason` and `resultingAppointmentId` — to the owning patient (or active guardian with `?patientProfileId=`), the referring doctor, the current target doctor, or an admin. Everyone else receives `404`. The route is registered after `/incoming`, `/mine`, `/created` and `/admin/*` so those paths keep matching, and successful reads are recorded in the PHI access log.
+- 2026-11-24 — Phase 3: the referring doctor can withdraw their own pending referral
+  ([issue #308](https://github.com/DocForum/docforum-core/issues/308)).
+  `POST /referrals/:referralId/withdraw` takes a required 1–200 character reason,
+  uses the same conditional `pending → cancelled` update as accept/decline (also
+  guarding `resultingAppointmentId IS NULL`) and writes a `referral.withdraw`
+  AuditEvent in the same transaction. Reuses the existing `cancelled` status and
+  `cancelledReason` column; no schema change. Integration tests cover the
+  withdraw/accept race, another doctor's referral (404), accepted referrals (409)
+  and validation.
+- 2026-11-24 — Phase 9: bounded both order-expiry sweeps (issue #348).
+  `expireUnconfirmedOrders` and `expireUnfulfilledOrders` now select ids in
+  bounded, id-ordered batches driven by a new `expirySweeps` config section
+  (`EXPIRY_SWEEP_BATCH_SIZE`, `EXPIRY_SWEEP_MAX_PER_RUN`), logging batch counts
+  through the structured logger. Each transition keeps its existing conditional
+  UPDATE and same-transaction audit/outbox event; a row already handled by
+  another process is skipped without a duplicate event. A capped run leaves
+  later rows for the next scheduled tick. Unit and integration tests cover
+  multi-batch, exact-multiple, empty, cap, resume and concurrent-run behavior.
+  No schema or endpoint changes.
+- 2026-11-24 — Phase 9: added `npm run new:module -- <name>` (`backend/scripts/new-module.mjs`),
+  which scaffolds a backend module skeleton under `backend/src/modules/` with
+  the intentional `routes/controllers/services/repositories` folders,
+  `validation.ts` and `mount.ts`. Names are validated as lowercase kebab-case and
+  existing modules are never overwritten. Shared wiring (`src/mounts.ts`,
+  export/retention registries, API docs rows) is not edited automatically; the
+  generator prints the exact follow-ups instead. Documented in `CONTRIBUTING.md`.
+  No model or endpoint changes.
+- 2026-11-24 — Docs/CI: resolved the duplicate ADR numbers (closes [#352](https://github.com/DocForum/docforum-core/issues/352)). 0006 stays with the Prisma 7 driver adapter (committed first); the multi-referral ADR is now 0017. 0014 stays with PostgreSQL row-level security (committed first); lab-result object storage is now 0018. All references were updated in place, `docs/adr/README.md` is now the full ADR index, and `scripts/check-adr-numbering.mjs` runs in CI to reject duplicate numbers, heading/filename mismatches and unindexed ADRs. No schema, endpoint or runtime changes.
+- 2026-11-24 — Docs: resolved duplicate ARCHITECTURE.md section numbers (closes [#353](https://github.com/DocForum/docforum-core/issues/353)). The later/less-referenced sections are now §3.2 (account deletion and retention holds), §4.16 (PHI read-access log), §4.17 (Payments) and §5.5 (facility discovery by distance); references that meant those sections were updated in place. §4.15 was left free for the already-filed issue #60 fragment. ARCHITECTURE_ESSENTIALS.md no longer points at a `frontend/src/` path in this repo — the frontend lives in `docforum-web` — and its jobs list now reflects the schedulers and workers actually started from `backend/src/server.ts`. `scripts/check-section-numbering.mjs` runs in CI to keep top-level section numbers unique, and the pending issue #24 docs fragment now targets §4.17. No schema, endpoint or runtime changes.
+- 2026-11-24 — Phase 5.5: operator runbook for escrow event alerts and RPC retention gaps
+  ([issue #356](https://github.com/DocForum/docforum-core/issues/356)).
+  `docs/runbooks/escrow-event-alerts.md` covers reading
+  `GET /admin/payments/escrow-events`, triaging an `unmatched` release or refund
+  (intent lookup, audit trail, dead letters, `npm run reconcile:escrows`), pausing
+  `payments.wallet_funding`, and recovering a stalled contract by setting a
+  reviewed, strictly later `ESCROW_CONTRACTS` start ledger. Every step was written
+  against the current code paths and cites the file it depends on; the runbook ends
+  with the controls that do not exist yet, so an operator stops looking for them.
+  It is linked from the `ARCHITECTURE_ESSENTIALS.md` escrow monitoring section
+  (`docs.d/356-escrow-event-alerts-runbook.md`) and from the docs site, which now
+  syncs `docs/runbooks/` like the other doc trees. No code, schema or endpoint
+  changed.
+- 2026-11-24 — Phase 2: integration tests for the doctor's day view and status transitions
+  ([issue #358](https://github.com/DocForum/docforum-core/issues/358)).
+  `backend/tests/integration/doctor-day-view-and-status-transitions.test.mts`
+  (real Postgres) pins `GET /appointments/doctor/today` — own
+  appointments only, ordering by slot start, the calendar day taken from the
+  doctor's `timeZone`, scheduled-only, doctor-only — and every legal and illegal
+  `PATCH /appointments/:id/status` transition, including a three-way concurrent
+  race where exactly one request wins. The suite fakes the clock
+  (`vi.useFakeTimers({ toFake: ['Date'] })`) so it cannot flake near midnight UTC.
+  `docs/api/README.md` still described `/doctor/today` as the server-local day
+  after issue #290 changed it; that row is corrected in place. No behaviour
+  changed.
+- 2026-11-25 — Phase 8: active guardians can read and act on a dependent's consultations, referrals and lab results through an optional `patientProfileId` parameter on `GET /consultations/:id`, `GET /referrals/mine`, referral accept/decline and `GET /orders/lab-orders/:id/result` ([issue #305](https://github.com/DocForum/docforum-core/issues/305)). Every path authorises through `patientsService.resolveActingProfile`, ends immediately on revocation or at majority with `403 GUARDIANSHIP_INACTIVE`, and PHI-access-logs guardian reads. Existing caller-only behaviour is unchanged when the parameter is omitted; no schema changes.
+- 2026-11-25 — feat(referrals): Filter the admin referral queue by specialty and target doctor
+  - Added `targetSpecialtyId` and `targetDoctorId` query filters to
+    `adminQueueQuerySchema` and the repository `listAdminQueue` query.
+  - Referrals with `null targetSpecialtyId` (named-doctor referrals) do not
+    match a specialty filter, preserving the distinction between specialty-only
+    and doctor-named referrals.
+  - The admin queue endpoint `GET /referrals/admin/queue` now accepts these
+    additional optional query parameters, conjunctive with the existing
+    `status`, `olderThan`, and `loopFlagged` filters.
+  - Updated `docs/api/README.md` row for `GET /referrals/admin/queue` to
+    document the new filters.
+  - Integration tests added in `backend/tests/integration/admin-referrals.test.mts`.
+  Closes #339
+- 2026-11-25 — feat(ci): Static module-boundary check in CI
+  - Added `scripts/check-module-boundaries.mjs` that statically checks for
+    imports from other modules' `repositories`, `controllers`, or `routes`
+    directories. A violation triggers a non-zero exit code.
+  - Existing violations are tracked in an allowlist so the check can be
+    introduced incrementally without breaking the build.
+  - Configured the script to run in `.github/workflows/ci.yml` as part of the
+    CI pipeline.
+  - Allowlist for existing violations has been added; new violations will
+    cause CI to fail.
+  - Verified that a deliberately bad import in a test fixture makes the
+    check fail.
+  Closes #340
+- 2026-11-25 — feat(logging): Route startup, shutdown and job logs through the structured logger
+  - Replaced `console.*` calls in `src/server.ts` with the structured pino
+    logger (`logger.info`, `logger.error`).
+  - Replaced `console.*` calls in all job files under `src/jobs/` with the
+    structured logger:
+    - `referral-expiry.ts`
+    - `auth-token-prune.ts`
+    - `outbox-events.ts`
+    - `payment-intents.ts`
+    - `consultation-sign-off.ts`
+    - `lab-result-escalation.ts`
+    - `order-expiry.ts`
+    - `patient-exports.ts`
+    - `follow-up-expiry.ts`
+    - `account-purge.ts`
+  - Replaced `console.*` call in `src/modules/auth/services/email-dispatcher.ts`
+    with `logger.info`.
+  - Replaced `console.*` calls in other modules across `src/`:
+    - `src/modules/audit/services/index.ts`
+    - `src/modules/notifications/services/index.ts`
+    - `src/modules/orders/services/lab-results.ts`
+    - `src/modules/patients/services/index.ts`
+    - `src/modules/payments/services/escrow-events.ts`
+    - `src/modules/payments/services/index.ts`
+  - Added lint guard (via existing `npm run lint` pipeline) that will forbid
+    `console.*` in `src/` outside `scripts/` in future PRs.
+  - No console calls remain in `src/`; all job logs carry error types, not
+    messages, consistent with the structured logging rule.
+  Closes #341
+- 2026-11-25 — feat(ci): Run the migration drift check in CI
+  - Added `prisma validate` and `prisma format --check` steps next to the
+    existing drift check in `.github/workflows/ci.yml`.
+  - The drift check (`node scripts/check-migration-drift.mjs`) now runs in
+    parallel with tests to keep job time reasonable.
+  - Documented the schema checks in `CONTRIBUTING.md` under the "Schema"
+    section, describing `prisma validate`, `prisma format --check`, and the
+    drift check.
+  - Script header updated to reference issue #376 and the CI check.
+  - Fails on a deliberate drift in a test branch (verified via commit
+    ad989bc).
+  - `prisma validate` and `prisma format --check` run in CI on every PR.
+  Closes #342
+- 2026-11-25 — Phase 8: integration tests for admin overview and success-metrics endpoints ([issue #359](https://github.com/DocForum/docforum-core/issues/359)).
+  `backend/tests/integration/admin-overview-and-metrics.test.mts` exercises `GET /admin/overview` and `GET /admin/metrics` against real Postgres:
+  - Enforces admin authorization gating (401 for anonymous, 403 for patient and doctor roles).
+  - Validates query parameter checking on `GET /admin/metrics` (RFC3339 offset awareness, interval boundaries, 366-day range cap).
+  - Tests empty and populated queue state calculations on `GET /admin/overview`, ensuring pending doctor counts and oldest item age are computed accurately without leaking PHI.
+  - Verifies SQL view aggregation and small-count suppression thresholds (< 5 eligible appointments) for `noShowRate` and `bookingLeadTimeDays` with hand-derived metrics over a pinned clock.
+- 2026-11-25 — Phase 1: let doctors set and change their time zone ([issue #360](https://github.com/DocForum/docforum-core/issues/360)).
+  `POST /auth/signup` accepts an optional `timeZone` field for doctor accounts (defaulting to `'UTC'` when omitted, and rejected for patient accounts). `PATCH /doctors/me` now accepts `timeZone` in addition to `fullName` under `If-Match` optimistic concurrency. Time zones are validated at runtime against canonical IANA identifiers via `Intl.supportedValuesOf('timeZone')` plus `'UTC'`, rejecting non-canonical aliases like `EST` and unrecognized strings. Changing a doctor's time zone preserves the absolute UTC timestamps of existing availability slots and booked appointments. Unit and integration tests cover signup, concurrent profile update, IANA validation, and slot immutability.
+- 2026-11-25 — Phase 4/5.5: lab test catalog endpoint, verifiable order token verification, non-custodial submit endpoint, and fee-sponsor budget monitoring (issues #70, #71, #81, #82). Adds `GET /lab-tests`, `POST /facilities/me/verify-order`, `POST /payments/intents/:id/submit`, and `GET /admin/payments/fee-sponsor`.
+- 2026-11-25 — Phase 6 notification delivery and Phase 9 CI hardening ([issues #95, #96, #111, and #112](https://github.com/DocForum/docforum-core/issues/112)). Added PHI-safe Postmark and Twilio adapters with signed callbacks, persistent delivery and SMS consent records, an OpenAPI 3.1 contract with drift checks, non-production contract serving, CodeQL, dependency review, and gitleaks gates.
+- 2026-11-26 — Added CI matrix to test unit tests and typecheck across Node versions 20, 22, and 24, aligned build job with production Node 22, and documented supported versions in CONTRIBUTING.md.

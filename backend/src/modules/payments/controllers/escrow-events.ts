@@ -5,9 +5,10 @@ import { listEscrowEvents } from '../services/escrow-events';
 const querySchema = z.object({
   state: z.enum(['pending', 'matched', 'unmatched']).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
+  cursor: z.string().min(1).max(256).optional(),
 }).strict();
 
 export async function listEscrowEventsController(req: Request, res: Response) {
   const query = querySchema.parse(req.query);
-  res.status(200).json(await listEscrowEvents(query.limit, query.state));
+  res.status(200).json(await listEscrowEvents(query.limit, query.state, query.cursor));
 }

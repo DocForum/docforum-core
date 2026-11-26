@@ -4,6 +4,7 @@ import type { PatientProfile } from '@prisma/client';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import { versionConflict } from '../../../middleware/optimistic-concurrency';
+import { logger } from '../../../logger';
 import * as patientsRepo from '../repositories';
 import { ChunkWriter, EXPORT_SCHEMA_VERSION, ExportSectionError, writeExportBundle } from './export-bundle';
 import { listExportSections, type PatientExportSection } from './export-registry';
@@ -215,8 +216,7 @@ async function generateClaimedExport(
     // Log the error *type* only — a driver or section error message can
     // echo the data it was handling.
     const cause = err instanceof ExportSectionError ? err.cause : err;
-    // eslint-disable-next-line no-console
-    console.error(
+    logger.error(
       `[jobs] patient export ${exportId} attempt ${attempt} failed${section ? ` in section "${section}"` : ''}: ${
         cause instanceof Error ? cause.name : typeof cause
       }`,
@@ -314,6 +314,16 @@ export async function getPatientProfileById(id: string) {
   const profile = await patientsRepo.findPatientProfileById(id);
   if (!profile) throw new HttpError(404, 'Patient profile not found.');
   return profile;
+}
+
+/** Non-throwing userId lookup by patientProfileId — for cross-module calls. */
+export function getPatientUserIdByProfileId(patientProfileId: string): Promise<string | null> {
+  return patientsRepo.findPatientProfileOwner(patientProfileId).then((row) => row?.userId ?? null);
+}
+
+/** Non-throwing patient profile lookup by userId — for cross-module calls. */
+export function findPatientProfileByUserId(userId: string) {
+  return patientsRepo.findPatientProfileByUserId(userId);
 }
 
 /** Batch id -> { id, fullName } lookup for other modules. Anonymised profiles return 'Deleted patient'. */
@@ -457,8 +467,7 @@ export async function purgeDeletedPatientAccounts(now = new Date()): Promise<Pur
           result.held += 1;
         } else {
           result.failed += 1;
-          // eslint-disable-next-line no-console
-          console.error(`[jobs] account purge failed for one profile: ${err instanceof Error ? err.name : typeof err}`);
+          logger.error(`[jobs] account purge failed for one profile: ${err instanceof Error ? err.name : typeof err}`);
         }
       }
     }

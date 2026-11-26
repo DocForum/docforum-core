@@ -77,9 +77,9 @@ model FulfillmentRecord {
   createdAt        DateTime                    @default(now())
   updatedAt        DateTime                    @updatedAt
 
-  prescription Prescription?   @relation(fields: [prescriptionId], references: [id], onDelete: Restrict)
-  labOrder     LabOrder?       @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
-  facility     FacilityProfile @relation(fields: [facilityId], references: [id], onDelete: Restrict)
+  prescription Prescription?     @relation(fields: [prescriptionId], references: [id], onDelete: Restrict)
+  labOrder     LabOrder?         @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
+  facility     FacilityProfile   @relation(fields: [facilityId], references: [id], onDelete: Restrict)
   // Phase 5 (issue #73): one row per routed order item (issue #73).
   items        FulfillmentItem[]
 
@@ -138,11 +138,11 @@ model FulfillmentItem {
 
   fulfillmentRecord FulfillmentRecord @relation(fields: [fulfillmentRecordId], references: [id], onDelete: Cascade)
 
-  // The order's item universe is counted across ALL facilities' records
-  // (services/applyOrderStatus), hence the unscoped lookup index.
-  @@index([orderType, orderItemId])
   // The same order item can't be routed twice under one record.
   @@unique([fulfillmentRecordId, orderType, orderItemId])
   // Cross-facility double-dispense guard — see dispensedKey above.
   @@unique([orderType, dispensedKey])
+  // The order's item universe is counted across ALL facilities' records
+  // (services/applyOrderStatus), hence the unscoped lookup index.
+  @@index([orderType, orderItemId])
 }

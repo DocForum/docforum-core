@@ -11,6 +11,7 @@
 import { config } from '../config';
 import { expireStalePreparedIntents } from '../modules/payments/services';
 import { runWithRlsBypassContext } from '../db/prisma-client';
+import { logger } from '../logger';
 
 export function startPaymentIntentJobs(): () => void {
   let running = false;
@@ -20,14 +21,12 @@ export function startPaymentIntentJobs(): () => void {
     void runWithRlsBypassContext(() => expireStalePreparedIntents())
       .then(({ expired }) => {
         if (expired > 0) {
-          // eslint-disable-next-line no-console
-          console.log(`[jobs] expired ${expired} stale prepared payment intent(s)`);
+          logger.info(`[jobs] expired ${expired} stale prepared payment intent(s)`);
         }
       })
       .catch((err) => {
         // Error type only: a database error message can echo row data.
-        // eslint-disable-next-line no-console
-        console.error(`[jobs] payment-intent expiry sweep failed: ${err instanceof Error ? err.name : typeof err}`);
+        logger.error(`[jobs] payment-intent expiry sweep failed: ${err instanceof Error ? err.name : typeof err}`);
       })
       .finally(() => {
         running = false;

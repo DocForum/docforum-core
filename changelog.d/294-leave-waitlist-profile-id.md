@@ -1,2 +1,0 @@
-Phase 2: fix waitlist leave authorization and conditional expiry ([issue #294](https://github.com/DocForum/docforum-core/issues/294)).
-`leaveWaitlist` now resolves caller identity via patient profile IDs (and active guardianships) instead of user IDs, preventing false 403 authorization failures. The status transition to `expired` is now conditional on active waitlist states, preventing accepted entries from being cancelled.

@@ -13,7 +13,14 @@ import { z } from 'zod';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import { formatMessage, resolveLocale } from '../../../i18n';
+import { logger } from '../../../logger';
 import * as notificationsRepo from '../repositories';
+import { notificationBroker } from './fanout';
+
+// Cross-instance real-time fan-out (issue #330), exposed through this
+// module's service surface for src/server.ts and src/health/readiness.ts.
+export { getNotificationFanoutState, startNotificationFanout } from './fanout';
+export type { FanoutState } from './fanout';
 
 export interface NotificationMessage {
   to: string;
@@ -31,7 +38,7 @@ export interface NotificationChannel {
  * single-use link (whose token is useless once used/expired). */
 export const consoleNotificationChannel: NotificationChannel = {
   async send(message) {
-    console.log(`[notifications] → ${message.to}\n${message.subject}\n${message.body}`);
+    logger.info(`[notifications] → ${message.to}\n${message.subject}`);
   },
 };
 
@@ -45,6 +52,18 @@ export function setNotificationChannel(next: NotificationChannel): NotificationC
 
 export function send(message: NotificationMessage): Promise<void> {
   return channel.send(message);
+}
+
+export async function optSmsIn(userId: string, phone: string) {
+	return notificationsRepo.setSmsConsent(userId, phone, 'opted_in');
+}
+
+export async function optSmsOut(userId: string, phone: string) {
+	return notificationsRepo.setSmsConsent(userId, phone, 'opted_out');
+}
+
+export async function canSendSms(phone: string): Promise<boolean> {
+	return (await notificationsRepo.hasSmsConsent(phone)) && (await notificationsRepo.smsSentToday(phone)) < config.notifications.sms.dailyCap;
 }
 
 export async function sendPasswordResetLink(input: {
@@ -127,13 +146,23 @@ export async function notify<T extends NotificationType>(
   };
 
   if (persisted.created) {
+    // Real-time push to the user's open streams on EVERY instance (issue
+    // #330). Ids only — the client fetches the notification over HTTP.
+    // Best-effort: the persisted row above is the record, so a failed
+    // publish never fails notify().
+    try {
+      await notificationBroker.publish({ notificationId: notification.id, userId, type });
+    } catch {
+      console.error(`[notifications] real-time fan-out publish failed for notification ${notification.id}`);
+    }
+
     const registeredAdapters = [...adapters];
     const results = await Promise.allSettled(
       registeredAdapters.map((adapter) => Promise.resolve().then(() => adapter.send(dispatch))),
     );
     results.forEach((result, index) => {
       if (result.status === 'rejected') {
-        console.error(`[notifications] ${registeredAdapters[index]?.channel ?? 'unknown'} adapter failed for notification ${notification.id}`);
+        logger.error(`[notifications] ${registeredAdapters[index]?.channel ?? 'unknown'} adapter failed for notification ${notification.id}`);
       }
     });
   }

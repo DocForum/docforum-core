@@ -23,7 +23,8 @@ model Notification {
   readAt        DateTime?
   createdAt     DateTime            @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries NotificationDelivery[]
 
   @@index([userId, createdAt, id])
   @@index([userId, readAt, createdAt, id])
@@ -44,4 +45,49 @@ model OutboxEvent {
 
   @@index([status, availableAt, createdAt, id])
   @@index([status, lockedAt])
+}
+
+enum NotificationDeliveryStatus {
+  queued
+  sent
+  delivered
+  failed
+  bounced
+  complained
+}
+
+enum SmsConsentStatus {
+  opted_in
+  opted_out
+}
+
+model NotificationDelivery {
+  id                String                     @id @default(uuid())
+  notificationId    String
+  channel           NotificationChannel
+  destination       String
+  providerMessageId String?
+  status            NotificationDeliveryStatus @default(queued)
+  error             String?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@index([channel, status, createdAt])
+  @@index([destination, channel])
+}
+
+model SmsConsent {
+  id        String           @id @default(uuid())
+  userId    String
+  phone     String
+  status    SmsConsentStatus
+  updatedAt DateTime         @updatedAt
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, phone])
+  @@index([phone, status])
 }

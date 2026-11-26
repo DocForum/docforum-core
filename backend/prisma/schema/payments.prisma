@@ -36,7 +36,7 @@ enum PaymentIntentStatus {
 
 model PaymentIntent {
   id             String              @id @default(uuid())
-  version     Int      @default(1)
+  version        Int                 @default(1)
   prescriptionId String?             @unique
   labOrderId     String?             @unique
   status         PaymentIntentStatus @default(created)
@@ -92,8 +92,8 @@ model PaymentIntent {
 
   // Set once funded (create_escrow succeeds) — needed to later call
   // release/refund against the right on-chain escrow.
-  escrowId          BigInt?
-  stellarTxHash     String?
+  escrowId            BigInt?
+  stellarTxHash       String?
   // Snapshot of the payee address this intent was actually funded to
   // (issue #78). Set at funding time from the facility's then-ACTIVE
   // wallet link and never changed afterwards — so re-linking a
@@ -105,7 +105,7 @@ model PaymentIntent {
   // Which deployed contract this intent was funded against — this repo
   // has already had two testnet contract IDs (Phase E1 vs. E2), so this
   // isn't hypothetical.
-  sorobanContractId String?
+  sorobanContractId   String?
 
   // When the current `funding` claim was taken (issue #24). NULL outside
   // that state. A stuck claim is one older than
@@ -167,7 +167,7 @@ model Sep10Challenge {
   expiresAt  DateTime // matches the challenge's timebounds maxTime (+ record TTL)
   consumedAt DateTime?
   createdAt  DateTime  @default(now())
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // Pruning and the "is this row still redeemable" check both scan by
   // expiry — same reason LoginAttempt indexes its window. Lookups at
@@ -216,27 +216,35 @@ enum WalletLinkVerificationMethod {
 }
 
 model WalletLink {
-  id         String               @id @default(uuid())
-  ownerType  WalletLinkOwnerType
+  id                 String                       @id @default(uuid())
+  ownerType          WalletLinkOwnerType
   // PatientProfile.id or FacilityProfile.id. Polymorphic — no FK on
   // purpose (see note above); existence + caller ownership are checked
   // in services/wallet-link.ts before any write.
-  ownerId    String
+  ownerId            String
   // G… address. NEVER accepted from a client-supplied field: derived
   // server-side from the account the SEP-10 challenge was issued for and
   // successfully verified.
-  stellarPublicKey       String
-  verificationMethod     WalletLinkVerificationMethod
+  stellarPublicKey   String
+  verificationMethod WalletLinkVerificationMethod
   // Set iff verificationMethod = 'sep10' (time the challenge passed).
-  verifiedAt DateTime?
+  verifiedAt         DateTime?
   // Set when a newer link superseded this one. Only these two fields
   // ever change on a row; stellarPublicKey/verificationMethod are
   // write-once.
-  replacedAt DateTime?
+  replacedAt         DateTime?
   // "<ownerType>:<ownerId>" while this is the owner's active link, NULL
   // once replaced. The unique index on this column IS the one-active-
   // link-per-owner DB guarantee.
-  activeOwnerKey String?  @unique
+  activeOwnerKey     String?                      @unique
+  // Issue #328: when this link may first be used as an escrow payee
+  // (funding/prepare). A facility re-link sets it to now +
+  // WALLET_LINK_COOLDOWN_HOURS; the first-ever link for an owner, and every
+  // patient link, is effective immediately. Until then the previously
+  // effective link stays the payee. A link replaced before its effectiveAt
+  // (replacedAt < effectiveAt) is cancelled and never becomes effective.
+  // Write-once. Pre-#328 rows are backfilled with createdAt.
+  effectiveAt        DateTime                     @default(now())
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

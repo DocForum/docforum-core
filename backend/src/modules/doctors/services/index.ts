@@ -12,9 +12,13 @@ export async function getMyDoctorProfile(userId: string) {
   return profile;
 }
 
-export async function updateMyDoctorProfile(userId: string, version: number, fullName: string) {
+export async function updateMyDoctorProfile(
+  userId: string,
+  version: number,
+  input: { fullName?: string; timeZone?: string },
+) {
   const current = await getMyDoctorProfile(userId);
-  const profile = await doctorsRepo.updateDoctorProfile(current.id, version, fullName);
+  const profile = await doctorsRepo.updateDoctorProfile(current.id, version, input);
   if (!profile) throw versionConflict();
   return profile;
 }
@@ -237,6 +241,17 @@ export async function assertDoctorVerifiedInSpecialty(doctorProfileId: string, s
     throw new HttpError(422, 'Target doctor does not hold the referral’s specialty.');
   }
   return profile;
+}
+
+/** Throws 422 when `specialtyId` names no specialty in the catalog. Lets
+ * callers (referral creation, issue #334) give a specific message instead of
+ * relying on a foreign-key failure or a misleading downstream error. */
+export async function assertSpecialtyExists(specialtyId: string) {
+  const specialty = await doctorsRepo.findSpecialtyById(specialtyId);
+  if (!specialty) {
+    throw new HttpError(422, 'The target specialty does not exist.', 'SPECIALTY_NOT_FOUND');
+  }
+  return specialty;
 }
 
 /** Doctor's specialty ids — used by referral creation to denormalise the

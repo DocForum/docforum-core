@@ -81,7 +81,7 @@ export const paymentHistoryQuerySchema = z
 export const adminIntentListQuerySchema = z
   .object({
     status: z
-      .enum(['created', 'awaiting_signature', 'submitting', 'escrowed', 'released', 'refunded', 'failed'])
+      .enum(['created', 'funding', 'awaiting_signature', 'submitting', 'escrowed', 'released', 'refunded', 'failed'])
       .optional(),
     assetCode: z.string().min(1).max(20).optional(),
     facilityId: z.string().min(1).optional(),
@@ -90,6 +90,19 @@ export const adminIntentListQuerySchema = z
     to: inclusiveEndDate.optional(),
     cursor: z.string().min(1).max(512).optional(),
     limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .strict()
+  .refine((query) => !query.from || !query.to || query.from <= query.to, {
+    message: '`from` must not be after `to`.',
+  });
+
+/** GET /payments/facility/ledger.csv (issue #329): the ledger's filters
+ * without pagination — the CSV streams every matching row. */
+export const ledgerCsvQuerySchema = z
+  .object({
+    status: z.enum(['created', 'funding', 'escrowed', 'released', 'refunded', 'failed']).optional(),
+    from: isoDate.optional(),
+    to: inclusiveEndDate.optional(),
   })
   .strict()
   .refine((query) => !query.from || !query.to || query.from <= query.to, {

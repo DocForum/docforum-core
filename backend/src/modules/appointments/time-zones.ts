@@ -1,11 +1,10 @@
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import { HttpError } from '../../http-error';
 import { config } from '../../config';
+import { isValidIanaTimeZone } from '../../utils/time-zones';
 
 export function assertValidTimeZone(timeZone: string): void {
-  try {
-    Intl.DateTimeFormat(undefined, { timeZone });
-  } catch {
+  if (!isValidIanaTimeZone(timeZone)) {
     throw new HttpError(400, `Invalid time zone: ${timeZone}`, 'INVALID_TIME_ZONE');
   }
 }

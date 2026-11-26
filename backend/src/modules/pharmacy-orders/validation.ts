@@ -68,3 +68,7 @@ export const updateFulfillmentRecordSchema = z
 export const orderFulfillmentStatusQuerySchema = z.object({
   orderType: z.enum(['prescription', 'lab_order']),
 });
+
+export const listOrderFulfillmentsQuerySchema = z.object({
+  orderType: z.enum(['prescription', 'lab_order']),
+});

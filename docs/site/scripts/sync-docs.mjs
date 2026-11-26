@@ -2,8 +2,8 @@
 // Pulls this site's content from each repo's own real docs — never a
 // hand-maintained copy. Runs before every dev/build (see package.json).
 // Everything it writes lands under docs/site/{product,architecture,api,
-// roadmap,repos}/ and is gitignored: the deployed site is always built
-// fresh from whatever's actually on `main` in each repo right now,
+// roadmap,runbooks,repos}/ and is gitignored: the deployed site is always
+// built fresh from whatever's actually on `main` in each repo right now,
 // there is no second copy to let drift.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -18,7 +18,7 @@ async function copyLocal(from, to) {
   const dest = path.join(SITE_ROOT, to);
   await mkdir(path.dirname(dest), { recursive: true });
   // Local files get the same rewrite as remote ones: a repo-relative link
-  // (e.g. ROADMAP.md -> docs/adr/0006-...md) has no page in the site.
+  // (e.g. ROADMAP.md -> docs/adr/0017-...md) has no page in the site.
   const content = rewriteRelativeLinks(await readFile(src, 'utf8'), 'docforum-core');
   await writeFile(dest, content);
   console.log(`  synced (local)  ${from} -> docs/site/${to}`);
@@ -79,6 +79,12 @@ async function main() {
   await copyLocal(
     'docs/adr/0005-non-custodial-patient-payments.md',
     'architecture/adr/0005-non-custodial-patient-payments.md',
+  );
+
+  console.log('\nOperator runbooks (local — docs/runbooks/):');
+  await copyLocal(
+    'docs/runbooks/escrow-event-alerts.md',
+    'runbooks/escrow-event-alerts.md',
   );
 
   console.log('\ndocforum-web (remote — github.com/DocForum/docforum-web@main):');

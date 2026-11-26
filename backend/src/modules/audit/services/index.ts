@@ -12,6 +12,7 @@
 import type { Prisma, Role } from '@prisma/client';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
+import { logger } from '../../../logger';
 import * as auditRepo from '../repositories';
 
 /** Who caused a transition. Controllers build it from the request with
@@ -38,6 +39,8 @@ export type AuditEntityType =
   | 'FacilityPrice'
   // Issue #14: admin-only facility account creation (`facility.created`).
   | 'FacilityProfile'
+  // Issue #320: admin add/remove facility capabilities.
+  | 'FacilityCapability'
   | 'Order'
   | 'OrderDispute'
   | 'FeatureFlag'
@@ -49,7 +52,9 @@ export type AuditEntityType =
   | 'Symptom'
   | 'User'
   | 'AdminInvite'
-  | 'LoginAttempt';
+  | 'LoginAttempt'
+  // Issue #328: facility payout-wallet changes (`wallet_link.linked|changed`).
+  | 'WalletLink';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;
@@ -248,7 +253,10 @@ export function recordAccess(input: AccessLogInput): void {
       logFailureCount += 1;
       // Fail-open by design, but loudly: this is a privacy trail, so a
       // silent gap is worse than a noisy one.
-      console.error(`[audit] FAILED to record access (${input.entityType} ${input.entityId})`, err);
+      logger.error(
+        { error: err instanceof Error ? err.name : typeof err },
+        `[audit] FAILED to record access (${input.entityType} ${input.entityId})`,
+      );
     });
 }
 

@@ -5,6 +5,7 @@
 // requests stay visible to the patient as `expired`.
 import { config } from '../config';
 import { expireOpenFollowUps } from '../modules/consultations/services';
+import { logger } from '../logger';
 
 export function startFollowUpExpiryJob(): () => void {
   let running = false;
@@ -14,14 +15,11 @@ export function startFollowUpExpiryJob(): () => void {
     void expireOpenFollowUps()
       .then(({ expired }) => {
         if (expired > 0) {
-          // Count only — never ids or notes.
-          // eslint-disable-next-line no-console
-          console.log(`[jobs] follow-up expiry: ${expired} expired`);
+          logger.info(`[jobs] follow-up expiry: ${expired} expired`);
         }
       })
       .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error(`[jobs] follow-up expiry failed: ${err instanceof Error ? err.name : typeof err}`);
+        logger.error(`[jobs] follow-up expiry failed: ${err instanceof Error ? err.name : typeof err}`);
       })
       .finally(() => {
         running = false;
