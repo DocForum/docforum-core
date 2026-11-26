@@ -658,8 +658,8 @@ describe('Idempotency-Key replay protection', () => {
         data: { verificationStatus: 'verified' },
       });
       secondDoctor = { userId: secondDoctorUser.userId, token: secondDoctorUser.token, profileId: (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: secondDoctorUser.userId } })).id };
-      await generateSlots(app, doctor as unknown as { accessToken: string; profileId: string }, 8);
-      secondDoctorSlots = await generateSlots(app, secondDoctor as unknown as { accessToken: string; profileId: string }, 8);
+      await generateSlots(app, { accessToken: doctor.token, profileId: doctor.profileId }, 8);
+      secondDoctorSlots = await generateSlots(app, { accessToken: secondDoctor.token, profileId: secondDoctor.profileId }, 8);
     });
 
     beforeEach(async () => {
@@ -669,8 +669,8 @@ describe('Idempotency-Key replay protection', () => {
     // Create a referral from main test's doctor → second doctor, then accept it
     async function createPendingReferral() {
       // consultationRitual: book, complete, consult with 'referred' outcome
-      const { consultationId } = await consultationRitual(app, patients[0] as unknown as { userId: string; accessToken: string; profileId: string; email: string }, doctor as unknown as { userId: string; accessToken: string; profileId: string; email: string });
-      const referralRes = await createReferral(app, doctor as unknown as { accessToken: string }, {
+      const { consultationId } = await consultationRitual(app, { userId: patients[0].userId, accessToken: patients[0].token, profileId: patientProfileId, email: patients[0].email }, { userId: doctor.userId, accessToken: doctor.token, profileId: doctor.profileId, email: '' });
+      const referralRes = await createReferral(app, { accessToken: doctor.token }, {
         sourceConsultationId: consultationId,
         targetDoctorId: secondDoctor.profileId,
         targetSpecialtyId: endocrinologyId,
@@ -772,8 +772,9 @@ describe('Idempotency-Key replay protection', () => {
       it('gives each user their own attempt under the same key string', async () => {
         // Two patients both need their own referrals; each accepts with the same key
         const referralA = await createPendingReferral();
-        const { consultationId: consultationIdB } = await consultationRitual(app, patients[1] as unknown as { userId: string; accessToken: string; profileId: string; email: string }, doctor as unknown as { userId: string; accessToken: string; profileId: string; email: string });
-        const referralResB = await createReferral(app, doctor as unknown as { accessToken: string }, {
+        const patient1Profile = await prisma.patientProfile.findUniqueOrThrow({ where: { userId: patients[1].userId } });
+        const { consultationId: consultationIdB } = await consultationRitual(app, { userId: patients[1].userId, accessToken: patients[1].token, profileId: patient1Profile.id, email: patients[1].email }, { userId: doctor.userId, accessToken: doctor.token, profileId: doctor.profileId, email: '' });
+        const referralResB = await createReferral(app, { accessToken: doctor.token }, {
           sourceConsultationId: consultationIdB,
           targetDoctorId: secondDoctor.profileId,
           targetSpecialtyId: endocrinologyId,
