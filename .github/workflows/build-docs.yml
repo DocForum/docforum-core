@@ -1,0 +1,67 @@
+# Builds docs/site (VitePress) on pull requests so a broken docs change is
+# caught on the PR instead of after it merges, when `Deploy docs site` fails
+# and the live site stops updating (issue #347: `main` runs #97 and #98 both
+# died in this build). Build only — no Pages artifact, no deploy — so a fork
+# PR cannot publish anything: the token is read-only (`contents: read`) and
+# this workflow never mentions the Pages or id-token permissions.
+#
+# The build is the same command `deploy-docs.yml` runs, with the same
+# GITHUB_PAGES=true so the base path matches production: a red here means the
+# same push to `main` would have been red. VitePress checks dead links during
+# `build` and exits non-zero, so this job is also the PR-time dead-link gate
+# (`ignoreDeadLinks` is explicitly `false` — see docs/site/.vitepress/config.ts).
+#
+# Paths mirror deploy-docs.yml's triggers: the site's own files plus every
+# source document it copies in at build time. Content synced from
+# docforum-web / docforum-escrow is fetched from their `main` branches, so a
+# sibling repo can break this build the same way it broke #98 — that failure
+# is not the PR author's, and is worth checking against `main` before
+# assuming your change caused it.
+name: Build docs site
+
+on:
+  pull_request:
+    paths:
+      - 'docs/site/**'
+      - 'PRD.md'
+      - 'ARCHITECTURE.md'
+      - 'ARCHITECTURE_ESSENTIALS.md'
+      - 'ROADMAP.md'
+      - 'docs/adr/**'
+      - 'docs/api/**'
+      - '.github/workflows/build-docs.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-docs-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build docs site (no deploy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: docs/site
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Nothing here needs to write git state back; the build reads the
+          # tree and fetches sibling docs over HTTPS.
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - run: npm ci
+
+      # `npm run build` = scripts/sync-docs.mjs (copy this repo's docs, fetch
+      # the siblings') && vitepress build. A dead link or a bad Vue template
+      # fails this step.
+      - run: GITHUB_PAGES=true npm run build

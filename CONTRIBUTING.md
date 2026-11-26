@@ -49,6 +49,18 @@ what depends on what, and what's deliberately not yet scoped (and why).
   especially for anything touching booking, referrals, or order-issuance
   (see `AGENTS.md`'s testing rules). These are the correctness-critical
   paths in this codebase.
+- `npm run test:coverage` (in `backend/`) runs the unit and integration suites
+  in one vitest process and writes the merged report to `backend/coverage/`:
+  `index.html` to browse, `coverage-summary.json` for the numbers. Every file
+  under `src/` is counted, so an untested path shows as 0% rather than going
+  missing. `vitest.config.mts` pins per-module floors for the
+  correctness-critical modules and the run fails below them — if a floor
+  blocks you, add the missing test; don't exclude files from the report.
+- Run `npm run prisma:generate` after `npm ci` and after pulling a schema
+  change. CI does it as its own step, but the generated client lives in
+  `node_modules`, so a fresh install without it fails every integration test
+  with `Cannot find module '.prisma/client/default'` rather than anything
+  about the schema.
 - If your change starts, completes, or blocks a roadmap-tracked item,
   tick or update that item's line in `ROADMAP.md` and add a changelog
   entry as a new file in `changelog.d/`, in the same PR. Don't append to
