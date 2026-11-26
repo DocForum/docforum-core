@@ -1,2 +1,0 @@
-Phase 2: public doctor detail endpoint ([issue #301](https://github.com/DocForum/docforum-core/issues/301)).
-Added `GET /doctors/:doctorProfileId`, returning public doctor fields (`id`, `fullName`, `specialties`, `nextAvailableAt`) for a single verified, active doctor without requiring authentication. Unverified, deactivated, deleted, or unknown doctor profiles return 404, matching search visibility rules.
