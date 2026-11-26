@@ -298,9 +298,15 @@ export async function acceptReferral(
   actor: auditService.AuditActor,
   referralId: string,
   availabilitySlotId: string,
+  patientProfileId?: string,
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  // Issue #305: no patientProfileId keeps the self-service path; naming one
+  // resolves an active guardianship (or the caller's own profile) first, so
+  // an ended guardianship is refused before the referral is touched.
+  const patientProfile = patientProfileId
+    ? await patientsService.resolveActingProfile(actor.userId, patientProfileId)
+    : await patientsService.getMyPatientProfile(actor.userId);
 
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
@@ -351,7 +357,7 @@ export async function acceptReferral(
       action: 'referral.accepted',
       fromState: 'pending',
       toState: 'accepted',
-      metadata: { appointmentId: appointment.id },
+      metadata: { appointmentId: appointment.id, patientProfileId: patientProfile.id },
     });
 
     return referralsRepo.findReferralById(tx, referralId);
@@ -365,9 +371,15 @@ export async function acceptReferral(
  * pending (re-bookable), from which declining is then possible. Keeps one
  * narrow transition instead of two overlapping exit paths.
  */
-export async function declineReferral(actor: auditService.AuditActor, referralId: string) {
+export async function declineReferral(
+  actor: auditService.AuditActor,
+  referralId: string,
+  patientProfileId?: string,
+) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  const patientProfile = patientProfileId
+    ? await patientsService.resolveActingProfile(actor.userId, patientProfileId)
+    : await patientsService.getMyPatientProfile(actor.userId);
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
     if (!referral) throw new HttpError(404, 'Referral not found.');
@@ -393,6 +405,7 @@ export async function declineReferral(actor: auditService.AuditActor, referralId
       action: 'referral.declined',
       fromState: 'pending',
       toState: 'declined',
+      metadata: { patientProfileId: patientProfile.id },
     });
 
     return referralsRepo.findReferralById(tx, referralId);
@@ -438,9 +451,23 @@ export async function withdrawReferral(
   });
 }
 
-export async function listMine(userId: string) {
-  const patientProfile = await patientsService.getMyPatientProfile(userId);
-  return referralsRepo.listReferralsForPatient(patientProfile.id);
+export async function listMine(userId: string, patientProfileId?: string) {
+  const patientProfile = patientProfileId
+    ? await patientsService.resolveActingProfile(userId, patientProfileId)
+    : await patientsService.getMyPatientProfile(userId);
+  const referrals = await referralsRepo.listReferralsForPatient(patientProfile.id);
+  const detail = patientProfile.userId === null ? 'referral list read (guardian)' : 'referral list read';
+  for (const referral of referrals) {
+    auditService.recordAccess({
+      accessedBy: userId,
+      patientProfileId: patientProfile.id,
+      entityType: 'Referral',
+      entityId: referral.id,
+      route: 'GET /referrals/mine',
+      detail,
+    });
+  }
+  return referrals;
 }
 
 export async function listCreated(userId: string) {
@@ -652,6 +679,8 @@ export interface AdminQueueFilters {
    * duration are returned. */
   olderThan?: string;
   loopFlagged?: boolean;
+  targetSpecialtyId?: string;
+  targetDoctorId?: string;
 }
 
 function parseDuration(value: string): number {
@@ -661,14 +690,16 @@ function parseDuration(value: string): number {
   return match[2] === 'h' ? amount * 60 * 60 * 1000 : amount * 24 * 60 * 60 * 1000;
 }
 
-/** Issue #68 queue endpoint: stuck referrals (by status + age) and/or
- * loop-flagged ones, with a derived human-readable reason and age. */
+/** Issue #68 + #339 queue endpoint: stuck referrals (by status + age + specialty + doctor)
+ * and/or loop-flagged ones, with a derived human-readable reason and age. */
 export async function adminListReferrals(_userId: string, filters: AdminQueueFilters) {
   const createdBefore = filters.olderThan ? new Date(Date.now() - parseDuration(filters.olderThan)) : undefined;
   const rows = await referralsRepo.listAdminQueue({
     status: filters.status,
     createdBefore,
     loopFlagged: filters.loopFlagged,
+    targetSpecialtyId: filters.targetSpecialtyId,
+    targetDoctorId: filters.targetDoctorId,
   });
 
   const now = Date.now();

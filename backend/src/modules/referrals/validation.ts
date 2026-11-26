@@ -26,6 +26,17 @@ export const createReferralBatchSchema = z.object({
 
 export const acceptReferralSchema = z.object({
   availabilitySlotId: z.string().min(1),
+  patientProfileId: z.string().uuid().optional(),
+});
+
+export const declineReferralSchema = z.object({
+  patientProfileId: z.string().uuid().optional(),
+});
+
+/** GET /referrals/mine — issue #305: an active guardian lists a dependent's
+ * referrals by naming the dependent. Authorised in the service. */
+export const listMineQuerySchema = z.object({
+  patientProfileId: z.string().uuid().optional(),
 });
 
 export const referralDetailQuerySchema = z.object({
@@ -66,4 +77,6 @@ export const adminQueueQuerySchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((value) => value === 'true'),
+  targetSpecialtyId: z.string().optional(),
+  targetDoctorId: z.string().optional(),
 });

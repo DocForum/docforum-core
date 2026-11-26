@@ -14,6 +14,7 @@ vi.mock('../../src/modules/audit/repositories', () => ({
 
 import * as auditService from '../../src/modules/audit/services';
 import * as auditRepo from '../../src/modules/audit/repositories';
+import { logger } from '../../src/logger';
 
 /** Waits for fire-and-forget promises to settle. */
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -21,7 +22,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 describe('access-log service: PHI read-access logging (issue #45)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -97,10 +98,10 @@ describe('access-log service: PHI read-access logging (issue #45)', () => {
 
       await flush();
 
-      // The failure was surfaced to the server console for operators
-      expect(console.error).toHaveBeenCalledWith(
+      // The failure was surfaced to the server log for operators
+      expect(logger.error).toHaveBeenCalledWith(
+        { error: 'Error' },
         expect.stringContaining('[audit] FAILED to record access'),
-        expect.any(Error),
       );
     });
 

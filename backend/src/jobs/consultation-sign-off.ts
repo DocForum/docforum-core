@@ -6,6 +6,7 @@
 // Started from src/server.ts only.
 import { config } from '../config';
 import { autoSignOffOverdue } from '../modules/consultations/services';
+import { logger } from '../logger';
 
 export function startConsultationSignOffJob(): () => void {
   let running = false;
@@ -16,13 +17,11 @@ export function startConsultationSignOffJob(): () => void {
       .then(({ signed }) => {
         if (signed > 0) {
           // Count only — never ids or notes.
-          // eslint-disable-next-line no-console
-          console.log(`[jobs] consultation sign-off: ${signed} signed`);
+          logger.info(`[jobs] consultation sign-off: ${signed} signed`);
         }
       })
       .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error(`[jobs] consultation sign-off failed: ${err instanceof Error ? err.name : typeof err}`);
+        logger.error(`[jobs] consultation sign-off failed: ${err instanceof Error ? err.name : typeof err}`);
       })
       .finally(() => {
         running = false;

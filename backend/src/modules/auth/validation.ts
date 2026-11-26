@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { timeZoneSchema } from '../../utils/time-zones';
 import {
   isCommonPassword,
   MAX_PASSWORD_BYTES,
@@ -37,12 +38,23 @@ export const passwordSchema = z
     }
   });
 
-export const signupSchema = z.object({
-  role: z.enum(['patient', 'doctor']),
-  email: emailSchema,
-  password: passwordSchema,
-  fullName: z.string().trim().min(1),
-});
+export const signupSchema = z
+  .object({
+    role: z.enum(['patient', 'doctor']),
+    email: emailSchema,
+    password: passwordSchema,
+    fullName: z.string().trim().min(1),
+    timeZone: timeZoneSchema.optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.role === 'patient' && data.timeZone !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'timeZone is only valid for doctor accounts.',
+        path: ['timeZone'],
+      });
+    }
+  });
 
 // Existing users with longer passwords can still log in: login does not restrict max bytes or denylist.
 export const loginSchema = z.object({

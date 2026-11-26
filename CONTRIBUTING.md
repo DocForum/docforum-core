@@ -5,6 +5,10 @@ This is the backend of a 3-repo org (`docforum-core`, `docforum-web`,
 if you're an AI coding agent, read `AGENTS.md` instead (it has the actual
 architecture rules this file doesn't repeat).
 
+## Supported Node Versions
+
+`package.json` declares the supported Node engines: `node: ^20.19.0 || ^22.12.0 || >=24.0.0` (matching production deployment on Node 22). CI runs unit tests and typecheck across Node 20, 22, and 24 via a test matrix, while integration tests run on the production version (Node 22).
+
 ## 1. Set up locally
 
 ```bash
@@ -61,6 +65,16 @@ what depends on what, and what's deliberately not yet scoped (and why).
   rewrite other people's paragraphs. See `AGENTS.md` → "Shared docs".
 - Run `npm run typecheck && npm run test:all && npm run build` locally —
   this is exactly what CI checks.
+- Run `npm run prisma:validate && npm run prisma:format:check` to verify
+  the schema matches the migrations and is properly formatted. These checks
+  are also run in CI (see `.github/workflows/ci.yml`).
+
+- Run `node scripts/check-module-boundaries.mjs` to verify no new module
+  boundary violations are introduced. This check is also run in CI.
+
+If your change involves Prisma schema modifications, ensure the drift check
+(`node scripts/check-migration-drift.mjs`) passes, and that a migration
+exists for any new field or change.
 
 ## 3.1 Generating a new module skeleton
 
@@ -78,7 +92,7 @@ lowercase kebab-case; empty names, path separators, `..` and names that already
 exist are refused without writing anything.
 
 The generator deliberately does **not** edit shared files. It prints the exact
-lines to add by hand: the `src/mounts.ts` export, the `PatientExportSection`
+edges to add by hand: the `src/mounts.ts` export, the `PatientExportSection`
 and retention-hold registry entries (only when the module holds patient data),
 and a `docs.d/` fragment for the module's API rows. Generated placeholders
 compile under `npm run typecheck`; replace them as the module's first real

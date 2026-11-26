@@ -16,9 +16,9 @@ Requirements:
 
 ## Decision
 
-1. **Email provider: Amazon SES (Simple Email Service).** SES is chosen for transactional email because it is low cost at our expected volume, has a mature Node SDK, supports DKIM/SPF/DMARC configuration on our own domain, and has no per-contract minimums.
+1. **Email provider: Postmark.** Postmark is chosen for transactional email because it provides focused delivery and bounce/complaint webhooks, clear transactional-stream separation, and a small provider-specific HTTP surface behind the adapter.
 2. **SMS provider: Twilio Programmable Messaging.** Twilio is chosen as the SMS adapter because it has broad coverage, a stable API, and straightforward delivery-status webhooks. SMS is not required for the first Phase 6 slice and is adopted only when an SMS-bearing trigger is built.
-3. **Adapter placement.** Each provider is implemented as a `NotificationChannel` adapter (e.g. `sesNotificationChannel`, `twilioNotificationChannel`) inside `backend/src/modules/notifications/`. Selection is made at composition time through `setNotificationChannel`. The console adapter remains the default for local development and tests.
+3. **Adapter placement.** Each provider is implemented as a `NotificationChannel` adapter (e.g. `postmarkNotificationChannel`, `twilioNotificationChannel`) inside `backend/src/modules/notifications/`. Selection is made at composition time through `setNotificationChannel`. The console adapter remains the default for local development and tests.
 4. **Provider-agnostic boundary.** The `Notification` model and dispatch interface stay provider-neutral. No provider SDK types, identifiers, or error codes may appear outside the adapter files. Callers only construct a `NotificationMessage` and call `send`.
 5. **Credentials.** Provider credentials are read from configuration/environment only and are never committed.
 
@@ -26,17 +26,17 @@ Requirements:
 
 - Phase 6 trigger work can proceed immediately by calling the notifications service; no provider decision is pending.
 - Switching providers later requires only a new adapter and a configuration change, with no edits to business logic.
-- We take on the operational setup of SES domain verification and Twilio sender registration when the adapters are built.
+- We take on the operational setup of Postmark sender approval and Twilio sender registration when the adapters are built.
 - The console adapter continues to serve local development until real adapters are wired in.
 
 ## Alternatives considered
 
-- **SendGrid (email):** comparable capability and pricing; rejected in favor of SES for cost and existing AWS alignment.
-- **Postmark (email):** excellent deliverability for transactional mail; rejected for higher per-message cost at scale.
+- **SendGrid (email):** comparable capability; rejected in favor of Postmark's transactional focus for the first integration.
+- **Amazon SES (email):** lower cost at volume; deferred until scale justifies its greater operational setup.
 - **Vonage / AWS SNS (SMS):** viable; Twilio chosen for its API maturity and webhook tooling.
 
 ## Follow-ups
 
-- Implement the SES `NotificationChannel` adapter and its configuration.
+- Implement and wire the Postmark `NotificationChannel` adapter.
 - Implement the Twilio `NotificationChannel` adapter when the first SMS trigger ships.
 - Update ARCHITECTURE.md §8 and the ROADMAP.md Phase 6 checklist to reflect this decision.

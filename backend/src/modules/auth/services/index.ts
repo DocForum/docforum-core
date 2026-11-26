@@ -3,6 +3,7 @@
 // outside this module.
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
+import { logger } from '../../../logger';
 import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
 import type { AuditActor } from '../../audit/services';
@@ -57,6 +58,13 @@ export {
   startSetup as startTwoFactorSetup,
 } from './two-factor';
 export type { TwoFactorEnrolment, TwoFactorSetup, TwoFactorStatus } from './two-factor';
+
+/** Recipient lookup exposed for notification adapters; notifications never
+ * read the identity tables directly across the module boundary. */
+export async function getNotificationRecipient(userId: string) {
+  const user = await findUserById(userId);
+  return user ? { email: user.email, phone: user.phone } : null;
+}
 
 // Password reset (Phase 8 #33) lives in its own file; re-exported here so
 // controllers keep calling a single service surface.
@@ -201,6 +209,7 @@ export interface SignupInput {
   password: string;
   fullName: string;
   locale?: Locale;
+  timeZone?: string;
 }
 
 export async function signup(input: SignupInput, context: SessionContext = {}): Promise<AuthSession> {
@@ -225,6 +234,7 @@ export async function signup(input: SignupInput, context: SessionContext = {}): 
     role: input.role,
     fullName: input.fullName,
     locale: input.locale,
+    timeZone: input.timeZone,
   });
 
   // Phase 8, issue #34: the account is created and usable for browsing
@@ -433,8 +443,7 @@ async function issueEmailVerification(user: { id: string; email: string; locale?
   } catch (err) {
     // A provider hiccup must not fail signup — the account exists and is
     // usable, and the user can hit resend. Logged without the message body.
-    // eslint-disable-next-line no-console
-    console.error('[auth] verification email dispatch failed:', err instanceof Error ? err.message : err);
+    logger.error('[auth] verification email dispatch failed');
   }
 }
 
