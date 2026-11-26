@@ -9,6 +9,8 @@ leave the rest of the file alone.
 
 Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
 
+Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `X-Frame-Options: DENY` and `Cache-Control: no-store` (a route may override `Cache-Control`; the SSE stream sends `no-store, no-transform`). `Strict-Transport-Security` is sent in production only. `X-Powered-By` is not sent. An unknown route returns `404 { "message": "Not found." }`. Prisma not-found and foreign-key failures map to `404 Record not found.` and `422`, with generic messages that never name a table or constraint (issue #334). Issue #332.
+
 ## Health
 
 | Method & path | Auth | Notes |
@@ -16,6 +18,14 @@ Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec ye
 | `GET /health/live` | none | Process liveness only; returns `200` while the HTTP process is running. |
 | `GET /health/ready` | none | Cached for three seconds. Returns `200` when required configuration, Postgres, and the latest committed Prisma migration are ready; otherwise `503`. A configured Stellar RPC result is reported separately and does not make the whole API unready. |
 | `GET /health` | none | Backward-compatible alias for liveness. |
+
+Request-body errors (issue #333), on every route that parses JSON:
+`400 INVALID_JSON` (malformed JSON), `413 PAYLOAD_TOO_LARGE` (over
+`express.json()`'s limit), `415 UNSUPPORTED_ENCODING` (unknown
+`Content-Encoding`), `415 UNSUPPORTED_CHARSET`, `400 REQUEST_ABORTED`, and
+`400 INVALID_REQUEST_BODY` (e.g. a corrupt gzip body), all in the
+`{ message, code }` envelope. The lab-result upload keeps its own
+`413 LAB_RESULT_TOO_LARGE`.
 
 ## Auth (`/auth`) — `backend/src/modules/auth`
 
@@ -27,6 +37,8 @@ Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec ye
 | `POST /auth/logout` | `X-CSRF-Token` | — | Clears the refresh cookie. `204 No Content`; `403` without the CSRF header or from a disallowed `Origin`. |
 | `POST /auth/verify-email` | none | `{ token }` | Redeems the token from the verification email. `200 { emailVerifiedAt }`. Errors are `400` with `code: 'INVALID_VERIFICATION_TOKEN'` (unknown / already used) or `code: 'VERIFICATION_TOKEN_EXPIRED'`. Single-use and atomic — two concurrent redemptions can't both succeed. |
 | `POST /auth/verify-email/resend` | access token | — | Re-sends to the caller's own address. `200 { resendAfterSeconds }`. `409 EMAIL_ALREADY_VERIFIED` if already verified; `429 EMAIL_VERIFICATION_RATE_LIMITED` if a mail went out less than `EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS` ago (default 60). Authenticated and account-scoped on purpose — no email in the body, so it can't be used to enumerate accounts. |
+| `POST /auth/change-email/request` | patient, doctor, admin | Authenticated. Body `{ newEmail, password }`. Requires current password confirmation with brute-force protection. Generates expiring `EmailChangeToken`, sends confirmation link to new email and alert notice to current email. Emits `email_change.requested` AuditEvent. |
+| `POST /auth/change-email/confirm` | public | Body `{ token }`. Atomically changes account email and sets `emailVerifiedAt` if token is valid and unconsumed, and new address is not taken. Emits `email_change.confirmed` AuditEvent. |
 
 ### Email verification (Phase 8, issue #34)
 
@@ -169,14 +181,37 @@ admin without 2FA logs in, the response instead carries
 only by `2fa/setup` and `2fa/enable`. `TOTP_ISSUER` sets the issuer shown in
 the authenticator app (default `DocForum`).
 
+### Admin account directory (Phase 8, issue #275)
+
+`GET /admin/users` is admin-only and read-only. It exists so support work
+("find this account's id") no longer needs database access.
+
+| Method & path | Auth | Query | Notes |
+|---|---|---|---|
+| `GET /admin/users` | admin | `role` (`patient`\|`doctor`\|`facility`\|`admin`), `state` (`active`\|`deactivated`\|`deleted`), `emailPrefix`, `limit` (1–200, default 50), `cursor` | Newest first, keyset-paged on `(createdAt DESC, id DESC)` like the audit list. Returns `{ items, nextCursor }`. Items are account-level fields only: `id`, `email`, `role`, `locale`, `emailVerifiedAt`, `deactivatedAt`, `deletedAt`, `deleted`, `createdAt`, `updatedAt` — never `passwordHash`, token fields, TOTP secrets or any clinical data. A deleted (tombstoned) account has `deleted: true` and `email: null`; its internal `deleted+<id>@deleted.invalid` placeholder is never returned. Unknown parameters and a malformed cursor are `400`. `emailPrefix` is an indexed prefix match (no wildcard interpretation). |
+
+### Admin invite list and revocation (Phase 8, issue #277)
+
+`POST /admin/invites` already issues a single-use invite; these two
+admin-only routes make outstanding invites visible and cancellable.
+
+| Method & path | Auth | Query / body | Notes |
+|---|---|---|---|
+| `GET /admin/invites` | admin | `status` (`pending`\|`redeemed`\|`expired`\|`revoked`, default `pending`), `limit` (1–200, default 50), `cursor` | Newest first, keyset-paged on `(createdAt DESC, id DESC)`: `{ items, nextCursor }`. Item: `{ id, email, status, expiresAt, consumedAt, revokedAt, invitedByUserId, createdAt }`. The token hash is never selected or returned. `status` is derived: `revoked` if `revokedAt`, else `redeemed` if `consumedAt`, else `expired` past `expiresAt`, else `pending`. |
+| `DELETE /admin/invites/:id` | admin | — | Revokes an unredeemed invite with one conditional `UPDATE` (`consumedAt IS NULL AND revokedAt IS NULL`). `200 { invite, alreadyRevoked }`; revoking an already-revoked invite is idempotent (`alreadyRevoked: true`, no second audit event). `409` if it was already redeemed. Writes an `admin_invite.revoked` `AuditEvent` in the same transaction (metadata carries ids only — never the invited address). A revoked invite's redemption fails with `400`. |
+
 ## Doctors (`/doctors`) — `backend/src/modules/doctors`
 
 | Method & path | Auth | Notes |
 |---|---|---|
 | `GET /doctors` | none | Query: optional `specialty` slug, typo-tolerant `q`, `symptom` slug (curated mapping, ranked by mapping strength — issue #60), `availableBefore` (ISO date-time), `limit` (1–50, default 20), and keyset `cursor`. Returns `{ items: [{ id, fullName, nextAvailableAt, specialties: [{ id, name, slug }] }], nextCursor }`; only verified profiles and public fields are returned. One/two-character queries use prefix matching; longer queries use `pg_trgm` similarity. `nextAvailableAt` is the ISO timestamp of the earliest open future slot, or `null`. With `symptom`, an unknown, retired or unmapped symptom is a `200` with empty `items` and an explanatory `hint`. |
+| `GET /doctors/:doctorProfileId` | none | Public detail for one verified, active doctor. Returns `{ id, fullName, nextAvailableAt, specialties: [{ id, name, slug }] }`. Returns `404` for unknown, unverified or deactivated doctors. |
 | `GET /doctors/me` | doctor | Returns the caller's own `DoctorProfile`. |
+| `PATCH /doctors/me` | doctor | Updates the caller's own `DoctorProfile` under optimistic concurrency (`If-Match: "<version>"`). Body `{ fullName?: string, timeZone?: string }`, requiring at least one field. `timeZone` must be a canonical IANA time zone identifier (or `UTC`). Modifying `timeZone` preserves the absolute UTC timestamps of existing slots and appointments. |
 | `PUT /doctors/me/specialties` | doctor | Body `{ specialtyIds: string[] }`; replaces the caller's specialty assignments. Unknown ids return `400`. |
 | `PATCH /doctors/:doctorProfileId/verification` | admin | Body `{ status: 'pending'\|'verified'\|'rejected' }`. Manual, admin-gated per PRD FR-3 — there is no automated verification pipeline. |
+| `GET /admin/doctors/verification-queue` | admin | Query: optional `kind` (`profile`\|`specialty`), `specialty` (id or slug), `limit` (default 20, max 100), keyset `cursor`. Returns pending doctor profiles and pending doctor specialty assignments ordered oldest first, with non-clinical review data, queue age in seconds, and `isDeactivated` flag. |
+| `PATCH /doctors/:doctorProfileId/specialties/:specialtyId/verification` | admin | Body `{ status: 'pending'\|'verified'\|'rejected', rejectionReason? }`. Reviewer identity is derived server-side from authenticated admin; `reviewDate` is set server-side. Requires `rejectionReason` (up to 200 chars) when rejecting. Emits transactional `AuditEvent` (`doctor_specialty.verification_changed`); no-op if status is unchanged. |
 
 ## Specialties (`/specialties`) — `backend/src/modules/doctors`
 
@@ -184,18 +219,38 @@ the authenticator app (default `DocForum`).
 |---|---|---|
 | `GET /specialties` | none | Lists the seeded specialty catalog as `{ id, name, slug }` records. |
 
+## Symptoms (`/symptoms`) — `backend/src/modules/doctors`
+
+Curated symptom vocabulary (issue #60) used by `GET /doctors?symptom=`. It is
+reviewed, admin-managed guidance for finding a specialty — not a diagnosis and
+not an automated triage tool. Retired symptoms are hidden from search.
+
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /symptoms` | none | Query: optional `q` (prefix match for short terms, `pg_trgm` similarity for 3+ characters), `limit` (1–50, default 10). Returns `{ items: [{ id, name, slug }] }`; without `q` it lists the active vocabulary alphabetically. |
+| `GET /admin/symptoms` | admin | Every symptom, including retired, with its `specialties: [{ specialtyId, weight, specialty: { name, slug } }]`. |
+| `POST /admin/symptoms` | admin | Body `{ name, slug? }` (`slug` derived from `name` when omitted). `409` on a duplicate name or slug. |
+| `PATCH /admin/symptoms/:id` | admin | Body `{ name?, isRetired? }`; at least one field is required. Audits rename/retire/unretire. |
+| `PUT /admin/symptoms/:id/specialties` | admin | Body `{ mappings: [{ specialtyId, weight }] }`, `weight` 1–5. **Replaces** the whole mapping set (an omitted specialty becomes unmapped); duplicate ids keep the highest weight. Unknown specialty ids and out-of-range weights are `400`. |
+| `GET /admin/specialties` | admin | Lists all specialties in the catalog, including retired ones (`isRetired: true`). |
+| `POST /admin/specialties` | admin | Body `{ name: string, slug?: string }`. Creates a new specialty (slug is generated if omitted). Audited (`specialty.created`). `409` on duplicate name or slug. |
+| `PATCH /admin/specialties/:id` | admin | Body `{ name?: string, isRetired?: boolean }`. Renames a specialty; slug stays immutable. Audited (`specialty.renamed`). `409` on duplicate name. |
+| `POST /admin/specialties/:id/retire` | admin | Retires a specialty (`isRetired: true`). Retired specialties disappear from public `GET /specialties` and cannot be newly assigned to doctors, but existing links and referrals keep working. Audited (`specialty.retired`). |
+
 ## Availability (`/availability`) — `backend/src/modules/availability`
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
-| `GET /availability/doctors/:doctorProfileId/slots` | none | — | Lists that doctor's open, future slots. Public on purpose — a patient needs to see availability before signing in. |
+| `GET /availability/doctors/:doctorProfileId/slots` | none | — | Lists that doctor's open, future slots. Public on purpose — a patient needs to see availability before signing in. **Returns `409` if the doctor's account is deactivated or deleted.** |
 | `POST /availability/doctors/:doctorProfileId/slots/generate` | doctor (self only) | `{ date: 'YYYY-MM-DD', startHour, endHour, slotLengthMinutes }` | Fixed-length, single-day generation — no recurrence engine (ARCHITECTURE.md §6.3.6 guardrail). Idempotent: re-running with an overlapping range skips slots that already exist rather than erroring or duplicating. |
+
+- `GET /availability/doctors/:doctorProfileId/slots`: supports optional `?from=&to=` ISO date-time query parameters (capped to 31 days span, default to next 14 days, `from` in the past clamped to `now`). Backed by composite index `(doctorProfileId, status, startTime)`.
 
 ## Appointments (`/appointments`) — `backend/src/modules/appointments`
 
 | Method & path | Auth | Body | Notes |
 |---|---|---|---|
-| `POST /appointments` | patient | `{ availabilitySlotId, patientProfileId? }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md §5.1` and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open. Load-tested under contention (Phase 9, issue #86) — see `backend/tests/load/README.md`. `patientProfileId` (Phase 8, issue #42) books for a dependent you're an active guardian of; omit it (or pass your own profile id) to book for yourself. Someone else's profile or dependent: `404`, checked before anything is booked. A dependent whose guardianship ended (revoked / reached majority): `403 GUARDIANSHIP_INACTIVE`. |
+| `POST /appointments` | patient | `{ availabilitySlotId, patientProfileId? }` | **The concurrency-critical endpoint** — see `ARCHITECTURE.md §5.1` and `backend/tests/integration/booking.test.mts`. `409` if the slot is no longer open **or the doctor's account is deactivated/deleted**. Load-tested under contention (Phase 9, issue #86) — see `backend/tests/load/README.md`. `patientProfileId` (Phase 8, issue #42) books for a dependent you're an active guardian of; omit it (or pass your own profile id) to book for yourself. Someone else's profile or dependent: `404`, checked before anything is booked. A dependent whose guardianship ended (revoked / reached majority): `403 GUARDIANSHIP_INACTIVE`. |
 | `GET /appointments/mine` | patient | — | Caller's own appointments, most recent first. `?patientProfileId=` lists an active dependent's instead (same authorisation as booking). |
 | `GET /appointments/doctor/today` | doctor | — | Caller's scheduled appointments whose slot starts in the doctor's current calendar day, computed in `DoctorProfile.timeZone` (issue #290), ordered by slot start then id. |
 | `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'\|'cancelled'\|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
@@ -204,6 +259,8 @@ the authenticator app (default `DocForum`).
 | `PATCH /appointments/:appointmentId/start` | doctor (treating doctor only) | — | Marks the appointment as `in_progress` and records `startedAt`. `409` unless `scheduled` (and checked in, if check-in is required). |
 | `PATCH /appointments/:appointmentId/complete` | doctor (treating doctor only) | — | Marks the appointment as `completed` and records `completedAt`; same referral cascade as the status transition above. `409` unless `in_progress`. |
 | `GET /appointments/:appointmentId/queue` | patient (own appointment) or treating doctor | — | Returns `{ position, estimatedWaitMinutes, checkedInAt, startedAt }` for the caller's own appointment only — never other patients' details. Position is the count of earlier same-day appointments for that doctor still not completed; the estimate is a simple running-average delay (actual start minus scheduled start) applied to the remaining appointments ahead in the queue. |
+| `GET /appointments/doctor` | doctor | — | Caller's appointments over an arbitrary date range (`?from=&to=&status=`, capped at 31 days), interpreted in their profile `timeZone`. Returns slot times and patient display name with zero clinical details. Cancelled appointments that released their slot return with `slot: null`. |
+| `GET /appointments/:id` | patient, guardian, treating doctor | — | Role-scoped appointment detail read. Returns appointment with slot times (`slot`), doctor summary (`doctor`), and origin. Only the owning patient, an active guardian of a dependent patient, or the treating doctor may access; all other callers (including admins, for clinical privacy) receive `404`. Cancelled appointments with a released slot return `slot: null`. Emits strong `ETag` carrying the appointment's integer `version`. |
 
 ## Intake (`/intake`) — `backend/src/modules/intake`
 
@@ -226,6 +283,9 @@ of the address.
 | `POST /appointments/:appointmentId/consultation` | doctor (own **completed** appointment, verified email) | `{ outcome: 'resolved' \| 'referred' \| 'follow_up_needed', notes }` | Closes the appointment's consultation. `201` returns `{ consultation, appointment }`; `404` if the appointment doesn't exist **or isn't the caller's** (no existence leak); `409` if the appointment isn't `completed` or its consultation was already closed; `400` on an unknown outcome or empty/over-20k notes. |
 | `POST /consultations` | doctor (own completed appointment, verified email) | `{ appointmentId, outcome?, notes? }` | The same write with the appointment in the body — Phase 3's address for it. `201` returns the consultation. `outcome` is optional here so a record can exist before sign-off; the close route above requires it. |
 | `GET /consultations/:consultationId` | doctor (treating) or patient (own visit) | — | Anyone else gets `403`; unknown id `404`. `notes` comes back decrypted. |
+| `GET /consultations/mine` | patient (own consultations, or guardian with `?patientProfileId=`) | — | Keyset-paginated list of the caller's consultation summaries, newest first. Query: `patientProfileId`, `limit` (default 20), `cursor`. Returns `{ items: [{ id, appointmentId, date, doctorName, outcome, createdAt }], nextCursor }`. Notes are omitted. |
+| `GET /consultations/doctor` | doctor (treating doctor, verified email) | — | Keyset-paginated list of the caller's consultation summaries, newest first. Query: `limit` (default 20), `cursor`. Returns `{ items: [{ id, appointmentId, date, patientName, outcome, createdAt }], nextCursor }`. Anonymised patients show as `Deleted patient`. Notes are omitted. |
+| `GET /consultations/:consultationId` | doctor (treating) or patient (own visit); active guardian with `?patientProfileId=` | query: `patientProfileId` (uuid, optional) | Issue #305: without the parameter, existing behaviour is unchanged. Naming a dependent reads their consultation (notes + addenda decrypted) only while the guardianship is active — `403 GUARDIANSHIP_INACTIVE` once revoked or at majority, `404` for an unrelated profile. Every successful read writes a PHI access log naming the viewer. |
 | `POST /consultations/:consultationId/referrals` | doctor (treating, verified email) | `{ targets: [{ targetDoctorId?, targetSpecialtyId?, snapshotNotes }] }` | Issue #66 — atomic all-or-none multi-referral. Equivalent to `POST /referrals/from-consultation/:consultationId` below; both live on the referrals service, so a specialty-only target is routed at creation exactly as that row describes (issue #6). |
 
 Once-only is a database guarantee, not an app-level check:
@@ -244,6 +304,23 @@ columns cannot be searched or indexed.
 Every write also records an `AuditEvent` (`consultation.closed`) in the same
 transaction, so the event exists iff the consultation was written.
 
+### Async thread, attachments, follow-ups and sign-off (Phase 2, issues #61–#64)
+
+| Method & path | Auth | Body | Notes |
+|---|---|---|---|
+| `GET /consultations/:consultationId/messages` | patient (own visit) or treating doctor | — | Issue #61. Oldest-first keyset page: `?limit=1..100&cursor=<messageId>` returns `{ messages, nextCursor }`. Bodies decrypted, attachments metadata only (no object key). Non-participants get `403`; another patient's consultation is invisible (`404`) through RLS. |
+| `POST /consultations/:consultationId/messages` | participants, verified email | `{ body?, attachments?: [{ fileName, contentType, dataBase64 }] }` | Appends. Text or ≥1 attachment required. `409 CONSULTATION_THREAD_CLOSED` after `CONSULTATION_THREAD_CLOSE_AFTER_DAYS`. Attachments: JPEG/PNG/PDF, sniffed, ≤ `CONSULTATION_ATTACHMENT_MAX_BYTES` each, ≤ 5 per message, per-user quota; EXIF stripped. |
+| `GET /consultations/messages/attachments/:attachmentId/download-url` | participants | — | Mints `{ url, expiresAt }`, valid for `CONSULTATION_ATTACHMENT_URL_TTL_SECONDS` (default 300). Membership re-checked here on every call. |
+| `GET /consultations/messages/attachments/:attachmentId/file?expires=&signature=` | signed URL (no auth header) | — | Serves the bytes while the HMAC signature and expiry are valid; `403 ATTACHMENT_LINK_INVALID` otherwise. `Cache-Control: private, no-store`. |
+| `PATCH /consultations/:consultationId/notes` | authoring doctor, verified email | `{ notes }` | Issue #64. Conditional update while unsigned; `409 CONSULTATION_NOTE_SIGNED` after sign-off. |
+| `POST /consultations/:consultationId/sign-off` | authoring doctor, verified email | — | Signs once. `409 CONSULTATION_ALREADY_SIGNED` on a second attempt. |
+| `POST /consultations/:consultationId/addenda` | authoring doctor, verified email | `{ body }` | Post-sign-off correction, append-only. `409 CONSULTATION_NOTE_NOT_SIGNED` before sign-off. `GET /consultations/:id` returns `signedAt` and the addenda in order. |
+| `GET /follow-ups/mine` | patient | `?status=open\|booked\|expired` | Issue #63. Own follow-up requests, newest first, decrypted note snapshot. |
+| `POST /follow-ups/:followUpId/book` | patient (own request), verified email | `{ availabilitySlotId }` | Books through the standard conditional slot claim; appointment origin `follow_up`. `409 FOLLOW_UP_ALREADY_BOOKED` / `FOLLOW_UP_EXPIRED`. |
+
+Documents the close route's `followUpWindowStart` / `followUpWindowEnd`
+(optional, both together, ISO-8601) for the follow-up window.
+
 
 ## Referrals (`/referrals`) — `backend/src/modules/referrals`
 
@@ -251,14 +328,20 @@ transaction, so the event exists iff the consultation was written.
 |---|---|---|---|
 | `POST /referrals` | doctor | `{ sourceConsultationId, targetDoctorId?, targetSpecialtyId?, snapshotNotes }` | Issues #5 and #6 (routing — `docs/adr/0008-referral-routing-without-target-doctor.md`). Requires: the caller's own **completed** appointment's consultation, at least one of `targetDoctorId` / `targetSpecialtyId` (`400` otherwise), no self-referral, no duplicate target for that consultation. A named doctor must be verified (and verified in `targetSpecialtyId` when given). **A specialty-only target is routed at creation to the least-loaded eligible doctor** — verified, holds the specialty, not the referring doctor, active account; fewest `pending`+`accepted` referrals, ties broken by doctor id — and the response carries the resolved `targetDoctorId`. When nobody is eligible: `422` with `code: "REFERRAL_NO_ELIGIBLE_TARGET"` and **no referral row is written**. Writes `snapshotNotes` as a copy. A repeat doctor/specialty anywhere in the lineage **flags** the referral (`loopFlaggedAt`) for the admin queue instead of failing; chains over `REFERRAL_MAX_HOPS` (default 4) and self-referrals are `422`. |
 | `POST /referrals/from-consultation/:consultationId` | doctor | `{ targets: [...] }` | Issue #66 — same atomic batch as the consultations route; the decision to allow multi-referral with independent lifecycles (and no bundle table) is `docs/adr/0017-multiple-referrals-per-consultation.md`. Duplicate doctor *or* specialty inside the batch, or against an existing referral from that consultation, fails the whole batch. Each specialty-only target is routed independently (issue #6), a batch never routes one onto a doctor it names explicitly, and a target with no eligible candidate left fails the whole batch. |
-| `POST /referrals/:referralId/accept` | patient (the referred patient) | `{ availabilitySlotId }` | Issue #7. Conditional `pending → accepted` (exactly one concurrent accept wins → `409`), then books a real appointment against the **target doctor** through the same slot-claim path as `POST /appointments` — the patient picks the slot; no re-intake, the snapshot travels on the referral. `409` if the slot isn't the target doctor's. Writes two audit rows in the one append-only trail: `referral.accepted` (a `Referral`-typed row) and `appointment.booked` for the appointment it booked (`origin: 'referral'`), both inside the accept's own transaction. |
+| `POST /referrals/:referralId/accept` | patient (the referred patient) | `{ availabilitySlotId }` | Issue #7. Conditional `pending → accepted` (exactly one concurrent accept wins → `409`), then books a real appointment against the **target doctor** through the same slot-claim path as `POST /appointments` — the patient picks the slot; no re-intake, the snapshot travels on the referral. `409` if the slot isn't the target doctor's **or the target doctor's account is deactivated/deleted**. Writes two audit rows in the one append-only trail: `referral.accepted` (a `Referral`-typed row) and `appointment.booked` for the appointment it booked (`origin: 'referral'`), both inside the accept's own transaction. |
+| `POST /referrals/:referralId/accept` | patient (the referred patient); active guardian with `patientProfileId` in the body | `{ availabilitySlotId, patientProfileId? }` | Issue #305: a guardian accepts a dependent's referral through `resolveActingProfile`; `403 GUARDIANSHIP_INACTIVE` after revocation/majority, `404` for an unrelated profile. The appointment is booked for the dependent and the audit row carries that profile id in its metadata. |
+| `POST /referrals/:referralId/decline` | patient (the referred patient); active guardian with `patientProfileId` in the body | `{ patientProfileId? }` | Issue #305: same authorisation as accept; pending-only, terminal. The `referral.declined` audit row carries the acted-for profile id. |
 | `POST /referrals/:referralId/decline` | patient (the referred patient) | — | Pending-only, terminal (`409` otherwise). Writes a `referral.declined` audit row. |
+| `POST /referrals/:referralId/withdraw` | doctor (the referring doctor) | `{ reason }` | Issue #308 — pending only, with a required 1–200 character reason. Reuses the existing `cancelled` status and `cancelledReason` column; accepted or terminal referrals and a lost race with accept return `409`, another doctor's referral or an unknown id returns `404`. One conditional `pending → cancelled` UPDATE (also requiring `resultingAppointmentId IS NULL`) and a `referral.withdraw` AuditEvent commit together; the reason lives in `metadata.reason`. |
 | `GET /referrals/mine` | patient | — | `{ referrals, groupedByConsultation }` — grouped for the "one visit, several referrals" view (#66). |
+| `GET /referrals/mine` | patient; active guardian with `?patientProfileId=` | query: `patientProfileId` (uuid, optional) | Issue #305: lists the named dependent's referrals with the same `{ referrals, groupedByConsultation }` shape. `403 GUARDIANSHIP_INACTIVE` after revocation/majority, `404` for an unrelated profile. Guardian reads are PHI-access-logged. |
 | `GET /referrals/created` | doctor | — | Referrals the caller created, including ones the cascade expired (see `referringDoctorNotifiedAt`) and ones the loop guard flagged. |
+| `GET /referrals/incoming` | doctor (the referral's current target) | query: `status`, `limit` (1–50, default 20), `cursor` | Issue #306: `{ items, nextCursor }`, newest first, keyset-paginated on `(createdAt, id)` through the existing `targetDoctorId` index. Defaults to `pending` + `accepted`; `expired`, `cancelled`, `declined` and `completed` need an explicit `status=...` filter. `snapshotNotes` is returned decrypted when field encryption lands. Each returned referral writes a PHI `AccessLog` row with the target doctor as viewer. Admin reassignment changes `targetDoctorId`, so a moved referral disappears from the old target's inbox and appears in the new target's. |
 | `GET /referrals/admin/queue` | admin | query: `status`, `olderThan` (`48h` / `7d`), `loopFlagged` (`true`\|`false`), `targetSpecialtyId`, `targetDoctorId` | Issue #68 + #339 — stuck/aged/loop-flagged referrals filtered by specialty and target doctor, with a derived human-readable `reason` and `ageMinutes`. |
 | `POST /referrals/admin/:referralId/reassign` | admin | `{ targetDoctorId, reason }` | **Pending referrals only.** Moves `targetDoctorId` (validated through the doctors service) — the snapshot, lineage and patient are untouched. Writes an `AuditEvent` (`referral.reassign`) in the one append-only audit trail, as a `Referral`-typed row. |
 | `POST /referrals/admin/:referralId/cancel` | admin | `{ reason }` | Pending or accepted (`409` on terminal). Cancelling an accepted referral also cancels its live appointment through the appointments service. Writes an `AuditEvent` (`referral.cancel`) in the one append-only audit trail, as a `Referral`-typed row. `cancelled` is distinct from `expired`/`declined` so the three exits stay tellable apart. |
 | `GET /referrals/admin/:referralId/audit-events` | admin | — | The referral's audit rows, read from the same `AuditEvent` table `GET /admin/audit-events` serves (`entityType: 'Referral'`, `entityId: <referralId>`): actor, role, action, from/to state, metadata (the admin's `reason` lives in `metadata.reason`), timestamp. |
+| `GET /referrals/:referralId` | patient (own, or guardian with `?patientProfileId=`), referring doctor, current target doctor, admin | query: `patientProfileId?` | Issue #307 — one referral row, including `status`, `expiredAt`, `expiredReason`, `cancelledReason` and `resultingAppointmentId`; `snapshotNotes` is returned in readable form. Everyone else receives `404`; registered after `/incoming`, `/mine`, `/created` and `/admin/*` so those routes keep matching. Successful reads are recorded in the PHI access log. |
 
 ## Facilities (`/facilities`) — `backend/src/modules/facilities`
 
@@ -285,6 +368,20 @@ from this list — exactly one, never both. With `catalogItemCode`, the intent
 snapshots the amount in force at issuance plus the code, so publishing a new
 price later cannot re-price an existing intent; a missing price fails the
 issuance with `422 { code: 'PRICE_ON_REQUEST' }` and writes no order.
+
+**Admin capability management (issue #320)**
+
+`POST /facilities/:facilityId/capabilities` — Admin only. Add a capability to a facility. Body: `{ capabilityType, detail? }`. Returns `{ id, capabilityType, detail }`. Records a `FacilityCapability.added` audit event.
+
+`DELETE /facilities/:facilityId/capabilities/:capabilityId` — Admin only. Remove a capability from a facility. Records a `FacilityCapability.removed` audit event.
+
+**Price-item retirement (issue #321)**
+
+`POST /facilities/me/prices/retire` — Facility owner only. Retire a catalog item from the price list from a given date onward. Body: `{ catalogItemCode, effectiveFrom?, asset? }`. Append-only: inserts a new retired row; existing intents and price history are unaffected. Returns the new price-list item row. Issues priced against the item before retirement keep their snapshot amount.
+
+**Patient fulfillment list (issue #323)**
+
+`GET /pharmacy-orders/orders/:orderId/fulfillments?orderType=prescription|lab_order` — Patient (or admin). Lists all fulfillment records for one of the patient's orders. Patients can only list their own orders (ownership verified). Returns `{ records: FulfillmentRecord[] }`.
 
 ## Payments (`/payments`) — `backend/src/modules/payments`
 
@@ -325,6 +422,30 @@ completion also creates an in-app `payment_refunded` notification for the
 patient. `POST /payments/intents/:id/{release,refund}` remains an audited
 admin override. No new endpoint is introduced by this path.
 
+**Funding is idempotent (issue #24).** `POST /payments/intents/:id/fund`
+claims the intent `created -> funding` with a conditional database update
+before calling the escrow contract, so of N concurrent fund requests exactly
+one reaches the chain and the rest get `409` (no escrow is created for them).
+A failed chain call returns the intent to `created` so it can be retried; an
+intent left in `funding` means a crash between the chain call and the status
+write and must be resolved with `npm run reconcile:escrows` (read-only report
+first, then `--adopt` or `--abandon`), never by calling fund again. The
+admin history filter accepts `status=funding`.
+
+Payout-wallet cool-down (issue #328): a facility's `POST /payments/wallet-link`
+re-link returns the new link with a future `effectiveAt`. It becomes the
+escrow payee only after `WALLET_LINK_COOLDOWN_HOURS` (default 24). Until then,
+fund and prepare use the previously effective address. The first-ever
+facility link and patient links are immediate. A facility whose only link is
+still cooling down gets `409 WALLET_LINK_COOLDOWN` on fund/prepare, and a
+release whose recorded payee is only a not-yet-effective link is refused with
+the same code. `GET /payments/wallet-link` returns the active link including
+`effectiveAt`.
+
+| Method & path | Auth | Query | Notes |
+|---|---|---|---|
+| `GET /admin/payments/wallet-links/pending` | admin | — | `{ items }` of facility payout changes still inside their cool-down, soonest first: `id`, `facilityId`, `facilityName`, `newStellarPublicKey`, `previousStellarPublicKey`, `linkedAt`, `effectiveAt`. |
+
 ## Orders (`/orders`) — `backend/src/modules/orders`
 
 Verified doctors can create a consultation with `POST /orders/consultations` (`appointmentId`, optional `outcome` and `notes`) — the same write as `POST /consultations` plus the verified-doctor gate, so all of its one-per-appointment/encryption/audit rules apply. Issue a prescription with `POST /orders/consultations/:consultationId/prescriptions` (`facilityProfileId`, and `items`), or a lab order with `POST /orders/consultations/:consultationId/lab-orders` (`facilityProfileId`, `testType`, optional `urgency` and `notes`). Either route takes **exactly one** of a positive integer `amountStroops` (manual price) or a `catalogItemCode` (facility price list, issue #127) — the resolved amount and the code are snapshotted on the payment intent. Issuance creates its payment intent in the same transaction. Corrections create superseding immutable orders: a created intent moves to the correction; an escrowed intent remains linked to the original and is handled by the existing admin refund action.
@@ -335,6 +456,7 @@ Verified doctors can create a consultation with `POST /orders/consultations` (`a
 |---|---|---|---|
 | `POST /orders/lab-orders/:labOrderId/result` | facility (the order's own facility only) | the raw file, `Content-Type: application/pdf` \| `image/png` \| `image/jpeg` | Stores the file in private object storage and creates the order's `LabResult`. The bytes must match the declared type (`415 LAB_RESULT_UNSUPPORTED_TYPE` / `LAB_RESULT_CONTENT_MISMATCH`). Size limit `LAB_RESULT_MAX_BYTES`, default 10 MiB (`413 LAB_RESULT_TOO_LARGE`). Empty body: `400`. Create-once: `409 LAB_RESULT_ALREADY_ATTACHED`. A superseded order: `409 LAB_ORDER_SUPERSEDED` (attach to the correction). Any other facility gets `404`, the same as a missing order. `201` with `{ id, labOrderId, fulfillingFacilityId, contentType, byteSize, abnormality, acknowledgement, createdAt }`; `?abnormality=normal|abnormal|critical` (default `normal`, issue #72) is the facility's judgement, and abnormal/critical opens an acknowledgement task for the ordering doctor (see the `/lab-results` rows below). The storage key is never returned. Writes a `lab_result.attached` audit event. Does not change the order or its fulfillment status. No storage configured on the server: `503 OBJECT_STORAGE_NOT_CONFIGURED`. |
 | `GET /orders/lab-orders/:labOrderId/result` | patient (own order), ordering doctor, fulfilling facility | — | The file itself, as `Content-Disposition: attachment`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`. Anyone else, including admins: `404`, the same as a missing order. No result yet: `404 LAB_RESULT_NOT_FOUND`. Each read is recorded in the PHI access log (`entityType: 'LabResult'`). |
+| `GET /orders/lab-orders/:labOrderId/result` | patient (own order), ordering doctor, fulfilling facility; active guardian with `?patientProfileId=` | query: `patientProfileId` (uuid, optional) | Issue #305: naming a dependent downloads that dependent's result file with `resolveActingProfile` authorisation; `403 GUARDIANSHIP_INACTIVE` after revocation/majority, `404` for an unrelated profile. The access log names the guardian as viewer and uses detail `lab result file download (guardian)`. |
 | `POST /lab-results/:labResultId/acknowledge` | doctor (the ordering doctor only) | — | Acknowledges an `abnormal`/`critical` result once via a conditional UPDATE. `200` with the acknowledgement row; a repeat is `409`. Anyone else (including another doctor) gets the same `404` as a missing task. Writes a `lab_result.acknowledged` audit event. |
 | `GET /lab-results/unacknowledged` | doctor, admin | `limit` (1–100, default 50) | Doctors see their own outstanding tasks; admins see the escalation queue (everything escalated or past its deadline). Items carry `labResultId`, `labOrderId`, `orderingDoctorId`, `severity`, `escalationDueAt`, `escalatedAt`, `overdue` (derived from the deadline) and `createdAt`. |
 
@@ -394,6 +516,7 @@ and the write (previously the second write silently overwrote the first).
 |---|---|---|---|
 | `GET /payments/mine` | patient | `status`, `from`, `to`, `limit`, `cursor` | Lists only the caller's payment intents, newest first. |
 | `GET /payments/facility/ledger` | facility | `status`, `from`, `to`, `limit`, `cursor` | Lists only the caller facility's intents and includes SQL-aggregated lifecycle totals. |
+| `GET /payments/facility/ledger.csv` | facility | `status`, `from`, `to` | Issue #329. The same rows and order as the ledger, as a streamed `text/csv` download (`attachment; filename="facility-ledger.csv"`). Columns: `date,intent_id,status,asset,amount_smallest_unit,amount,transaction_hash`. Cells starting with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'` (formula-injection guard). `limit`/`cursor` are rejected (`400`): the export covers every matching row. |
 
 `limit` defaults to 50 and is capped at 100. `from` and `to` are inclusive
 ISO-8601 dates or date-times; `status` is one of `created`, `escrowed`,
@@ -412,6 +535,9 @@ clinical order details are exposed. The facility totals object contains
 `escrowed` (pending in escrow), `released`, and `refunded` sums, each as a
 BigInt-safe decimal string.
 ## Patients (`/patients`) — `backend/src/modules/patients`
+
+| `GET /patients/me` | patient | Authenticated patient. Returns caller's profile with strong `ETag` matching `version`. Refuses anonymized profiles (404). |
+| `PATCH /patients/me` | patient | Authenticated patient. Body `{ fullName?, dateOfBirth? }`. Requires `If-Match` header with current version (428/412). Executes single conditional UPDATE on version and anonymizedAt null. |
 
 ### Dependents (Phase 8, issue #42 — `docs/adr/0011`)
 
@@ -501,6 +627,16 @@ Notification payloads are validated against the typed catalogue and contain
 opaque entity identifiers only, never clinical details. Registered email/SMS
 adapter failures do not fail the persisted in-app notification. Provider
 integration and callbacks remain pending the provider decision in issue #17.
+
+`GET /notifications/stream` (issue #97) delivers to a user's streams on every
+backend instance (issue #330). Events: `notification` with
+`data: { id, type }` and `id:` set to the notification id (ids only, so fetch
+the notification through `GET /notifications`); `resync` (no ids) when the
+instance's fan-out listener has reconnected and events may have been missed,
+so the client should refetch its inbox; and `token-expired`. `/health/ready`
+reports the listener as `checks.notifications` without failing readiness.
+
+The machine-readable OpenAPI 3.1 contract is generated by `backend/scripts/gen-openapi.mjs`, committed as `backend/openapi.json`, checked for drift in CI, and served at `GET /openapi.json` outside production. Provider callbacks are `POST /notifications/webhooks/postmark` and `POST /notifications/webhooks/twilio`; both require the configured timestamped signature and never expose clinical payloads.
 
 ## Outbox administration (`/admin/outbox`) — `backend/src/events`
 
@@ -593,6 +729,9 @@ is still pending.
 ## Escrow chain events (/admin/payments/escrow-events)
 
 Admin-only read endpoint. Optional state filter accepts pending, matched, or unmatched; limit is 1–200 (default 50). It returns persisted Soroban events and per-contract cursors. Unmatched release/refund events produce a high-severity structured log, an optional JSON POST to ESCROW_EVENT_ALERT_WEBHOOK_URL, and an unmatched row visible here. A retention-window failure sets catchupError on the corresponding cursor; operators must reconcile the gap before changing the configured start ledger.
+
+Pagination (issue #327): events are ordered newest first (`detectedAt` desc, then `id` desc). Pass the response's `nextCursor` back as `?cursor=` to fetch the next page; `nextCursor` is `null` on the last page, and a malformed cursor is `400 INVALID_CURSOR`. `cursor` combines with `state`. An event with no matching payment intent is flagged by `state: unmatched` with `paymentIntentId: null` and `alertedAt` set; `pending` events are not yet judged.
+
 ## OpenAPI specification
 
 A machine-readable OpenAPI 3 specification is available at [`backend/openapi.json`](../../backend/openapi.json). The TypeScript types and client are generated from this spec via [`backend/scripts/gen-openapi.mjs`](../../backend/scripts/gen-openapi.mjs) into the `@docforum/api-client` package (`packages/api-client/`).
