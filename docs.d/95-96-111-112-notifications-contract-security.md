@@ -1,3 +1,4 @@
+---
 file: docs/api/README.md
 section: "Notifications (`/notifications`) — `backend/src/modules/notifications`"
 ---

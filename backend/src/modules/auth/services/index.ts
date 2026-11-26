@@ -199,6 +199,7 @@ export interface SignupInput {
   password: string;
   fullName: string;
   locale?: Locale;
+  timeZone?: string;
 }
 
 export async function signup(input: SignupInput, context: SessionContext = {}): Promise<AuthSession> {
@@ -222,6 +223,7 @@ export async function signup(input: SignupInput, context: SessionContext = {}): 
     role: input.role,
     fullName: input.fullName,
     locale: input.locale,
+    timeZone: input.timeZone,
   });
 
   // Phase 8, issue #34: the account is created and usable for browsing
