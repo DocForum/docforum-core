@@ -36,6 +36,9 @@ export class ClamAvFileScanner implements FileScanner {
   ) {}
 
   scan(body: Buffer): Promise<ScanResult> {
+    // Only a real Buffer can be framed for INSTREAM; anything else is a scan
+    // error, so callers apply the fail-open / fail-closed policy.
+    if (!Buffer.isBuffer(body)) return Promise.resolve('error');
     return new Promise((resolve) => {
       const socket = net.connect({ host: this.host, port: this.port });
       let response = '';

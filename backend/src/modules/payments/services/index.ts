@@ -346,10 +346,10 @@ export async function getPaymentIntentForOwner(
   const intent = await paymentsRepo.findPaymentIntentById(id);
   if (!intent) return null;
   if (role === 'patient') {
-    const profile = await paymentsRepo.findPatientProfileByUserId(userId);
+    const profile = await findPatientProfileByUserId(userId);
     if (!profile || intent.patientProfileId !== profile.id) return null;
   } else {
-    const facilityProfile = await paymentsRepo.findFacilityProfileByUserId(userId);
+    const facilityProfile = await findFacilityProfileByUserId(userId);
     if (!facilityProfile || intent.facilityId !== facilityProfile.id) return null;
   }
   return intent;
