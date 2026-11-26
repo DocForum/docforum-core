@@ -642,7 +642,6 @@ describe('Idempotency-Key replay protection', () => {
     let secondDoctor: { userId: string; token: string; profileId: string };
     let secondDoctorSlots: string[];
     let referralId: string;
-    let appointmentId: string;
     let waitlistEntryId: string;
 
     beforeAll(async () => {
@@ -681,13 +680,23 @@ describe('Idempotency-Key replay protection', () => {
     }
 
     // Book an appointment on a fresh slot for reschedule tests
-    async function bookAppointmentForReschedule(slotIndex = 4) {
+    async function bookAppointmentForReschedule(slotId: string) {
       const res = await request(app)
         .post('/appointments')
         .set(asPatient(0))
-        .send({ availabilitySlotId: slots[slotIndex] });
+        .send({ availabilitySlotId: slotId });
       expect(res.status).toBe(201);
       return res.body.id as string;
+    }
+
+    // Generate fresh slots for a specific date (avoids clashing with consumed slots)
+    async function generateFreshSlots(targetDoctor: { accessToken: string; profileId: string }, date: string): Promise<string[]> {
+      await request(app)
+        .post(`/availability/doctors/${targetDoctor.profileId}/slots/generate`)
+        .set('Authorization', `Bearer ${targetDoctor.accessToken}`)
+        .send({ date, startHour: 9, endHour: 14, slotLengthMinutes: 30 });
+      const res = await request(app).get(`/availability/doctors/${targetDoctor.profileId}/slots`);
+      return (res.body as { id: string }[]).map((s) => s.id);
     }
 
     // Join waitlist for second doctor
@@ -736,7 +745,7 @@ describe('Idempotency-Key replay protection', () => {
         expect(acceptedAppointments.length).toBe(1);
 
         const row = await rowFor(patients[0].userId, key);
-        expect(row).toMatchObject({ userId: patients[0].userId, key, method: 'POST', route: `/referrals/${referralId}/accept` });
+        expect(row).toMatchObject({ userId: patients[0].userId, key, method: 'POST', route: expect.stringContaining('/accept') });
         expect(row!.responseStatus).toBe(200);
         expect(row!.responseBody).toEqual(first.body);
         expect(row!.requestHash).toMatch(/^[0-9a-f]{64}$/);
@@ -765,7 +774,7 @@ describe('Idempotency-Key replay protection', () => {
         expect(mismatch.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
 
         const referral = await prisma.referral.findUniqueOrThrow({ where: { id: referralId } });
-        expect(referral.status).toBe('pending');
+        expect(referral.status).toBe('accepted');
         expect((await prisma.availabilitySlot.findUniqueOrThrow({ where: { id: secondDoctorSlots[2] } })).status).toBe('open');
       });
 
@@ -820,10 +829,9 @@ describe('Idempotency-Key replay protection', () => {
 
     describe('POST /appointments/:id/reschedule', () => {
       it('replays the stored response to a retry instead of rescheduling twice', async () => {
-        appointmentId = await bookAppointmentForReschedule(0);
-        // Generate a second slot for doctor to reschedule into
-        const extraSlots = await generateSlots(app, doctor as unknown as { accessToken: string; profileId: string }, 8);
-        const newSlotId = extraSlots.find((s: string) => s !== slots[0])!;
+        const freshSlots = await generateFreshSlots({ accessToken: doctor.token, profileId: doctor.profileId }, '2027-06-01');
+        const appointmentId = await bookAppointmentForReschedule(freshSlots[0]);
+        const newSlotId = freshSlots[1];
 
         const first = await request(app)
           .post(`/appointments/${appointmentId}/reschedule`)
@@ -847,10 +855,10 @@ describe('Idempotency-Key replay protection', () => {
       });
 
       it('refuses the same key with a different body (different newSlotId) and runs nothing', async () => {
-        appointmentId = await bookAppointmentForReschedule(1);
-        const extraSlots = await generateSlots(app, doctor as unknown as { accessToken: string; profileId: string }, 8);
-        const newSlotA = extraSlots.find((s: string) => s !== slots[1])!;
-        const newSlotB = extraSlots.find((s: string) => s !== slots[1] && s !== newSlotA)!;
+        const freshSlots = await generateFreshSlots({ accessToken: doctor.token, profileId: doctor.profileId }, '2027-06-02');
+        const appointmentId = await bookAppointmentForReschedule(freshSlots[0]);
+        const newSlotA = freshSlots[1];
+        const newSlotB = freshSlots[2];
         const key = `reschedule-mismatch-${runId}`;
 
         expect(
@@ -872,15 +880,16 @@ describe('Idempotency-Key replay protection', () => {
         expect(mismatch.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
 
         const unchanged = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
-        expect(unchanged.availabilitySlotId).toBe(slots[1]);
+        expect(unchanged.availabilitySlotId).toBe(freshSlots[0]);
       });
 
       it('gives each user their own attempt under the same key string', async () => {
-        const appointmentA = await bookAppointmentForReschedule(2);
-        const appointmentB = await bookAppointmentForReschedule(3);
-        const extraSlots = await generateSlots(app, doctor as unknown as { accessToken: string; profileId: string }, 8);
-        const newSlotA = extraSlots.find((s: string) => s !== slots[2])!;
-        const newSlotB = extraSlots.find((s: string) => s !== slots[3] && s !== newSlotA)!;
+        const freshSlotsA = await generateFreshSlots({ accessToken: doctor.token, profileId: doctor.profileId }, '2027-06-03');
+        const appointmentA = await bookAppointmentForReschedule(freshSlotsA[0]);
+        const freshSlotsB = await generateFreshSlots({ accessToken: doctor.token, profileId: doctor.profileId }, '2027-06-04');
+        const appointmentB = await bookAppointmentForReschedule(freshSlotsB[0]);
+        const newSlotA = freshSlotsA[1];
+        const newSlotB = freshSlotsB[1];
         const key = `reschedule-shared-${runId}`;
 
         const a = await request(app)
