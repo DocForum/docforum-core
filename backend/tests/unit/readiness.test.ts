@@ -7,6 +7,7 @@ function checks(overrides: Partial<ReadinessChecks> = {}): ReadinessChecks {
     database: vi.fn(async () => {}),
     migrations: vi.fn(async () => {}),
     payments: vi.fn(async () => 'disabled' as const),
+    notifications: vi.fn(() => 'listening' as const),
     ...overrides,
   };
 }
@@ -33,6 +34,14 @@ describe('readiness checks', () => {
     await expect(getReadiness()).resolves.toMatchObject({
       status: 'ready',
       checks: { payments: 'unavailable' },
+    });
+  });
+
+  it('reports the notification fan-out listener state without gating readiness (issue #330)', async () => {
+    const getReadiness = createReadinessChecker(checks({ notifications: () => 'reconnecting' }));
+    await expect(getReadiness()).resolves.toMatchObject({
+      status: 'ready',
+      checks: { notifications: 'reconnecting' },
     });
   });
 

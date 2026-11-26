@@ -1,2 +1,0 @@
-Phase 2: list consultations for the patient and the treating doctor ([issue #304](https://github.com/DocForum/docforum-core/issues/304)).
-Added keyset-paginated `GET /consultations/mine` for patients (including guardian view with `patientProfileId`) and `GET /consultations/doctor` for treating doctors. Responses return visit summaries (date, doctor/patient name, outcome) without decrypted clinical notes, resolving ownership through the appointments service and displaying anonymised patient profiles as `Deleted patient`.

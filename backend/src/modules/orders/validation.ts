@@ -77,6 +77,12 @@ export const listDisputesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
 });
 
+/** Issue #305: an active guardian downloads a dependent's result by naming
+ * the dependent. Service-side authorisation through resolveActingProfile. */
+export const labResultDownloadQuerySchema = z.object({
+  patientProfileId: z.string().uuid().optional(),
+});
+
 export const labOrderSchema = requireExactlyOnePrice({
   ...pricing,
   facilityProfileId: z.string().uuid(),

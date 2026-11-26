@@ -1,0 +1,5 @@
+---
+file: docs/api/README.md
+after: | `GET /appointments/:appointmentId/queue` | patient (own appointment) or treating doctor | — | Returns `{ position, estimatedWaitMinutes, checkedInAt, startedAt }` for the caller's own appointment only — never other patients' details. Position is the count of earlier same-day appointments for that doctor still not completed; the estimate is a simple running-average delay (actual start minus scheduled start) applied to the remaining appointments ahead in the queue. |
+---
+| `POST /appointments/waitlist/accept` | patient (own waitlist entry, verified email) | `{ entryId }` | Accepts a waitlist offer for the caller's own waitlist entry. Books the first open slot for the waitlisted doctor in one transaction. `409` if the waitlist entry isn't `pending`, no open slots exist, **or the doctor's account is deactivated/deleted**.

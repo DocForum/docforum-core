@@ -7,6 +7,11 @@ import {
   adminReassignSchema,
   createReferralBatchSchema,
   createReferralSchema,
+  declineReferralSchema,
+  incomingReferralsQuerySchema,
+  listMineQuerySchema,
+  referralDetailQuerySchema,
+  withdrawReferralSchema,
 } from '../validation';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
@@ -29,24 +34,38 @@ export async function createBatch(req: Request, res: Response) {
 
 export async function accept(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const { availabilitySlotId } = acceptReferralSchema.parse(req.body);
+  const { availabilitySlotId, patientProfileId } = acceptReferralSchema.parse(req.body);
   const referral = await referralsService.acceptReferral(
     auditActor(req),
     getParam(req, 'referralId'),
     availabilitySlotId,
+    patientProfileId,
   );
   res.status(200).json(referral);
 }
 
 export async function decline(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const referral = await referralsService.declineReferral(auditActor(req), getParam(req, 'referralId'));
+  const { patientProfileId } = declineReferralSchema.parse(req.body ?? {});
+  const referral = await referralsService.declineReferral(auditActor(req), getParam(req, 'referralId'), patientProfileId);
+  res.status(200).json(referral);
+}
+
+export async function withdraw(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const input = withdrawReferralSchema.parse(req.body);
+  const referral = await referralsService.withdrawReferral(
+    auditActor(req),
+    getParam(req, 'referralId'),
+    input,
+  );
   res.status(200).json(referral);
 }
 
 export async function listMine(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const referrals = await referralsService.listMine(req.user.id);
+  const { patientProfileId } = listMineQuerySchema.parse(req.query);
+  const referrals = await referralsService.listMine(req.user.id, patientProfileId);
   // Grouped by source consultation for the patient's "one visit, several
   // referrals" view (issue #66): independent lifecycles, presented as the
   // bundle they were born as.
@@ -61,6 +80,24 @@ export async function listCreated(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const referrals = await referralsService.listCreated(req.user.id);
   res.status(200).json(referrals);
+}
+
+export async function listIncoming(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const filters = incomingReferralsQuerySchema.parse(req.query);
+  const page = await referralsService.listIncoming(req.user.id, filters);
+  res.status(200).json(page);
+}
+
+export async function getOne(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const { patientProfileId } = referralDetailQuerySchema.parse(req.query);
+  const referral = await referralsService.getReferralDetail(
+    auditActor(req),
+    getParam(req, 'referralId'),
+    patientProfileId,
+  );
+  res.status(200).json(referral);
 }
 
 export async function adminQueue(req: Request, res: Response) {

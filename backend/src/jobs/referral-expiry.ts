@@ -6,6 +6,7 @@
 // the referrals module, so running more than one process is safe.
 import { config } from '../config';
 import { expireStaleReferrals } from '../modules/referrals/services';
+import { logger } from '../logger';
 
 export function startReferralExpiryJob(): () => void {
   let running = false;
@@ -16,13 +17,11 @@ export function startReferralExpiryJob(): () => void {
       .then(({ expired }) => {
         if (expired > 0) {
           // Count only — never ids or notes.
-          // eslint-disable-next-line no-console
-          console.log(`[jobs] referral expiry: ${expired} expired`);
+          logger.info(`[jobs] referral expiry: ${expired} expired`);
         }
       })
       .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error(`[jobs] referral expiry failed: ${err instanceof Error ? err.name : typeof err}`);
+        logger.error(`[jobs] referral expiry failed: ${err instanceof Error ? err.name : typeof err}`);
       })
       .finally(() => {
         running = false;

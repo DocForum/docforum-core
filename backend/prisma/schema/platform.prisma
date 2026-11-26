@@ -56,24 +56,24 @@ model FeatureFlag {
 // only as long as a retry could still arrive, and it is never exported or
 // listed. See ARCHITECTURE.md §4.12.
 model IdempotencyKey {
-  id           String   @id @default(uuid())
+  id              String   @id @default(uuid())
   // Scope: a key is only ever compared against the same user's other keys,
   // so one user can never replay (or read) another user's stored response.
-  userId       String
-  key          String
-  method       String
+  userId          String
+  key             String
+  method          String
   // Route pattern, not the URL: '/payments/intents/:id/fund'. Stored so a
   // row is self-describing when debugging, and folded into requestHash so a
   // key reused on a different route is refused rather than replayed.
-  route        String
+  route           String
   // SHA-256 of the canonical request. Same key + same body -> replay;
   // same key + different body -> 422.
-  requestHash  String
+  requestHash     String
   responseStatus  Int?
   responseBody    Json?
   responseHeaders Json?
-  createdAt    DateTime @default(now())
-  expiresAt    DateTime
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime
 
   @@unique([userId, key])
   @@index([expiresAt])

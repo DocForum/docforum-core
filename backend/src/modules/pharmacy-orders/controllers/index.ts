@@ -5,6 +5,7 @@ import { auditActor } from '../../../middleware/request-id';
 import * as pharmacyOrdersService from '../services';
 import {
   createFulfillmentSchema,
+  listOrderFulfillmentsQuerySchema,
   orderFulfillmentStatusQuerySchema,
   updateFulfillmentItemSchema,
   updateFulfillmentRecordSchema,
@@ -56,6 +57,18 @@ export async function getOrderFulfillmentStatus(req: Request, res: Response) {
     getParam(req, 'orderId'),
   );
   res.status(200).json(summary);
+}
+
+/** GET /pharmacy-orders/orders/:orderId/fulfillments — patient lists
+ * all fulfillment records for their own order (issue #323). */
+export async function listOrderFulfillments(req: Request, res: Response) {
+  const { orderType } = listOrderFulfillmentsQuerySchema.parse(req.query);
+  const records = await pharmacyOrdersService.listFulfillmentRecordsForOrder(
+    orderType,
+    getParam(req, 'orderId'),
+    requireUser(req),
+  );
+  res.status(200).json({ records });
 }
 
 // --- Pharmacy order creation / fulfillment proof ------------------------

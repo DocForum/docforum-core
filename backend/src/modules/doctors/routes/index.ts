@@ -30,8 +30,24 @@ specialtiesRouter.post('/', authenticate, requireRole('admin'), doctorsControlle
 specialtiesRouter.patch('/:id', authenticate, requireRole('admin'), doctorsController.updateSpecialty);
 specialtiesRouter.post('/:id/retire', authenticate, requireRole('admin'), doctorsController.retireSpecialty);
 
+// Issue #60: public symptom vocabulary (autocomplete for "search by
+// symptom"). Declaration order matters — keep it last, and note the
+// doctors router's `/:doctorProfileId` does not apply here: this is a
+// separate mount (`/symptoms`, see mount.ts).
+export const symptomsRouter = Router();
+symptomsRouter.get('/', doctorsController.listSymptoms);
+
 export const adminDoctorsRouter = Router();
 adminDoctorsRouter.get('/doctors/verification-queue', authenticate, requireRole('admin'), doctorsController.verificationQueue);
+adminDoctorsRouter.get('/symptoms', authenticate, requireRole('admin'), doctorsController.listAdminSymptoms);
+adminDoctorsRouter.post('/symptoms', authenticate, requireRole('admin'), doctorsController.createSymptom);
+adminDoctorsRouter.patch('/symptoms/:id', authenticate, requireRole('admin'), doctorsController.updateSymptom);
+adminDoctorsRouter.put(
+  '/symptoms/:id/specialties',
+  authenticate,
+  requireRole('admin'),
+  doctorsController.setSymptomSpecialties,
+);
 adminDoctorsRouter.get('/specialties', authenticate, requireRole('admin'), doctorsController.listAdminSpecialties);
 adminDoctorsRouter.post('/specialties', authenticate, requireRole('admin'), doctorsController.createSpecialty);
 adminDoctorsRouter.patch('/specialties/:id', authenticate, requireRole('admin'), doctorsController.updateSpecialty);

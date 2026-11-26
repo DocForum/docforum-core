@@ -8,7 +8,7 @@ enum VerificationStatus {
 
 model DoctorProfile {
   id                 String             @id @default(uuid())
-  version     Int      @default(1)
+  version            Int                @default(1)
   userId             String             @unique
   fullName           String
   verificationStatus VerificationStatus @default(pending)
@@ -16,21 +16,21 @@ model DoctorProfile {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
-  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  specialties        DoctorSpecialty[]
-  availabilitySlots  AvailabilitySlot[]
-  appointments       Appointment[]
-  prescriptions      Prescription[]
-  labOrders          LabOrder[]
+  user                      User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialties               DoctorSpecialty[]
+  availabilitySlots         AvailabilitySlot[]
+  appointments              Appointment[]
+  prescriptions             Prescription[]
+  labOrders                 LabOrder[]
   // Issue #72: abnormal/critical lab results waiting on this doctor.
   labResultAcknowledgements LabResultAcknowledgement[] @relation("LabResultAcknowledgementOrderingDoctor")
-  waitlistEntries    WaitlistEntry[]
+  waitlistEntries           WaitlistEntry[]
   // Referral sides a doctor can sit on: `referringReferrals` are ones
   // they created; `targetedReferrals` are ones aimed at them (whether
   // they ultimately see the patient or not).
-  referringReferrals Referral[]         @relation("ReferralReferringDoctor")
-  targetedReferrals  Referral[]         @relation("ReferralTargetDoctor")
-  followUpRequests   FollowUpRequest[]  @relation("FollowUpRequestsAsDoctor")
+  referringReferrals        Referral[]                 @relation("ReferralReferringDoctor")
+  targetedReferrals         Referral[]                 @relation("ReferralTargetDoctor")
+  followUpRequests          FollowUpRequest[]          @relation("FollowUpRequestsAsDoctor")
 
   @@index([verificationStatus])
   // Trigram index for doctor search (similarity() in doctors/repositories);
@@ -46,9 +46,52 @@ model Specialty {
 
   doctors         DoctorSpecialty[]
   waitlistEntries WaitlistEntry[]
+  // Issue #60: curated symptom -> specialty guidance (see Symptom below).
+  symptomMappings SymptomSpecialty[]
 
   // Trigram index for doctor search by specialty name (see DoctorProfile).
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "Specialty_name_trgm_idx")
+}
+
+// Symptom-to-specialty mapping (issue #60). A curated, admin-managed
+// controlled vocabulary — explicitly NOT ML or a diagnosis aid (PRD §8.3.3).
+// A patient typing "rash" gets dermatologists first and family medicine
+// second because a human reviewed and weighted that mapping; the result is
+// still a doctor list, never medical advice.
+//
+// `weight` is the mapping strength, 1 (weak) to 5 (strong). Doctors are
+// ranked by the strongest mapped specialty they hold, which is why the
+// service orders by weight before id (see doctors/repositories).
+model Symptom {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  slug      String   @unique
+  isRetired Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  specialties SymptomSpecialty[]
+
+  // Trigram + prefix autocomplete for GET /symptoms?q=
+  // (migration: symptom_specialty_mapping).
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "Symptom_name_trgm_idx")
+}
+
+model SymptomSpecialty {
+  id          String   @id @default(uuid())
+  symptomId   String
+  specialtyId String
+  // 1-5, validated in the API layer; a check constraint keeps a hand-written
+  // row from inventing a different scale.
+  weight      Int      @default(1)
+  createdAt   DateTime @default(now())
+
+  symptom   Symptom   @relation(fields: [symptomId], references: [id], onDelete: Cascade)
+  specialty Specialty @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  @@unique([symptomId, specialtyId])
+  // Doctor search joins mappings by specialty, so this is the read path.
+  @@index([specialtyId])
 }
 
 model DoctorSpecialty {

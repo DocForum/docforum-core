@@ -13,12 +13,12 @@ import { record, recordAccess, type AuditActor } from '../../audit/services';
 import { decryptField } from '../../../utils/field-encryption';
 import type { OrderStatus } from '@prisma/client';
 import * as repo from '../repositories';
-import * as patientsService from '../../patients/services';
-import * as facilitiesService from '../../facilities/services';
 import {
   formatOrderResponse,
   type FulfillOrderInput,
 } from '../../pharmacy-orders/services';
+import * as facilitiesService from '../../facilities/services';
+import * as patientsService from '../../patients/services';
 
 export async function getLabOrder(id: string) {
   const labOrder = await repo.findLabOrderById(id);
@@ -62,10 +62,7 @@ export async function createLabOrder(data: {
     throw new HttpError(400, 'Patient profile ID is required.');
   }
 
-  const patient = await patientsService.findPatientProfileById(data.patientProfileId!);
-  if (!patient) {
-    throw new HttpError(404, 'Patient profile not found.');
-  }
+  await patientsService.getPatientProfileById(data.patientProfileId);
 
   const order = await prisma.$transaction(async (tx) => {
     return repo.createOrder(tx, {

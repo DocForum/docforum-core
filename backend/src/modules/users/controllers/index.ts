@@ -2,6 +2,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
+import { logger } from '../../../logger';
 import { auditActor } from '../../../middleware/request-id';
 import * as usersService from '../services';
 import { createAdminInviteSchema, listAdminInvitesQuerySchema, listAdminUsersQuerySchema } from '../validation';
@@ -52,7 +53,7 @@ export async function revokeInvite(req: Request, res: Response) {
   const inviteId = getParam(req, 'id');
   const result = await usersService.revokeAdminInvite(auditActor(req), inviteId);
   // eslint-disable-next-line no-console
-  console.info(`[users] admin ${req.user.id} revoked invite ${inviteId} (alreadyRevoked=${result.alreadyRevoked})`);
+   logger.info(`[users] admin ${req.user.id} revoked invite ${inviteId} (alreadyRevoked=${result.alreadyRevoked})`);
   res.status(200).json(result);
 }
 

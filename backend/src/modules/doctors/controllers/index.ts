@@ -2,12 +2,16 @@ import type { Request, Response } from 'express';
 import * as doctorsService from '../services';
 import {
   createSpecialtySchema,
+  createSymptomSchema,
   publicDoctorListQuerySchema,
   setDoctorSpecialtyVerificationSchema,
   setMySpecialtiesSchema,
+  setSymptomSpecialtiesSchema,
   setVerificationStatusSchema,
+  symptomAutocompleteQuerySchema,
   updateDoctorProfileSchema,
   updateSpecialtySchema,
+  updateSymptomSchema,
   verificationQueueQuerySchema,
 } from '../validation';
 import { HttpError } from '../../../http-error';
@@ -24,8 +28,8 @@ export async function getMe(req: Request, res: Response) {
 
 export async function updateMe(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const { fullName } = updateDoctorProfileSchema.parse(req.body);
-  const profile = await doctorsService.updateMyDoctorProfile(req.user.id, expectedVersion(req), fullName);
+  const input = updateDoctorProfileSchema.parse(req.body);
+  const profile = await doctorsService.updateMyDoctorProfile(req.user.id, expectedVersion(req), input);
   setVersionEtag(res, profile.version);
   res.status(200).json(profile);
 }
@@ -101,4 +105,32 @@ export async function retireSpecialty(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const result = await doctorsService.retireSpecialty(auditActor(req), id);
   res.status(200).json(result);
+}
+
+// --- Symptom -> specialty mapping (issue #60) ----------------------------
+
+export async function listSymptoms(req: Request, res: Response) {
+  const query = symptomAutocompleteQuerySchema.parse(req.query);
+  res.status(200).json(await doctorsService.searchSymptoms(query));
+}
+
+export async function listAdminSymptoms(_req: Request, res: Response) {
+  res.status(200).json(await doctorsService.listSymptomsForAdmin());
+}
+
+export async function createSymptom(req: Request, res: Response) {
+  const input = createSymptomSchema.parse(req.body);
+  res.status(201).json(await doctorsService.createSymptom(auditActor(req), input));
+}
+
+export async function updateSymptom(req: Request, res: Response) {
+  const id = getParam(req, 'id');
+  const input = updateSymptomSchema.parse(req.body);
+  res.status(200).json(await doctorsService.updateSymptom(auditActor(req), id, input));
+}
+
+export async function setSymptomSpecialties(req: Request, res: Response) {
+  const id = getParam(req, 'id');
+  const { mappings } = setSymptomSpecialtiesSchema.parse(req.body);
+  res.status(200).json(await doctorsService.setSymptomSpecialties(auditActor(req), id, mappings));
 }

@@ -12,6 +12,13 @@ export default defineConfig({
     'Documentation for the DocForum organization — docforum-core, docforum-web, docforum-escrow.',
   cleanUrls: true,
   lastUpdated: true,
+  // Dead internal links fail `vitepress build` (issue #347). Left explicit as
+  // `false` because a broken link otherwise silently ships: `deploy-docs.yml`
+  // only runs on `main`, so the first build that sees one is the deploy that
+  // it stops. `build-docs.yml` runs the same build on every PR.
+  // (sync-docs.mjs rewrites repo-relative links to GitHub URLs for the same
+  // reason — relative paths mean nothing inside this site's tree.)
+  ignoreDeadLinks: false,
 
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg` }],
@@ -32,6 +39,7 @@ export default defineConfig({
       { text: 'Architecture', link: '/architecture/overview' },
       { text: 'API', link: '/api/reference' },
       { text: 'Roadmap', link: '/roadmap/core' },
+      { text: 'Runbooks', link: '/runbooks/escrow-event-alerts' },
       { text: 'Repos', link: '/repos/core' },
     ],
 
@@ -79,6 +87,15 @@ export default defineConfig({
             { text: 'docforum-core', link: '/roadmap/core' },
             { text: 'docforum-web', link: '/repos/web/roadmap' },
             { text: 'docforum-escrow', link: '/repos/escrow/roadmap' },
+          ],
+        },
+      ],
+
+      '/runbooks/': [
+        {
+          text: 'Operator runbooks',
+          items: [
+            { text: 'Escrow event alerts', link: '/runbooks/escrow-event-alerts' },
           ],
         },
       ],

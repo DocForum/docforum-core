@@ -2,6 +2,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { config } from '../config';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { Client as PgClient } from 'pg';
 
 export type RlsRequestContext = { userId: string; role: string };
 const rlsContext = new AsyncLocalStorage<RlsRequestContext>();
@@ -110,3 +111,21 @@ export const prisma = new Proxy(extendedClient, {
     };
   },
 }) as unknown as PrismaClient;
+
+/**
+ * Issue #330: a dedicated node-postgres connection OUTSIDE Prisma's pool,
+ * for LISTEN. A listening session must stay open and owned by one consumer;
+ * borrowing a pooled connection would either pin it forever or lose the
+ * subscription when the pool recycles it. Same DATABASE_URL and connect
+ * timeout as the pool; keep-alive so a dead peer is noticed.
+ */
+export const NOTIFICATION_LISTENER_APPLICATION_NAME = 'docforum-notification-listener';
+
+export function createListenerConnection(): PgClient {
+  return new PgClient({
+    connectionString: config.databaseUrl,
+    connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS ?? 5_000),
+    application_name: NOTIFICATION_LISTENER_APPLICATION_NAME,
+    keepAlive: true,
+  });
+}

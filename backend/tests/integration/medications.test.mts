@@ -227,7 +227,7 @@ describe('issue #69: medication catalog and structured prescription items', () =
       const res = await request(app)
         .post(prescriptionsUrl())
         .set('Authorization', `Bearer ${doctorToken}`)
-        .send(body([{ medicationId: amoxicillinId, dosage: '1 capsule', frequency: 'three times daily', duration: '7 days' }]));
+        .send(body([{ medicationId: amoxicillinId, dosage: '1 capsule', frequency: 'three times daily', duration: '7 days', quantity: 1, unit: 'tablets' }]));
 
       expect(res.status, JSON.stringify(res.body)).toBe(201);
       expect(res.body.items).toHaveLength(1);
@@ -249,7 +249,7 @@ describe('issue #69: medication catalog and structured prescription items', () =
       const res = await request(app)
         .post(prescriptionsUrl())
         .set('Authorization', `Bearer ${doctorToken}`)
-        .send(body([{ drugName: 'Some imported syrup', dosage: '5 ml', frequency: 'twice daily', duration: '3 days' }]));
+        .send(body([{ drugName: 'Some imported syrup', dosage: '5 ml', frequency: 'twice daily', duration: '3 days', quantity: 1, unit: 'tablets' }]));
 
       expect(res.status, JSON.stringify(res.body)).toBe(201);
       expect(res.body.items[0]).toMatchObject({
@@ -265,7 +265,7 @@ describe('issue #69: medication catalog and structured prescription items', () =
         .post(prescriptionsUrl())
         .set('Authorization', `Bearer ${doctorToken}`)
         .send(body([
-          { medicationId: '00000000-0000-4000-8000-000000000000', dosage: '1', frequency: 'daily', duration: '1 day' },
+          { medicationId: '00000000-0000-4000-8000-000000000000', dosage: '1', frequency: 'daily', duration: '1 day', quantity: 1, unit: 'tablets' },
         ]));
 
       expect(res.status).toBe(400);
@@ -277,7 +277,7 @@ describe('issue #69: medication catalog and structured prescription items', () =
       const res = await request(app)
         .post(prescriptionsUrl())
         .set('Authorization', `Bearer ${doctorToken}`)
-        .send(body([{ dosage: '1', frequency: 'daily', duration: '1 day' }]));
+        .send(body([{ dosage: '1', frequency: 'daily', duration: '1 day', quantity: 1, unit: 'tablets' }]));
       expect(res.status).toBe(400);
     });
 
@@ -285,7 +285,7 @@ describe('issue #69: medication catalog and structured prescription items', () =
       const issued = await request(app)
         .post(prescriptionsUrl())
         .set('Authorization', `Bearer ${doctorToken}`)
-        .send(body([{ medicationId: snapshotMedicationId, dosage: '1 tablet', frequency: 'daily', duration: '5 days' }]));
+        .send(body([{ medicationId: snapshotMedicationId, dosage: '1 tablet', frequency: 'daily', duration: '5 days', quantity: 1, unit: 'tablets' }]));
       expect(issued.status, JSON.stringify(issued.body)).toBe(201);
       expect(issued.body.items[0].drugName).toBe('Snapshotmycin 250 mg tablet');
 
@@ -304,7 +304,7 @@ describe('issue #69: medication catalog and structured prescription items', () =
       const after = await request(app)
         .post(prescriptionsUrl())
         .set('Authorization', `Bearer ${doctorToken}`)
-        .send(body([{ medicationId: snapshotMedicationId, dosage: '1 tablet', frequency: 'daily', duration: '5 days' }]));
+        .send(body([{ medicationId: snapshotMedicationId, dosage: '1 tablet', frequency: 'daily', duration: '5 days', quantity: 1, unit: 'tablets' }]));
       expect(after.status, JSON.stringify(after.body)).toBe(201);
       expect(after.body.items[0].drugName).toBe('Snapshotmycin XR 500 mg tablet');
     });
