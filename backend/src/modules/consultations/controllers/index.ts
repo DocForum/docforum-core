@@ -6,6 +6,7 @@ import {
   closeConsultationSchema,
   createConsultationSchema,
   createReferralsSchema,
+  getConsultationQuerySchema,
   listConsultationsQuerySchema,
   listFollowUpsQuerySchema,
   listMessagesQuerySchema,
@@ -49,7 +50,12 @@ export async function create(req: Request, res: Response) {
 
 export async function getOne(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const consultation = await consultationsService.getConsultation(req.user.id, getParam(req, 'consultationId'));
+  const { patientProfileId } = getConsultationQuerySchema.parse(req.query);
+  const consultation = await consultationsService.getConsultation(
+    req.user.id,
+    getParam(req, 'consultationId'),
+    patientProfileId,
+  );
   res.status(200).json(consultation);
 }
 

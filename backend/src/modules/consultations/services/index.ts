@@ -336,9 +336,18 @@ export function assertConsultationAcceptsOrders(consultation: { appointment: { s
 }
 
 /** Visible to the treating doctor and the patient of the underlying
- * appointment — nothing wider in v1. `notes` is decrypted for the reader;
- * the stored ciphertext never leaves this module. */
-export async function getConsultation(userId: string, consultationId: string) {
+ * appointment — nothing wider in v1. Issue #305: an active guardian reads a
+ * dependent's consultation by naming the dependent in `patientProfileId`,
+ * authorised through patientsService.resolveActingProfile (never by trusting
+ * the query parameter). `notes` is decrypted for the reader; the stored
+ * ciphertext never leaves this module. */
+export async function getConsultation(userId: string, consultationId: string, patientProfileId?: string) {
+  // Resolve first: a revoked guardianship also makes RLS hide the
+  // consultation from this caller, so checking only after the read would
+  // answer a generic 404 instead of GUARDIANSHIP_INACTIVE.
+  const actingPatient = patientProfileId
+    ? await patientsService.resolveActingProfile(userId, patientProfileId)
+    : null;
   const consultation = await consultationsRepo.findConsultationById(prisma, consultationId);
   if (!consultation) throw new HttpError(404, 'Consultation not found.');
 
@@ -351,10 +360,30 @@ export async function getConsultation(userId: string, consultationId: string) {
     }));
     const doctor = await doctorsService.getMyDoctorProfile(userId).catch(() => null);
     if (doctor && doctor.id === consultation.appointment.doctorProfileId) {
+      auditService.recordAccess({
+        accessedBy: userId,
+        patientProfileId: consultation.appointment.patientProfileId,
+        entityType: 'Consultation',
+        entityId: consultation.id,
+        route: 'GET /consultations/:consultationId',
+        detail: 'consultation detail read',
+      });
       return { ...consultation, notes: decryptField(consultation.notes), addenda };
     }
-    const patient = await patientsService.getMyPatientProfile(userId).catch(() => null);
+    // With no profile named, fall back to the caller's own profile so the
+    // long-standing self-read (and doctor read) stays unchanged. Naming one
+    // goes through resolveActingProfile: an ended guardianship throws
+    // GUARDIANSHIP_INACTIVE here, before any notes are decrypted.
+    const patient = actingPatient ?? await patientsService.getMyPatientProfile(userId).catch(() => null);
     if (patient && patient.id === consultation.appointment.patientProfileId) {
+      auditService.recordAccess({
+        accessedBy: userId,
+        patientProfileId: patient.id,
+        entityType: 'Consultation',
+        entityId: consultation.id,
+        route: 'GET /consultations/:consultationId',
+        detail: patient.userId === null ? 'consultation detail read (guardian)' : 'consultation detail read',
+      });
       return { ...consultation, notes: decryptField(consultation.notes), addenda };
     }
   }

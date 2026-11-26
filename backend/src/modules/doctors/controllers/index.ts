@@ -28,8 +28,8 @@ export async function getMe(req: Request, res: Response) {
 
 export async function updateMe(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const { fullName } = updateDoctorProfileSchema.parse(req.body);
-  const profile = await doctorsService.updateMyDoctorProfile(req.user.id, expectedVersion(req), fullName);
+  const input = updateDoctorProfileSchema.parse(req.body);
+  const profile = await doctorsService.updateMyDoctorProfile(req.user.id, expectedVersion(req), input);
   setVersionEtag(res, profile.version);
   res.status(200).json(profile);
 }

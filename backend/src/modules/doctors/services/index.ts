@@ -12,9 +12,13 @@ export async function getMyDoctorProfile(userId: string) {
   return profile;
 }
 
-export async function updateMyDoctorProfile(userId: string, version: number, fullName: string) {
+export async function updateMyDoctorProfile(
+  userId: string,
+  version: number,
+  input: { fullName?: string; timeZone?: string },
+) {
   const current = await getMyDoctorProfile(userId);
-  const profile = await doctorsRepo.updateDoctorProfile(current.id, version, fullName);
+  const profile = await doctorsRepo.updateDoctorProfile(current.id, version, input);
   if (!profile) throw versionConflict();
   return profile;
 }

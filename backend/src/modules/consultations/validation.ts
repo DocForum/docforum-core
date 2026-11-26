@@ -58,6 +58,12 @@ export const listConsultationsQuerySchema = z.object({
   cursor: z.string().optional(),
 });
 
+/** Issue #305: `patientProfileId` selects the patient being read for, and is
+ * authorised by patientsService.resolveActingProfile in the service. */
+export const getConsultationQuerySchema = z.object({
+  patientProfileId: z.string().uuid().optional(),
+});
+
 // --- Issue #61/#62: messages and attachments ----------------------------
 
 const attachmentSchema = z.object({
