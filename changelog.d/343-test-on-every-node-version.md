@@ -1,0 +1,1 @@
+Added CI matrix to test unit tests and typecheck across Node versions 20, 22, and 24, aligned build job with production Node 22, and documented supported versions in CONTRIBUTING.md.
