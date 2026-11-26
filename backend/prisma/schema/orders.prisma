@@ -98,12 +98,12 @@ model OrderDispute {
 }
 
 model OrderDisputeResolution {
-  id              String   @id @default(uuid())
+  id              String         @id @default(uuid())
   disputeId       String
   adminUserId     String
   resolutionNotes String
   outcome         DisputeOutcome
-  createdAt       DateTime @default(now())
+  createdAt       DateTime       @default(now())
 
   dispute   OrderDispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
   adminUser User         @relation(fields: [adminUserId], references: [id])
