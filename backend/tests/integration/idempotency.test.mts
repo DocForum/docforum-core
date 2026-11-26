@@ -680,11 +680,11 @@ describe('Idempotency-Key replay protection', () => {
       return referralRes.body.id as string;
     }
 
-    // Book an appointment on a fresh slot for reschedule tests
-    async function bookAppointmentForReschedule(slotId: string) {
+    // Book an appointment on a fresh slot for reschedule tests (specify patient index for ownership)
+    async function bookAppointmentForReschedule(slotId: string, patientIndex = 0) {
       const res = await request(app)
         .post('/appointments')
-        .set(asPatient(0))
+        .set(asPatient(patientIndex))
         .send({ availabilitySlotId: slotId });
       expect(res.status).toBe(201);
       return res.body.id as string;
@@ -886,9 +886,9 @@ describe('Idempotency-Key replay protection', () => {
 
       it('gives each user their own attempt under the same key string', async () => {
         const freshSlotsA = await generateFreshSlots({ accessToken: doctor.token, profileId: doctor.profileId }, '2027-06-03');
-        const appointmentA = await bookAppointmentForReschedule(freshSlotsA[0]);
+        const appointmentA = await bookAppointmentForReschedule(freshSlotsA[0], 0);
         const freshSlotsB = await generateFreshSlots({ accessToken: doctor.token, profileId: doctor.profileId }, '2027-06-04');
-        const appointmentB = await bookAppointmentForReschedule(freshSlotsB[0]);
+        const appointmentB = await bookAppointmentForReschedule(freshSlotsB[0], 1);
         // Confirm both reschedule targets are still open right before sending
         const slotsRes = await request(app).get(`/availability/doctors/${doctor.profileId}/slots`);
         const openSlotIds = (slotsRes.body as { id: string }[]).map((s) => s.id);
