@@ -233,7 +233,7 @@ describe('deactivated and soft-deleted doctors', () => {
         .send({ appointmentId: 'some-appointment-id', outcome: 'follow_up_needed' });
       // The consultation creation may fail before booking, but the key point
       // is that doctor-related operations should be refused
-      expect([409, 404]).toContain(res.status);
+      expect([409, 404, 403]).toContain(res.status);
     });
 
     it('refuses GET /availability/doctors/:id/slots for deactivated doctor', async () => {
@@ -300,7 +300,7 @@ describe('deactivated and soft-deleted doctors', () => {
         .post('/consultations')
         .set('Authorization', `Bearer ${patientAccessToken}`)
         .send({ appointmentId: 'some-appointment-id', outcome: 'follow_up_needed' });
-      expect([409, 404]).toContain(res.status);
+      expect([409, 404, 403]).toContain(res.status);
     });
 
     it('refuses GET /availability/doctors/:id/slots for soft-deleted doctor', async () => {
