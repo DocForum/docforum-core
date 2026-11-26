@@ -277,6 +277,47 @@ describe('Orders integration tests', () => {
     expect(resolveRes.body.dispute.resolutions).toHaveLength(1);
     expect(resolveRes.body.dispute.resolutions[0].outcome).toBe('refunded');
 
+    // Issue #311: resolution is a one-way pending → resolved transition.
+    const secondResolve = await request(app)
+      .post(`/admin/orders/disputes/${disputeItem.id}/resolve`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ resolutionNotes: 'Second attempt', outcome: 'rejected' });
+    expect(secondResolve.status).toBe(409);
+    const resolutionRows = await prisma.orderDisputeResolution.count({ where: { disputeId: disputeItem.id } });
+    expect(resolutionRows).toBe(1);
+
+    const missingResolve = await request(app)
+      .post('/admin/orders/disputes/00000000-0000-4000-8000-000000000000/resolve')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ resolutionNotes: 'No such dispute', outcome: 'upheld' });
+    expect(missingResolve.status).toBe(404);
+
+    const badOutcome = await request(app)
+      .post(`/admin/orders/disputes/${disputeItem.id}/resolve`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ resolutionNotes: 'Free text outcome', outcome: 'resolved' });
+    expect(badOutcome.status).toBe(400);
+
+    const badStatus = await request(app)
+      .get('/admin/orders/disputes?status=closed')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(badStatus.status).toBe(400);
+
+    // Keyset pagination: walk the resolved queue one row at a time.
+    const firstPage = await request(app)
+      .get('/admin/orders/disputes?status=resolved&limit=1')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.items).toHaveLength(1);
+    expect(firstPage.body.items[0].status).toBe('resolved');
+    if (firstPage.body.nextCursor) {
+      const nextPage = await request(app)
+        .get(`/admin/orders/disputes?status=resolved&limit=1&cursor=${firstPage.body.nextCursor}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(nextPage.status).toBe(200);
+      expect(nextPage.body.items.map((d: any) => d.id)).not.toContain(firstPage.body.items[0].id);
+    }
+
     // Note: resolving dispute does NOT mark order as confirmed!
     const updatedOrder = await request(app)
       .get(`/orders/${orderId}`)
