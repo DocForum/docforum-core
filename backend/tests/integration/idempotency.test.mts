@@ -23,6 +23,9 @@
 //   - an attempt left unfinished by a dead process is taken over, but only by
 //     an identical request
 //   - unopted-in routes are untouched, and a malformed key is a 400
+//   - Phase 8, issue #310: replay + mismatch + scope isolation on the
+//     mutations that were not opted in yet at the time of #48 — referral
+//     accept, appointment reschedule and waitlist accept
 //
 // Self-contained embedded Postgres on its own port (5443), same pattern as the
 // other files in this directory, so it runs alongside them. The escrow SDK is
@@ -38,6 +41,12 @@ import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import EmbeddedPostgres from 'embedded-postgres';
 import { createOrderFixture, createPaymentIntentForFixture } from './order-fixtures.mjs';
+import {
+  consultationRitual,
+  createReferral,
+  generateSlots,
+  makeSpecialty,
+} from './helpers/fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5443;
@@ -626,4 +635,372 @@ describe('Idempotency-Key replay protection', () => {
       expect((await prisma.idempotencyKey.findMany()).map((row) => row.key)).toEqual([keep]);
     });
   });
+
+  describe('Phase 8, issue #310 — idempotency on referral accept / reschedule / waitlist accept', () => {
+    // Shared setup using main test's doctor, patients, slots plus a second doctor for referrals
+    let endocrinologyId: string;
+    let secondDoctor: { userId: string; token: string; profileId: string };
+    let secondDoctorSlots: string[];
+    let referralId: string;
+    let appointmentId: string;
+    let waitlistEntryId: string;
+
+    beforeAll(async () => {
+      const specialty = await makeSpecialty(prisma, `Cardiology ${runId}`);
+      endocrinologyId = specialty;
+      // Create a second doctor to accept referrals to (main test's doctor is the referrer)
+      const secondDoctorUser = await signup('doctor', `idem-doctor-${runId}`);
+      await prisma.doctorSpecialty.create({
+        data: { doctorProfileId: (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: secondDoctorUser.userId } })).id, specialtyId: endocrinologyId },
+      });
+      await prisma.doctorProfile.update({
+        where: { id: (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: secondDoctorUser.userId } })).id },
+        data: { verificationStatus: 'verified' },
+      });
+      secondDoctor = { userId: secondDoctorUser.userId, token: secondDoctorUser.token, profileId: (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: secondDoctorUser.userId } })).id };
+      await generateSlots(app, doctor as unknown as { accessToken: string; profileId: string }, 8);
+      secondDoctorSlots = await generateSlots(app, secondDoctor as unknown as { accessToken: string; profileId: string }, 8);
+    });
+
+    beforeEach(async () => {
+      await prisma.idempotencyKey.deleteMany();
+    });
+
+    // Create a referral from main test's doctor → second doctor, then accept it
+    async function createPendingReferral() {
+      // consultationRitual: book, complete, consult with 'referred' outcome
+      const { consultationId } = await consultationRitual(app, patients[0] as unknown as { userId: string; accessToken: string; profileId: string; email: string }, doctor as unknown as { userId: string; accessToken: string; profileId: string; email: string });
+      const referralRes = await createReferral(app, doctor as unknown as { accessToken: string }, {
+        sourceConsultationId: consultationId,
+        targetDoctorId: secondDoctor.profileId,
+        targetSpecialtyId: endocrinologyId,
+        snapshotNotes: 'Referral for idempotency test',
+      });
+      expect(referralRes.status).toBe(201);
+      return referralRes.body.id as string;
+    }
+
+    // Book an appointment on a fresh slot for reschedule tests
+    async function bookAppointmentForReschedule(slotIndex = 4) {
+      const res = await request(app)
+        .post('/appointments')
+        .set(asPatient(0))
+        .send({ availabilitySlotId: slots[slotIndex] });
+      expect(res.status).toBe(201);
+      return res.body.id as string;
+    }
+
+    // Join waitlist for second doctor
+    async function joinWaitlistFor(secondDoctor: { profileId: string; token: string }, patient: { token: string }) {
+      const earliest = new Date(Date.now() + 3600_000).toISOString();
+      const latest = new Date(Date.now() + 86400_000).toISOString();
+      const res = await request(app)
+        .post('/appointments/waitlist/join')
+        .set('Authorization', `Bearer ${patient.token}`)
+        .send({
+          doctorProfileId: secondDoctor.profileId,
+          specialtyId: endocrinologyId,
+          earliestAcceptable: earliest,
+          latestAcceptable: latest,
+          holdDurationMinutes: 30,
+        });
+      expect(res.status).toBe(201);
+      return res.body.id as string;
+    }
+
+    describe('POST /referrals/:referralId/accept', () => {
+      it('replays the stored response to a retry instead of accepting twice', async () => {
+        referralId = await createPendingReferral();
+        const key = `ref-accept-replay-${runId}`;
+
+        const first = await request(app)
+          .post(`/referrals/${referralId}/accept`)
+          .set('Authorization', `Bearer ${patients[0].token}`)
+          .set('Idempotency-Key', key)
+          .send({ availabilitySlotId: secondDoctorSlots[0] });
+        expect(first.status).toBe(200);
+        expect(first.headers['idempotency-replayed']).toBeUndefined();
+
+        const retry = await request(app)
+          .post(`/referrals/${referralId}/accept`)
+          .set('Authorization', `Bearer ${patients[0].token}`)
+          .set('Idempotency-Key', key)
+          .send({ availabilitySlotId: secondDoctorSlots[0] });
+        expect(retry.status).toBe(200);
+        expect(retry.headers['idempotency-replayed']).toBe('true');
+        expect(retry.body).toEqual(first.body);
+
+        const referral = await prisma.referral.findUniqueOrThrow({ where: { id: referralId } });
+        expect(referral.status).toBe('accepted');
+        const acceptedAppointments = await prisma.appointment.findMany({ where: { origin: 'referral', referralId } });
+        expect(acceptedAppointments.length).toBe(1);
+
+        const row = await rowFor(patients[0].userId, key);
+        expect(row).toMatchObject({ userId: patients[0].userId, key, method: 'POST', route: `/referrals/${referralId}/accept` });
+        expect(row!.responseStatus).toBe(200);
+        expect(row!.responseBody).toEqual(first.body);
+        expect(row!.requestHash).toMatch(/^[0-9a-f]{64}$/);
+      });
+
+      it('refuses the same key with a different body (different slot) and runs nothing', async () => {
+        referralId = await createPendingReferral();
+        const key = `ref-accept-mismatch-${runId}`;
+
+        expect(
+          (
+            await request(app)
+              .post(`/referrals/${referralId}/accept`)
+              .set('Authorization', `Bearer ${patients[0].token}`)
+              .set('Idempotency-Key', key)
+              .send({ availabilitySlotId: secondDoctorSlots[1] })
+          ).status
+        ).toBe(200);
+
+        const mismatch = await request(app)
+          .post(`/referrals/${referralId}/accept`)
+          .set('Authorization', `Bearer ${patients[0].token}`)
+          .set('Idempotency-Key', key)
+          .send({ availabilitySlotId: secondDoctorSlots[2] });
+        expect(mismatch.status).toBe(422);
+        expect(mismatch.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+        const referral = await prisma.referral.findUniqueOrThrow({ where: { id: referralId } });
+        expect(referral.status).toBe('pending');
+        expect((await prisma.availabilitySlot.findUniqueOrThrow({ where: { id: secondDoctorSlots[2] } })).status).toBe('open');
+      });
+
+      it('gives each user their own attempt under the same key string', async () => {
+        // Two patients both need their own referrals; each accepts with the same key
+        const referralA = await createPendingReferral();
+        const { consultationId: consultationIdB } = await consultationRitual(app, patients[1] as unknown as { userId: string; accessToken: string; profileId: string; email: string }, doctor as unknown as { userId: string; accessToken: string; profileId: string; email: string });
+        const referralResB = await createReferral(app, doctor as unknown as { accessToken: string }, {
+          sourceConsultationId: consultationIdB,
+          targetDoctorId: secondDoctor.profileId,
+          targetSpecialtyId: endocrinologyId,
+          snapshotNotes: 'Referral B',
+        });
+        expect(referralResB.status).toBe(201);
+        const referralB = referralResB.body.id as string;
+
+        const key = `ref-accept-shared-${runId}`;
+
+        const a = await request(app)
+          .post(`/referrals/${referralA}/accept`)
+          .set('Authorization', `Bearer ${patients[0].token}`)
+          .set('Idempotency-Key', key)
+          .send({ availabilitySlotId: secondDoctorSlots[3] });
+        const b = await request(app)
+          .post(`/referrals/${referralB}/accept`)
+          .set('Authorization', `Bearer ${patients[1].token}`)
+          .set('Idempotency-Key', key)
+          .send({ availabilitySlotId: secondDoctorSlots[4] });
+        expect(a.status).toBe(200);
+        expect(b.status).toBe(200);
+        expect(a.body.id).not.toBe(b.body.id);
+
+        expect(await prisma.idempotencyKey.count({ where: { key } })).toBe(2);
+
+        const aRetry = await request(app)
+          .post(`/referrals/${referralA}/accept`)
+          .set('Authorization', `Bearer ${patients[0].token}`)
+          .set('Idempotency-Key', key)
+          .send({ availabilitySlotId: secondDoctorSlots[3] });
+        const bRetry = await request(app)
+          .post(`/referrals/${referralB}/accept`)
+          .set('Authorization', `Bearer ${patients[1].token}`)
+          .set('Idempotency-Key', key)
+          .send({ availabilitySlotId: secondDoctorSlots[4] });
+        expect(aRetry.body).toEqual(a.body);
+        expect(bRetry.body).toEqual(b.body);
+        expect(JSON.stringify(aRetry.body)).not.toContain(b.body.id);
+        expect(JSON.stringify(bRetry.body)).not.toContain(a.body.id);
+      });
+    });
+
+    describe('POST /appointments/:id/reschedule', () => {
+      it('replays the stored response to a retry instead of rescheduling twice', async () => {
+        appointmentId = await bookAppointmentForReschedule(0);
+        // Generate a second slot for doctor to reschedule into
+        const extraSlots = await generateSlots(app, doctor as unknown as { accessToken: string; profileId: string }, 8);
+        const newSlotId = extraSlots.find((s: string) => s !== slots[0])!;
+
+        const first = await request(app)
+          .post(`/appointments/${appointmentId}/reschedule`)
+          .set(asPatient(0))
+          .set('Idempotency-Key', `reschedule-replay-${runId}`)
+          .send({ newSlotId });
+        expect(first.status).toBe(200);
+        expect(first.headers['idempotency-replayed']).toBeUndefined();
+
+        const retry = await request(app)
+          .post(`/appointments/${appointmentId}/reschedule`)
+          .set(asPatient(0))
+          .set('Idempotency-Key', `reschedule-replay-${runId}`)
+          .send({ newSlotId });
+        expect(retry.status).toBe(200);
+        expect(retry.headers['idempotency-replayed']).toBe('true');
+        expect(retry.body).toEqual(first.body);
+
+        const updated = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+        expect(updated.availabilitySlotId).toBe(newSlotId);
+      });
+
+      it('refuses the same key with a different body (different newSlotId) and runs nothing', async () => {
+        appointmentId = await bookAppointmentForReschedule(1);
+        const extraSlots = await generateSlots(app, doctor as unknown as { accessToken: string; profileId: string }, 8);
+        const newSlotA = extraSlots.find((s: string) => s !== slots[1])!;
+        const newSlotB = extraSlots.find((s: string) => s !== slots[1] && s !== newSlotA)!;
+        const key = `reschedule-mismatch-${runId}`;
+
+        expect(
+          (
+            await request(app)
+              .post(`/appointments/${appointmentId}/reschedule`)
+              .set(asPatient(0))
+              .set('Idempotency-Key', key)
+              .send({ newSlotId: newSlotA })
+          ).status
+        ).toBe(200);
+
+        const mismatch = await request(app)
+          .post(`/appointments/${appointmentId}/reschedule`)
+          .set(asPatient(0))
+          .set('Idempotency-Key', key)
+          .send({ newSlotId: newSlotB });
+        expect(mismatch.status).toBe(422);
+        expect(mismatch.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+        const unchanged = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+        expect(unchanged.availabilitySlotId).toBe(slots[1]);
+      });
+
+      it('gives each user their own attempt under the same key string', async () => {
+        const appointmentA = await bookAppointmentForReschedule(2);
+        const appointmentB = await bookAppointmentForReschedule(3);
+        const extraSlots = await generateSlots(app, doctor as unknown as { accessToken: string; profileId: string }, 8);
+        const newSlotA = extraSlots.find((s: string) => s !== slots[2])!;
+        const newSlotB = extraSlots.find((s: string) => s !== slots[3] && s !== newSlotA)!;
+        const key = `reschedule-shared-${runId}`;
+
+        const a = await request(app)
+          .post(`/appointments/${appointmentA}/reschedule`)
+          .set(asPatient(0))
+          .set('Idempotency-Key', key)
+          .send({ newSlotId: newSlotA });
+        const b = await request(app)
+          .post(`/appointments/${appointmentB}/reschedule`)
+          .set(asPatient(1))
+          .set('Idempotency-Key', key)
+          .send({ newSlotId: newSlotB });
+        expect(a.status).toBe(200);
+        expect(b.status).toBe(200);
+
+        expect(await prisma.idempotencyKey.count({ where: { key } })).toBe(2);
+
+        const aRetry = await request(app)
+          .post(`/appointments/${appointmentA}/reschedule`)
+          .set(asPatient(0))
+          .set('Idempotency-Key', key)
+          .send({ newSlotId: newSlotA });
+        const bRetry = await request(app)
+          .post(`/appointments/${appointmentB}/reschedule`)
+          .set(asPatient(1))
+          .set('Idempotency-Key', key)
+          .send({ newSlotId: newSlotB });
+        expect(aRetry.body).toEqual(a.body);
+        expect(bRetry.body).toEqual(b.body);
+      });
+    });
+
+    describe('POST /appointments/waitlist/accept', () => {
+      it('replays the stored response to a retry instead of accepting twice', async () => {
+        waitlistEntryId = await joinWaitlistFor(secondDoctor, patients[0]);
+        const key = `waitlist-accept-replay-${runId}`;
+
+        const first = await request(app)
+          .post('/appointments/waitlist/accept')
+          .set(asPatient(0))
+          .set('Idempotency-Key', key)
+          .send({ entryId: waitlistEntryId });
+        expect(first.status).toBe(201);
+        expect(first.headers['idempotency-replayed']).toBeUndefined();
+
+        const retry = await request(app)
+          .post('/appointments/waitlist/accept')
+          .set(asPatient(0))
+          .set('Idempotency-Key', key)
+          .send({ entryId: waitlistEntryId });
+        expect(retry.status).toBe(201);
+        expect(retry.headers['idempotency-replayed']).toBe('true');
+        expect(retry.body).toEqual(first.body);
+
+        const entry = await prisma.waitlistEntry.findUniqueOrThrow({ where: { id: waitlistEntryId } });
+        expect(entry.status).toBe('accepted');
+      });
+
+      it('refuses the same key with a different body (different entryId) and runs nothing', async () => {
+        const entryA = await joinWaitlistFor(secondDoctor, patients[0]);
+        const entryB = await joinWaitlistFor(secondDoctor, patients[1]);
+        const key = `waitlist-accept-mismatch-${runId}`;
+
+        expect(
+          (
+            await request(app)
+              .post('/appointments/waitlist/accept')
+              .set(asPatient(0))
+              .set('Idempotency-Key', key)
+              .send({ entryId: entryA })
+          ).status
+        ).toBe(201);
+
+        const mismatch = await request(app)
+          .post('/appointments/waitlist/accept')
+          .set(asPatient(0))
+          .set('Idempotency-Key', key)
+          .send({ entryId: entryB });
+        expect(mismatch.status).toBe(422);
+        expect(mismatch.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+        const entry = await prisma.waitlistEntry.findUniqueOrThrow({ where: { id: entryB } });
+        expect(entry.status).toBe('pending');
+      });
+
+      it('gives each user their own attempt under the same key string', async () => {
+        const entryA = await joinWaitlistFor(secondDoctor, patients[0]);
+        const entryB = await joinWaitlistFor(secondDoctor, patients[1]);
+        const key = `waitlist-accept-shared-${runId}`;
+
+        const a = await request(app)
+          .post('/appointments/waitlist/accept')
+          .set(asPatient(0))
+          .set('Idempotency-Key', key)
+          .send({ entryId: entryA });
+        const b = await request(app)
+          .post('/appointments/waitlist/accept')
+          .set(asPatient(1))
+          .set('Idempotency-Key', key)
+          .send({ entryId: entryB });
+        expect(a.status).toBe(201);
+        expect(b.status).toBe(201);
+
+        expect(await prisma.idempotencyKey.count({ where: { key } })).toBe(2);
+
+        const aRetry = await request(app)
+          .post('/appointments/waitlist/accept')
+          .set(asPatient(0))
+          .set('Idempotency-Key', key)
+          .send({ entryId: entryA });
+        const bRetry = await request(app)
+          .post('/appointments/waitlist/accept')
+          .set(asPatient(1))
+          .set('Idempotency-Key', key)
+          .send({ entryId: entryB });
+        expect(aRetry.body).toEqual(a.body);
+        expect(bRetry.body).toEqual(b.body);
+      });
+    });
+  });
 });
+
+
+
