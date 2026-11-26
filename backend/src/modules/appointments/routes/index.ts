@@ -51,6 +51,7 @@ appointmentsRouter.post(
   authenticate,
   requireRole('patient'),
   requireVerifiedEmail,
+  idempotency(),
   appointmentsController.reschedule,
 );
 // Cancel an appointment (Phase 2, issue #56). Requires verified email.
@@ -87,6 +88,7 @@ appointmentsRouter.post(
   authenticate,
   requireRole('patient'),
   requireVerifiedEmail,
+  idempotency(),
   appointmentsController.acceptWaitlistOffer,
 );
 // Lifecycle (issue #3 + the cascade trigger for issue #67): only the

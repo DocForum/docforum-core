@@ -4,7 +4,8 @@ import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
 import * as availabilityService from '../../availability/services';
 import * as doctorsRepo from '../repositories';
-import type { VerificationStatus } from '@prisma/client';
+import type { Prisma, VerificationStatus } from '@prisma/client';
+type DbClient = typeof prisma | Prisma.TransactionClient;
 
 export async function getMyDoctorProfile(userId: string) {
   const profile = await doctorsRepo.findDoctorProfileByUserId(userId);
@@ -159,8 +160,8 @@ export async function setMySpecialties(userId: string, requestedIds: string[]) {
   });
 }
 
-export async function getDoctorProfileById(doctorProfileId: string) {
-  const profile = await doctorsRepo.findDoctorProfileById(doctorProfileId);
+export async function getDoctorProfileById(doctorProfileId: string, db?: DbClient) {
+  const profile = await doctorsRepo.findDoctorProfileById(doctorProfileId, db);
   if (!profile) throw new HttpError(404, 'Doctor profile not found.');
   return profile;
 }
@@ -239,6 +240,19 @@ export async function assertDoctorVerifiedInSpecialty(doctorProfileId: string, s
   const holds = specialties.some((link) => link.specialtyId === specialtyId);
   if (!holds) {
     throw new HttpError(422, 'Target doctor does not hold the referral’s specialty.');
+  }
+  return profile;
+}
+
+/**
+ * Ensures the doctor's user account is active (not deactivated or deleted).
+ * Throws 409 if the doctor's account is deactivated or deleted, since the
+ * doctor cannot accept new bookings in that state.
+ */
+export async function assertDoctorActive(doctorProfileId: string, db?: DbClient) {
+  const profile = await getDoctorProfileById(doctorProfileId, db);
+  if (profile.user.deactivatedAt || profile.user.deletedAt) {
+    throw new HttpError(409, 'Doctor is not available for booking.');
   }
   return profile;
 }
