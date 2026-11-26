@@ -648,7 +648,7 @@ export async function bookForReferral(
     throw new HttpError(404, 'Slot not found.');
   }
   if (slot.doctorProfileId !== input.doctorProfileId) {
-    throw new HttpError(409, 'That slot does not belong to the referral\'s target doctor.');
+    throw new HttpError(409, 'That slot does not belong to the referral’s target doctor.');
   }
 
   // Ensure the doctor is active (not deactivated or deleted)
@@ -712,7 +712,7 @@ export async function bookForFollowUp(
     throw new HttpError(404, 'Slot not found.');
   }
   if (slot.doctorProfileId !== input.doctorProfileId) {
-    throw new HttpError(409, 'That slot does not belong to the follow-up\'s doctor.');
+    throw new HttpError(409, 'That slot does not belong to the follow-up’s doctor.');
   }
 
   // Ensure the doctor is active (not deactivated or deleted)
