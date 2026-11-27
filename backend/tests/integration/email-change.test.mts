@@ -15,7 +15,7 @@ import type { EmailMessage } from '../../src/modules/auth/services/email-dispatc
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5475; // unique per integration file
 const runId = Date.now();
-const PASSWORD = 'password123';
+const PASSWORD = 'ChangeMe!Strong#2026';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-email-change-pg-'));
 const pg = new EmbeddedPostgres({

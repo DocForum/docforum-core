@@ -4,6 +4,9 @@
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import { logger } from '../../../logger';
+import { prisma } from '../../../db/prisma-client';
+import * as auditService from '../../audit/services';
+import type { AuditActor } from '../../audit/services';
 import {
   anonymizeUser,
   consumeVerificationToken,
@@ -18,7 +21,7 @@ import {
   markUserEmailVerified,
   replaceVerificationToken,
 } from '../repositories';
-import { hashPassword, verifyPassword } from './password';
+import { hashPassword, verifyPassword, validatePasswordStrength } from './password';
 import { signAccessToken, signMfaToken, signRefreshToken, verifyMfaToken, verifyRefreshToken } from './tokens';
 import { assertSessionUsable, recordSessionUse, startSession, type SessionContext } from './sessions';
 import { generateVerificationToken, hashVerificationToken } from './verification-tokens';
@@ -85,7 +88,14 @@ export {
 // Hashing is auth's business (issue #14): the admin-only facility-creation
 // path in the facilities module hashes the initial password through this
 // service surface rather than depending on bcrypt directly.
-export { hashPassword, verifyPassword } from './password';
+export {
+  hashPassword,
+  verifyPassword,
+  validatePasswordStrength,
+  isCommonPassword,
+  MAX_PASSWORD_BYTES,
+  MIN_PASSWORD_LENGTH,
+} from './password';
 
 export {
   assertSessionUsable,
@@ -166,7 +176,7 @@ function toPublicUser(user: {
   };
 }
 
-function issueTokensForSession(
+export function issueTokensForSession(
   user: { id: string; role: Role; tokenVersion?: number; locale?: string },
   sessionId: string,
 ): { accessToken: string; refreshToken: string; csrfToken: string } {
@@ -203,6 +213,7 @@ export interface SignupInput {
 }
 
 export async function signup(input: SignupInput, context: SessionContext = {}): Promise<AuthSession> {
+  validatePasswordStrength(input.password);
   // Facility accounts are admin-invited only (PRD OQ-2) — enforced here,
   // not just in docforum-web's UI. `Extract<Role, 'patient'|'doctor'>` on
   // the type already narrows this at compile time; this is the runtime
@@ -250,6 +261,7 @@ export interface SignupWithInviteInput {
 }
 
 export async function signupWithInvite(input: SignupWithInviteInput, context: SessionContext = {}): Promise<AuthSession> {
+  validatePasswordStrength(input.password);
   const passwordHash = await hashPassword(input.password);
   const user = await redeemAdminInvite({ token: input.token, email: input.email, passwordHash });
 
@@ -646,6 +658,7 @@ export const accountExportSection: PatientExportSection = {
 export async function confirmPassword(userId: string, password: string, ip?: string | null): Promise<void> {
   const user = await findUserById(userId);
   if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
+  if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
 
   const throttleKeys = { emailKey: emailThrottleKey(user.email), ipKey: normalizeClientIp(ip) };
   const gate = await checkLoginThrottle(throttleKeys);
@@ -659,6 +672,94 @@ export async function confirmPassword(userId: string, password: string, ip?: str
     if (afterFailure.blocked) throw new LoginThrottledError(afterFailure.retryAfterSeconds);
     throw new HttpError(403, 'Password confirmation failed.', 'PASSWORD_CONFIRMATION_FAILED');
   }
+}
+
+export interface ChangePasswordInput {
+  userId: string;
+  currentPassword: string;
+  newPassword: string;
+  ip?: string | null;
+  currentSessionId?: string;
+}
+
+/**
+ * Authenticated password change (Phase 8, issue #270).
+ * Re-authenticates the current password via the throttled `confirmPassword` path,
+ * rejects new passwords that equal the current one, updates `passwordHash`,
+ * bumps `tokenVersion`, and revokes all other active sessions while keeping
+ * the caller's own session row alive. The bumper also invalidates the
+ * caller's own tokens, so the caller re-issues its pair afterwards through
+ * `reissueCallerSession` — this function returns no session material.
+ */
+export async function changePassword(
+  input: ChangePasswordInput,
+  actor?: AuditActor,
+): Promise<{ tokenVersion: number }> {
+  if (input.currentPassword === input.newPassword) {
+    throw new HttpError(400, 'New password must be different from current password.', 'PASSWORD_UNCHANGED');
+  }
+
+  const user = await findUserById(input.userId);
+  if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
+  if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
+
+  await confirmPassword(input.userId, input.currentPassword, input.ip);
+  validatePasswordStrength(input.newPassword);
+  const passwordHash = await hashPassword(input.newPassword);
+
+  return prisma.$transaction(async (tx) => {
+    const updatedUser = await tx.user.update({
+      where: { id: input.userId },
+      data: {
+        passwordHash,
+        tokenVersion: { increment: 1 },
+      },
+      select: { tokenVersion: true },
+    });
+
+    const revokedResult = await tx.refreshSession.updateMany({
+      where: {
+        userId: input.userId,
+        revokedAt: null,
+        ...(input.currentSessionId ? { id: { not: input.currentSessionId } } : {}),
+      },
+      data: {
+        revokedAt: new Date(),
+        revokedReason: 'password_changed',
+      },
+    });
+
+    if (actor) {
+      await auditService.record(tx, actor, {
+        entityType: 'User',
+        entityId: input.userId,
+        action: 'user.password_changed',
+        fromState: null,
+        toState: null,
+        metadata: {
+          sessionsRevoked: revokedResult.count,
+        },
+      });
+    }
+
+    return { tokenVersion: updatedUser.tokenVersion };
+  });
+}
+
+/**
+ * Re-issues the caller's session token pair after `changePassword` bumped
+ * `User.tokenVersion` (issue #270). The bump invalidates every token minted
+ * before it — the caller's own refresh cookie included — so "keep the caller
+ * signed in" means minting one fresh pair for the session they called from.
+ * The session id is unchanged, so `GET /auth/sessions` still shows a single
+ * entry for this device. Kept out of `changePassword` on purpose: this is the
+ * same same-session rotation `refresh` performs, and the credential path
+ * should not hand back session material.
+ */
+export async function reissueCallerSession(userId: string, sessionId: string): Promise<AuthSession> {
+  const user = await findUserById(userId);
+  if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
+  return { user: toPublicUser(user), ...issueTokensForSession(user, sessionId), sessionId };
 }
 
 export async function isAccountDeleted(userId: string): Promise<boolean> {
