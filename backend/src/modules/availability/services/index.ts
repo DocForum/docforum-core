@@ -5,11 +5,11 @@ import * as doctorsService from '../../doctors/services';
 import { buildSlotRanges } from '../slot-generation';
 import { validateSlotGenerationDate } from '../validation';
 
-function isOverlapOrUniqueViolation(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
+export function isOverlapOrUniqueViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || !error) return false;
   const e = error as Record<string, unknown>;
   if (e.code === 'P2002') return true;
-  if (typeof e.message === 'string' && (e.message.includes('exclusion') || e.message.includes('23P01') || e.message.includes('AvailabilitySlot_doctor_no_overlap_excl'))) {
+  if (typeof e.message === 'string' && /exclusion|23P01|AvailabilitySlot_doctor_no_overlap_excl/.test(e.message)) {
     return true;
   }
   return false;
@@ -108,12 +108,7 @@ export async function generateSlots(input: GenerateSlotsInput) {
     proposedSlots[0].startTime,
     proposedSlots[proposedSlots.length - 1].endTime,
   );
-  let rows: ReturnType<typeof buildSlotRanges>;
-  try {
-    rows = buildSlotRanges(inputWithCutoff, existing);
-  } catch (error) {
-    throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
-  }
+  const rows = buildSlotRanges(inputWithCutoff, existing);
 
   const skippedOverlapping = proposedSlots.length - rows.length;
   if (rows.length === 0) return { created: 0, skippedOverlapping, skipped: skippedOverlapping };

@@ -59,26 +59,19 @@ export function buildSlotRanges(
   if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeStart >= rangeEnd) {
     throw new Error('date and timeZone must produce a valid slot range.');
   }
-  const existingIntervals: { start: number; end: number }[] = [];
-  const exactStarts = new Set<number>();
-  for (const item of existingSlots) {
-    if (typeof item === 'number') {
-      exactStarts.add(item);
-    } else {
-      const start = item.startTime instanceof Date ? item.startTime.getTime() : item.startTime;
-      const end = item.endTime instanceof Date ? item.endTime.getTime() : (item.endTime ?? start + 1);
-      existingIntervals.push({ start, end });
-    }
-  }
-
   const stepMs = slotLengthMinutes * 60 * 1_000;
   const skipBeforeMs = skipBefore ? skipBefore.getTime() : -Infinity;
   const slots: GeneratedSlotRange[] = [];
 
+  const existingIntervals = existingSlots.map((item) => {
+    const start = typeof item === 'number' ? item : new Date(item.startTime).getTime();
+    const end = typeof item === 'object' && item.endTime != null ? new Date(item.endTime).getTime() : start + stepMs;
+    return { start, end };
+  });
+
   for (let start = rangeStart; start + stepMs <= rangeEnd; start += stepMs) {
     if (start <= skipBeforeMs) continue;
     const end = start + stepMs;
-    if (exactStarts.has(start)) continue;
     const overlaps = existingIntervals.some((interval) => start < interval.end && end > interval.start);
     if (overlaps) continue;
     slots.push({ doctorProfileId, startTime: new Date(start), endTime: new Date(end) });
