@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
+import { apiRateLimit } from '../../../middleware/rate-limit';
 import * as pharmacyOrdersController from '../controllers';
 
 export const pharmacyOrdersRouter = Router();
@@ -63,6 +64,7 @@ pharmacyOrdersRouter.get(
 // integration test. `/facility/queue` before `/:id` to avoid id capture.
 pharmacyOrdersRouter.get(
   '/facility/queue',
+  apiRateLimit,
   authenticate,
   requireRole('facility'),
   pharmacyOrdersController.listFacilityQueue,
