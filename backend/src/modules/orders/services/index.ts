@@ -7,6 +7,7 @@ import * as paymentsService from '../../payments/services';
 import * as facilitiesService from '../../facilities/services';
 import * as medicationsService from '../../medications/services';
 import * as auditService from '../../audit/services';
+import * as pharmacyOrdersService from '../../pharmacy-orders/services';
 import { encryptField, decryptField } from '../../../utils/field-encryption';
 import * as ordersRepo from '../repositories';
 import type { Prisma } from '@prisma/client';
@@ -437,25 +438,19 @@ export async function listMineOrders(patientUserId: string) {
   };
 }
 
-export async function getOrderById(orderId: string) {
+/** One legacy `Order` (pharmacy or lab) for an authorised viewer: the
+ * patient or an active guardian, the prescribing doctor, the facility it is
+ * routed to, or an admin. Everyone else gets the same 404 as a missing order.
+ * Writes an AccessLog row. */
+export async function getOrderById(
+  orderId: string,
+  viewer: pharmacyOrdersService.OrderViewer,
+  route: string,
+) {
   if (!orderId || typeof orderId !== 'string') {
     throw new HttpError(400, 'Order ID is required.');
   }
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: {
-      fulfillmentProofs: { omit: { attachmentObjectKey: true } },
-      disputes: {
-        include: {
-          resolutions: true,
-        },
-      },
-    },
-  });
-  if (!order) {
-    throw new HttpError(404, 'Order not found.');
-  }
-  return formatOrderResponse(order);
+  return pharmacyOrdersService.getLegacyOrderForViewer(orderId, viewer, route);
 }
 
 export const prescriptionsExportSection: PatientExportSection = {

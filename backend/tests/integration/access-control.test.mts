@@ -67,6 +67,9 @@ const KNOWN_ROUTES = [
   'POST /orders/consultations/:consultationId/lab-orders',
   'POST /pharmacy-orders/:id/fulfill',
   'POST /lab-orders/:id/fulfill',
+  'POST /pharmacy-orders',
+  'POST /lab-orders',
+  'GET /pharmacy-orders/:id',
   'PUT /fulfillment-proofs/:proofId/attachment',
   'GET /fulfillment-proofs/:proofId/attachment',
   'GET /facilities/me',
@@ -146,6 +149,12 @@ const ACCESS_MATRIX: MatrixRow[] = [
   // Facility passes authorization; missing body → 400 (issue #317 schemas).
   { method: 'POST', path: '/pharmacy-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 400, admin: 403 } },
   { method: 'POST', path: '/lab-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 400, admin: 403 } },
+  // Legacy Order creation is admin-only (it bypasses the consultation-scoped
+  // issuance path); admin passes and the empty body is a 400.
+  { method: 'POST', path: '/pharmacy-orders', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 400 } },
+  { method: 'POST', path: '/lab-orders', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 400 } },
+  // Legacy Order reads are checked per order: an unknown id is 404 for all.
+  { method: 'GET', path: '/pharmacy-orders/:id', expected: { anon: 401, patient: 404, doctor: 404, facility: 404, admin: 404 } },
   // Fulfillment proof files (issue #316): upload is facility-only; download
   // is checked per proof, so an unknown id is 404 for every signed-in role.
   { method: 'PUT', path: '/fulfillment-proofs/:proofId/attachment', expected: { anon: 401, patient: 403, doctor: 403, facility: 404, admin: 403 } },

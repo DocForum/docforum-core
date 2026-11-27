@@ -302,6 +302,18 @@ describe('partial fulfillment (issue #73)', () => {
       .set('Authorization', `Bearer ${patientToken}`);
     expect(summary.status).toBe(200);
     expect(summary.body).toMatchObject({ totalItems: 3, dispensedItems: 3, status: 'fulfilled' });
+
+    // The summary is checked per order: another patient gets the same 404 as
+    // a missing order, never the summary.
+    const strangerUser = await prisma.user.create({
+      data: { email: `stranger-${runId}@example.com`, passwordHash: 'unused', role: 'patient', emailVerifiedAt: new Date() },
+    });
+    await prisma.patientProfile.create({ data: { userId: strangerUser.id, fullName: 'Stranger Patient' } });
+    const strangerToken = signAccessToken({ sub: strangerUser.id, role: 'patient' });
+    const stranger = await request(app)
+      .get(`/pharmacy-orders/orders/${prescription.id}/fulfillment-status?orderType=prescription`)
+      .set('Authorization', `Bearer ${strangerToken}`);
+    expect(stranger.status).toBe(404);
   });
 
   it('rejects a second facility dispensing the same item — including under concurrency', async () => {
