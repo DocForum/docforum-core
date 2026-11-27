@@ -404,6 +404,7 @@ describe('AuditEvent foundation', () => {
         'insertAuditEvent',
         'pruneAccessLogs',
         'recordAccess',
+        'recordAccessMany',
       ]);
     });
 

@@ -242,28 +242,53 @@ export function getLogFailureCount(): number {
   return logFailureCount;
 }
 
+function toAccessLogRow(input: AccessLogInput) {
+  return {
+    accessedBy: input.accessedBy ?? null,
+    patientProfileId: input.patientProfileId ?? null,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    route: input.route ?? null,
+    detail: input.detail ?? null,
+  };
+}
+
 /** Records one read, off the call path: returns immediately, never throws.
  * Callers must NOT await this on a request path — the unit test asserting
  * sub-50ms return with a hanging insert is the guard. */
 export function recordAccess(input: AccessLogInput): void {
-  void auditRepo
-    .recordAccess({
-      accessedBy: input.accessedBy ?? null,
-      patientProfileId: input.patientProfileId ?? null,
-      entityType: input.entityType,
-      entityId: input.entityId,
-      route: input.route ?? null,
-      detail: input.detail ?? null,
-    })
-    .catch((err: unknown) => {
-      logFailureCount += 1;
-      // Fail-open by design, but loudly: this is a privacy trail, so a
-      // silent gap is worse than a noisy one.
-      logger.error(
-        { error: err instanceof Error ? err.name : typeof err },
-        `[audit] FAILED to record access (${input.entityType} ${input.entityId})`,
-      );
-    });
+  void auditRepo.recordAccess(toAccessLogRow(input)).catch((err: unknown) => {
+    logFailureCount += 1;
+    // Fail-open by design, but loudly: this is a privacy trail, so a
+    // silent gap is worse than a noisy one.
+    logger.error(
+      { error: err instanceof Error ? err.name : typeof err },
+      `[audit] FAILED to record access (${input.entityType} ${input.entityId})`,
+    );
+  });
+}
+
+/**
+ * Records a whole list read as one INSERT (issue #122). The referrals lists
+ * used to call `recordAccess` once per row, which is an N+1 write: 20 rows
+ * meant 20 extra queries on `GET /referrals/incoming` and 50 on
+ * `GET /referrals/mine`. Off the call path and fail-open exactly like the
+ * single-row version, so a failed audit write still never fails the read.
+ */
+export function recordAccessMany(inputs: AccessLogInput[]): void {
+  if (inputs.length === 0) return;
+  const rows = inputs.map(toAccessLogRow);
+  void auditRepo.recordAccessMany(rows).catch((err: unknown) => {
+    logFailureCount += 1;
+    // Fail-open by design, but loudly: this is a privacy trail, so a
+    // silent gap is worse than a noisy one.
+    logger.error(
+      { error: err instanceof Error ? err.name : typeof err, count: rows.length },
+      rows.length === 1
+        ? `[audit] FAILED to record access (${rows[0]!.entityType} ${rows[0]!.entityId})`
+        : `[audit] FAILED to record ${rows.length} access rows`,
+    );
+  });
 }
 
 // --- Patient-facing query (PII stripped) ------------------------------------

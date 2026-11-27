@@ -485,16 +485,18 @@ export async function listMine(userId: string, patientProfileId?: string) {
     : await patientsService.getMyPatientProfile(userId);
   const referrals = await referralsRepo.listReferralsForPatient(patientProfile.id);
   const detail = patientProfile.userId === null ? 'referral list read (guardian)' : 'referral list read';
-  for (const referral of referrals) {
-    auditService.recordAccess({
+  // One batched INSERT for the page — a call per referral made the read's
+  // query count grow with the list (issue #122).
+  auditService.recordAccessMany(
+    referrals.map((referral) => ({
       accessedBy: userId,
       patientProfileId: patientProfile.id,
-      entityType: 'Referral',
+      entityType: 'Referral' as const,
       entityId: referral.id,
       route: 'GET /referrals/mine',
       detail,
-    });
-  }
+    })),
+  );
   return referrals;
 }
 
@@ -600,16 +602,16 @@ export async function listIncoming(userId: string, filters: IncomingReferralFilt
     snapshotIntake: readableSnapshotIntake(row.snapshotIntake),
   }));
 
-  for (const row of pageRows) {
-    auditService.recordAccess({
+  auditService.recordAccessMany(
+    pageRows.map((row) => ({
       accessedBy: userId,
       patientProfileId: row.patientProfileId,
-      entityType: 'Referral',
+      entityType: 'Referral' as const,
       entityId: row.id,
       route: 'GET /referrals/incoming',
       detail: 'incoming referral read',
-    });
-  }
+    })),
+  );
 
   const last = pageRows.at(-1);
   return { items, nextCursor: hasMore && last ? encodeIncomingCursor(last) : null };

@@ -13,6 +13,7 @@ import * as moduleMounts from './mounts';
 import { registerRetentionHolds } from './retention-holds';
 import { getReadiness } from './health/readiness';
 import { runWithRlsContext } from './db/prisma-client';
+import { queryCountMiddleware } from './db/query-count';
 import { HttpError } from './http-error';
 import * as authService from './modules/auth/services';
 import * as notificationsService from './modules/notifications/services';
@@ -60,6 +61,10 @@ export function createApp() {
   app.use(requestDeadline());
   app.use(express.json());
   app.use(cookieParser());
+  // Issue #122: opt-in, per-request Prisma query counter for the query-budget
+  // tests. Inert unless a request carries the test-only header (and never in
+  // production), so this stays out of the way of real traffic.
+  app.use(queryCountMiddleware);
   // Unauthenticated requests must not inherit a previous patient's identity.
   // Authenticated routes replace this with the verified JWT context.
   app.use((_req, _res, next) => runWithRlsContext({ userId: '', role: 'anonymous' }, next));

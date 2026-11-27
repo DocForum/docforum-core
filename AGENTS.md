@@ -62,5 +62,31 @@ Edits to shared lines are what put PRs into merge conflict with each other.
 - When you hit an unresolved design gap listed in `ARCHITECTURE_ESSENTIALS.md` ("Known unresolved design gaps"), don't silently invent a resolution — implement the smallest reasonable default, note the assumption in the PR description, and leave the gap noted (or mark it resolved if your PR actually closes it).
 - Tests: booking, referral, and order-issuance flows are correctness-critical (see ARCHITECTURE.md §7) — these need integration tests, not just unit tests, before being considered done.
 
+## Query budgets for list endpoints
+
+A list endpoint's query count is a tested property, not something to notice later
+in a load test. Prisma makes N+1 easy (a `findMany`, then a lookup per row); it
+passes functional tests and only hurts once the list is long.
+
+- Give every new list endpoint a budget test in
+  `backend/tests/integration/query-budgets.test.mts`, using
+  `backend/tests/helpers/query-budget.ts` (`expectQueryBudget`). Measure the same
+  endpoint with **1 row and 50 rows** and assert the same small constant — a
+  count that grows with the result set is the bug.
+- The counter is per request: the helper sends `X-Query-Count-Id`, the middleware
+  in `backend/src/db/query-count.ts` opens an `AsyncLocalStorage` counter for it,
+  and the Prisma extension in `backend/src/db/prisma-client.ts` increments that
+  counter.
+  Parallel tests therefore don't pollute each other. The middleware is inert
+  without the header and never runs in production.
+- Fix an over-budget endpoint by batching, not by raising the number: use
+  `include`/`select` on the list query, a `WHERE id IN (...)` read, or the owning
+  module's batch service (e.g. `patients.getPatientSummariesByIds`,
+  `doctors.getDoctorSummariesByIds`) instead of a per-row call or a service call
+  inside a loop. Per-row *writes* count too — batch audit/access-log rows with
+  `auditService.recordAccessMany` rather than calling `recordAccess` in a loop.
+- Set the budget to the measured constant, not a round number with slack; the
+  point is that an added per-row query fails the test immediately.
+
 ## For CLAUDE.md
 `CLAUDE.md` in this repo defers to this file for substantive project rules and only adds Claude-specific operating notes (tool usage, file skills, etc.). Keep the two in sync — don't duplicate rules, reference them.
