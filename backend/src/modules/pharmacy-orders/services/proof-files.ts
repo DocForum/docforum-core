@@ -29,11 +29,11 @@ export function assertAcceptableProofFile(file: { body: unknown; contentType: st
   if (!signature) {
     throw new HttpError(415, `Proof files must be one of: ${PROOF_CONTENT_TYPES.join(', ')}.`, 'PROOF_UNSUPPORTED_TYPE');
   }
-  if (!Buffer.isBuffer(file.body) || file.body.length === 0) {
+  if (!Buffer.isBuffer(file.body) || file.body.byteLength === 0) {
     throw new HttpError(400, 'The request body must be the proof file.', 'PROOF_EMPTY');
   }
   const body = file.body;
-  if (body.length > config.orders.proofMaxBytes) {
+  if (body.byteLength > config.orders.proofMaxBytes) {
     throw new HttpError(413, `Proof files may be at most ${config.orders.proofMaxBytes} bytes.`, 'PROOF_TOO_LARGE');
   }
   if (!signature.magic.every((byte, index) => body[index] === byte)) {

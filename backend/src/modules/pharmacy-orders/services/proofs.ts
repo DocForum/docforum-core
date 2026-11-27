@@ -74,7 +74,7 @@ export async function attachProofFile(
       const attached = await repo.setProofAttachmentIfEmpty(tx, proof.id, {
         objectKey,
         contentType,
-        byteSize: body.length,
+        byteSize: body.byteLength,
       });
       if (!attached) {
         throw new HttpError(409, 'A file has already been attached to this proof.', 'PROOF_ALREADY_ATTACHED');
@@ -85,7 +85,7 @@ export async function attachProofFile(
         action: 'fulfillment_proof.attached',
         fromState: null,
         toState: 'attached',
-        metadata: { orderId: proof.orderId, facilityProfileId, contentType, byteSize: body.length },
+        metadata: { orderId: proof.orderId, facilityProfileId, contentType, byteSize: body.byteLength },
       });
     });
   } catch (error) {
@@ -95,7 +95,7 @@ export async function attachProofFile(
     throw error;
   }
 
-  return { proofId: proof.id, orderId: proof.orderId, contentType, byteSize: body.length };
+  return { proofId: proof.id, orderId: proof.orderId, contentType, byteSize: body.byteLength };
 }
 
 /** True when `user` may read this proof's file. A patient may name an active
