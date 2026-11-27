@@ -12,6 +12,13 @@ export default defineConfig({
     'Documentation for the DocForum organization — docforum-core, docforum-web, docforum-escrow.',
   cleanUrls: true,
   lastUpdated: true,
+  // Dead internal links fail `vitepress build` (issue #347). Left explicit as
+  // `false` because a broken link otherwise silently ships: `deploy-docs.yml`
+  // only runs on `main`, so the first build that sees one is the deploy that
+  // it stops. `build-docs.yml` runs the same build on every PR.
+  // (sync-docs.mjs rewrites repo-relative links to GitHub URLs for the same
+  // reason — relative paths mean nothing inside this site's tree.)
+  ignoreDeadLinks: false,
 
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg` }],
