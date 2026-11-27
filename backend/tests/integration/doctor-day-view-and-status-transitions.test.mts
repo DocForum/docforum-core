@@ -118,12 +118,38 @@ describe('doctor day view and appointment status transitions (issue #358)', () =
     });
   }
 
+  let tempBookingSeq = 0;
   async function book(patient: Patient, slotId: string) {
+    const slot = await prisma.availabilitySlot.findUniqueOrThrow({ where: { id: slotId } });
+    const isPast = slot.startTime <= new Date();
+    if (isPast) {
+      tempBookingSeq += 1;
+      const tempFuture = new Date(Date.now() + (30 * 24 + tempBookingSeq) * 3600 * 1000);
+      await prisma.availabilitySlot.update({
+        where: { id: slotId },
+        data: {
+          startTime: tempFuture,
+          endTime: new Date(tempFuture.getTime() + 30 * 60_000),
+        },
+      });
+    }
+
     const res = await request(app)
       .post('/appointments')
       .set('Authorization', `Bearer ${patient.accessToken}`)
       .send({ availabilitySlotId: slotId });
     expect(res.status, `booking failed: ${res.text}`).toBe(201);
+
+    if (isPast) {
+      await prisma.availabilitySlot.update({
+        where: { id: slotId },
+        data: {
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+        },
+      });
+    }
+
     return res.body.id as string;
   }
 

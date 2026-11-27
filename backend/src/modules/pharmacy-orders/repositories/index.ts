@@ -2,7 +2,7 @@
 // access only. Facilities write ONLY through these paths (hard rule 5):
 // never to Prescription.status / LabOrder.status directly.
 import { prisma } from '../../../db/prisma-client';
-import type { FulfillmentStatus, OrderType, Prisma } from '@prisma/client';
+import type { FulfillmentStatus, FulfillmentUnfulfilledReason, OrderType, Prisma } from '@prisma/client';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
@@ -13,6 +13,19 @@ export function findFulfillmentRecordById(id: string) {
   return prisma.fulfillmentRecord.findUnique({
     where: { id },
     include: { items: { orderBy: { createdAt: 'asc' } }, facility: { select: { id: true, name: true } } },
+  });
+}
+
+/** All fulfillment records for an order — used by the patient-facing summary
+ * to surface rejection/unfulfilled reasons (issue #322). */
+export function findFulfillmentRecordsForOrder(
+  orderType: 'prescription' | 'lab_order',
+  orderId: string,
+) {
+  return prisma.fulfillmentRecord.findMany({
+    where: orderType === 'prescription' ? { prescriptionId: orderId } : { labOrderId: orderId },
+    include: { items: { orderBy: { createdAt: 'asc' } } },
+    orderBy: { createdAt: 'asc' },
   });
 }
 
@@ -96,7 +109,7 @@ export function claimPendingItem(
   fulfillmentRecordId: string,
   data:
     | { status: 'dispensed'; dispensedKey: string; quantityDispensed: number; dispensedAt: Date }
-    | { status: 'unfulfilled' },
+    | { status: 'unfulfilled'; unfulfilledReason: FulfillmentUnfulfilledReason | null; unfulfilledNote: string | null },
 ) {
   return db.fulfillmentItem
     .updateMany({
@@ -176,6 +189,25 @@ export async function createFulfillmentProof(
       attachmentUrl: data.attachmentUrl,
       notes: data.notes,
     },
+  });
+}
+
+/** All fulfillment records assigned to a facility — the facility's own queue
+ * (issue #15). `status` filter is optional; omitting it returns all records. */
+export function listFulfillmentRecordsForFacility(
+  facilityId: string,
+  filters: { status?: FulfillmentStatus } = {},
+) {
+  return prisma.fulfillmentRecord.findMany({
+    where: {
+      facilityId,
+      ...(filters.status ? { status: filters.status } : {}),
+    },
+    include: {
+      items: { orderBy: { createdAt: 'asc' } },
+      facility: { select: { id: true, name: true } },
+    },
+    orderBy: { createdAt: 'desc' },
   });
 }
 

@@ -2,6 +2,7 @@ import express, { Router, type NextFunction, type Request, type Response } from 
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
+import { apiRateLimit } from '../../../middleware/rate-limit';
 import * as ordersController from '../controllers';
 import { LAB_RESULT_CONTENT_TYPES } from '../services/lab-results';
 
@@ -59,6 +60,16 @@ ordersRouter.get(
   '/lab-orders/:labOrderId/result',
   authenticate,
   ordersController.downloadLabResult,
+);
+
+// Issue #11: patient-facing view of active/past orders, supersedes-chain resolved.
+// `/mine` before `/:id` so the literal is never captured as an order id.
+ordersRouter.get(
+  '/mine',
+  apiRateLimit,
+  authenticate,
+  requireRole('patient'),
+  ordersController.listMineOrders,
 );
 
 ordersRouter.post(

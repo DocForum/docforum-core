@@ -4,7 +4,9 @@ import { prisma } from '../../../db/prisma-client';
 import * as auditService from '../../audit/services';
 import * as availabilityService from '../../availability/services';
 import * as doctorsRepo from '../repositories';
-import type { VerificationStatus } from '@prisma/client';
+import type { Prisma, VerificationStatus } from '@prisma/client';
+
+type DbClient = typeof prisma | Prisma.TransactionClient;
 
 export async function getMyDoctorProfile(userId: string) {
   const profile = await doctorsRepo.findDoctorProfileByUserId(userId);
@@ -159,8 +161,8 @@ export async function setMySpecialties(userId: string, requestedIds: string[]) {
   });
 }
 
-export async function getDoctorProfileById(doctorProfileId: string) {
-  const profile = await doctorsRepo.findDoctorProfileById(doctorProfileId);
+export async function getDoctorProfileById(doctorProfileId: string, db: DbClient = prisma) {
+  const profile = await doctorsRepo.findDoctorProfileById(doctorProfileId, db);
   if (!profile) throw new HttpError(404, 'Doctor profile not found.');
   return profile;
 }
@@ -216,13 +218,19 @@ export async function setVerificationStatus(
   });
 }
 
-/** A referral target (or admin-reassignment target) must be a verified
- * doctor — an unverified profile has no business receiving patients
- * (issue #68: reassignment goes through this gate, never around it). */
-export async function assertDoctorVerified(doctorProfileId: string) {
-  const profile = await getDoctorProfileById(doctorProfileId);
+/** Checks whether a doctor profile exists and is verified (issue #286). */
+export async function isDoctorVerified(doctorProfileId: string, db: DbClient = prisma): Promise<boolean> {
+  const profile = await doctorsRepo.findDoctorProfileById(doctorProfileId, db);
+  return profile?.verificationStatus === 'verified';
+}
+
+/** A referral target, appointment booking target, or admin-reassignment target
+ * must be a verified doctor — an unverified profile has no business receiving
+ * patients (issue #68, #286: booking and reassignment go through this gate). */
+export async function assertDoctorVerified(doctorProfileId: string, message?: string, db: DbClient = prisma) {
+  const profile = await getDoctorProfileById(doctorProfileId, db);
   if (profile.verificationStatus !== 'verified') {
-    throw new HttpError(422, 'Target doctor is not verified.');
+    throw new HttpError(422, message ?? 'Target doctor is not verified.');
   }
   return profile;
 }
@@ -233,12 +241,29 @@ export async function assertDoctorVerified(doctorProfileId: string) {
  * repository — callers (referrals/admin ops) never touch DoctorSpecialty
  * directly (module-boundary hard rule).
  */
-export async function assertDoctorVerifiedInSpecialty(doctorProfileId: string, specialtyId: string) {
-  const profile = await assertDoctorVerified(doctorProfileId);
-  const specialties = await doctorsRepo.findDoctorSpecialties(doctorProfileId);
+export async function assertDoctorVerifiedInSpecialty(
+  doctorProfileId: string,
+  specialtyId: string,
+  db: DbClient = prisma,
+) {
+  const profile = await assertDoctorVerified(doctorProfileId, undefined, db);
+  const specialties = await doctorsRepo.findDoctorSpecialties(doctorProfileId, db);
   const holds = specialties.some((link) => link.specialtyId === specialtyId);
   if (!holds) {
     throw new HttpError(422, 'Target doctor does not hold the referral’s specialty.');
+  }
+  return profile;
+}
+
+/**
+ * Ensures the doctor's user account is active (not deactivated or deleted).
+ * Throws 409 if the doctor's account is deactivated or deleted, since the
+ * doctor cannot accept new bookings in that state.
+ */
+export async function assertDoctorActive(doctorProfileId: string, db?: DbClient) {
+  const profile = await getDoctorProfileById(doctorProfileId, db);
+  if (profile.user.deactivatedAt || profile.user.deletedAt) {
+    throw new HttpError(409, 'Doctor is not available for booking.');
   }
   return profile;
 }

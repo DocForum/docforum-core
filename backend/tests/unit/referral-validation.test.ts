@@ -5,6 +5,7 @@ import {
   adminReassignSchema,
   createReferralBatchSchema,
   createReferralSchema,
+  declineReferralSchema,
 } from '../../src/modules/referrals/validation';
 import { updateStatusSchema } from '../../src/modules/appointments/validation';
 
@@ -57,6 +58,25 @@ describe('referral validation schemas', () => {
     expect(() => adminReassignSchema.parse({ targetDoctorId: 'd1', reason: ' ' })).toThrow();
     expect(() => adminCancelSchema.parse({ reason: '' })).toThrow();
     expect(adminCancelSchema.parse({ reason: 'why' })).toEqual({ reason: 'why' });
+  });
+
+  it('accepts an empty decline body and an optional decline reason (issue #309)', () => {
+    // Backwards compatible: no body at all is valid.
+    expect(declineReferralSchema.parse({})).toEqual({});
+    expect(declineReferralSchema.parse({ patientProfileId: '00000000-0000-4000-8000-000000000000' })).toEqual({
+      patientProfileId: '00000000-0000-4000-8000-000000000000',
+    });
+
+    expect(declineReferralSchema.parse({ reason: { enum: 'cost' } })).toEqual({ reason: { enum: 'cost' } });
+    expect(declineReferralSchema.parse({ reason: { enum: 'other', note: '  explanation  ' } })).toEqual({
+      reason: { enum: 'other', note: 'explanation' },
+    });
+  });
+
+  it('rejects an invalid decline enum, a missing enum and an over-long note', () => {
+    expect(() => declineReferralSchema.parse({ reason: { enum: 'too_expensive' } })).toThrow();
+    expect(() => declineReferralSchema.parse({ reason: { note: 'no enum' } })).toThrow();
+    expect(() => declineReferralSchema.parse({ reason: { enum: 'cost', note: 'x'.repeat(201) } })).toThrow();
   });
 });
 

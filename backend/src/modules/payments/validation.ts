@@ -77,6 +77,25 @@ export const paymentHistoryQuerySchema = z
     message: '`from` must not be after `to`.',
   });
 
+// Issue #325: admin list of all payment intents with extra filters.
+export const adminIntentListQuerySchema = z
+  .object({
+    status: z
+      .enum(['created', 'funding', 'awaiting_signature', 'submitting', 'escrowed', 'released', 'refunded', 'failed'])
+      .optional(),
+    assetCode: z.string().min(1).max(20).optional(),
+    facilityId: z.string().min(1).optional(),
+    patientProfileId: z.string().min(1).optional(),
+    from: isoDate.optional(),
+    to: inclusiveEndDate.optional(),
+    cursor: z.string().min(1).max(512).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .strict()
+  .refine((query) => !query.from || !query.to || query.from <= query.to, {
+    message: '`from` must not be after `to`.',
+  });
+
 /** GET /payments/facility/ledger.csv (issue #329): the ledger's filters
  * without pagination — the CSV streams every matching row. */
 export const ledgerCsvQuerySchema = z

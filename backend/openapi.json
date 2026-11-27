@@ -122,9 +122,7 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 8,
-                    "maxLength": 72,
-                    "description": "Account password (min 8 characters, max 72 UTF-8 bytes, rejected if commonly breached)"
+                    "minLength": 8
                   },
                   "fullName": {
                     "type": "string"
@@ -135,14 +133,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Account created successfully"
-          },
-          "400": {
-            "description": "Validation error or invalid password. See [Error Catalogue](/api/errors#password-errors)."
-          },
-          "409": {
-            "description": "Email already registered. See [Error Catalogue](/api/errors#EMAIL_ALREADY_REGISTERED)."
+          "200": {
+            "description": "Success"
           }
         }
       }
@@ -178,16 +170,7 @@
         },
         "responses": {
           "200": {
-            "description": "Login successful"
-          },
-          "400": {
-            "description": "Validation error. See [Error Catalogue](/api/errors#validation-errors)."
-          },
-          "401": {
-            "description": "Invalid email or password. See [Error Catalogue](/api/errors#AUTH_INVALID_CREDENTIALS)."
-          },
-          "429": {
-            "description": "Login attempts locked or throttled. See [Error Catalogue](/api/errors#RATE_LIMIT_EXCEEDED)."
+            "description": "Success"
           }
         }
       }
@@ -359,12 +342,6 @@
         "responses": {
           "201": {
             "description": "Created"
-          },
-          "401": {
-            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
-          },
-          "403": {
-            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
           }
         }
       }
@@ -387,12 +364,6 @@
         "responses": {
           "200": {
             "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
-          },
-          "403": {
-            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
           }
         }
       }
@@ -406,12 +377,6 @@
         "responses": {
           "200": {
             "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
-          },
-          "403": {
-            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
           }
         }
       }
@@ -462,12 +427,6 @@
         "responses": {
           "201": {
             "description": "Created"
-          },
-          "401": {
-            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
-          },
-          "403": {
-            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
           }
         }
       }
@@ -510,12 +469,6 @@
         "responses": {
           "201": {
             "description": "Created"
-          },
-          "401": {
-            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
-          },
-          "403": {
-            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
           }
         }
       }
@@ -557,12 +510,6 @@
         "responses": {
           "201": {
             "description": "Created"
-          },
-          "401": {
-            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
-          },
-          "403": {
-            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
           }
         }
       }
@@ -576,12 +523,6 @@
         "responses": {
           "200": {
             "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
-          },
-          "403": {
-            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
           }
         }
       }
@@ -619,12 +560,6 @@
         "responses": {
           "201": {
             "description": "Created"
-          },
-          "401": {
-            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
-          },
-          "403": {
-            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
           }
         }
       }
@@ -656,12 +591,6 @@
         "responses": {
           "201": {
             "description": "Created"
-          },
-          "401": {
-            "description": "Authentication required. See [Error Catalogue](/api/errors#UNAUTHORIZED)."
-          },
-          "403": {
-            "description": "Forbidden or email not verified. See [Error Catalogue](/api/errors#EMAIL_NOT_VERIFIED)."
           }
         }
       }
@@ -3089,62 +3018,60 @@
         }
       }
     },
-    "/auth/password": {
-      "post": {
+    "/payments/intents": {
+      "get": {
         "tags": [
-          "Auth"
+          "payments"
         ],
-        "summary": "Change password",
-        "description": "Authenticated password change endpoint. Re-verifies current password through throttled confirmPassword helper. Bumps tokenVersion and revokes other refresh sessions while keeping caller's current session alive. See [Error Catalogue](/api/errors#password-errors).",
+        "operationId": "payments_get_payments_intents",
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "cookieAuth": []
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/auth/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "auth_post_auth_password",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "currentPassword",
-                  "newPassword"
-                ],
-                "properties": {
-                  "currentPassword": {
-                    "type": "string",
-                    "description": "Current account password"
-                  },
-                  "newPassword": {
-                    "type": "string",
-                    "minLength": 8,
-                    "maxLength": 72,
-                    "description": "New password (min 8 characters, max 72 UTF-8 bytes, not commonly breached)"
-                  }
-                }
+                "additionalProperties": true
               }
             }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Password updated successfully"
-          },
-          "400": {
-            "description": "Invalid new password or identical to current password. See [Error Catalogue](/api/errors#password-errors)."
-          },
-          "401": {
-            "description": "Invalid current password. See [Error Catalogue](/api/errors#AUTH_INVALID_CREDENTIALS)."
-          },
-          "403": {
-            "description": "Account deactivated. See [Error Catalogue](/api/errors#ACCOUNT_DEACTIVATED)."
-          },
-          "429": {
-            "description": "Password change attempts throttled. See [Error Catalogue](/api/errors#RATE_LIMIT_EXCEEDED)."
           }
         }
       }

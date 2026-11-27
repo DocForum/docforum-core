@@ -129,6 +129,10 @@ describe('optimistic concurrency (version + If-Match)', () => {
       ...otherDoctorUser,
       profileId: (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: otherDoctorUser.userId } })).id,
     };
+    await prisma.doctorProfile.update({
+      where: { id: doctor.profileId },
+      data: { verificationStatus: 'verified' },
+    });
     const patientUser = await signup('patient', 'cc-patient');
     patient = {
       ...patientUser,
