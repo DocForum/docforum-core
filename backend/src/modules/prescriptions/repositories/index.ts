@@ -28,6 +28,8 @@ export function findPrescriptionWithItems(id: string) {
           flaggedForPharmacistReview: true,
         },
       },
+      // Issue #314: a superseded prescription points at its correction.
+      correctedBy: { select: { id: true } },
     },
   });
 }
@@ -60,12 +62,4 @@ export function applyOrderStatusIf(
   return db.prescription
     .updateMany({ where: { id, status: { in: allowedFrom } }, data: { status: to } })
     .then((result) => result.count === 1);
-}
-
-/** Returns the patientProfileId for a prescription — used by cross-module
- * callers that need to verify ownership (issue #323). */
-export function findPatientProfileIdForPrescription(id: string) {
-  return prisma.prescription
-    .findUnique({ where: { id }, select: { patientProfileId: true } })
-    .then((row) => row?.patientProfileId ?? null);
 }

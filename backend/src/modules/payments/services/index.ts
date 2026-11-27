@@ -338,6 +338,16 @@ export async function getPaymentIntent(id: string) {
  * Admin-only fields (preparedTxHash, preparedXdr, preparedExpiryLedger,
  * preparedExpiresAt) are not exposed. Returns null for 404/403 — callers
  * always raise a plain 404 so ids cannot be probed. */
+/** Issue #314: the payment intent status of one order (null when the order
+ * has no intent), for the order detail reads in other modules. */
+export async function getPaymentIntentStatusForOrder(
+  orderType: 'prescription' | 'lab_order',
+  orderId: string,
+): Promise<string | null> {
+  const intent = await paymentsRepo.findPaymentIntentByOrder(orderType, orderId);
+  return intent?.status ?? null;
+}
+
 export async function getPaymentIntentForOwner(
   id: string,
   userId: string,

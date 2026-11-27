@@ -5,6 +5,8 @@ import { prisma } from '../../../db/prisma-client';
 import { publish } from '../../../events';
 import * as prescriptionsRepo from '../repositories';
 import { recordAccess } from '../../audit/services';
+import * as pharmacyOrdersService from '../../pharmacy-orders/services';
+import * as paymentsService from '../../payments/services';
 import type { OrderStatus } from '@prisma/client';
 
 export async function getPrescription(id: string) {
@@ -70,72 +72,26 @@ export async function applyFulfillmentStatus(
   });
 }
 
-/** Resolves the patient who owns this prescription — for ownership checks
- * in cross-module fulfillment reads (issue #323). */
-export async function getPatientProfileIdForOrder(prescriptionId: string): Promise<string | null> {
-  return prescriptionsRepo.findPatientProfileIdForPrescription(prescriptionId);
-}
-
 /**
- * Issue #314: fetch a prescription for a viewer with RBAC.
- *
- * Allowed viewers:
- *   - admin: always
- *   - doctor: must be the prescriber (prescribingDoctorId's userId)
- *   - patient: must own the patientProfileId
- *   - facility: must have a FulfillmentRecord on this prescription
- *
- * Returns 404 for any unauthorised viewer — 403 would leak existence.
- * Writes an AccessLog row fire-and-forget.
+ * Issue #314: one prescription by id for an authorised viewer (see
+ * pharmacyOrdersService.canViewOrder for who that is); 404 for everyone
+ * else, so existence never leaks. Returns the items, status, supersession
+ * links both ways and the payment intent status, and writes an AccessLog row.
  */
 export async function getPrescriptionForViewer(
   prescriptionId: string,
-  viewer: { userId: string; role: string },
+  viewer: pharmacyOrdersService.OrderViewer,
   route: string,
-): Promise<{ prescription: NonNullable<Awaited<ReturnType<typeof prescriptionsRepo.findPrescriptionWithItems>>>; }> {
+) {
   const prescription = await prescriptionsRepo.findPrescriptionWithItems(prescriptionId);
-  if (!prescription) throw new HttpError(404, 'Prescription not found.');
-
-  let allowed = false;
-
-  if (viewer.role === 'admin') {
-    allowed = true;
-  } else if (viewer.role === 'doctor') {
-    const doctorProfile = await prisma.doctorProfile.findUnique({
-      where: { userId: viewer.userId },
-      select: { id: true },
-    });
-    allowed = doctorProfile !== null && prescription.prescribingDoctorId === doctorProfile.id;
-  } else if (viewer.role === 'patient') {
-    // Find the prescription's patient profile only when the viewer owns it or
-    // is an active guardian for it (Guardianship.guardianUserId = viewer.userId,
-    // revokedAt null). `guardians` is the PatientProfile side of that relation.
-    const patientProfile = await prisma.patientProfile.findFirst({
-      where: {
-        id: prescription.patientProfileId,
-        OR: [
-          { userId: viewer.userId },
-          { guardians: { some: { guardianUserId: viewer.userId, revokedAt: null } } },
-        ],
-      },
-      select: { id: true },
-    });
-    allowed = patientProfile !== null;
-  } else if (viewer.role === 'facility') {
-    const facilityProfile = await prisma.facilityProfile.findUnique({
-      where: { userId: viewer.userId },
-      select: { id: true },
-    });
-    if (facilityProfile) {
-      const record = await prisma.fulfillmentRecord.findFirst({
-        where: { prescriptionId, facilityId: facilityProfile.id },
-        select: { id: true },
-      });
-      allowed = record !== null;
-    }
-  }
-
-  if (!allowed) throw new HttpError(404, 'Prescription not found.');
+  const allowed = prescription !== null && (await pharmacyOrdersService.canViewOrder(viewer, {
+    orderType: 'prescription',
+    id: prescription.id,
+    patientProfileId: prescription.patientProfileId,
+    issuingDoctorId: prescription.prescribingDoctorId,
+    facilityProfileId: prescription.facilityProfileId,
+  }));
+  if (!prescription || !allowed) throw new HttpError(404, 'Prescription not found.');
 
   recordAccess({
     accessedBy: viewer.userId,
@@ -145,5 +101,12 @@ export async function getPrescriptionForViewer(
     route,
   });
 
-  return { prescription };
+  const { correctedBy, amountStroops, ...rest } = prescription;
+  return {
+    ...rest,
+    amountStroops: amountStroops.toString(),
+    supersedesPrescriptionId: prescription.supersedesPrescriptionId,
+    correctedByPrescriptionId: correctedBy?.id ?? null,
+    paymentIntentStatus: await paymentsService.getPaymentIntentStatusForOrder('prescription', prescription.id),
+  };
 }

@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 import { auditActor } from '../../../middleware/request-id';
 import * as services from '../services';
+import { HttpError } from '../../../http-error';
+import { getParam } from '../../../request-params';
 
 export async function createLabOrder(req: Request, res: Response) {
   const { patientProfileId, orderingDoctorId, details } = req.body || {};
@@ -26,9 +28,13 @@ export async function fulfillLabOrder(req: Request, res: Response) {
   res.status(200).json(order);
 }
 
+/** `GET /lab-orders/:id` (issue #314). */
 export async function getLabOrder(req: Request, res: Response) {
-  const id = req.params.id as string;
-  const viewer = { userId: req.user!.id, role: req.user!.role as string };
-  const order = await services.getLabOrderForViewer(id, viewer, req.path);
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const order = await services.getLabOrderForViewer(
+    getParam(req, 'id'),
+    { userId: req.user.id, role: req.user.role },
+    req.originalUrl,
+  );
   res.status(200).json(order);
 }

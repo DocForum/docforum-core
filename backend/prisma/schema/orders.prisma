@@ -29,6 +29,10 @@ enum DisputeOutcome {
   upheld
   rejected
   refunded
+  // Legacy rows only: a pre-#311 free-text outcome that named no outcome
+  // (e.g. "resolved"). The original text is kept in resolutionNotes. Never
+  // accepted for a new resolution.
+  unspecified
 }
 
 model Order {

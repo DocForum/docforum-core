@@ -1,7 +1,10 @@
 Issues #311–#314: order module hardening.
 
 **#311** — Harden dispute resolution: `DisputeOutcome` enum (`upheld | rejected |
-refunded`) replaces the free-text `outcome` column; `resolveDispute` now uses a
+refunded`, plus `unspecified` for legacy rows only) replaces the free-text
+`outcome` column. The migration maps existing values with an explicit
+case-insensitive `CASE` and keeps any unmapped original text in
+`resolutionNotes`; `resolveDispute` now uses a
 conditional `updateMany` (pending → resolved) so a double-resolve returns 409
 instead of silently creating a second resolution; `listDisputes` is keyset-paginated;
 all inputs are validated with Zod.
@@ -18,7 +21,18 @@ expiry job now delegates per-order transitions to `expireLabOrder` in the
 lab-orders service, which records an `AuditEvent` in the same transaction.
 
 **#314** — Prescription and lab order detail reads: `GET /prescriptions/:id` is a
-new endpoint with RBAC (prescriber, patient/guardian, facilities with a
-FulfillmentRecord on the order, admins — 404 otherwise). `GET /lab-orders/:id`
-enforces the same RBAC and decrypts notes only for clinical roles (doctor, admin).
-Both endpoints write an AccessLog row fire-and-forget.
+new endpoint and `GET /lab-orders/:id` now enforces the same rule (it previously
+returned any order to any signed-in user): the issuing doctor, the patient or an
+active guardian, the facility the order was sent to or one holding a fulfillment
+record on it, and admins; 404 otherwise. The rule lives once, in
+`pharmacyOrdersService.canViewOrder`, and goes through the doctors, patients and
+facilities services (no cross-module table access). Both reads return the items
+or notes, status, supersession links both ways (`supersedes…Id`,
+`correctedBy…Id`) and `paymentIntentStatus`; lab notes are decrypted only for
+the ordering doctor and admins. Each read writes an AccessLog row; both routes
+are behind `apiRateLimit`.
+
+Integration tests in `order-detail-reads.test.mts` (port 5497) cover required
+quantities, over-dispensing (400) and exact dispensing, routine/urgent
+`expiresAt`, the audited expiry (fulfilled orders never expire) and the
+per-role reads with their AccessLog rows.
