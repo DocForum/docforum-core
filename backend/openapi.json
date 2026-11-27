@@ -3018,12 +3018,12 @@
         }
       }
     },
-    "/prescriptions/:id": {
+    "/payments/intents": {
       "get": {
         "tags": [
-          "prescriptions"
+          "payments"
         ],
-        "operationId": "prescriptions_get_prescriptions_id",
+        "operationId": "payments_get_payments_intents",
         "security": [
           {
             "bearerAuth": []

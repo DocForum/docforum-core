@@ -155,7 +155,7 @@ const ACCESS_MATRIX: MatrixRow[] = [
   // Payments — admin-triggered in v1; wallet-link is patient and facility (issue #78)
   { method: 'POST', path: '/payments/wallet-link', expected: { anon: 401, patient: 403, doctor: 403, facility: 400, admin: 403 } },
   { method: 'GET', path: '/payments/wallet-link', expected: { anon: 401, patient: 404, doctor: 403, facility: 404, admin: 403 } },
-  { method: 'GET', path: '/payments/intents/:id', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
+  { method: 'GET', path: '/payments/intents/:id', expected: { anon: 401, patient: 404, doctor: 403, facility: 404, admin: 404 } }, // #326: owners may read; unknown id → 404
   { method: 'POST', path: '/payments/intents/:id/fund', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
   { method: 'POST', path: '/payments/intents/:id/release', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },
   { method: 'POST', path: '/payments/intents/:id/refund', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 404 } },

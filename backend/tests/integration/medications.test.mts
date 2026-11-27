@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
+import { shiftSlotToPast } from './helpers/fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5472;
@@ -122,10 +123,7 @@ describe('issue #69: medication catalog and structured prescription items', () =
     const slots = await request(app).get(`/availability/doctors/${doctorProfileId}/slots`);
     const book = await request(app).post('/appointments').set('Authorization', `Bearer ${patientToken}`).send({ availabilitySlotId: slots.body[0].id });
     expect(book.status, JSON.stringify(book.body)).toBe(201);
-    await prisma.availabilitySlot.update({
-      where: { id: slots.body[0].id },
-      data: { startTime: new Date(Date.now() - 60000) },
-    });
+    await shiftSlotToPast(prisma, slots.body[0].id);
     const done = await request(app)
       .patch(`/appointments/${book.body.id}/status`)
       .set('Authorization', `Bearer ${doctorToken}`)

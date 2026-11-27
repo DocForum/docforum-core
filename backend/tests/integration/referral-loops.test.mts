@@ -21,6 +21,7 @@ import {
   makeSpecialty,
   resetEmailSenderFixture,
   setAppointmentStatus,
+  shiftSlotToPast,
 } from './helpers/fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -93,10 +94,7 @@ describe('referral loop detection', () => {
     if (viaConsultationAppointmentId) {
       const before = await prisma.appointment.findUniqueOrThrow({ where: { id: viaConsultationAppointmentId } });
       if (before.availabilitySlotId) {
-        await prisma.availabilitySlot.update({
-          where: { id: before.availabilitySlotId },
-          data: { startTime: new Date(Date.now() - 60000) },
-        });
+        await shiftSlotToPast(prisma, before.availabilitySlotId);
       }
       const completed = await setAppointmentStatus(app, from, viaConsultationAppointmentId, 'completed');
       expect(completed.status).toBe(200);

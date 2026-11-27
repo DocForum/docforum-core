@@ -17,6 +17,7 @@ import { config } from '../../../config';
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { getObjectStorage } from '../../../utils/object-storage';
+import { getFileScanner } from '../../../utils/file-scanner';
 import * as auditService from '../../audit/services';
 import * as doctorsService from '../../doctors/services';
 import { logger } from '../../../logger';
@@ -90,6 +91,20 @@ export async function attachLabResult(
   const body = file.body;
   if (!signature.magic.every((byte, index) => body[index] === byte)) {
     throw new HttpError(415, `The file content is not a valid ${contentType} file.`, 'LAB_RESULT_CONTENT_MISMATCH');
+  }
+
+  // Issue #324: scan before writing to object storage. The scanner result
+  // determines whether the upload is allowed (infected = hard refuse) or
+  // proceeds despite a scan error (fail-open vs fail-closed per config).
+  const scanResult = await getFileScanner().scan(body);
+  if (scanResult === 'infected') {
+    throw new HttpError(422, 'The uploaded file was refused by the malware scanner.', 'LAB_RESULT_INFECTED');
+  }
+  if (scanResult === 'error') {
+    if (!config.fileScanning.failOpen) {
+      throw new HttpError(503, 'File scanning is unavailable and this environment requires it to pass.', 'LAB_RESULT_SCAN_UNAVAILABLE');
+    }
+    console.error('[file-scanner] scan error — failing open for lab result upload');
   }
 
   // Opaque key: nothing about the patient, order or original filename.

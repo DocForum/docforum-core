@@ -65,6 +65,9 @@ jobs:
       - name: Check notification templates for PHI
         run: npm run notifications:check
 
+      - name: Check .env.example documents every env var (issue #344)
+        run: npm run check:env
+
       - name: Regenerate OpenAPI contract
         run: npm run openapi:generate
 

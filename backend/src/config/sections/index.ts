@@ -12,6 +12,7 @@ export * from './cookie';
 export * from './corsOrigins';
 export * from './expirySweeps';
 export * from './featureFlags';
+export * from './fileScanning';
 export * from './idempotency';
 export * from './jwt';
 export * from './labOrders';

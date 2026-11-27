@@ -1,0 +1,1 @@
+Phase 2: hide unverified doctors' slots from public listing and refuse booking attempts ([issue #286](https://github.com/DocForum/docforum-core/issues/286)). `GET /availability/doctors/:id/slots` returns an empty list for unverified doctors, and booking/rescheduling against unverified doctor profiles is rejected with 422.

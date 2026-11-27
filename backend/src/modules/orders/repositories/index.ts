@@ -192,6 +192,25 @@ export function findLabOrderExportPage(patientProfileId: string, cursor: string 
   });
 }
 
+/** Non-superseded prescriptions for a patient — the ones where no other
+ * Prescription row lists this one as its `supersedesPrescriptionId`. */
+export function findCurrentPrescriptionsForPatient(patientProfileId: string) {
+  return prisma.prescription.findMany({
+    where: { patientProfileId, correctedBy: null },
+    include: { items: true },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+/** Non-superseded lab orders for a patient — same correctedBy-null filter. */
+export function findCurrentLabOrdersForPatient(patientProfileId: string) {
+  return prisma.labOrder.findMany({
+    where: { patientProfileId, correctedBy: null },
+    include: { result: { select: { summary: true, abnormality: true, createdAt: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
 export async function patientHasOrders(patientProfileId: string): Promise<boolean> {
   const [prescription, labOrder] = await Promise.all([
     prisma.prescription.findFirst({ where: { patientProfileId }, select: { id: true } }),

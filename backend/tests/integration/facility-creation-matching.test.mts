@@ -84,7 +84,7 @@ describe('facility account creation + capability matching (issue #14)', () => {
     await pg.start();
     await pg.createDatabase('docforum_facility_admin_test');
 
-    execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
+    execFileSync(process.execPath, [path.join(BACKEND_ROOT, 'node_modules/prisma/build/index.js'), 'migrate', 'deploy'], {
       cwd: BACKEND_ROOT,
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: 'pipe',
@@ -310,5 +310,147 @@ describe('facility account creation + capability matching (issue #14)', () => {
     expect(() =>
       facilitiesService.facilityRequirementForOrderKind('nonsense' as 'lab_order'),
     ).toThrowError(expect.objectContaining({ status: 400 }));
+  });
+
+  it('excludes deactivated facilities from eligible queries and refuses order routing (issue #284)', async () => {
+    // 1. Create a pharmacy facility with valid capability
+    const pharmacyRes = await postFacility(
+      adminToken,
+      validLabPayload({
+        email: `deact-pharmacy-${runId}@example.com`,
+        name: 'Deactivatable Pharmacy',
+        type: 'pharmacy',
+        capabilities: [{ capabilityType: 'medication_dispense', detail: 'analgesics' }],
+      }),
+    );
+    expect(pharmacyRes.status).toBe(201);
+    const facilityId = pharmacyRes.body.id as string;
+    await prisma.facilityProfile.update({
+      where: { id: facilityId },
+      data: { latitude: 6.45, longitude: 3.39, address: '10 Marina, Lagos' },
+    });
+    const facilityProfile = await prisma.facilityProfile.findUniqueOrThrow({ where: { id: facilityId } });
+
+    // 2. Before deactivation: appears in both plain and distance-sorted queries
+    const plainBefore = await request(app).get('/facilities/eligible').query({ type: 'pharmacy' });
+    expect(plainBefore.status).toBe(200);
+    expect(plainBefore.body.facilities.some((f: { facilityId: string }) => f.facilityId === facilityId)).toBe(true);
+
+    const distanceBefore = await request(app).get('/facilities/eligible').query({
+      type: 'pharmacy',
+      near: '6.45,3.39',
+      radiusKm: 10,
+    });
+    expect(distanceBefore.status).toBe(200);
+    expect(distanceBefore.body.facilities.some((f: { facilityId: string }) => f.facilityId === facilityId)).toBe(true);
+
+    // Can be accepted for order kind before deactivation
+    const reqBefore = await facilitiesService.requireFacilityForOrderKind(prisma, facilityId, 'prescription');
+    expect(reqBefore.id).toBe(facilityId);
+
+    // Route a fulfillment record before deactivation
+    const pharmacyOrdersService = await import('../../src/modules/pharmacy-orders/services/index.js');
+    // Seed an issued prescription directly
+    const testDoctorUser = await prisma.user.create({
+      data: { email: `doc-${runId}-deact@example.com`, passwordHash: 'unused', role: 'doctor' },
+    });
+    const testDoctor = await prisma.doctorProfile.create({
+      data: { userId: testDoctorUser.id, fullName: 'Prescribing Doctor', verificationStatus: 'verified', timeZone: 'UTC' },
+    });
+    const testPatientUser = await prisma.user.create({
+      data: { email: `pat-${runId}-deact@example.com`, passwordHash: 'unused', role: 'patient' },
+    });
+    const testPatient = await prisma.patientProfile.create({
+      data: { userId: testPatientUser.id, fullName: 'Routed Patient' },
+    });
+    const testAppointment = await prisma.appointment.create({
+      data: { doctorProfileId: testDoctor.id, patientProfileId: testPatient.id },
+    });
+    const testConsultation = await prisma.consultation.create({
+      data: { appointmentId: testAppointment.id },
+    });
+    const testPrescription = await prisma.prescription.create({
+      data: {
+        consultationId: testConsultation.id,
+        patientProfileId: testPatient.id,
+        prescribingDoctorId: testDoctor.id,
+        facilityProfileId: facilityId,
+        amountStroops: 10000000n,
+        items: {
+          create: [{ drugName: 'Ibuprofen', dosage: '400mg', frequency: 'daily', duration: '5 days' }],
+        },
+      },
+      include: { items: true },
+    });
+    const routedRecord = await pharmacyOrdersService.createFulfillment(
+      {
+        orderType: 'prescription',
+        orderId: testPrescription.id,
+        facilityId,
+        orderItemIds: [testPrescription.items[0].id],
+      },
+      { userId: testPatientUser.id, role: 'patient' },
+    );
+    expect(routedRecord.facilityId).toBe(facilityId);
+
+    // 3. Deactivate the facility account
+    await prisma.user.update({
+      where: { id: facilityProfile.userId },
+      data: { deactivatedAt: new Date() },
+    });
+
+    // 4. Excluded from plain eligible-facility queries
+    const plainAfter = await request(app).get('/facilities/eligible').query({ type: 'pharmacy' });
+    expect(plainAfter.status).toBe(200);
+    expect(plainAfter.body.facilities.some((f: { facilityId: string }) => f.facilityId === facilityId)).toBe(false);
+
+    // 5. Excluded from distance-sorted eligible-facility queries
+    const distanceAfter = await request(app).get('/facilities/eligible').query({
+      type: 'pharmacy',
+      near: '6.45,3.39',
+      radiusKm: 10,
+    });
+    expect(distanceAfter.status).toBe(200);
+    expect(distanceAfter.body.facilities.some((f: { facilityId: string }) => f.facilityId === facilityId)).toBe(false);
+
+    // 6. Refused at order kind requirement (prescription/lab order issuance)
+    await expect(
+      facilitiesService.requireFacilityForOrderKind(prisma, facilityId, 'prescription'),
+    ).rejects.toThrowError(expect.objectContaining({ status: 400, message: expect.stringMatching(/deactivated/i) }));
+
+    // 7. Refused when patient attempts to route fulfillment
+    const secondPrescription = await prisma.prescription.create({
+      data: {
+        consultationId: testConsultation.id,
+        patientProfileId: testPatient.id,
+        prescribingDoctorId: testDoctor.id,
+        facilityProfileId: quickscriptsId, // active facility at issuance
+        amountStroops: 10000000n,
+        items: {
+          create: [{ drugName: 'Paracetamol', dosage: '500mg', frequency: 'twice', duration: '3 days' }],
+        },
+      },
+      include: { items: true },
+    });
+    await expect(
+      pharmacyOrdersService.createFulfillment(
+        {
+          orderType: 'prescription',
+          orderId: secondPrescription.id,
+          facilityId, // routing to deactivated facility
+          orderItemIds: [secondPrescription.items[0].id],
+        },
+        { userId: testPatientUser.id, role: 'patient' },
+      ),
+    ).rejects.toThrowError(expect.objectContaining({ status: 400, message: expect.stringMatching(/deactivated/i) }));
+
+    // 8. Orders/fulfillments already routed before deactivation remain readable
+    const readableRecord = await prisma.fulfillmentRecord.findUniqueOrThrow({
+      where: { id: routedRecord.id },
+      include: { facility: true },
+    });
+    expect(readableRecord.id).toBe(routedRecord.id);
+    expect(readableRecord.facilityId).toBe(facilityId);
+    expect(readableRecord.facility.name).toBe('Deactivatable Pharmacy');
   });
 });

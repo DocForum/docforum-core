@@ -143,6 +143,7 @@ describe('AuditEvent foundation', () => {
 
     const doctorUser = await signup('doctor', 'audit-doctor');
     doctor = { ...doctorUser, profileId: (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: doctorUser.userId } })).id };
+    await prisma.doctorProfile.update({ where: { id: doctor.profileId }, data: { verificationStatus: 'verified' } });
     patients = await Promise.all(Array.from({ length: 5 }, (_, i) => signup('patient', `audit-patient-${i}`)));
 
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -249,6 +250,11 @@ describe('AuditEvent foundation', () => {
   });
 
   describe('doctor verification', () => {
+    beforeAll(async () => {
+      await prisma.doctorProfile.update({ where: { id: doctor.profileId }, data: { verificationStatus: 'pending' } });
+      await prisma.auditEvent.deleteMany({ where: { entityId: doctor.profileId } });
+    });
+
     const patch = (status: string, requestIdHeader?: string) => {
       const req = request(app).patch(`/doctors/${doctor.profileId}/verification`).set(adminAuth());
       if (requestIdHeader) req.set('X-Request-Id', requestIdHeader);
