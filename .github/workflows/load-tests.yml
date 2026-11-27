@@ -1,0 +1,87 @@
+name: Load tests
+
+# k6 load scenarios against a throwaway Postgres and a backend started on the
+# runner (issue #349). Manual only, and never pointed at the shared Render
+# preview: the server and database live and die with this job.
+on:
+  workflow_dispatch:
+    inputs:
+      referrals:
+        description: Patients accepting referrals at once
+        default: '40'
+      slots:
+        description: Open slots the specialist offers
+        default: '4'
+
+permissions:
+  contents: read
+
+jobs:
+  referral-accept-contention:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: docforum
+          POSTGRES_PASSWORD: docforum
+          POSTGRES_DB: docforum_load
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U docforum" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Throwaway values for this job only; no real secret is involved.
+      DATABASE_URL: postgresql://docforum:docforum@localhost:5432/docforum_load
+      JWT_ACCESS_SECRET: load-test-access-secret
+      JWT_REFRESH_SECRET: load-test-refresh-secret
+      FIELD_ENCRYPTION_KEY_V1: BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=
+      FIELD_ENCRYPTION_ACTIVE_VERSION: v1
+      OBJECT_STORAGE_DRIVER: none
+      NOTIFICATION_FANOUT_DRIVER: local
+      # Every VU shares the runner's IP; the per-IP limiter would otherwise
+      # turn the contention test into a rate-limit test.
+      RATE_LIMIT_MAX_REQUESTS: '100000'
+      PORT: '4000'
+      LOAD_TEST_BASE_URL: http://localhost:4000
+      LOAD_TEST_SEED_FILE: tests/load/seed-referral-accept-contention.json
+      LOAD_REFERRALS: ${{ inputs.referrals }}
+      LOAD_SLOTS: ${{ inputs.slots }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+
+      - name: Seed referral accept contention
+        run: npx tsx tests/load/seed-referral-accept-contention.mts
+
+      - name: Start backend
+        run: |
+          npx tsx src/server.ts > server.log 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://localhost:4000/health > /dev/null && exit 0; sleep 1; done
+          cat server.log; exit 1
+
+      - name: Run k6 scenario
+        working-directory: backend/tests/load
+        run: >-
+          docker run --rm --network host -v "$PWD:/scripts" -w /scripts
+          -e LOAD_TEST_BASE_URL -e LOAD_TEST_SEED_FILE=./seed-referral-accept-contention.json
+          grafana/k6:0.54.0 run referral-accept-contention.js
+
+      - name: Verify database invariants
+        if: always()
+        run: npx tsx tests/load/verify-referral-accept-contention.mts
+
+      - name: Server log
+        if: always()
+        run: cat server.log || true

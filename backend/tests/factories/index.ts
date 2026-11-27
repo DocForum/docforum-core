@@ -70,12 +70,22 @@ export const availabilitySlotFactory = (
   };
 };
 
+/** A pending referral row. Every referral comes from a consultation, so the
+ * caller supplies its source consultation and both doctors. `snapshotNotes`
+ * is stored encrypted by the service; pass an envelope via overrides when a
+ * test reads it back through the API. */
 export const referralFactory = (
   patientProfileId: string,
-  doctorProfileId: string,
+  sourceConsultationId: string,
+  referringDoctorId: string,
+  targetDoctorId: string,
   overrides: Partial<Prisma.ReferralUncheckedCreateInput> = {},
 ): Prisma.ReferralUncheckedCreateInput => ({
   patientProfileId,
+  sourceConsultationId,
+  referringDoctorId,
+  targetDoctorId,
+  snapshotNotes: `Referral notes ${next()}`,
   status: 'pending',
   ...overrides,
 });
