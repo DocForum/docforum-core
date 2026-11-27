@@ -5,6 +5,7 @@ import * as controllers from '../controllers';
 
 export const labOrdersRouter = Router();
 
-labOrdersRouter.post('/', apiRateLimit, authenticate, controllers.createLabOrder);
+// Legacy `Order` creation: admin-only (see pharmacy-orders/routes).
+labOrdersRouter.post('/', apiRateLimit, authenticate, requireRole('admin'), controllers.createLabOrder);
 labOrdersRouter.get('/:id', apiRateLimit, authenticate, controllers.getLabOrder);
 labOrdersRouter.post('/:id/fulfill', apiRateLimit, authenticate, requireRole('facility'), controllers.fulfillLabOrder);

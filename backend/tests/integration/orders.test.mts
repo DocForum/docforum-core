@@ -141,7 +141,7 @@ describe('Orders integration tests', () => {
     // 1. Create pharmacy order
     const orderRes = await request(app)
       .post('/pharmacy-orders')
-      .set('Authorization', `Bearer ${patient1Token}`)
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({ patientProfileId: patient1ProfileId, details: 'Amoxicillin 500mg' });
 
     expect(orderRes.status).toBe(201);
@@ -203,7 +203,7 @@ describe('Orders integration tests', () => {
   it('stores proof files privately and serves them only to the patient, the facility and admins (issue #316)', async () => {
     const orderRes = await request(app)
       .post('/pharmacy-orders')
-      .set('Authorization', `Bearer ${patient1Token}`)
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({ patientProfileId: patient1ProfileId, details: 'Proof file order' });
     const orderId = orderRes.body.id as string;
     const fulfilled = await request(app)
@@ -299,7 +299,7 @@ describe('Orders integration tests', () => {
   it('keeps a pre-#316 client-supplied proof URL readable but untrusted, and never serves it', async () => {
     const orderRes = await request(app)
       .post('/lab-orders')
-      .set('Authorization', `Bearer ${patient1Token}`)
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({ patientProfileId: patient1ProfileId, details: 'Legacy proof order' });
     const orderId = orderRes.body.id as string;
     const fulfilled = await request(app)
@@ -321,11 +321,58 @@ describe('Orders integration tests', () => {
     expect(res.body.code).toBe('PROOF_FILE_NOT_FOUND');
   });
 
+  it('legacy order reads are limited to the patient, the routed facility and admins', async () => {
+    const created = await request(app)
+      .post('/pharmacy-orders')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ patientProfileId: patient1ProfileId, details: 'Access check order' });
+    expect(created.status).toBe(201);
+    const orderId = created.body.id as string;
+
+    // Not routed yet: only the patient and admins can read it.
+    for (const path of [`/orders/${orderId}`, `/pharmacy-orders/${orderId}`]) {
+      expect((await request(app).get(path).set('Authorization', `Bearer ${patient1Token}`)).status).toBe(200);
+      expect((await request(app).get(path).set('Authorization', `Bearer ${adminToken}`)).status).toBe(200);
+      expect((await request(app).get(path).set('Authorization', `Bearer ${patient2Token}`)).status).toBe(404);
+      expect((await request(app).get(path).set('Authorization', `Bearer ${facility1Token}`)).status).toBe(404);
+    }
+
+    // Once a facility fulfils it the order is routed to that facility, which
+    // can then read it.
+    const fulfilled = await request(app)
+      .post(`/pharmacy-orders/${orderId}/fulfill`)
+      .set('Authorization', `Bearer ${facility1Token}`)
+      .send({ referenceNumber: 'REF-ACCESS' });
+    expect(fulfilled.status).toBe(200);
+    expect((await request(app).get(`/orders/${orderId}`).set('Authorization', `Bearer ${facility1Token}`)).status).toBe(200);
+    expect((await request(app).get(`/orders/${orderId}`).set('Authorization', `Bearer ${patient2Token}`)).status).toBe(404);
+
+    // Successful reads leave an AccessLog row (written fire-and-forget).
+    let logged = 0;
+    for (let i = 0; i < 20 && logged === 0; i += 1) {
+      logged = await prisma.accessLog.count({ where: { entityType: 'Order', entityId: orderId, patientProfileId: patient1ProfileId } });
+      if (logged === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(logged).toBeGreaterThan(0);
+  });
+
+  it('legacy order creation is admin-only', async () => {
+    for (const path of ['/pharmacy-orders', '/lab-orders']) {
+      for (const token of [patient1Token, facility1Token]) {
+        const res = await request(app)
+          .post(path)
+          .set('Authorization', `Bearer ${token}`)
+          .send({ patientProfileId: patient1ProfileId, details: 'Should be refused' });
+        expect(res.status).toBe(403);
+      }
+    }
+  });
+
   it('patient confirm-receipt and dispute are mutually exclusive', async () => {
     // Create & fulfill pharmacy order for patient 1
     const orderRes = await request(app)
       .post('/pharmacy-orders')
-      .set('Authorization', `Bearer ${patient1Token}`)
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({ patientProfileId: patient1ProfileId, details: 'Ibuprofen 400mg' });
     const orderId = orderRes.body.id;
 
@@ -361,7 +408,7 @@ describe('Orders integration tests', () => {
     // Create & fulfill lab order for patient 1
     const orderRes = await request(app)
       .post('/lab-orders')
-      .set('Authorization', `Bearer ${patient1Token}`)
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({ patientProfileId: patient1ProfileId, details: 'Blood Panel Test' });
     const orderId = orderRes.body.id;
 
@@ -468,7 +515,7 @@ describe('Orders integration tests', () => {
     // 1. Order A: fulfilled, past window -> should be auto-confirmed with confirmationSource: 'timeout'
     const orderARes = await request(app)
       .post('/pharmacy-orders')
-      .set('Authorization', `Bearer ${patient1Token}`)
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({ patientProfileId: patient1ProfileId, details: 'Metformin 500mg' });
     const orderAId = orderARes.body.id;
 
@@ -487,7 +534,7 @@ describe('Orders integration tests', () => {
     // 2. Order B: fulfilled, past window, BUT disputed -> must NOT be auto-confirmed
     const orderBRes = await request(app)
       .post('/pharmacy-orders')
-      .set('Authorization', `Bearer ${patient1Token}`)
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({ patientProfileId: patient1ProfileId, details: 'Omeprazole 20mg' });
     const orderBId = orderBRes.body.id;
 
