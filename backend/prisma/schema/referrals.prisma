@@ -22,12 +22,22 @@ enum ReferralExpiryReason {
   no_show
 }
 
+// Issue #309: optional structured reason a patient gives when declining a
+// referral. A small fixed vocabulary keeps the data reportable; `other`
+// pairs with the optional bounded free-text note below.
+enum ReferralDeclineReason {
+  cost
+  distance
+  second_opinion
+  other
+}
+
 // Phase 3 (issues #5/#65/#66/#67/#68). Snapshot rule (FR-7/FR-8, hard
 // rule 3): `snapshotNotes` and `snapshotIntake` are copies taken at
 // creation, never live references — reassign/cancel/cascade never touch them.
 model Referral {
-  id                        String                @id @default(uuid())
-  status                    ReferralStatus        @default(pending)
+  id                        String                 @id @default(uuid())
+  status                    ReferralStatus         @default(pending)
   patientProfileId          String
   // The consultation this referral grew out of. Required: every referral
   // is created from a consultation (PRD FR-7), which is also what gives
@@ -59,7 +69,7 @@ model Referral {
   // when repeated no-shows expire the referral. Both live on the
   // referral (not a Notification row) because Phase 6's dispatch layer
   // doesn't exist yet — the flag is the seam it will read.
-  noShowCount               Int                   @default(0)
+  noShowCount               Int                    @default(0)
   referringDoctorNotifiedAt DateTime?
   // Issue #65: set (with a reason naming the matching hop) when the
   // target doctor/specialty was already in the ancestor chain — the
@@ -70,16 +80,23 @@ model Referral {
   // Issue #68: admin-initiated cancellation carries its reason; the
   // audit trail proper is the AuditEvent row written alongside.
   cancelledReason           String?
+  // Issue #309: optional reason when a patient declines a referral.
+  // Set only when the patient declines a pending referral; null otherwise.
+  declineReason             ReferralDeclineReason?
+  // Optional bounded free-text note accompanying the decline reason.
+  // Bounded to 200 characters to match the audit metadata string limit
+  // (ARCHITECTURE.md §4.10, MAX_METADATA_STRING).
+  declineReasonNote         String?                @db.VarChar(200)
   // The appointment this referral currently produced (null while
   // pending/declined, or after a cancelled/no-showed appointment returns
   // it to pending). Kept pointing at the last no-show when expired —
   // that appointment is why it expired.
-  resultingAppointmentId    String?               @unique
+  resultingAppointmentId    String?                @unique
   // Issue #8: set together with status `expired` — when, and why.
   expiredAt                 DateTime?
   expiredReason             ReferralExpiryReason?
-  createdAt                 DateTime              @default(now())
-  updatedAt                 DateTime              @updatedAt
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
 
   sourceConsultation   Consultation   @relation(fields: [sourceConsultationId], references: [id])
   patientProfile       PatientProfile @relation(fields: [patientProfileId], references: [id])
