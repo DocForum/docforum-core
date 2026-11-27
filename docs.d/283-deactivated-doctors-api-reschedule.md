@@ -1,0 +1,5 @@
+---
+file: docs/api/README.md
+after: | `PATCH /appointments/:appointmentId/status` | doctor (treating doctor only) | `{ status: 'completed'\|'cancelled'\|'no_show' }` | Issue #3's lifecycle, and the trigger for the referral cascade (#67): if the appointment came from a referral, the referral moves in the same transaction (completed → referral completed; cancelled → referral back to `pending` and the slot released; no-show → count++, pending until `NO_SHOW_EXPIRY_THRESHOLD` (2) then `expired`). `409` unless the appointment is still `scheduled`. |
+---
+| `POST /appointments/:appointmentId/reschedule` | patient (own appointment, verified email) | `{ newSlotId }` | Atomically claims the new slot and releases the old one in one transaction. `409` if the appointment isn't `scheduled`, the new slot isn't open, the new slot doesn't belong to the same doctor, or **the doctor's account is deactivated/deleted**. Cutoff: `409` if rescheduling within `APPOINTMENTS_CUTOFF_HOURS` (default 2) of the original slot start.

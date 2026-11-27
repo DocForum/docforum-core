@@ -193,6 +193,24 @@ export async function createConsultation(
   return res.body as { id: string };
 }
 
+let pastSlotSequence = 0;
+
+/** Shifts a slot to a unique non-overlapping historical window so it can be completed. */
+export async function shiftSlotToPast(
+  prisma: PrismaClient,
+  slotId: string,
+): Promise<{ startTime: Date; endTime: Date }> {
+  pastSlotSequence += 1;
+  const basePast = new Date('2026-01-01T00:00:00.000Z');
+  const startTime = new Date(basePast.getTime() + pastSlotSequence * 3600_000);
+  const endTime = new Date(startTime.getTime() + 30 * 60_000);
+  await prisma.availabilitySlot.update({
+    where: { id: slotId },
+    data: { startTime, endTime },
+  });
+  return { startTime, endTime };
+}
+
 /** The end-to-end pre-referral ritual: slots, book, complete, consult. */
 export async function consultationRitual(
   app: App,
@@ -203,10 +221,7 @@ export async function consultationRitual(
   const slotId = slots[0];
   const appointment = await bookAppointment(app, patient, slotId);
   const { prisma } = await import('../../../src/db/prisma-client.js');
-  await prisma.availabilitySlot.update({
-    where: { id: slotId },
-    data: { startTime: new Date(Date.now() - 60000) },
-  });
+  await shiftSlotToPast(prisma, slotId);
   const completed = await setAppointmentStatus(app, doctor, appointment.id, 'completed');
   if (completed.status !== 200) throw new Error(`complete failed: ${completed.status} ${completed.text}`);
   const consultation = await createConsultation(app, doctor, appointment.id);

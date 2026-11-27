@@ -4,6 +4,8 @@ import * as auditService from '../../audit/services';
 import { paginate, type PatientExportSection } from '../../patients/services';
 import * as intakeRepo from '../repositories';
 import { decryptField, encryptField } from '../../../utils/field-encryption';
+import type { Prisma } from '@prisma/client';
+import { prisma } from '../../../db/prisma-client';
 import type { z } from 'zod';
 import type { createIntakeSchema } from '../validation';
 
@@ -30,6 +32,17 @@ export async function listMyIntakes(userId: string) {
     });
   }
   return records.map((record) => ({ ...record, freeTextNotes: decryptField(record.freeTextNotes) ?? null }));
+}
+
+/** Latest intake for a patient, decrypted, usable inside a transaction
+ * (issue #5: referral creation captures this as an immutable snapshot). */
+export async function findLatestIntakeForReferral(
+  db: typeof prisma | Prisma.TransactionClient,
+  patientProfileId: string,
+): Promise<{ symptoms: unknown; freeTextNotes: string | null } | null> {
+  const record = await intakeRepo.findLatestIntakeForPatient(db, patientProfileId);
+  if (!record) return null;
+  return { symptoms: record.symptoms, freeTextNotes: decryptField(record.freeTextNotes) ?? null };
 }
 
 export const intakeExportSection: PatientExportSection = {

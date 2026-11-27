@@ -6,7 +6,7 @@ import { config } from '../../src/config';
 // you add a section.
 const KEYS = [
   'accessLog', 'accountPurge', 'adminInvites', 'appBaseUrl', 'appointments', 'auth', 'availability', 'consultations', 'cookie', 'corsOrigins',
-  'databaseUrl', 'expirySweeps', 'featureFlags', 'idempotency', 'jwt', 'labResults', 'log', 'loginThrottle', 'notificationFanout',
+  'databaseUrl', 'expirySweeps', 'featureFlags', 'fileScanning', 'idempotency', 'jwt', 'labResults', 'log', 'loginThrottle', 'notificationFanout',
   'notifications', 'objectStorage', 'orders', 'passwordReset', 'patientExport', 'patients', 'payments', 'port', 'rateLimit',
   'referrals', 'securityHeaders', 'sep10', 'sessions', 'tokenPrune', 'trustProxy', 'twoFactor', 'walletLink',
 ];

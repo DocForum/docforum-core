@@ -333,6 +333,64 @@ export async function getPaymentIntent(id: string) {
   return intent;
 }
 
+/** Issue #326: patient (payer) or facility (payee) reads their own intent.
+ * Returns the same shape as their history rows plus on-chain references.
+ * Admin-only fields (preparedTxHash, preparedXdr, preparedExpiryLedger,
+ * preparedExpiresAt) are not exposed. Returns null for 404/403 — callers
+ * always raise a plain 404 so ids cannot be probed. */
+export async function getPaymentIntentForOwner(
+  id: string,
+  userId: string,
+  role: 'patient' | 'facility',
+): Promise<PaymentIntent | null> {
+  const intent = await paymentsRepo.findPaymentIntentById(id);
+  if (!intent) return null;
+  if (role === 'patient') {
+    const profile = await findPatientProfileByUserId(userId);
+    if (!profile || intent.patientProfileId !== profile.id) return null;
+  } else {
+    const facilityProfile = await findFacilityProfileByUserId(userId);
+    if (!facilityProfile || intent.facilityId !== facilityProfile.id) return null;
+  }
+  return intent;
+}
+
+export interface AdminIntentFilters {
+  status?: import('@prisma/client').PaymentIntentStatus;
+  assetCode?: string;
+  facilityId?: string;
+  patientProfileId?: string;
+  from?: Date;
+  to?: Date;
+  cursor?: string;
+  limit: number;
+}
+
+/** Issue #325: admin-scoped paginated list of all payment intents. */
+export async function listAdminPaymentIntents(filters: AdminIntentFilters) {
+  const rows = await paymentsRepo.findAdminPaymentIntentsPage({
+    status: filters.status,
+    assetCode: filters.assetCode,
+    facilityId: filters.facilityId,
+    patientProfileId: filters.patientProfileId,
+    from: filters.from,
+    to: filters.to,
+    before: filters.cursor ? decodePaymentCursor(filters.cursor) : undefined,
+    take: filters.limit + 1,
+  });
+  const page = rows.slice(0, filters.limit);
+  const last = page[page.length - 1];
+  return {
+    // The admin view names both parties so the list can be filtered/audited.
+    items: page.map((row) => ({
+      ...serializePayment(row),
+      facilityId: row.facilityId,
+      patientProfileId: row.patientProfileId,
+    })),
+    nextCursor: rows.length > filters.limit && last ? encodePaymentCursor(last) : null,
+  };
+}
+
 export interface PaymentHistoryFilters {
   status?: PaymentIntentStatus;
   from?: Date;

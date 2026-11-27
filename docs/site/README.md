@@ -41,6 +41,27 @@ npm run dev      # syncs, then starts the dev server
 `.vitepress/dist/` (gitignored). `npm run docs:sync` alone just refreshes
 the synced content without starting/building anything.
 
+## Checking a docs change on a PR
+
+`.github/workflows/build-docs.yml` runs the production build on every PR that
+touches the site or a document it syncs in, and does nothing else: no Pages
+artifact, no deploy, and a read-only `contents: read` token, so a fork PR
+cannot publish. It is the same command with the same base path the deploy uses,
+so the PR build predicts what merging would do:
+
+```bash
+cd docs/site
+GITHUB_PAGES=true npm run build
+```
+
+VitePress fails that build on a dead internal link (`ignoreDeadLinks` is
+explicitly `false` in `.vitepress/config.ts`), on bad front matter, and on
+markdown that isn't a valid Vue template — the same ways a docs change used to
+pass review and then break the deploy on `main`. Since the sibling repos'
+documents are fetched from their `main` branches at build time, a break in
+`docforum-web` or `docforum-escrow` lands here too: re-run the build a while
+later to see whether the failure was yours.
+
 ## Rebuilding on upstream changes (cross-repo docs sync)
 
 The site deploys automatically when documentation changes land in `docforum-core`:

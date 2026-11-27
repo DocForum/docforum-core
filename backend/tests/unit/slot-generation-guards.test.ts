@@ -165,4 +165,112 @@ describe('slot generation input guard rails (issue #288)', () => {
     expect(slots[1].startTime.toISOString()).toBe('2026-11-25T09:50:00.000Z');
     expect(slots[1].endTime.toISOString()).toBe('2026-11-25T10:40:00.000Z');
   });
+
+  it('rejects invalid slotLengthMinutes directly in buildSlotRanges', () => {
+    expect(() =>
+      buildSlotRanges({
+        doctorProfileId: 'doc-test',
+        date: '2026-11-25',
+        startHour: 9,
+        endHour: 17,
+        slotLengthMinutes: 0,
+        timeZone: 'UTC',
+      }),
+    ).toThrow('slotLengthMinutes must be a positive integer.');
+
+    expect(() =>
+      buildSlotRanges({
+        doctorProfileId: 'doc-test',
+        date: '2026-11-25',
+        startHour: 9,
+        endHour: 17,
+        slotLengthMinutes: -10,
+        timeZone: 'UTC',
+      }),
+    ).toThrow('slotLengthMinutes must be a positive integer.');
+  });
+
+  it('rejects invalid startHour and endHour directly in buildSlotRanges', () => {
+    expect(() =>
+      buildSlotRanges({
+        doctorProfileId: 'doc-test',
+        date: '2026-11-25',
+        startHour: 18,
+        endHour: 9,
+        slotLengthMinutes: 30,
+        timeZone: 'UTC',
+      }),
+    ).toThrow('startHour must be before endHour, both within 0-24.');
+
+    expect(() =>
+      buildSlotRanges({
+        doctorProfileId: 'doc-test',
+        date: '2026-11-25',
+        startHour: -1,
+        endHour: 10,
+        slotLengthMinutes: 30,
+        timeZone: 'UTC',
+      }),
+    ).toThrow('startHour must be before endHour, both within 0-24.');
+
+    expect(() =>
+      buildSlotRanges({
+        doctorProfileId: 'doc-test',
+        date: '2026-11-25',
+        startHour: 9,
+        endHour: 25,
+        slotLengthMinutes: 30,
+        timeZone: 'UTC',
+      }),
+    ).toThrow('startHour must be before endHour, both within 0-24.');
+  });
+
+  it('rejects invalid date format directly in buildSlotRanges', () => {
+    expect(() =>
+      buildSlotRanges({
+        doctorProfileId: 'doc-test',
+        date: 'invalid-date',
+        startHour: 9,
+        endHour: 17,
+        slotLengthMinutes: 30,
+        timeZone: 'UTC',
+      }),
+    ).toThrow('date must be a valid ISO date.');
+
+    expect(() =>
+      buildSlotRanges({
+        doctorProfileId: 'doc-test',
+        date: '2026-11-25',
+        startHour: 9,
+        endHour: 17,
+        slotLengthMinutes: 30,
+        timeZone: 'Invalid/Zone',
+      }),
+    ).toThrow('date and timeZone must produce a valid slot range.');
+  });
+
+  it('skips overlapping slots with varied existing slot formats in buildSlotRanges', () => {
+    const baseInput = {
+      doctorProfileId: 'doc-test',
+      date: '2026-11-25',
+      startHour: 9,
+      endHour: 12,
+      slotLengthMinutes: 60,
+      timeZone: 'UTC',
+    };
+    // 9-10, 10-11, 11-12 (3 slots)
+    // Overlap 10-11 using object with Date
+    const start10 = new Date('2026-11-25T10:00:00.000Z');
+    const end11 = new Date('2026-11-25T11:00:00.000Z');
+    const slots = buildSlotRanges(baseInput, [{ startTime: start10, endTime: end11 }]);
+    expect(slots.length).toBe(2);
+    expect(slots[0].startTime.toISOString()).toBe('2026-11-25T09:00:00.000Z');
+    expect(slots[1].startTime.toISOString()).toBe('2026-11-25T11:00:00.000Z');
+
+    // Overlap 9-10 using raw timestamp number
+    const start9 = new Date('2026-11-25T09:00:00.000Z').getTime();
+    const slotsNum = buildSlotRanges(baseInput, [start9]);
+    expect(slotsNum.length).toBe(2);
+    expect(slotsNum[0].startTime.toISOString()).toBe('2026-11-25T10:00:00.000Z');
+  });
 });

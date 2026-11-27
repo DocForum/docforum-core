@@ -229,12 +229,12 @@ describe('partial fulfillment (issue #73)', () => {
     const outOfStock1 = await request(app)
       .patch(`/pharmacy-orders/fulfillments/${recordA}/items/${row2}`)
       .set('Authorization', `Bearer ${facilityA.token}`)
-      .send({ status: 'unfulfilled' });
+      .send({ status: 'unfulfilled', unfulfilledReason: 'out_of_stock' });
     expect(outOfStock1.status).toBe(200);
     const outOfStock2 = await request(app)
       .patch(`/pharmacy-orders/fulfillments/${recordA}/items/${row3}`)
       .set('Authorization', `Bearer ${facilityA.token}`)
-      .send({ status: 'unfulfilled' });
+      .send({ status: 'unfulfilled', unfulfilledReason: 'out_of_stock' });
     expect(outOfStock2.status).toBe(200);
     // Every item terminal, only one dispensed → record derives
     // partially_fulfilled (not a lie of "fulfilled", not a refusal).
@@ -247,7 +247,7 @@ describe('partial fulfillment (issue #73)', () => {
     const replay = await request(app)
       .patch(`/pharmacy-orders/fulfillments/${recordA}/items/${row1}`)
       .set('Authorization', `Bearer ${facilityA.token}`)
-      .send({ status: 'unfulfilled' });
+      .send({ status: 'unfulfilled', unfulfilledReason: 'out_of_stock' });
     expect(replay.status).toBe(409);
 
     // Patient routes the two remaining items to facility B.

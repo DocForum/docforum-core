@@ -361,7 +361,10 @@ export async function findPublicDoctorDetails(ids: string[]) {
 }
 
 export function findDoctorProfileById(id: string, db: DbClient = prisma) {
-  return db.doctorProfile.findUnique({ where: { id } });
+  return db.doctorProfile.findUnique({ 
+    where: { id },
+    include: { user: { select: { deactivatedAt: true, deletedAt: true } } },
+  });
 }
 
 export interface UpdateDoctorProfileInput {
@@ -453,8 +456,8 @@ export async function updateDoctorSpecialtyVerification(
   });
 }
 
-export function findDoctorSpecialties(doctorProfileId: string) {
-  return prisma.doctorSpecialty.findMany({
+export function findDoctorSpecialties(doctorProfileId: string, db: DbClient = prisma) {
+  return db.doctorSpecialty.findMany({
     where: { doctorProfileId },
     include: { specialty: true },
   });
