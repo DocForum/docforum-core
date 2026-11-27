@@ -374,4 +374,88 @@ describe('referral foundation', () => {
     const groups = list.body.groupedByConsultation as Record<string, unknown[]>;
     expect(Object.keys(groups).length).toBeGreaterThan(0);
   });
+
+  // ---- issue #5 deviation-a close: snapshotIntake immutability -----------
+
+  it("captures the patient intake snapshot at creation and is unaffected by later intake updates", async () => {
+    // 1. Create an intake form for the patient before the referral.
+    const intakeRes = await request(app)
+      .post('/intake')
+      .set('Authorization', `Bearer ${patient.accessToken}`)
+      .send({
+        symptoms: [{ symptom: 'palpitations', duration: '3 days', severity: 'mild' }],
+        freeTextNotes: 'original note',
+      });
+    expect(intakeRes.status).toBe(201);
+
+    // 2. Create a referral -- this should snapshot the intake above.
+    const { consultationId } = await consultationRitual(app, patient, doctorA);
+    const created = await createReferral(app, doctorA, {
+      sourceConsultationId: consultationId,
+      targetDoctorId: doctorB.profileId,
+      targetSpecialtyId: endocrinologyId,
+      snapshotNotes: 'snapshot immutability test',
+    });
+    expect(created.status).toBe(201);
+    const referralId = created.body.id as string;
+
+    // 3. Fetch the detail now -- snapshotIntake should contain the original intake data.
+    const detailBefore = await request(app)
+      .get(`/referrals/${referralId}`)
+      .set('Authorization', `Bearer ${doctorA.accessToken}`);
+    expect(detailBefore.status).toBe(200);
+    const intakeBefore = detailBefore.body.snapshotIntake as {
+      symptoms: { symptom: string }[];
+      freeTextNotes: string;
+    } | null;
+    expect(intakeBefore).not.toBeNull();
+    expect(intakeBefore!.symptoms[0].symptom).toBe('palpitations');
+    expect(intakeBefore!.freeTextNotes).toBe('original note');
+
+    // 4. The patient submits a new intake form with different data.
+    const updatedIntakeRes = await request(app)
+      .post('/intake')
+      .set('Authorization', `Bearer ${patient.accessToken}`)
+      .send({
+        symptoms: [{ symptom: 'headache', duration: '1 week', severity: 'severe' }],
+        freeTextNotes: 'updated note',
+      });
+    expect(updatedIntakeRes.status).toBe(201);
+
+    // 5. Re-fetch the referral detail -- snapshotIntake must be unchanged.
+    const detailAfter = await request(app)
+      .get(`/referrals/${referralId}`)
+      .set('Authorization', `Bearer ${doctorA.accessToken}`);
+    expect(detailAfter.status).toBe(200);
+    const intakeAfter = detailAfter.body.snapshotIntake as {
+      symptoms: { symptom: string }[];
+      freeTextNotes: string;
+    } | null;
+    expect(intakeAfter).not.toBeNull();
+    // The snapshot must still reflect what was known at referral creation.
+    expect(intakeAfter!.symptoms[0].symptom).toBe('palpitations');
+    expect(intakeAfter!.freeTextNotes).toBe('original note');
+  });
+
+  it("leaves snapshotIntake null when the patient has no intake form at referral time", async () => {
+    // Create a fresh patient with no intake history.
+    const freshPatient = await makePatient(app, emailedTokens, runId + 100);
+    const freshDoctor = doctorA;
+
+    const { consultationId } = await consultationRitual(app, freshPatient, freshDoctor);
+    // No intake form was submitted for freshPatient.
+    const created = await createReferral(app, freshDoctor, {
+      sourceConsultationId: consultationId,
+      targetDoctorId: doctorB.profileId,
+      snapshotNotes: 'no-intake patient referral',
+    });
+    expect(created.status).toBe(201);
+
+    const detail = await request(app)
+      .get(`/referrals/${created.body.id}`)
+      .set('Authorization', `Bearer ${freshDoctor.accessToken}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.snapshotIntake).toBeNull();
+  });
+
 });

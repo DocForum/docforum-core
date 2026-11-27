@@ -5,11 +5,37 @@ import * as doctorsService from '../../doctors/services';
 import { buildSlotRanges } from '../slot-generation';
 import { validateSlotGenerationDate } from '../validation';
 
-export function listOpenSlots(
+export function isOverlapOrUniqueViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || !error) return false;
+  const e = error as Record<string, unknown>;
+  if (e.code === 'P2002') return true;
+  if (typeof e.message === 'string' && /exclusion|23P01|AvailabilitySlot_doctor_no_overlap_excl/.test(e.message)) {
+    return true;
+  }
+  return false;
+}
+
+export async function listOpenSlots(
   doctorProfileId: string,
   query?: { from?: string; to?: string },
   now = new Date(),
 ) {
+  // Ensure the doctor is active (not deactivated or deleted).
+  // A non-existent doctor profile returns an empty list (200) rather than
+  // 404, preserving the original public-listing behaviour used by the
+  // access-control matrix test with placeholder ids.
+  const profile = await doctorsService.getDoctorProfileById(doctorProfileId).catch((err) => {
+    // Only swallow 404 (not-found) errors so non-existent doctor profiles
+    // return an empty list (200) instead of 404. Let other errors propagate.
+    if (err instanceof HttpError && err.status === 404) return null;
+    throw err;
+  });
+  if (profile) {
+    if (profile.user.deactivatedAt || profile.user.deletedAt) {
+      throw new HttpError(409, 'Doctor is not available for booking.');
+    }
+  }
+
   let fromDate = query?.from ? new Date(query.from) : now;
   // from in the past is clamped to now (issue #289)
   if (fromDate < now) {
@@ -36,6 +62,9 @@ export function listOpenSlots(
       'DATE_RANGE_TOO_LARGE',
     );
   }
+
+  const isVerified = await doctorsService.isDoctorVerified(doctorProfileId);
+  if (!isVerified) return [];
 
   return availabilityRepo.findOpenSlots(doctorProfileId, fromDate, toDate);
 }
@@ -72,25 +101,27 @@ export async function generateSlots(input: GenerateSlotsInput) {
   } catch (error) {
     throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
   }
-  if (proposedSlots.length === 0) return { created: 0 };
+  if (proposedSlots.length === 0) return { created: 0, skippedOverlapping: 0, skipped: 0 };
 
   const existing = await availabilityRepo.findExistingSlotRanges(
     doctorProfileId,
     proposedSlots[0].startTime,
     proposedSlots[proposedSlots.length - 1].endTime,
   );
-  const existingStarts = existing.map((slot) => slot.startTime.getTime());
-  let rows: ReturnType<typeof buildSlotRanges>;
+  const rows = buildSlotRanges(inputWithCutoff, existing);
+
+  const skippedOverlapping = proposedSlots.length - rows.length;
+  if (rows.length === 0) return { created: 0, skippedOverlapping, skipped: skippedOverlapping };
+
   try {
-    rows = buildSlotRanges(inputWithCutoff, existingStarts);
+    const result = await availabilityRepo.createSlots(rows);
+    return { created: result.count, skippedOverlapping, skipped: skippedOverlapping };
   } catch (error) {
-    throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
+    if (isOverlapOrUniqueViolation(error)) {
+      throw new HttpError(409, 'Slot overlaps with an existing slot.');
+    }
+    throw error;
   }
-
-  if (rows.length === 0) return { created: 0 };
-
-  const result = await availabilityRepo.createSlots(rows);
-  return { created: result.count };
 }
 
 /** Re-exported for appointments/services — the only cross-module entry
