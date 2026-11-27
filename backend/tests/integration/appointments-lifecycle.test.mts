@@ -202,8 +202,8 @@ describe('appointments cancellation (issue #292)', () => {
 
   describe('appointments reschedule (issue #293)', () => {
     it('succeeds for far-future slot and releases the old slot', async () => {
-      const oldSlotStart = new Date(Date.now() + 48 * 3600 * 1000);
-      const newSlotStart = new Date(Date.now() + 72 * 3600 * 1000);
+      const oldSlotStart = new Date(Date.now() + 60 * 3600 * 1000);
+      const newSlotStart = new Date(Date.now() + 62 * 3600 * 1000);
       const [oldSlot, newSlot] = await Promise.all([
         prisma.availabilitySlot.create({
           data: {
@@ -244,9 +244,9 @@ describe('appointments cancellation (issue #292)', () => {
     });
 
     it('rejects reschedule within cutoff with 409', async () => {
-      // Current slot is 30m away (within 2h cutoff)
-      const oldSlotStart = new Date(Date.now() + 30 * 60 * 1000);
-      const newSlotStart = new Date(Date.now() + 48 * 3600 * 1000);
+      // Current slot is 70m away (within 2h cutoff)
+      const oldSlotStart = new Date(Date.now() + 70 * 60 * 1000);
+      const newSlotStart = new Date(Date.now() + 64 * 3600 * 1000);
       const [oldSlot, newSlot] = await Promise.all([
         prisma.availabilitySlot.create({
           data: {
@@ -281,7 +281,7 @@ describe('appointments cancellation (issue #292)', () => {
     });
 
     it('rescheduling onto the same slot is a no-op', async () => {
-      const slotStart = new Date(Date.now() + 48 * 3600 * 1000);
+      const slotStart = new Date(Date.now() + 66 * 3600 * 1000);
       const slot = await prisma.availabilitySlot.create({
         data: {
           doctorProfileId: doctorA.profileId,
@@ -307,8 +307,8 @@ describe('appointments cancellation (issue #292)', () => {
     });
 
     it('refuses to reschedule to a slot of a different doctor with 400', async () => {
-      const slotStart1 = new Date(Date.now() + 48 * 3600 * 1000);
-      const slotStart2 = new Date(Date.now() + 72 * 3600 * 1000);
+      const slotStart1 = new Date(Date.now() + 68 * 3600 * 1000);
+      const slotStart2 = new Date(Date.now() + 70 * 3600 * 1000);
       const [slotDocA, slotDocB] = await Promise.all([
         prisma.availabilitySlot.create({
           data: {
@@ -346,24 +346,24 @@ describe('appointments cancellation (issue #292)', () => {
       const slot1 = await prisma.availabilitySlot.create({
         data: {
           doctorProfileId: doctorA.profileId,
-          startTime: new Date(Date.now() + 48 * 3600 * 1000),
-          endTime: new Date(Date.now() + 48.5 * 3600 * 1000),
+          startTime: new Date(Date.now() + 80 * 3600 * 1000),
+          endTime: new Date(Date.now() + 80.5 * 3600 * 1000),
           status: 'open',
         },
       });
       const slot2 = await prisma.availabilitySlot.create({
         data: {
           doctorProfileId: doctorA.profileId,
-          startTime: new Date(Date.now() + 50 * 3600 * 1000),
-          endTime: new Date(Date.now() + 50.5 * 3600 * 1000),
+          startTime: new Date(Date.now() + 82 * 3600 * 1000),
+          endTime: new Date(Date.now() + 82.5 * 3600 * 1000),
           status: 'open',
         },
       });
       const targetSlot = await prisma.availabilitySlot.create({
         data: {
           doctorProfileId: doctorA.profileId,
-          startTime: new Date(Date.now() + 72 * 3600 * 1000),
-          endTime: new Date(Date.now() + 72.5 * 3600 * 1000),
+          startTime: new Date(Date.now() + 84 * 3600 * 1000),
+          endTime: new Date(Date.now() + 84.5 * 3600 * 1000),
           status: 'open',
         },
       });
@@ -388,16 +388,16 @@ describe('appointments cancellation (issue #292)', () => {
       const slot1 = await prisma.availabilitySlot.create({
         data: {
           doctorProfileId: doctorA.profileId,
-          startTime: new Date(Date.now() + 52 * 3600 * 1000),
-          endTime: new Date(Date.now() + 52.5 * 3600 * 1000),
+          startTime: new Date(Date.now() + 86 * 3600 * 1000),
+          endTime: new Date(Date.now() + 86.5 * 3600 * 1000),
           status: 'open',
         },
       });
       const targetSlot = await prisma.availabilitySlot.create({
         data: {
           doctorProfileId: doctorA.profileId,
-          startTime: new Date(Date.now() + 75 * 3600 * 1000),
-          endTime: new Date(Date.now() + 75.5 * 3600 * 1000),
+          startTime: new Date(Date.now() + 88 * 3600 * 1000),
+          endTime: new Date(Date.now() + 88.5 * 3600 * 1000),
           status: 'open',
         },
       });

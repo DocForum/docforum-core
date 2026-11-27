@@ -19,6 +19,7 @@ import {
   makeSpecialty,
   resetEmailSenderFixture,
   setAppointmentStatus,
+  shiftSlotToPast,
 } from './helpers/fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -140,10 +141,7 @@ describe('referral detail endpoint', () => {
       .set('Authorization', `Bearer ${guardianToken}`)
       .send({ availabilitySlotId: slotId, patientProfileId: dependentProfileId });
     expect(booked.status).toBe(201);
-    await prisma.availabilitySlot.update({
-      where: { id: slotId },
-      data: { startTime: new Date(Date.now() - 60_000) },
-    });
+    await shiftSlotToPast(prisma, slotId);
     const completed = await setAppointmentStatus(app, gp, booked.body.id, 'completed');
     expect(completed.status).toBe(200);
     const consultation = await createConsultation(app, gp, booked.body.id);

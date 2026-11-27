@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
+import { shiftSlotToPast } from './helpers/fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5452;
@@ -151,12 +152,15 @@ describe('consultation close-once guarantee', () => {
     }
   });
 
+  let completedApptSequence = 0;
   async function makeCompletedAppointment() {
+    completedApptSequence += 1;
+    const futureStart = new Date(Date.now() + (100 + completedApptSequence) * 3600_000);
     const slot = await prisma.availabilitySlot.create({
       data: {
         doctorProfileId,
-        startTime: new Date(Date.now() - 3600_000),
-        endTime: new Date(Date.now() - 1800_000),
+        startTime: futureStart,
+        endTime: new Date(futureStart.getTime() + 30 * 60_000),
         status: 'open',
       },
     });
@@ -166,6 +170,7 @@ describe('consultation close-once guarantee', () => {
       .send({ availabilitySlotId: slot.id });
     expect(book.status).toBe(201);
     const apptId = book.body.id as string;
+    await shiftSlotToPast(prisma, slot.id);
     const complete = await request(app)
       .patch(`/appointments/${apptId}/status`)
       .set('Authorization', `Bearer ${owningDoctorToken}`)
@@ -186,10 +191,8 @@ describe('consultation close-once guarantee', () => {
   });
 
   it('lets the treating doctor complete the appointment', async () => {
-    await prisma.availabilitySlot.updateMany({
-      where: { appointment: { id: appointmentId } },
-      data: { startTime: new Date(Date.now() - 60000) },
-    });
+    const apt = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+    await shiftSlotToPast(prisma, apt.availabilitySlotId!);
     const res = await request(app)
       .patch(`/appointments/${appointmentId}/status`)
       .set('Authorization', `Bearer ${owningDoctorToken}`)
@@ -444,11 +447,13 @@ describe('consultation close-once guarantee', () => {
       where: { user: { email: `consult-anon-${runId}@example.com` } },
     });
 
+    completedApptSequence += 1;
+    const futureStart = new Date(Date.now() + (100 + completedApptSequence) * 3600_000);
     const slot = await prisma.availabilitySlot.create({
       data: {
         doctorProfileId,
-        startTime: new Date(Date.now() - 7200_000),
-        endTime: new Date(Date.now() - 5400_000),
+        startTime: futureStart,
+        endTime: new Date(futureStart.getTime() + 30 * 60_000),
         status: 'open',
       },
     });
@@ -459,6 +464,7 @@ describe('consultation close-once guarantee', () => {
     expect(book.status).toBe(201);
     const anonApptId = book.body.id as string;
 
+    await shiftSlotToPast(prisma, slot.id);
     await request(app)
       .patch(`/appointments/${anonApptId}/status`)
       .set('Authorization', `Bearer ${owningDoctorToken}`)

@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
+import { shiftSlotToPast } from './helpers/fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5467;
@@ -182,10 +183,8 @@ describe('issue #10: issuing prescriptions and lab orders from a consultation', 
     const [closedAppt, openAppt, scheduledAppt, cancelledAppt] = appointmentIds;
 
     for (const id of [closedAppt, openAppt]) {
-      await prisma.availabilitySlot.updateMany({
-        where: { appointment: { id } },
-        data: { startTime: new Date(Date.now() - 60000) },
-      });
+      const apt = await prisma.appointment.findUniqueOrThrow({ where: { id } });
+      await shiftSlotToPast(prisma, apt.availabilitySlotId!);
       const done = await request(app).patch(`/appointments/${id}/status`).set('Authorization', `Bearer ${treatingDoctorToken}`).send({ status: 'completed' });
       expect(done.status, JSON.stringify(done.body)).toBe(200);
     }
