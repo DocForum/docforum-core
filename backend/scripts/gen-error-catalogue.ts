@@ -37,7 +37,14 @@ const TITLES: Record<ErrorModule, string> = {
   'lab-tests': 'Lab tests',
 };
 
-const cell = (value: string) => value.replace(/\|/g, '\\|');
+// Table cells must not carry raw HTML (a `<token>` placeholder would be parsed
+// as a tag by the docs site) and must escape Markdown table pipes.
+const cell = (value: string) =>
+  value
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 
 export function renderErrorCatalogue(): string {
   const lines: string[] = [

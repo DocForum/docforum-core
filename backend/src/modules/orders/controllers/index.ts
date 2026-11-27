@@ -102,7 +102,7 @@ export async function downloadLabResult(req: Request, res: Response) {
 }
 
 export async function getOrder(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const order = await ordersService.getOrderById(
     getParam(req, 'id'),
     { userId: req.user.id, role: req.user.role },

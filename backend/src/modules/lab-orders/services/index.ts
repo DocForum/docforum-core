@@ -91,7 +91,7 @@ export async function fulfillLabOrder(
     // An order already routed to a facility can only be fulfilled by that
     // facility; for any other facility it does not exist.
     if (!existing || (existing.facilityProfileId !== null && existing.facilityProfileId !== facilityProfile.id)) {
-      throw new HttpError(404, 'Lab order not found.');
+      throw new HttpError('LAB_ORDER_NOT_FOUND', 'Lab order not found.');
     }
     if (existing.status === 'fulfilled') {
       throw new HttpError('LAB_ORDER_ALREADY_FULFILLED', 'Lab order has already been fulfilled.');

@@ -418,7 +418,7 @@ export async function getOrderFulfillmentSummaryForViewer(
       patientProfileId: lab.patientProfileId, issuingDoctorId: lab.orderingDoctorId, facilityProfileId: lab.facilityProfileId,
     })).catch(() => null);
   const allowed = order !== null && (await canViewOrder(viewer, { orderType, id: orderId, ...order }));
-  if (!order || !allowed) throw new HttpError(404, 'Order not found.');
+  if (!order || !allowed) throw new HttpError('ORDER_NOT_FOUND', 'Order not found.');
   return getOrderFulfillmentSummary(orderType, orderId);
 }
 
@@ -542,7 +542,7 @@ export async function fulfillPharmacyOrder(
     // An order already routed to a facility can only be fulfilled by that
     // facility; for any other facility it does not exist.
     if (!existing || (existing.facilityProfileId !== null && existing.facilityProfileId !== facilityProfile.id)) {
-      throw new HttpError(404, 'Pharmacy order not found.');
+      throw new HttpError('PHARMACY_ORDER_NOT_FOUND', 'Pharmacy order not found.');
     }
     if (existing.status === 'fulfilled') {
       throw new HttpError('PHARMACY_ORDER_ALREADY_FULFILLED', 'Pharmacy order has already been fulfilled.');
@@ -630,7 +630,9 @@ export async function getLegacyOrderForViewer(
   const order = await repo.findOrderById(prisma, orderId, orderType);
   const allowed = order !== null && (await canViewLegacyOrder(viewer, order));
   if (!order || !allowed) {
-    throw new HttpError(404, orderType === 'pharmacy' ? 'Pharmacy order not found.' : 'Order not found.');
+    throw orderType === 'pharmacy'
+      ? new HttpError('PHARMACY_ORDER_NOT_FOUND', 'Pharmacy order not found.')
+      : new HttpError('ORDER_NOT_FOUND', 'Order not found.');
   }
   recordAccess({
     accessedBy: viewer.userId,
