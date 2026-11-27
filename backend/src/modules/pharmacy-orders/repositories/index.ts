@@ -240,3 +240,16 @@ export async function markOrderFulfilled(
   });
   return updated.count > 0;
 }
+
+/** Issue #314: whether this facility holds a fulfillment record on the order. */
+export async function facilityHasRecordForOrder(
+  orderType: 'prescription' | 'lab_order',
+  orderId: string,
+  facilityId: string,
+): Promise<boolean> {
+  const row = await prisma.fulfillmentRecord.findFirst({
+    where: { facilityId, ...(orderType === 'prescription' ? { prescriptionId: orderId } : { labOrderId: orderId }) },
+    select: { id: true },
+  });
+  return row !== null;
+}

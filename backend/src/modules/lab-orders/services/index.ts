@@ -9,7 +9,8 @@ import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { publish } from '../../../events';
 import { storageService } from '../../../utils/storage';
-import { record, type AuditActor } from '../../audit/services';
+import { record, recordAccess, type AuditActor } from '../../audit/services';
+import { decryptField } from '../../../utils/field-encryption';
 import type { OrderStatus } from '@prisma/client';
 import * as repo from '../repositories';
 import {
@@ -18,6 +19,8 @@ import {
 } from '../../pharmacy-orders/services';
 import * as facilitiesService from '../../facilities/services';
 import * as patientsService from '../../patients/services';
+import * as pharmacyOrdersService from '../../pharmacy-orders/services';
+import * as paymentsService from '../../payments/services';
 
 export async function getLabOrder(id: string) {
   const labOrder = await repo.findLabOrderById(id);
@@ -152,13 +155,77 @@ export async function fulfillLabOrder(
   return formatOrderResponse(result);
 }
 
-export async function getLabOrderById(orderId: string) {
-  if (!orderId || typeof orderId !== 'string') {
-    throw new HttpError(400, 'Order ID is required.');
-  }
-  const order = await repo.findOrderById(prisma, orderId, 'lab');
-  if (!order) {
-    throw new HttpError(404, 'Lab order not found.');
-  }
-  return formatOrderResponse(order);
+/**
+ * Issue #313: expire one lab order that passed its TTL.
+ *
+ * Conditional update (status='issued') guards against a concurrent
+ * fulfilment winning the race and an `expired` row being re-expired on the
+ * next job tick.  Returns false (no-op) when the guard fails.
+ */
+export async function expireLabOrder(
+  labOrderId: string,
+  now: Date,
+  actor: AuditActor,
+): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.labOrder.updateMany({
+      where: { id: labOrderId, status: 'issued', expiresAt: { not: null, lte: now } },
+      data: { status: 'expired' },
+    });
+    if (result.count !== 1) return false;
+
+    await publish(tx, 'order.expired', { orderType: 'lab_order', orderId: labOrderId });
+
+    await record(tx, actor, {
+      entityType: 'LabOrder',
+      entityId: labOrderId,
+      action: 'lab_order.expired',
+      fromState: 'issued',
+      toState: 'expired',
+    });
+
+    return true;
+  });
+}
+
+/**
+ * Issue #314: one lab order by id for an authorised viewer (see
+ * pharmacyOrdersService.canViewOrder); 404 for everyone else. Notes are
+ * clinical text: decrypted for the issuing doctor and admins only, `null`
+ * for patients and facilities. Returns supersession links both ways and the
+ * payment intent status, and writes an AccessLog row.
+ */
+export async function getLabOrderForViewer(
+  labOrderId: string,
+  viewer: pharmacyOrdersService.OrderViewer,
+  route: string,
+) {
+  const labOrder = await repo.findLabOrderWithCorrection(labOrderId);
+  const allowed = labOrder !== null && (await pharmacyOrdersService.canViewOrder(viewer, {
+    orderType: 'lab_order',
+    id: labOrder.id,
+    patientProfileId: labOrder.patientProfileId,
+    issuingDoctorId: labOrder.orderingDoctorId,
+    facilityProfileId: labOrder.facilityProfileId,
+  }));
+  if (!labOrder || !allowed) throw new HttpError(404, 'Lab order not found.');
+
+  recordAccess({
+    accessedBy: viewer.userId,
+    patientProfileId: labOrder.patientProfileId,
+    entityType: 'LabOrder',
+    entityId: labOrderId,
+    route,
+  });
+
+  const isClinical = viewer.role === 'doctor' || viewer.role === 'admin';
+  const { correctedBy, amountStroops, notes, ...rest } = labOrder;
+  return {
+    ...rest,
+    amountStroops: amountStroops.toString(),
+    notes: isClinical && notes ? decryptField(notes) : null,
+    supersedesLabOrderId: labOrder.supersedesLabOrderId,
+    correctedByLabOrderId: correctedBy?.id ?? null,
+    paymentIntentStatus: await paymentsService.getPaymentIntentStatusForOrder('lab_order', labOrder.id),
+  };
 }

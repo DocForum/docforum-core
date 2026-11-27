@@ -13,3 +13,6 @@ backend/node_modules/
 *.tsbuildinfo
 # vitest coverage report (npm run test:coverage) — generated, never committed
 backend/coverage/
+
+# Load-test seed output (holds short-lived access tokens), issue #349
+backend/tests/load/seed-*.json

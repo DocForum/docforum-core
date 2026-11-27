@@ -2,8 +2,9 @@
 // refund trigger of issue #84).
 //
 // A lab order that was never fulfilled by its `expiresAt` moves
-// `issued -> expired` through ONE conditional UPDATE per row, and the
-// `order.expired` outbox event is inserted in the SAME transaction. The
+// `issued -> expired` through ONE conditional UPDATE per row (inside the
+// lab-orders service, issue #313), and the `order.expired` outbox event plus
+// an AuditEvent row are written in the SAME transaction. The
 // payments worker therefore refunds exactly the orders whose expiry
 // committed — a crashed job, a concurrent fulfilment, or a second process
 // cannot refund an order that never expired, and cannot expire a fulfilled
@@ -15,12 +16,16 @@
 // cannot double-publish. A run that hits the cap leaves the remaining
 // eligible rows for the next scheduled tick.
 //
+// Issue #313: expiresAt is set at issuance (issueLabOrder), so this job
+// finds real candidates instead of rows with a NULL expiresAt.
+//
 // Prescriptions have no `expiresAt` column (ARCHITECTURE.md §4.5), so there is
 // no prescription-expiry trigger here; that is a documented gap, not an
 // omission hidden behind a generic "order" sweep.
 import { prisma } from '../db/prisma-client';
 import { config } from '../config';
-import { publish } from '../events';
+import * as labOrdersService from '../modules/lab-orders/services';
+import { SYSTEM_ACTOR } from '../modules/audit/services';
 import { logger } from '../logger';
 import { runBatchedSweep, type SweepLogger } from './expiry-sweeps';
 
@@ -68,20 +73,9 @@ export async function runExpireUnfulfilledOrders(
     processBatch: async (rows) => {
       let expired = 0;
       for (const row of rows) {
-        await prisma.$transaction(async (tx) => {
-          const result = await tx.labOrder.updateMany({
-            where: {
-              id: row.id,
-              status: 'issued',
-              expiresAt: { not: null, lte: now },
-            },
-            data: { status: 'expired' },
-          });
-          if (result.count === 1) {
-            await publish(tx, 'order.expired', { orderType: 'lab_order', orderId: row.id });
-            expired += 1;
-          }
-        });
+        if (await labOrdersService.expireLabOrder(row.id, now, SYSTEM_ACTOR)) {
+          expired += 1;
+        }
       }
       return { expired, skipped: rows.length - expired };
     },

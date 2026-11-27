@@ -4,6 +4,9 @@ import { HttpError } from '../../../http-error';
 import { prisma } from '../../../db/prisma-client';
 import { publish } from '../../../events';
 import * as prescriptionsRepo from '../repositories';
+import { recordAccess } from '../../audit/services';
+import * as pharmacyOrdersService from '../../pharmacy-orders/services';
+import * as paymentsService from '../../payments/services';
 import type { OrderStatus } from '@prisma/client';
 
 export async function getPrescription(id: string) {
@@ -26,10 +29,11 @@ export async function getItemsForFulfillment(prescriptionId: string): Promise<Pr
   if (items.length === 0) {
     throw new HttpError(400, 'This prescription has no items to fulfill.');
   }
-  // quantityOrdered stays null until the Phase 4 item models grow a
-  // quantity field — flagged, not faked. See schema.prisma
-  // FulfillmentItem.quantityOrdered.
-  return items.map((item) => ({ id: item.id, label: item.drugName, quantityOrdered: null }));
+  // Issue #312: quantity is now on the PrescriptionItem row (nullable for
+  // legacy rows pre-migration). null means the item pre-dates Phase 4 — the
+  // over-dispensing guard skips the check for those items rather than
+  // blocking fulfilment of historical prescriptions.
+  return items.map((item) => ({ id: item.id, label: item.drugName, quantityOrdered: item.quantity ?? null }));
 }
 
 /**
@@ -66,4 +70,43 @@ export async function applyFulfillmentStatus(
     }
     return changed;
   });
+}
+
+/**
+ * Issue #314: one prescription by id for an authorised viewer (see
+ * pharmacyOrdersService.canViewOrder for who that is); 404 for everyone
+ * else, so existence never leaks. Returns the items, status, supersession
+ * links both ways and the payment intent status, and writes an AccessLog row.
+ */
+export async function getPrescriptionForViewer(
+  prescriptionId: string,
+  viewer: pharmacyOrdersService.OrderViewer,
+  route: string,
+) {
+  const prescription = await prescriptionsRepo.findPrescriptionWithItems(prescriptionId);
+  const allowed = prescription !== null && (await pharmacyOrdersService.canViewOrder(viewer, {
+    orderType: 'prescription',
+    id: prescription.id,
+    patientProfileId: prescription.patientProfileId,
+    issuingDoctorId: prescription.prescribingDoctorId,
+    facilityProfileId: prescription.facilityProfileId,
+  }));
+  if (!prescription || !allowed) throw new HttpError(404, 'Prescription not found.');
+
+  recordAccess({
+    accessedBy: viewer.userId,
+    patientProfileId: prescription.patientProfileId,
+    entityType: 'Prescription',
+    entityId: prescriptionId,
+    route,
+  });
+
+  const { correctedBy, amountStroops, ...rest } = prescription;
+  return {
+    ...rest,
+    amountStroops: amountStroops.toString(),
+    supersedesPrescriptionId: prescription.supersedesPrescriptionId,
+    correctedByPrescriptionId: correctedBy?.id ?? null,
+    paymentIntentStatus: await paymentsService.getPaymentIntentStatusForOrder('prescription', prescription.id),
+  };
 }

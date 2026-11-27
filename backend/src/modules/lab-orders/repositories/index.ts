@@ -34,3 +34,8 @@ export {
   createFulfillmentProof,
   markOrderFulfilled,
 } from '../../pharmacy-orders/repositories';
+
+/** Issue #314: a lab order plus the id of its correction, if superseded. */
+export function findLabOrderWithCorrection(id: string) {
+  return prisma.labOrder.findUnique({ where: { id }, include: { correctedBy: { select: { id: true } } } });
+}
