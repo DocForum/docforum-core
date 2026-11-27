@@ -1,6 +1,7 @@
 import { HttpError } from '../../../http-error';
 import { versionConflict } from '../../../middleware/optimistic-concurrency';
 import { prisma } from '../../../db/prisma-client';
+import { createHash, randomBytes } from 'node:crypto';
 import * as auditService from '../../audit/services';
 import * as availabilityService from '../../availability/services';
 import * as doctorsRepo from '../repositories';
@@ -12,6 +13,25 @@ export async function getMyDoctorProfile(userId: string) {
   const profile = await doctorsRepo.findDoctorProfileByUserId(userId);
   if (!profile) throw new HttpError('NO_DOCTOR_PROFILE', 'No doctor profile for this account.');
   return profile;
+}
+
+export async function rotateCalendarFeedToken(userId: string) {
+  const profile = await getMyDoctorProfile(userId);
+  const token = randomBytes(32).toString('hex');
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  await doctorsRepo.upsertCalendarFeedToken(profile.id, tokenHash);
+  return token;
+}
+
+export async function revokeCalendarFeedToken(userId: string) {
+  const profile = await getMyDoctorProfile(userId);
+  await doctorsRepo.deleteCalendarFeedToken(profile.id);
+}
+
+export async function getDoctorProfileIdForCalendarFeedToken(token: string) {
+  if (!/^[a-f0-9]{64}$/.test(token)) return null;
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  return doctorsRepo.findDoctorProfileIdByCalendarFeedTokenHash(tokenHash);
 }
 
 export async function updateMyDoctorProfile(

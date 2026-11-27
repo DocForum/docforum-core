@@ -7,6 +7,27 @@ export function findDoctorProfileByUserId(userId: string, db: DbClient = prisma)
   return db.doctorProfile.findUnique({ where: { userId } });
 }
 
+export function upsertCalendarFeedToken(doctorProfileId: string, tokenHash: string) {
+  return prisma.doctorCalendarFeed.upsert({
+    where: { doctorProfileId },
+    create: { doctorProfileId, tokenHash },
+    update: { tokenHash },
+    select: { doctorProfileId: true },
+  });
+}
+
+export function deleteCalendarFeedToken(doctorProfileId: string) {
+  return prisma.doctorCalendarFeed.deleteMany({ where: { doctorProfileId } });
+}
+
+export async function findDoctorProfileIdByCalendarFeedTokenHash(tokenHash: string) {
+  const feed = await prisma.doctorCalendarFeed.findUnique({
+    where: { tokenHash },
+    select: { doctorProfileId: true },
+  });
+  return feed?.doctorProfileId ?? null;
+}
+
 export function findSpecialties(options: { includeRetired?: boolean } = {}) {
   return prisma.specialty.findMany({
     where: options.includeRetired ? undefined : { isRetired: false },

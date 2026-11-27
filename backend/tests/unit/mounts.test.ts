@@ -9,7 +9,7 @@ import {
   symptomsRouter,
 } from '../../src/modules/doctors/routes';
 import { availabilityRouter } from '../../src/modules/availability/routes';
-import { appointmentsRouter } from '../../src/modules/appointments/routes';
+import { appointmentsRouter, calendarRouter } from '../../src/modules/appointments/routes';
 import {
   appointmentConsultationsRouter,
   consultationsRouter,
@@ -48,6 +48,7 @@ const EXPECTED: Array<[string, unknown]> = [
   // Issue #60: public symptom vocabulary / autocomplete.
   ['/symptoms', symptomsRouter],
   ['/availability', availabilityRouter],
+  ['/calendar', calendarRouter],
   ['/appointments', appointmentsRouter],
   ['/appointments', appointmentConsultationsRouter],
   ['/intake', intakeRouter],

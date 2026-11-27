@@ -874,7 +874,12 @@ describe('guardian and dependent profiles', () => {
       dbExecuteFile(url, migrationFile(newMigration));
       await withClient(url, async (client) => {
         expect(await client.patientProfile.findUniqueOrThrow({ where: { id: 'p1' } })).toMatchObject({ userId: 'u1', fullName: 'Existing Patient' });
-        expect(await client.appointment.findUniqueOrThrow({ where: { id: 'a1' } })).toMatchObject({ patientProfileId: 'p1' });
+        expect(
+          await client.appointment.findUniqueOrThrow({
+            where: { id: 'a1' },
+            select: { patientProfileId: true },
+          }),
+        ).toEqual({ patientProfileId: 'p1' });
         expect(await client.guardianship.count()).toBe(0);
       });
     });

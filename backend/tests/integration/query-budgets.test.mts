@@ -12,6 +12,7 @@
 // character fails under a WIN1252 cluster), migrations applied via the
 // local Prisma CLI rather than `npx` so it runs on Windows too.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -182,6 +183,20 @@ describe('query budgets for list endpoints', () => {
         },
       });
     }
+    const smallCalendarToken = 'a'.repeat(64);
+    const manyCalendarToken = 'b'.repeat(64);
+    await prisma.doctorCalendarFeed.createMany({
+      data: [
+        {
+          doctorProfileId: smallDoctor.profile.id,
+          tokenHash: createHash('sha256').update(smallCalendarToken).digest('hex'),
+        },
+        {
+          doctorProfileId: manyDoctor.profile.id,
+          tokenHash: createHash('sha256').update(manyCalendarToken).digest('hex'),
+        },
+      ],
+    });
     await prisma.referral.create({
       data: {
         patientProfileId: smallPatient.profile.id,
@@ -257,7 +272,7 @@ describe('query budgets for list endpoints', () => {
   afterAll(async () => {
     await prisma?.$disconnect();
     await pg.stop();
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   });
 
   /** Both fixture sizes for one endpoint, measured against the same budget. */
@@ -294,6 +309,16 @@ describe('query budgets for list endpoints', () => {
     );
     expect(one.response.body).toHaveLength(1);
     expect(fifty.response.body).toHaveLength(50);
+  });
+
+  it('keeps GET /calendar/:token.ics constant from 1 to 50 appointments', async () => {
+    const { one, fifty } = await expectConstantBudget(
+      4,
+      (a) => a.get(`/calendar/${'a'.repeat(64)}.ics`),
+      (a) => a.get(`/calendar/${'b'.repeat(64)}.ics`),
+    );
+    expect((one.response.text.match(/BEGIN:VEVENT/g) ?? []).length).toBe(1);
+    expect((fifty.response.text.match(/BEGIN:VEVENT/g) ?? []).length).toBe(50);
   });
 
   it('keeps GET /consultations/mine constant as the page grows', async () => {

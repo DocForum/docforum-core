@@ -18,6 +18,7 @@ import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
 import { expectedVersion, setVersionEtag } from '../../../middleware/optimistic-concurrency';
+import { config } from '../../../config';
 
 export async function getMe(req: Request, res: Response) {
   if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
@@ -32,6 +33,19 @@ export async function updateMe(req: Request, res: Response) {
   const profile = await doctorsService.updateMyDoctorProfile(req.user.id, expectedVersion(req), input);
   setVersionEtag(res, profile.version);
   res.status(200).json(profile);
+}
+
+export async function rotateCalendarFeed(req: Request, res: Response) {
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
+  const token = await doctorsService.rotateCalendarFeedToken(req.user.id);
+  const feedUrl = new URL(`/calendar/${token}.ics`, config.publicApiBaseUrl);
+  res.status(201).json({ feedUrl: feedUrl.toString() });
+}
+
+export async function revokeCalendarFeed(req: Request, res: Response) {
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
+  await doctorsService.revokeCalendarFeedToken(req.user.id);
+  res.status(204).end();
 }
 
 export async function listSpecialties(_req: Request, res: Response) {

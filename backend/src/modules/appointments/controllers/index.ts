@@ -17,6 +17,9 @@ import { HttpError } from '../../../http-error';
 import { setVersionEtag } from '../../../middleware/optimistic-concurrency';
 import { auditActor } from '../../../middleware/request-id';
 import { getParam } from '../../../request-params';
+import { createHash } from 'node:crypto';
+import { config } from '../../../config';
+import { serializeCalendarFeed } from '../calendar-ics';
 
 export async function book(req: Request, res: Response) {
   if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
@@ -145,4 +148,24 @@ export async function getQueue(req: Request, res: Response) {
   const appointmentId = getParam(req, 'appointmentId');
   const appointment = await appointmentsService.getAppointmentDetail(req.user.id, appointmentId);
   res.status(200).json({ appointmentId, appointment });
+}
+
+export async function calendarFeed(req: Request, res: Response) {
+  const token = getParam(req, 'token');
+  const events = await appointmentsService.getCalendarFeedEvents(token);
+  const body = serializeCalendarFeed(events, config.appBaseUrl);
+  const etag = `"${createHash('sha256').update(body).digest('hex')}"`;
+  const lastModified = events.reduce(
+    (latest, event) => (event.updatedAt > latest ? event.updatedAt : latest),
+    new Date(0),
+  );
+
+  res.set({
+    'Cache-Control': 'private, max-age=0, must-revalidate',
+    'Content-Type': 'text/calendar; charset=utf-8',
+    ETag: etag,
+    'Last-Modified': lastModified.toUTCString(),
+  });
+  if (req.fresh) return res.status(304).end();
+  return res.status(200).send(body);
 }

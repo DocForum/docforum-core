@@ -19,6 +19,17 @@ export const http = {
 
 export const port = Number(process.env.PORT ?? 4000);
 export const databaseUrl = requireEnv('DATABASE_URL');
+const publicApiUrl = new URL(
+  process.env.PUBLIC_API_BASE_URL ??
+    (process.env.NODE_ENV === 'production' ? requireEnv('PUBLIC_API_BASE_URL') : 'http://localhost:4000'),
+);
+if (!['http:', 'https:'].includes(publicApiUrl.protocol) || publicApiUrl.pathname !== '/' || publicApiUrl.search || publicApiUrl.hash) {
+  throw new Error('PUBLIC_API_BASE_URL must be an HTTP(S) origin without a path, query or fragment.');
+}
+if (process.env.NODE_ENV === 'production' && publicApiUrl.protocol !== 'https:') {
+  throw new Error('PUBLIC_API_BASE_URL must use HTTPS in production.');
+}
+export const publicApiBaseUrl = publicApiUrl.origin;
 
 // Base URL of docforum-web, used to build the link in outbound
 // notifications (password reset today). Not a provider decision — see

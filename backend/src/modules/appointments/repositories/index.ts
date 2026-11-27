@@ -9,6 +9,8 @@ export function createAppointment(
     patientProfileId: string;
     doctorProfileId: string;
     availabilitySlotId: string;
+    calendarStartTime: Date;
+    calendarEndTime: Date;
     origin?: 'direct_booking' | 'referral' | 'follow_up';
     referralId?: string;
   },
@@ -83,6 +85,29 @@ export function findAppointmentsForDoctorOnDay(doctorProfileId: string, start: D
   });
 }
 
+/** Only calendar-safe fields are selected; patient identity and clinical
+ * records never enter the feed projection. */
+export function findAppointmentsForCalendarFeed(doctorProfileId: string, db: DbClient = prisma) {
+  return db.appointment.findMany({
+    where: {
+      doctorProfileId,
+      OR: [
+        { calendarStartTime: { not: null }, calendarEndTime: { not: null } },
+        { availabilitySlotId: { not: null } },
+      ],
+    },
+    select: {
+      id: true,
+      status: true,
+      calendarStartTime: true,
+      calendarEndTime: true,
+      updatedAt: true,
+      availabilitySlot: { select: { startTime: true, endTime: true } },
+    },
+    orderBy: [{ calendarStartTime: 'asc' }, { id: 'asc' }],
+  });
+}
+
 /** Appointments across an arbitrary date range in the doctor's calendar (issue #291). */
 export function findAppointmentsForDoctorSchedule(
   doctorProfileId: string,
@@ -124,10 +149,16 @@ export function updateStatusIfScheduled(db: DbClient, id: string, status: Appoin
 /**
  * Conditionally repoints an appointment's availabilitySlotId if it is still scheduled.
  */
-export function rescheduleIfScheduled(db: DbClient, id: string, newSlotId: string) {
+export function rescheduleIfScheduled(
+  db: DbClient,
+  id: string,
+  newSlotId: string,
+  calendarStartTime: Date,
+  calendarEndTime: Date,
+) {
   return db.appointment.updateMany({
     where: { id, status: 'scheduled' },
-    data: { availabilitySlotId: newSlotId },
+    data: { availabilitySlotId: newSlotId, calendarStartTime, calendarEndTime },
   });
 }
 

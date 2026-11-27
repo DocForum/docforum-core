@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -416,6 +417,89 @@ describe('appointments cancellation (issue #292)', () => {
       // Either reschedule won (200) and booking lost (409), OR booking won (201) and reschedule lost (409)
       const won = (rescheduleRes.status === 200 && bookRes.status === 409) || (bookRes.status === 201 && rescheduleRes.status === 409);
       expect(won).toBe(true);
+    });
+
+    describe('tokenised calendar feed (issue #130)', () => {
+      it('serves a PHI-free UTC feed, rotates and revokes its token, and supports conditional GETs', async () => {
+        await prisma.doctorProfile.update({
+          where: { id: doctorA.profileId },
+          data: { timeZone: 'America/New_York' },
+        });
+
+        const startTime = new Date('2027-03-14T06:30:00.000Z');
+        const slot = await prisma.availabilitySlot.create({
+          data: {
+            doctorProfileId: doctorA.profileId,
+            startTime,
+            endTime: new Date('2027-03-14T07:00:00.000Z'),
+            status: 'open',
+          },
+        });
+        const booking = await request(app)
+          .post('/appointments')
+          .set('Authorization', `Bearer ${patient1.accessToken}`)
+          .send({ availabilitySlotId: slot.id });
+        expect(booking.status).toBe(201);
+
+        const issue = async () =>
+          request(app)
+            .post('/doctors/me/calendar-feed')
+            .set('Authorization', `Bearer ${doctorA.accessToken}`);
+        const firstIssue = await issue();
+        expect(firstIssue.status).toBe(201);
+        const firstUrl = new URL(firstIssue.body.feedUrl as string);
+        const firstToken = /\/calendar\/([a-f0-9]{64})\.ics$/.exec(firstUrl.pathname)?.[1];
+        expect(firstToken).toBeDefined();
+        const storedToken = await prisma.doctorCalendarFeed.findUniqueOrThrow({
+          where: { doctorProfileId: doctorA.profileId },
+        });
+        expect(storedToken.tokenHash).toBe(createHash('sha256').update(firstToken!).digest('hex'));
+        expect(storedToken.tokenHash).not.toBe(firstToken);
+
+        const rotate = await issue();
+        expect(rotate.status).toBe(201);
+        const feedUrl = new URL(rotate.body.feedUrl as string);
+        const token = /\/calendar\/([a-f0-9]{64})\.ics$/.exec(feedUrl.pathname)?.[1];
+        expect(token).toBeDefined();
+        expect(token).not.toBe(firstToken);
+        expect((await request(app).get(firstUrl.pathname)).status).toBe(404);
+
+        const feed = await request(app).get(feedUrl.pathname);
+        expect(feed.status).toBe(200);
+        expect(feed.headers['content-type']).toContain('text/calendar');
+        expect(feed.headers.etag).toBeDefined();
+        expect(feed.headers['last-modified']).toBeDefined();
+        expect(feed.text).toContain('SUMMARY:DocForum appointment');
+        expect(feed.text).toContain('DTSTART:20270314T063000Z');
+        expect(feed.text).toContain('DTEND:20270314T070000Z');
+        expect(feed.text).not.toContain('TZID');
+        expect(feed.text).toContain(`URL:http://localhost:5173/appointments/${booking.body.id}`);
+        expect(feed.text).not.toContain(patient1.profileId);
+        expect(feed.text).not.toContain(patient1.userId);
+        expect(feed.text).not.toContain('Fixture patient');
+        expect(feed.text).not.toContain(slot.id);
+        expect(feed.text).not.toContain(token);
+
+        const cancelled = await request(app)
+          .post(`/appointments/${booking.body.id}/cancel`)
+          .set('Authorization', `Bearer ${patient1.accessToken}`);
+        expect(cancelled.status).toBe(200);
+        const cancelledFeed = await request(app).get(feedUrl.pathname);
+        expect(cancelledFeed.status).toBe(200);
+        expect(cancelledFeed.text).toContain('STATUS:CANCELLED');
+        expect(cancelledFeed.text).toContain('DTSTART:20270314T063000Z');
+        expect(cancelledFeed.headers.etag).not.toBe(feed.headers.etag);
+        expect((await request(app).get(feedUrl.pathname).set('If-None-Match', cancelledFeed.headers.etag)).status).toBe(304);
+        expect(
+          (await request(app).get(feedUrl.pathname).set('If-Modified-Since', cancelledFeed.headers['last-modified'])).status,
+        ).toBe(304);
+
+        const revoked = await request(app)
+          .delete('/doctors/me/calendar-feed')
+          .set('Authorization', `Bearer ${doctorA.accessToken}`);
+        expect(revoked.status).toBe(204);
+        expect((await request(app).get(feedUrl.pathname)).status).toBe(404);
+      });
     });
   });
 
