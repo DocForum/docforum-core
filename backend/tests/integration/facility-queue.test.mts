@@ -1,6 +1,8 @@
 // Integration tests for issue #15 — facility fulfillment queue and status
 // transitions, including the access-control invariant that `fulfilled` is
 // NEVER directly settable: it is derived from dispensed items only.
+// Also covers the issue #11 patient view, GET /orders/mine (current orders
+// only; superseded prescriptions are hidden).
 //
 // What's proven here against a real Postgres (embedded, self-contained,
 // own port 5460):
@@ -298,5 +300,57 @@ describe('facility fulfillment queue (issue #15)', () => {
       .get('/pharmacy-orders/facility/queue')
       .set('Authorization', `Bearer ${patientToken}`);
     expect(res.status).toBe(403);
+  });
+});
+
+describe('patient orders view (issue #11)', () => {
+  it('GET /orders/mine returns only current prescriptions and lab orders, hiding superseded ones', async () => {
+    const original = await createPrescription(facilityAId);
+    const ctx = await createOrderContext();
+    const correction = await prisma.prescription.create({
+      data: {
+        consultationId: ctx.consultationId,
+        patientProfileId,
+        prescribingDoctorId: ctx.doctorProfileId,
+        facilityProfileId: facilityAId,
+        amountStroops: 1_000n,
+        supersedesPrescriptionId: original.id,
+        items: { create: [{ drugName: 'Amoxicillin 250mg', dosage: '1 tab', frequency: 'daily', duration: '5d' }] },
+      },
+    });
+    const labOrder = await prisma.labOrder.create({
+      data: {
+        consultationId: ctx.consultationId,
+        patientProfileId,
+        orderingDoctorId: ctx.doctorProfileId,
+        facilityProfileId: facilityAId,
+        amountStroops: 2_000n,
+        testType: 'Full blood count',
+      },
+    });
+
+    const res = await request(app)
+      .get('/orders/mine')
+      .set('Authorization', `Bearer ${patientToken}`);
+    expect(res.status).toBe(200);
+    const rxIds = (res.body.prescriptions as { id: string }[]).map((p) => p.id);
+    expect(rxIds).toContain(correction.id);
+    expect(rxIds).not.toContain(original.id);
+    const labIds = (res.body.labOrders as { id: string; amountStroops: string }[]).map((l) => l.id);
+    expect(labIds).toContain(labOrder.id);
+    // BigInt amounts are serialized as strings.
+    expect(typeof (res.body.prescriptions as { amountStroops: unknown }[])[0]?.amountStroops).toBe('string');
+  });
+
+  it('GET /orders/mine is patient-only (403 for a facility)', async () => {
+    const res = await request(app)
+      .get('/orders/mine')
+      .set('Authorization', `Bearer ${facilityAToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /orders/mine requires authentication (401)', async () => {
+    const res = await request(app).get('/orders/mine');
+    expect(res.status).toBe(401);
   });
 });
