@@ -318,6 +318,9 @@ export async function acceptReferral(
       throw new HttpError(409, 'Only a pending referral can be accepted.');
     }
 
+    // Ensure the target doctor is active (not deactivated or deleted)
+    await doctorsService.assertDoctorActive(referral.targetDoctorId, tx);
+
     // Conditional pending → accepted FIRST: if two accepts race, exactly
     // one matches, same shape as claimOpenSlot (hard rule 2's philosophy,
     // applied to referral state).
