@@ -128,6 +128,7 @@ describe('patient data export', () => {
     const doctor = await signupVerified('doctor', 'export-doctor');
     doctorToken = doctor.token;
     doctorProfileId = (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: doctor.userId } })).id;
+    await prisma.doctorProfile.update({ where: { id: doctorProfileId }, data: { verificationStatus: 'verified' } });
 
     const admin = await prisma.user.create({
       data: { email: `admin-${runId}@example.com`, passwordHash: 'x', role: 'admin', emailVerifiedAt: new Date() },

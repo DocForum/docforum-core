@@ -15,7 +15,7 @@
 //  - "A single item can't be dispensed by two facilities" is a DB-level
 //    constraint (unique index on (orderType, dispensedKey)), not app timing.
 import { Prisma } from '@prisma/client';
-import type { FulfillmentItem, FulfillmentStatus, Role } from '@prisma/client';
+import type { FulfillmentItem, FulfillmentRejectionReason, FulfillmentStatus, FulfillmentUnfulfilledReason, Role } from '@prisma/client';
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { publish } from '../../../events';
@@ -23,9 +23,9 @@ import { storageService, type UploadAttachmentOptions } from '../../../utils/sto
 import { computeConfirmedSignal, formatOrderResponse } from '../../../utils/order-utils';
 import { record as recordAudit, type AuditActor } from '../../audit/services';
 import * as repo from '../repositories';
+import * as facilitiesService from '../../facilities/services';
 import * as prescriptionsService from '../../prescriptions/services';
 import * as labOrdersService from '../../lab-orders/services';
-import * as facilitiesService from '../../facilities/services';
 import * as patientsService from '../../patients/services';
 
 export type OrderType = 'prescription' | 'lab_order';
@@ -125,8 +125,7 @@ export async function createFulfillment(
   if (requester.role !== 'patient' && requester.role !== 'admin') {
     throw new HttpError(403, 'You do not have permission to perform this action.');
   }
-  const facility = await facilitiesService.findFacilityProfileById(input.facilityId);
-  if (!facility) throw new HttpError(404, 'Facility not found.');
+  await facilitiesService.assertFacilityActive(input.facilityId);
 
   const orderItems = await getOrderItems(input.orderType, input.orderId);
   const requestedIds = input.orderItemIds ?? orderItems.map((item) => item.id);
@@ -170,7 +169,12 @@ export async function createFulfillment(
 export async function updateFulfillmentItem(
   recordId: string,
   itemId: string,
-  input: { status: 'dispensed' | 'unfulfilled'; quantityDispensed?: number },
+  input: {
+    status: 'dispensed' | 'unfulfilled';
+    quantityDispensed?: number;
+    unfulfilledReason?: string;
+    unfulfilledNote?: string;
+  },
   requester: Requester,
 ) {
   const record = await requireOwnedRecord(recordId, requester);
@@ -214,7 +218,11 @@ export async function updateFulfillmentItem(
                 quantityDispensed,
                 dispensedAt: new Date(),
               }
-            : { status: 'unfulfilled' },
+            : {
+                status: 'unfulfilled',
+                unfulfilledReason: (input.unfulfilledReason ?? null) as FulfillmentUnfulfilledReason | null,
+                unfulfilledNote: input.unfulfilledNote ?? null,
+              },
         );
         if (!ok) return false;
       } catch (error) {
@@ -271,7 +279,7 @@ export async function updateFulfillmentItem(
  * settable — it's derived from dispensed items. */
 export async function updateFulfillmentRecord(
   recordId: string,
-  input: { status: 'in_progress' | 'rejected' },
+  input: { status: 'in_progress' | 'rejected'; rejectionReason?: string; rejectionNote?: string },
   requester: Requester,
 ) {
   const record = await requireOwnedRecord(recordId, requester);
@@ -294,7 +302,15 @@ export async function updateFulfillmentRecord(
     const claimed = await tx.fulfillmentRecord
       .updateMany({
         where: { id: recordId, status: { in: ['pending', 'in_progress'] } },
-        data: { status: input.status },
+        data: {
+          status: input.status,
+          ...(input.status === 'rejected'
+            ? {
+                rejectionReason: (input.rejectionReason ?? 'unspecified') as FulfillmentRejectionReason,
+                rejectionNote: input.rejectionNote ?? null,
+              }
+            : {}),
+        },
       })
       .then((result) => result.count === 1);
     if (!claimed) return null;
@@ -389,12 +405,25 @@ export async function listFulfillmentRecordsForOrder(
 }
 
 /** Derived order-level fulfillment state WITHOUT writing it back (read
- * path for the patient/doctor UI). */
+ * path for the patient/doctor UI). Includes rejection/unfulfilled reasons
+ * from all records so the patient can see why items were not dispensed
+ * (issue #322). */
 export async function getOrderFulfillmentSummary(
   orderType: OrderType,
   orderId: string,
-): Promise<{ orderType: OrderType; orderId: string; totalItems: number; dispensedItems: number; status: DerivedOrderStatus }> {
-  const items = await getOrderItems(orderType, orderId);
+): Promise<{
+  orderType: OrderType;
+  orderId: string;
+  totalItems: number;
+  dispensedItems: number;
+  status: DerivedOrderStatus;
+  rejections: { facilityId: string; reason: string; note: string | null }[];
+  unfulfilledItems: { orderItemId: string; reason: string; note: string | null }[];
+}> {
+  const [items, records] = await Promise.all([
+    getOrderItems(orderType, orderId),
+    repo.findFulfillmentRecordsForOrder(orderType, orderId),
+  ]);
   const dispensedItems =
     orderType === 'prescription'
       ? await repo.countDispensedOrderItems(
@@ -404,7 +433,49 @@ export async function getOrderFulfillmentSummary(
       : await repo.countDispensedOrderItems('lab_order', [orderId]);
   const status: DerivedOrderStatus =
     dispensedItems === items.length ? 'fulfilled' : dispensedItems > 0 ? 'partially_fulfilled' : 'issued';
-  return { orderType, orderId, totalItems: items.length, dispensedItems, status };
+
+  // Surface rejection and unfulfilled reasons for the patient view (#322).
+  const rejections = records
+    .filter((r) => r.status === 'rejected' && r.rejectionReason)
+    .map((r) => ({
+      facilityId: r.facilityId,
+      reason: r.rejectionReason ?? 'unspecified',
+      note: r.rejectionNote ?? null,
+    }));
+  const unfulfilledItems = records
+    .flatMap((r) => r.items)
+    .filter((item) => item.status === 'unfulfilled' && item.unfulfilledReason)
+    .map((item) => ({
+      orderItemId: item.orderItemId,
+      reason: item.unfulfilledReason ?? 'unspecified',
+      note: item.unfulfilledNote ?? null,
+    }));
+
+  return { orderType, orderId, totalItems: items.length, dispensedItems, status, rejections, unfulfilledItems };
+}
+
+/**
+ * The facility's own fulfillment queue — all FulfillmentRecords assigned to
+ * the caller's facility (issue #15). Only facilities may call this; a 403
+ * is returned for any other role.
+ *
+ * Hard rule 5 applies: a facility sees ONLY its own records, never another
+ * facility's. `fulfilled` status is NEVER directly settable via the PATCH
+ * endpoint — it is derived from dispensed items (§5.3 step 5), and the
+ * test for this issue proves that invariant by attempting the forbidden path.
+ */
+export async function listFacilityQueue(
+  requester: Requester,
+  filters: { status?: FulfillmentStatus } = {},
+): Promise<Awaited<ReturnType<typeof repo.listFulfillmentRecordsForFacility>>> {
+  if (requester.role !== 'facility') {
+    throw new HttpError(403, 'Only facilities can view the fulfillment queue.');
+  }
+  const facilityId = await getOwnFacilityId(requester);
+  if (!facilityId) {
+    throw new HttpError(403, 'No facility profile is linked to this account.');
+  }
+  return repo.listFulfillmentRecordsForFacility(facilityId, filters);
 }
 
 export { computeConfirmedSignal, formatOrderResponse };

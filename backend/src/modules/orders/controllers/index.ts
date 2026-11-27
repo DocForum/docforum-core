@@ -106,3 +106,9 @@ export async function getOrder(req: Request, res: Response) {
   const order = await ordersService.getOrderById(id);
   res.status(200).json(serialize(order));
 }
+
+export async function listMineOrders(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const result = await ordersService.listMineOrders(req.user.id);
+  res.status(200).json(serialize(result));
+}

@@ -48,6 +48,13 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
   return prisma.$transaction(async (tx) => {
     const claimed = await availabilityService.claimOpenSlot(tx, availabilitySlotId);
     if (!claimed) {
+      const slot = await availabilityService.getSlot(tx, availabilitySlotId);
+      if (!slot) {
+        throw new HttpError(404, 'Slot not found.');
+      }
+      if (slot.startTime <= new Date()) {
+        throw new HttpError(409, 'This slot has already passed and is no longer bookable.');
+      }
       throw new HttpError(409, 'This slot is no longer available.');
     }
 
@@ -57,6 +64,7 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
       // keeps TypeScript honest and fails loudly instead of silently.
       throw new HttpError(404, 'Slot not found.');
     }
+    await doctorsService.assertDoctorVerified(slot.doctorProfileId, undefined, tx);
 
     // Ensure the doctor is active (not deactivated or deleted)
     await doctorsService.assertDoctorActive(slot.doctorProfileId, tx);
@@ -184,19 +192,24 @@ export async function rescheduleSlot(
     if (!newSlot) {
       throw new HttpError(404, 'New slot not found.');
     }
+
+    await doctorsService.assertDoctorVerified(newSlot.doctorProfileId, undefined, tx);
+    await doctorsService.assertDoctorActive(newSlot.doctorProfileId, tx);
+
     if (newSlot.doctorProfileId !== existingAppointment.doctorProfileId) {
       throw new HttpError(400, 'The new slot must belong to the same doctor.');
     }
-    if (newSlot.startTime.getTime() <= now.getTime()) {
-      throw new HttpError(400, 'The new slot must be in the future.');
-    }
-
-    // Ensure the doctor is active (not deactivated or deleted)
-    await doctorsService.assertDoctorActive(newSlot.doctorProfileId, tx);
 
     // Claim the new slot atomically
-    const newClaimed = await availabilityService.claimOpenSlot(tx, newSlotId);
+    const newClaimed = await availabilityService.claimOpenSlot(tx, newSlotId, now);
     if (!newClaimed) {
+      const newSlot = await availabilityService.getSlot(tx, newSlotId);
+      if (!newSlot) {
+        throw new HttpError(404, 'The new slot does not exist.');
+      }
+      if (newSlot.startTime <= now) {
+        throw new HttpError(409, 'The new slot has already passed and is no longer bookable.');
+      }
       throw new HttpError(409, 'The new slot is no longer available.');
     }
 
@@ -386,6 +399,7 @@ export async function acceptWaitlistOffer(
     if (!entry.doctorProfileId) {
       throw new HttpError(404, 'No doctor profile specified for waitlist entry.');
     }
+    await doctorsService.assertDoctorVerified(entry.doctorProfileId, undefined, tx);
 
     const openSlots = await availabilityService.listOpenSlots(entry.doctorProfileId);
     if (!openSlots.length) {
@@ -395,6 +409,10 @@ export async function acceptWaitlistOffer(
     // Claim the first open slot
     const claimed = await availabilityService.claimOpenSlot(tx, openSlots[0].id);
     if (!claimed) {
+      const slot = await availabilityService.getSlot(tx, openSlots[0].id);
+      if (slot && slot.startTime <= new Date()) {
+        throw new HttpError(409, 'This slot has already passed and is no longer bookable.');
+      }
       throw new HttpError(409, 'The slot was taken before we could claim it.');
     }
 
@@ -663,17 +681,21 @@ export async function bookForReferral(
   actor: auditService.AuditActor,
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const claimed = await availabilityService.claimOpenSlot(db, input.availabilitySlotId);
-  if (!claimed) {
-    throw new HttpError(409, 'This slot is no longer available.');
-  }
-
   const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
   if (!slot) {
     throw new HttpError(404, 'Slot not found.');
   }
   if (slot.doctorProfileId !== input.doctorProfileId) {
     throw new HttpError(409, 'That slot does not belong to the referral’s target doctor.');
+  }
+  await doctorsService.assertDoctorVerified(slot.doctorProfileId, undefined, db);
+
+  const claimed = await availabilityService.claimOpenSlot(db, input.availabilitySlotId);
+  if (!claimed) {
+    if (slot.startTime <= new Date()) {
+      throw new HttpError(409, 'This slot has already passed and is no longer bookable.');
+    }
+    throw new HttpError(409, 'This slot is no longer available.');
   }
 
   // Ensure the doctor is active (not deactivated or deleted)
@@ -727,17 +749,21 @@ export async function bookForFollowUp(
   actor: auditService.AuditActor,
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const claimed = await availabilityService.claimOpenSlot(db, input.availabilitySlotId);
-  if (!claimed) {
-    throw new HttpError(409, 'This slot is no longer available.');
-  }
-
   const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
   if (!slot) {
     throw new HttpError(404, 'Slot not found.');
   }
   if (slot.doctorProfileId !== input.doctorProfileId) {
     throw new HttpError(409, 'That slot does not belong to the follow-up’s doctor.');
+  }
+  await doctorsService.assertDoctorVerified(slot.doctorProfileId, undefined, db);
+
+  const claimed = await availabilityService.claimOpenSlot(db, input.availabilitySlotId);
+  if (!claimed) {
+    if (slot.startTime <= new Date()) {
+      throw new HttpError(409, 'This slot has already passed and is no longer bookable.');
+    }
+    throw new HttpError(409, 'This slot is no longer available.');
   }
 
   // Ensure the doctor is active (not deactivated or deleted)
