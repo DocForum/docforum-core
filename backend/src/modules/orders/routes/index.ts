@@ -42,9 +42,9 @@ function labResultBody(req: Request, res: Response, next: NextFunction) {
     if (!err) return next();
     const status = (err as { status?: number }).status;
     if (status === 413) {
-      return next(new HttpError(413, `Result files may be at most ${config.labResults.maxBytes} bytes.`, 'LAB_RESULT_TOO_LARGE'));
+      return next(new HttpError('LAB_RESULT_TOO_LARGE', `Result files may be at most ${config.labResults.maxBytes} bytes.`));
     }
-    return next(new HttpError(400, 'The result file could not be read.'));
+    return next(new HttpError('LAB_RESULT_UNREADABLE', 'The result file could not be read.'));
   });
 }
 

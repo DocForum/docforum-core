@@ -72,7 +72,7 @@ export async function acknowledgeLabResult(req: Request, res: Response) {
 }
 
 export async function listUnacknowledgedLabResults(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { limit } = unacknowledgedResultsQuerySchema.parse(req.query);
   const items = await labResultAcknowledgementsService.listUnacknowledgedResults(
     { ...auditActor(req), role: req.user.role },
@@ -102,7 +102,7 @@ export async function downloadLabResult(req: Request, res: Response) {
 }
 
 export async function getOrder(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const order = await ordersService.getOrderById(
     getParam(req, 'id'),
     { userId: req.user.id, role: req.user.role },
@@ -112,7 +112,7 @@ export async function getOrder(req: Request, res: Response) {
 }
 
 export async function listMineOrders(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const result = await ordersService.listMineOrders(req.user.id);
   res.status(200).json(serialize(result));
 }

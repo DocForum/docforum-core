@@ -23,7 +23,7 @@ import * as paymentsService from '../../payments/services';
 
 export async function getLabOrder(id: string) {
   const labOrder = await repo.findLabOrderById(id);
-  if (!labOrder) throw new HttpError(404, 'Lab order not found.');
+  if (!labOrder) throw new HttpError('LAB_ORDER_NOT_FOUND', 'Lab order not found.');
   return labOrder;
 }
 
@@ -83,7 +83,7 @@ export async function fulfillLabOrder(
   // controller's Zod schema (issue #317).
   const facilityProfile = await facilitiesService.findFacilityProfileByUserId(facilityUserId);
   if (!facilityProfile) {
-    throw new HttpError(403, 'Facility profile required.');
+    throw new HttpError('FACILITY_PROFILE_REQUIRED', 'Facility profile required.');
   }
 
   const result = await prisma.$transaction(async (tx) => {
@@ -91,18 +91,18 @@ export async function fulfillLabOrder(
     // An order already routed to a facility can only be fulfilled by that
     // facility; for any other facility it does not exist.
     if (!existing || (existing.facilityProfileId !== null && existing.facilityProfileId !== facilityProfile.id)) {
-      throw new HttpError(404, 'Lab order not found.');
+      throw new HttpError('LAB_ORDER_NOT_FOUND', 'Lab order not found.');
     }
     if (existing.status === 'fulfilled') {
-      throw new HttpError(409, 'Lab order has already been fulfilled.');
+      throw new HttpError('LAB_ORDER_ALREADY_FULFILLED', 'Lab order has already been fulfilled.');
     }
     if (existing.status !== 'issued') {
-      throw new HttpError(400, `Lab order cannot be fulfilled from status: ${existing.status}`);
+      throw new HttpError('LAB_ORDER_NOT_FULFILLABLE', `Lab order cannot be fulfilled from status: ${existing.status}`);
     }
 
     const marked = await repo.markOrderFulfilled(tx, orderId, facilityProfile.id);
     if (!marked) {
-      throw new HttpError(409, 'Failed to transition order status to fulfilled.');
+      throw new HttpError('LAB_ORDER_FULFILLMENT_FAILED', 'Failed to transition order status to fulfilled.');
     }
 
     await repo.createFulfillmentProof(tx, {
@@ -127,7 +127,7 @@ export async function fulfillLabOrder(
 
     const updated = await repo.findOrderById(tx, orderId, 'lab');
     if (!updated) {
-      throw new HttpError(500, 'Failed to fetch updated order.');
+      throw new HttpError('ORDER_FETCH_FAILED', 'Failed to fetch updated order.');
     }
     return updated;
   });
@@ -188,7 +188,7 @@ export async function getLabOrderForViewer(
     issuingDoctorId: labOrder.orderingDoctorId,
     facilityProfileId: labOrder.facilityProfileId,
   }));
-  if (!labOrder || !allowed) throw new HttpError(404, 'Lab order not found.');
+  if (!labOrder || !allowed) throw new HttpError('LAB_ORDER_NOT_FOUND', 'Lab order not found.');
 
   recordAccess({
     accessedBy: viewer.userId,

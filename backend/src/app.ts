@@ -1,6 +1,6 @@
 import express from 'express';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config';
@@ -80,7 +80,10 @@ export function createApp() {
     // Load the static contract once at startup. Keeping filesystem access out
     // of the request handler avoids turning this public route into an
     // unbounded per-request file read.
-    const openApiPath = join(process.cwd(), process.cwd().endsWith('/backend') ? 'openapi.json' : 'backend/openapi.json');
+    // `basename` rather than a '/backend' suffix: Windows cwd paths end in
+    // '\backend', and a suffix check there resolved the file one level too deep.
+    const cwdIsBackend = basename(process.cwd()) === 'backend';
+    const openApiPath = join(process.cwd(), cwdIsBackend ? 'openapi.json' : 'backend/openapi.json');
     const openApiDocument = readFileSync(openApiPath, 'utf8');
     app.get('/openapi.json', (_req, res) => res.type('application/json').send(openApiDocument));
   }
@@ -92,7 +95,7 @@ export function createApp() {
   // instead of Express's built-in HTML page, so the API never serves HTML
   // (and that page can't replace the security headers set above).
   app.use(() => {
-    throw new HttpError(404, 'Not found.');
+    throw new HttpError('ROUTE_NOT_FOUND', 'Not found.');
   });
 
   // Must be registered last — Express only routes errors here once every

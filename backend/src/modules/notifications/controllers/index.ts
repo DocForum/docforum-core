@@ -13,7 +13,7 @@ const listQuerySchema = z.object({
 }).strict();
 
 function getUserId(req: Request): string {
-	if (!req.user) throw new HttpError(401, 'Authentication required.');
+	if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
 	return req.user.id;
 }
 
@@ -54,7 +54,7 @@ export const streamTimings = { heartbeatMs: 15_000 };
 const RETRY_MS = 5_000;
 
 export function stream(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const userId = req.user.id;
 
   // The access token expires mid-stream. Read its `exp` to schedule the close.

@@ -52,7 +52,7 @@ export function startSession(input: { userId: string } & SessionContext): Promis
 export async function assertSessionUsable(input: { sessionId: string; userId: string }): Promise<void> {
   const session = await findRefreshSessionById(input.sessionId);
   if (!session || session.userId !== input.userId || session.revokedAt) {
-    throw new HttpError(401, 'Invalid or expired refresh token.');
+    throw new HttpError('INVALID_REFRESH_TOKEN', 'Invalid or expired refresh token.');
   }
 }
 

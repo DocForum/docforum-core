@@ -168,14 +168,14 @@ export function decodeAuditCursor(cursor: string): { createdAt: Date; id: string
   const createdAt = new Date(raw.slice(0, separator));
   const id = raw.slice(separator + 1);
   if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
-    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+    throw new HttpError('INVALID_CURSOR', 'Invalid cursor.');
   }
   return { createdAt, id };
 }
 
 export async function listAuditEvents(filters: AuditEventFilters) {
   if (filters.from && filters.to && filters.from.getTime() > filters.to.getTime()) {
-    throw new HttpError(400, '`from` must not be after `to`.');
+    throw new HttpError('INVALID_AUDIT_RANGE', '`from` must not be after `to`.');
   }
   const rows = await auditRepo.findAuditEvents({
     entityType: filters.entityType,

@@ -9,7 +9,7 @@ leave the rest of the file alone.
 
 Base URL: `http://localhost:4000` locally (`PORT` in `.env`). No OpenAPI spec yet — TBD, tracked informally, not blocking Phase 1.
 
-Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `X-Frame-Options: DENY` and `Cache-Control: no-store` (a route may override `Cache-Control`; the SSE stream sends `no-store, no-transform`). `Strict-Transport-Security` is sent in production only. `X-Powered-By` is not sent. An unknown route returns `404 { "message": "Not found." }`. Prisma not-found and foreign-key failures map to `404 Record not found.` and `422`, with generic messages that never name a table or constraint (issue #334). Issue #332.
+Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `X-Frame-Options: DENY` and `Cache-Control: no-store` (a route may override `Cache-Control`; the SSE stream sends `no-store, no-transform`). `Strict-Transport-Security` is sent in production only. `X-Powered-By` is not sent. An unknown route returns `404 { "code": "ROUTE_NOT_FOUND", "message": "Not found." }`. Prisma not-found, foreign-key and uniqueness failures map to `404 NOT_FOUND`, `422 INVALID_REFERENCE` and `409 DUPLICATE_RECORD`, with generic messages that never name a table or constraint (issues #334, #115). Issue #332.
 
 ## Health
 
@@ -24,7 +24,7 @@ Request-body errors (issue #333), on every route that parses JSON:
 `express.json()`'s limit), `415 UNSUPPORTED_ENCODING` (unknown
 `Content-Encoding`), `415 UNSUPPORTED_CHARSET`, `400 REQUEST_ABORTED`, and
 `400 INVALID_REQUEST_BODY` (e.g. a corrupt gzip body), all in the
-`{ message, code }` envelope. The lab-result upload keeps its own
+`{ code, message }` envelope. The lab-result upload keeps its own
 `413 LAB_RESULT_TOO_LARGE`.
 
 ## Auth (`/auth`) — `backend/src/modules/auth`

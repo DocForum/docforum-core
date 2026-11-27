@@ -6,7 +6,7 @@ import { isValidIanaTimeZone } from '../../utils/time-zones';
 
 export function assertValidTimeZone(timeZone: string): void {
   if (!isValidIanaTimeZone(timeZone)) {
-    throw new HttpError(400, `Invalid time zone: ${timeZone}`, 'INVALID_TIME_ZONE');
+    throw new HttpError('INVALID_TIME_ZONE', `Invalid time zone: ${timeZone}`);
   }
 }
 
@@ -52,12 +52,12 @@ export function validateSlotGenerationDate(date: string, timeZone: string, now =
 
   const dateObj = new Date(`${date}T00:00:00.000Z`);
   if (Number.isNaN(dateObj.getTime()) || dateObj.toISOString().slice(0, 10) !== date) {
-    throw new HttpError(400, 'date must be a valid ISO date (YYYY-MM-DD).', 'INVALID_DATE');
+    throw new HttpError('INVALID_DATE', 'date must be a valid ISO date (YYYY-MM-DD).');
   }
 
   const todayInZone = formatInTimeZone(now, timeZone, 'yyyy-MM-dd');
   if (date < todayInZone) {
-    throw new HttpError(400, 'Cannot generate slots for a date in the past.', 'SLOT_DATE_IN_PAST');
+    throw new HttpError('SLOT_DATE_IN_PAST', 'Cannot generate slots for a date in the past.');
   }
 
   const [y, m, d] = todayInZone.split('-').map(Number);
@@ -65,10 +65,8 @@ export function validateSlotGenerationDate(date: string, timeZone: string, now =
   const maxDateStr = maxDate.toISOString().slice(0, 10);
   if (date > maxDateStr) {
     throw new HttpError(
-      400,
-      `Date cannot be beyond ${config.availability.slotMaxHorizonDays} days in the future.`,
       'SLOT_DATE_BEYOND_HORIZON',
-    );
+      `Date cannot be beyond ${config.availability.slotMaxHorizonDays} days in the future.`);
   }
 }
 

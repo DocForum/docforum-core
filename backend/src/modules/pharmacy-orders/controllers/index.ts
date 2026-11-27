@@ -16,7 +16,7 @@ import {
 } from '../validation';
 
 function requireUser(req: Request): pharmacyOrdersService.Requester {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   return { userId: req.user.id, role: req.user.role };
 }
 

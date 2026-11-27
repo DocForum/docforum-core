@@ -41,7 +41,7 @@ function serializeIntent(intent: {
 }
 
 export async function linkWallet(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   // strict schema: rejects any raw-address field outright.
   const { transaction } = walletLinkSchema.parse(req.body);
   const link = await paymentsService.linkWalletViaSep10(req.user.id, req.user.role, transaction, auditActor(req));
@@ -57,9 +57,9 @@ export async function linkWallet(req: Request, res: Response) {
 }
 
 export async function getOwnWallet(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const link = await paymentsService.getOwnWalletLink(req.user.id, req.user.role);
-  if (!link) throw new HttpError(404, 'No wallet linked yet.');
+  if (!link) throw new HttpError('WALLET_LINK_NOT_FOUND', 'No wallet linked yet.');
   res.status(200).json(link);
 }
 
@@ -98,11 +98,11 @@ function serializeOwnerIntent(intent: Parameters<typeof serializeIntent>[0]) {
 }
 
 export async function getOwnIntent(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const id = getParam(req, 'id');
   const role = req.user.role as 'patient' | 'facility';
   const intent = await paymentsService.getPaymentIntentForOwner(id, req.user.id, role);
-  if (!intent) throw new HttpError(404, 'PaymentIntent not found.');
+  if (!intent) throw new HttpError('PAYMENT_INTENT_NOT_FOUND', 'PaymentIntent not found.');
   setVersionEtag(res, intent.version);
   res.status(200).json(serializeOwnerIntent(intent));
 }
@@ -130,7 +130,7 @@ export async function prepareIntent(req: Request, res: Response) {
 export async function submitIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const signedXdr = String((req.body as { signedXdr?: unknown })?.signedXdr ?? '');
-  if (!signedXdr) throw new HttpError(400, 'signedXdr is required.');
+  if (!signedXdr) throw new HttpError('INVALID_XDR', 'signedXdr is required.');
   const result = await paymentsService.submitPaymentIntent(auditActor(req), id, signedXdr);
   setVersionEtag(res, result.intent.version);
   res.status(200).json({
@@ -162,13 +162,13 @@ export async function refundIntent(req: Request, res: Response) {
 }
 
 export async function listMyPayments(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const filters = paymentHistoryQuerySchema.parse(req.query);
   res.status(200).json(await paymentsService.listMyPayments(req.user.id, filters));
 }
 
 export async function listFacilityLedger(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const filters = paymentHistoryQuerySchema.parse(req.query);
   res.status(200).json(await paymentsService.listFacilityPaymentLedger(req.user.id, filters));
 }
@@ -177,7 +177,7 @@ export async function listFacilityLedger(req: Request, res: Response) {
  * written as it is read, honouring backpressure, and the read loop stops
  * as soon as the client disconnects. */
 export async function exportFacilityLedgerCsv(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const filters = ledgerCsvQuerySchema.parse(req.query);
   // Authorises (403 for a non-facility caller) before any CSV header goes out.
   const chunks = await paymentsService.openFacilityLedgerCsv(req.user.id, filters);

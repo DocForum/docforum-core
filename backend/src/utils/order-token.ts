@@ -29,23 +29,23 @@ export function issueOrderToken(payload: Omit<OrderTokenPayload, 'issuedAt'> & {
 
 export function verifyOrderToken(token: string): OrderTokenPayload {
   if (typeof token !== 'string' || !token.includes('.')) {
-    throw new HttpError(400, 'Invalid order token.', 'INVALID_ORDER_TOKEN');
+    throw new HttpError('INVALID_ORDER_TOKEN', 'Invalid order token.');
   }
   const [body, sig] = token.split('.');
   const expected = b64url(crypto.createHmac('sha256', ORDER_TOKEN_SECRET).update(body).digest());
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-    throw new HttpError(400, 'Invalid order token signature.', 'INVALID_ORDER_TOKEN');
+    throw new HttpError('INVALID_ORDER_TOKEN', 'Invalid order token signature.');
   }
   let payload: OrderTokenPayload;
   try {
     payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as OrderTokenPayload;
   } catch {
-    throw new HttpError(400, 'Invalid order token payload.', 'INVALID_ORDER_TOKEN');
+    throw new HttpError('INVALID_ORDER_TOKEN', 'Invalid order token payload.');
   }
   if (!payload.orderId || !payload.kind || typeof payload.version !== 'number') {
-    throw new HttpError(400, 'Invalid order token payload.', 'INVALID_ORDER_TOKEN');
+    throw new HttpError('INVALID_ORDER_TOKEN', 'Invalid order token payload.');
   }
   return payload;
 }

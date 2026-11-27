@@ -56,14 +56,14 @@ export async function postMessage(
   consultationId: string,
   input: PostMessageInput,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const context = await resolveThreadContext(actor.userId, consultationId);
   assertThreadOpen(context.consultation);
 
   const body = input.body?.trim() ?? '';
   const uploads = input.attachments ?? [];
   if (body.length === 0 && uploads.length === 0) {
-    throw new HttpError(400, 'A message needs text or at least one attachment.');
+    throw new HttpError('MESSAGE_EMPTY', 'A message needs text or at least one attachment.');
   }
 
   const prepared = prepareAttachments(uploads);
@@ -158,7 +158,7 @@ export async function authorizeAttachmentDownload(
   buildLink: (attachmentId: string) => { url: string; expiresAt: string },
 ) {
   const attachment = await consultationsRepo.findAttachmentById(prisma, attachmentId);
-  if (!attachment) throw new HttpError(404, 'Attachment not found.');
+  if (!attachment) throw new HttpError('ATTACHMENT_NOT_FOUND', 'Attachment not found.');
 
   const context = await resolveThreadContext(userId, attachment.message.consultationId);
   auditService.recordAccess({
@@ -177,6 +177,6 @@ export async function authorizeAttachmentDownload(
  * happened when the link was minted; the token's expiry bounds it. */
 export async function getAttachmentForSignedDownload(attachmentId: string) {
   const attachment = await consultationsRepo.findAttachmentById(prisma, attachmentId);
-  if (!attachment) throw new HttpError(404, 'Attachment not found.');
+  if (!attachment) throw new HttpError('ATTACHMENT_NOT_FOUND', 'Attachment not found.');
   return attachment;
 }

@@ -2,44 +2,49 @@ import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
 import { HttpError } from '../http-error';
+import { ERROR_CATALOGUE, isErrorCode, type ErrorCode } from '../error-catalogue';
 import type { Logger } from 'pino';
 import { logger as rootLogger } from '../logger';
 import { localizedErrorMessage, resolveLocale } from '../i18n';
 
-/** Prisma known-request codes mapped to a client status (issue #334). */
-export const PRISMA_CLIENT_ERRORS: Readonly<Record<string, { status: number; message: string; log: string }>> = {
+/** Prisma known-request codes mapped to a coded client error (issue #334).
+ * The messages are fixed strings: Prisma's own `message`/`meta` name tables,
+ * columns and constraints, so they are logged server-side and never sent. */
+export const PRISMA_CLIENT_ERRORS: Readonly<
+  Record<string, { code: ErrorCode; message: string; log: string }>
+> = {
   // Unique constraint failed.
-  P2002: { status: 409, message: 'A record with this value already exists.', log: 'Unique constraint violation' },
+  P2002: { code: 'DUPLICATE_RECORD', message: 'A record with this value already exists.', log: 'Unique constraint violation' },
   // Foreign key constraint failed: the request names a record that doesn't
   // exist (create/update), or one that other records still depend on.
   P2003: {
-    status: 422,
+    code: 'INVALID_REFERENCE',
     message: 'The request refers to a record that does not exist or is still in use.',
     log: 'Foreign key constraint violation',
   },
   // An update/delete (or a required connect) matched no row.
-  P2025: { status: 404, message: 'Record not found.', log: 'Record not found' },
+  P2025: { code: 'NOT_FOUND', message: 'Record not found.', log: 'Record not found' },
 };
 
 /**
  * Issue #333: body-parser (express.json()) failures are client errors, not
- * 500s. Each `type` maps to a fixed status and a stable `code`. Routes with
- * their own body handling (the lab-result raw-body route) convert these
- * errors to their own HttpError first, so their codes are kept.
+ * 500s. Each `type` maps to a stable catalogue code (which fixes the status).
+ * Routes with their own body handling (the lab-result raw-body route) convert
+ * these errors to their own HttpError first, so their codes are kept.
  */
-const BODY_PARSER_ERRORS: Record<string, { status: number; code: string; message: string }> = {
-  'entity.parse.failed': { status: 400, code: 'INVALID_JSON', message: 'The request body is not valid JSON.' },
-  'entity.too.large': { status: 413, code: 'PAYLOAD_TOO_LARGE', message: 'The request body is too large.' },
-  'encoding.unsupported': { status: 415, code: 'UNSUPPORTED_ENCODING', message: 'The request body encoding is not supported.' },
-  'charset.unsupported': { status: 415, code: 'UNSUPPORTED_CHARSET', message: 'The request body charset is not supported.' },
-  'request.aborted': { status: 400, code: 'REQUEST_ABORTED', message: 'The request body was not fully received.' },
-  'request.size.invalid': { status: 400, code: 'INVALID_REQUEST_BODY', message: 'The request body could not be read.' },
+const BODY_PARSER_ERRORS: Record<string, { code: ErrorCode; message: string }> = {
+  'entity.parse.failed': { code: 'INVALID_JSON', message: 'The request body is not valid JSON.' },
+  'entity.too.large': { code: 'PAYLOAD_TOO_LARGE', message: 'The request body is too large.' },
+  'encoding.unsupported': { code: 'UNSUPPORTED_ENCODING', message: 'The request body encoding is not supported.' },
+  'charset.unsupported': { code: 'UNSUPPORTED_CHARSET', message: 'The request body charset is not supported.' },
+  'request.aborted': { code: 'REQUEST_ABORTED', message: 'The request body was not fully received.' },
+  'request.size.invalid': { code: 'INVALID_REQUEST_BODY', message: 'The request body could not be read.' },
 };
 
 // A corrupt compressed body (e.g. `Content-Encoding: gzip` with bytes that
 // aren't gzip) surfaces from body-parser as an http-errors 400 with NO
 // `type`. It is the same client mistake, so it gets the same treatment.
-const UNREADABLE_BODY = { status: 400, code: 'INVALID_REQUEST_BODY', message: 'The request body could not be read.' };
+const UNREADABLE_BODY = { code: 'INVALID_REQUEST_BODY' as const, message: 'The request body could not be read.' };
 
 /** Returns the mapping for a body-parser error, or undefined for anything
  * else. Exported for unit tests. */
@@ -50,9 +55,12 @@ export function bodyParserErrorMapping(err: unknown) {
   return status === 400 && expose === true ? UNREADABLE_BODY : undefined;
 }
 
-// docforum-web's api-client.ts assumes an error envelope of
-// `{ message: string }` (documented as unconfirmed there) — this is the
+// docforum-web's api-client.ts assumes the error envelope carries
+// `{ code, message }` (documented as unconfirmed there) — this is the
 // implementation that assumption is checked against. Keep them in sync.
+//
+// Every response carries a code (issue #115). `message` is the human-readable
+// text kept for backwards compatibility; clients must branch on `code`.
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   const requestLogger: Logger =
     (req as Request & { log?: Logger }).log ?? rootLogger;
@@ -69,19 +77,18 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     // Never log `err` itself: body-parser attaches the raw request body to
     // a parse failure (`err.body`), and a request body can carry PHI or
     // credentials. Only the error type and status are logged, at warn.
+    const status = ERROR_CATALOGUE[bodyError.code].status;
     requestLogger.warn(
-      { bodyParserError: (err as { type?: string }).type ?? 'unreadable', status: bodyError.status },
+      { bodyParserError: (err as { type?: string }).type ?? 'unreadable', status },
       'Request body rejected',
     );
     const locale = resolveLocale(req.user?.locale, req.headers['accept-language']);
     const message = localizedErrorMessage(locale, bodyError.code, bodyError.message);
-    res.status(bodyError.status).json({ message, code: bodyError.code });
+    res.status(status).json({ code: bodyError.code, message });
     return;
   }
 
   if (err instanceof HttpError) {
-    // `code` is only present when the thrower supplied one — the envelope
-    // for every existing error is unchanged (`{ message }`).
     if (err.status >= 500) {
       requestLogger.error({ err }, 'Request failed');
     } else {
@@ -89,37 +96,54 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     }
     const locale = resolveLocale(req.user?.locale, req.headers['accept-language']);
     const message = localizedErrorMessage(locale, err.code, err.message);
-    res.status(err.status).json(err.code ? { message, code: err.code } : { message });
+    res.status(err.status).json(
+      err.details ? { code: err.code, message, details: err.details } : { code: err.code, message },
+    );
     return;
   }
 
+  // Schema validation failures share one top-level code (`VALIDATION_FAILED`);
+  // the per-field detail carries the specific validation code so a client can
+  // still tell a short password from a malformed date.
   if (err instanceof ZodError) {
     requestLogger.warn({ err }, 'Request validation failed');
-    const customIssue = err.issues.find(
-      (issue) => (issue as unknown as { params?: { code?: string } }).params?.code,
-    ) as unknown as { params?: { code?: string } } | undefined;
-    const code = customIssue?.params?.code;
     const locale = resolveLocale(req.user?.locale, req.headers['accept-language']);
     const message = err.issues.map((issue) => issue.message).join('; ');
-    const localized = code ? localizedErrorMessage(locale, code, message) : message;
-    res.status(400).json(code ? { message: localized, code } : { message });
+    const customCodeOf = (issue: unknown) => (issue as { params?: { code?: string } }).params?.code;
+    const fields = err.issues.map((issue) => ({
+      path: issue.path.map(String).join('.'),
+      code: customCodeOf(issue) ?? issue.code,
+      message: issue.message,
+    }));
+    // Backwards compatibility: before the catalogue, a schema refinement that
+    // carried its own catalogue code (e.g. PASSWORD_TOO_SHORT) answered with
+    // that code at the top level, and clients branch on it. Keep doing so;
+    // everything else is VALIDATION_FAILED. The status stays 400 either way.
+    const customCode = err.issues
+      .map(customCodeOf)
+      .find((candidate): candidate is ErrorCode => candidate !== undefined && isErrorCode(candidate));
+    const code: ErrorCode = customCode ?? 'VALIDATION_FAILED';
+    res.status(ERROR_CATALOGUE.VALIDATION_FAILED.status).json({
+      code,
+      message: localizedErrorMessage(locale, code, message),
+      details: { fields },
+    });
     return;
   }
 
-  // Prisma request errors that are the client's fault (issue #334). The
-  // messages are fixed strings: Prisma's own `message`/`meta` name tables,
-  // columns and constraints, so they are logged server-side and never sent.
-  // Errors thrown inside `$transaction` reach here as the same class, so
-  // they map the same way.
+  // Prisma request errors that are the client's fault (issue #334). Errors
+  // thrown inside `$transaction` reach here as the same class, so they map
+  // the same way.
   const prismaMapping = err instanceof Prisma.PrismaClientKnownRequestError ? PRISMA_CLIENT_ERRORS[err.code] : undefined;
   if (prismaMapping) {
     requestLogger.warn({ err }, prismaMapping.log);
-    res.status(prismaMapping.status).json({ message: prismaMapping.message });
+    const status = ERROR_CATALOGUE[prismaMapping.code].status;
+    res.status(status).json({ code: prismaMapping.code, message: prismaMapping.message });
     return;
   }
 
   // Log the full error (including stack) server-side only. The response
   // body is the safe envelope and never leaks internal details.
   requestLogger.error({ err }, 'Unhandled error');
-  res.status(500).json({ message: 'Internal server error.' });
+  res.status(ERROR_CATALOGUE.INTERNAL.status).json({ code: 'INTERNAL', message: 'Internal server error.' });
 }

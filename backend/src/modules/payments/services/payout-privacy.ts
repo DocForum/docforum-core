@@ -8,10 +8,10 @@ export function resolveEscrowPayee(input: {
 }): string {
   if (input.mode === 'facility') return input.facilityAddress;
   if (input.production) {
-    throw new HttpError(503, 'Pooled payout privacy is a testnet prototype and is disabled in production.');
+    throw new HttpError('POOLED_PAYOUT_DISABLED', 'Pooled payout privacy is a testnet prototype and is disabled in production.');
   }
   if (!input.poolAddress || !/^G[A-Z2-7]{55}$/.test(input.poolAddress)) {
-    throw new HttpError(503, 'Pooled payout privacy requires a valid PAYOUT_PRIVACY_POOL_ADDRESS.');
+    throw new HttpError('POOLED_PAYOUT_MISCONFIGURED', 'Pooled payout privacy requires a valid PAYOUT_PRIVACY_POOL_ADDRESS.');
   }
   return input.poolAddress;
 }

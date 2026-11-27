@@ -61,7 +61,7 @@ function generateRecoveryCode(): string {
 
 async function requireUser(userId: string) {
   const user = await authRepo.findUserById(userId);
-  if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
+  if (!user || user.deletedAt) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   return user;
 }
 
@@ -70,7 +70,7 @@ async function requireUser(userId: string) {
 async function requireEnabledSecret(userId: string): Promise<{ user: Awaited<ReturnType<typeof requireUser>>; secret: string }> {
   const user = await requireUser(userId);
   if (!user.totpEnabledAt || !user.totpSecret) {
-    throw new HttpError(409, 'Two-factor authentication is not enabled for this account.', 'TWO_FACTOR_NOT_ENABLED');
+    throw new HttpError('TWO_FACTOR_NOT_ENABLED', 'Two-factor authentication is not enabled for this account.');
   }
   const secret = decryptField(user.totpSecret);
   if (!secret) throw new Error('Two-factor secret could not be decrypted.');
@@ -101,10 +101,8 @@ export async function startSetup(userId: string): Promise<TwoFactorSetup> {
   const account = user.email;
   if (user.totpEnabledAt) {
     throw new HttpError(
-      409,
-      'Two-factor authentication is already enabled. Disable it with a current code before enrolling again.',
       'TWO_FACTOR_ALREADY_ENABLED',
-    );
+      'Two-factor authentication is already enabled. Disable it with a current code before enrolling again.');
   }
 
   const secret = generateTotpSecret();
@@ -113,7 +111,7 @@ export async function startSetup(userId: string): Promise<TwoFactorSetup> {
 
   const stored = await authRepo.setPendingTotpSecret(userId, encrypted);
   if (!stored) {
-    throw new HttpError(409, 'Two-factor authentication was enabled while setting up. Sign in again.', 'TWO_FACTOR_ALREADY_ENABLED');
+    throw new HttpError('TWO_FACTOR_ALREADY_ENABLED', 'Two-factor authentication was enabled while setting up. Sign in again.');
   }
 
   return {
@@ -130,24 +128,24 @@ export async function startSetup(userId: string): Promise<TwoFactorSetup> {
 export async function enable(userId: string, code: string): Promise<TwoFactorEnrolment> {
   const user = await requireUser(userId);
   if (user.totpEnabledAt) {
-    throw new HttpError(409, 'Two-factor authentication is already enabled.', 'TWO_FACTOR_ALREADY_ENABLED');
+    throw new HttpError('TWO_FACTOR_ALREADY_ENABLED', 'Two-factor authentication is already enabled.');
   }
   if (!user.totpSecret) {
-    throw new HttpError(400, 'Start two-factor setup before confirming it.', 'TWO_FACTOR_SETUP_REQUIRED');
+    throw new HttpError('TWO_FACTOR_SETUP_REQUIRED', 'Start two-factor setup before confirming it.');
   }
   const secret = decryptField(user.totpSecret);
   if (!secret) throw new Error('Two-factor secret could not be decrypted.');
 
   const verification = verifyTotp(secret, code);
-  if (!verification) throw new HttpError(400, 'Invalid authentication code.', 'INVALID_TOTP_CODE');
+  if (!verification) throw new HttpError('INVALID_TOTP_ENROLLMENT_CODE', 'Invalid authentication code.');
 
   // Claim the step before enabling, so the enrolment code can't immediately
   // be replayed against the very first login.
   if (!(await authRepo.claimTotpStep(userId, verification.step))) {
-    throw new HttpError(400, 'This authentication code has already been used.', 'TOTP_CODE_REPLAYED');
+    throw new HttpError('TOTP_CODE_ALREADY_USED', 'This authentication code has already been used.');
   }
   const enabled = await authRepo.enableTotp(userId);
-  if (!enabled) throw new HttpError(409, 'Two-factor authentication is already enabled.', 'TWO_FACTOR_ALREADY_ENABLED');
+  if (!enabled) throw new HttpError('TWO_FACTOR_ALREADY_ENABLED', 'Two-factor authentication is already enabled.');
 
   const recoveryCodes = Array.from({ length: config.twoFactor.recoveryCodeCount }, () => generateRecoveryCode());
   await authRepo.replaceRecoveryCodes(userId, recoveryCodes.map(hashRecoveryCode));
@@ -165,14 +163,14 @@ export async function verifySecondFactor(userId: string, code: string): Promise<
   const verification = verifyTotp(secret, code);
   if (verification) {
     if (await authRepo.claimTotpStep(userId, verification.step)) return 'totp';
-    throw new HttpError(401, 'This authentication code has already been used.', 'TOTP_CODE_REPLAYED');
+    throw new HttpError('TOTP_CODE_REPLAYED', 'This authentication code has already been used.');
   }
 
   if (await authRepo.consumeRecoveryCode(userId, hashRecoveryCode(code))) {
     return 'recovery_code';
   }
 
-  throw new HttpError(401, 'Invalid authentication code.', 'INVALID_TOTP_CODE');
+  throw new HttpError('INVALID_TOTP_CODE', 'Invalid authentication code.');
 }
 
 /** Disabling needs a current code or an unused recovery code — possession of
@@ -182,6 +180,6 @@ export async function disable(userId: string, code: string): Promise<void> {
   await verifySecondFactor(userId, code);
   const disabled = await authRepo.disableTotp(userId, null);
   if (!disabled) {
-    throw new HttpError(409, 'Two-factor authentication is not enabled for this account.', 'TWO_FACTOR_NOT_ENABLED');
+    throw new HttpError('TWO_FACTOR_NOT_ENABLED', 'Two-factor authentication is not enabled for this account.');
   }
 }

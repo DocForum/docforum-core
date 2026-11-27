@@ -32,7 +32,7 @@ export async function listOpenSlots(
   });
   if (profile) {
     if (profile.user.deactivatedAt || profile.user.deletedAt) {
-      throw new HttpError(409, 'Doctor is not available for booking.');
+      throw new HttpError('DOCTOR_NOT_AVAILABLE', 'Doctor is not available for booking.');
     }
   }
 
@@ -51,16 +51,14 @@ export async function listOpenSlots(
   }
 
   if (fromDate > toDate) {
-    throw new HttpError(400, 'from must be before or equal to to.', 'INVALID_DATE_RANGE');
+    throw new HttpError('INVALID_DATE_RANGE', 'from must be before or equal to to.');
   }
 
   const maxSpanMs = config.availability.slotsMaxRangeDays * 24 * 60 * 60 * 1_000;
   if (toDate.getTime() - fromDate.getTime() > maxSpanMs) {
     throw new HttpError(
-      400,
-      `Date range cannot exceed ${config.availability.slotsMaxRangeDays} days.`,
       'DATE_RANGE_TOO_LARGE',
-    );
+      `Date range cannot exceed ${config.availability.slotsMaxRangeDays} days.`);
   }
 
   const isVerified = await doctorsService.isDoctorVerified(doctorProfileId);
@@ -99,7 +97,7 @@ export async function generateSlots(input: GenerateSlotsInput) {
   try {
     proposedSlots = buildSlotRanges(inputWithCutoff);
   } catch (error) {
-    throw new HttpError(400, error instanceof Error ? error.message : 'Invalid slot-generation input.');
+    throw new HttpError('INVALID_SLOT_GENERATION', error instanceof Error ? error.message : 'Invalid slot-generation input.');
   }
   if (proposedSlots.length === 0) return { created: 0, skippedOverlapping: 0, skipped: 0 };
 
@@ -118,7 +116,7 @@ export async function generateSlots(input: GenerateSlotsInput) {
     return { created: result.count, skippedOverlapping, skipped: skippedOverlapping };
   } catch (error) {
     if (isOverlapOrUniqueViolation(error)) {
-      throw new HttpError(409, 'Slot overlaps with an existing slot.');
+      throw new HttpError('SLOT_OVERLAP', 'Slot overlaps with an existing slot.');
     }
     throw error;
   }

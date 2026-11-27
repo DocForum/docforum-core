@@ -58,7 +58,7 @@ export interface RequestPasswordResetInput {
  */
 export async function requestPasswordReset(input: RequestPasswordResetInput): Promise<void> {
   if (!emailLimiter.consume(input.email.toLowerCase()) || !ipLimiter.consume(input.ip)) {
-    throw new HttpError(429, 'Too many password reset requests. Please try again later.');
+    throw new HttpError('PASSWORD_RESET_RATE_LIMITED', 'Too many password reset requests. Please try again later.');
   }
 
   const user = await findUserByEmail(input.email);
@@ -87,10 +87,10 @@ export async function confirmPasswordReset(input: ConfirmPasswordResetInput): Pr
   const record = await findPasswordResetTokenByHash(presentedHash);
 
   if (!record || !hashesEqual(record.tokenHash, presentedHash)) {
-    throw new HttpError(400, GENERIC_INVALID_TOKEN_MESSAGE);
+    throw new HttpError('INVALID_PASSWORD_RESET_TOKEN', GENERIC_INVALID_TOKEN_MESSAGE);
   }
-  if (record.usedAt) throw new HttpError(400, GENERIC_INVALID_TOKEN_MESSAGE);
-  if (record.expiresAt.getTime() <= Date.now()) throw new HttpError(400, GENERIC_INVALID_TOKEN_MESSAGE);
+  if (record.usedAt) throw new HttpError('INVALID_PASSWORD_RESET_TOKEN', GENERIC_INVALID_TOKEN_MESSAGE);
+  if (record.expiresAt.getTime() <= Date.now()) throw new HttpError('INVALID_PASSWORD_RESET_TOKEN', GENERIC_INVALID_TOKEN_MESSAGE);
 
   validatePasswordStrength(input.newPassword);
 
@@ -101,7 +101,7 @@ export async function confirmPasswordReset(input: ConfirmPasswordResetInput): Pr
     passwordHash,
   });
   // Lost the race to a concurrent confirm of the same token.
-  if (!consumed) throw new HttpError(400, GENERIC_INVALID_TOKEN_MESSAGE);
+  if (!consumed) throw new HttpError('INVALID_PASSWORD_RESET_TOKEN', GENERIC_INVALID_TOKEN_MESSAGE);
 }
 
 /** Test seam only — the limiters are module-level singletons so the limits

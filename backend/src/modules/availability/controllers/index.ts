@@ -12,7 +12,7 @@ export async function listSlots(req: Request, res: Response) {
 }
 
 export async function generateSlots(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const doctorProfileId = getParam(req, 'doctorProfileId');
   const doctor = await availabilityService.assertCanGenerateFor(req.user.id, doctorProfileId);
 

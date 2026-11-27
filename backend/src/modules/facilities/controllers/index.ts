@@ -57,7 +57,7 @@ function serializeEligible(facility: facilitiesService.EligibleFacility) {
 
 /** GET /facilities/me — the signed-in facility owner's full profile (issue #319). */
 export async function getOwnProfile(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const profile = await facilitiesService.getOwnFacilityProfile(req.user.id);
   setVersionEtag(res, profile.version);
   res.status(200).json(profile);
@@ -65,7 +65,7 @@ export async function getOwnProfile(req: Request, res: Response) {
 
 /** PATCH /facilities/me — update the facility's own profile (issue #319). */
 export async function updateOwnProfile(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = facilityUpdateSchema.parse(req.body);
   const profile = await facilitiesService.updateOwnFacilityProfile(
     auditActor(req),
@@ -78,7 +78,7 @@ export async function updateOwnProfile(req: Request, res: Response) {
 
 /** GET /facilities/me/prices — the signed-in facility owner's price list. */
 export async function listOwnPrices(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const filters = priceFiltersSchema.parse(req.query);
   const facilityId = await facilitiesService.getOwnFacilityProfileId(req.user.id);
   const prices = await facilitiesService.listPrices(facilityId, filters);
@@ -87,7 +87,7 @@ export async function listOwnPrices(req: Request, res: Response) {
 
 /** POST /facilities/me/prices — publish a new version of a price. */
 export async function createOwnPrice(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const body = createPriceVersionSchema.parse(req.body);
   const facilityId = await facilitiesService.getOwnFacilityProfileId(req.user.id);
   const price = await facilitiesService.createPriceVersion(auditActor(req), facilityId, body);
@@ -107,7 +107,7 @@ export async function eligibleFacilities(req: Request, res: Response) {
   const query = eligibleFacilitiesQuerySchema.parse(req.query);
   const at = query.at === undefined ? undefined : new Date(query.at);
   if (at !== undefined && Number.isNaN(at.getTime())) {
-    throw new HttpError(400, 'at must be a valid ISO-8601 timestamp.');
+    throw new HttpError('INVALID_TIMESTAMP', 'at must be a valid ISO-8601 timestamp.');
   }
   const facilities = await facilitiesService.listEligibleFacilities({ ...query, at });
   res.status(200).json({ facilities: facilities.map(serializeEligible) });
@@ -141,16 +141,16 @@ export async function removeCapability(req: Request, res: Response) {
 }
 
 export async function verifyOrder(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const token = String((req.body as { token?: unknown })?.token ?? '');
-  if (!token) throw new HttpError(400, 'token is required.');
+  if (!token) throw new HttpError('INVALID_REQUEST', 'token is required.');
   const result = await facilitiesService.verifyOrder(auditActor(req), token);
   res.status(200).json(result);
 }
 
 /** POST /facilities/me/prices/retire — facility retires an item. */
 export async function retireOwnPriceItem(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const body = retirePriceItemSchema.parse(req.body);
   const facilityId = await facilitiesService.getOwnFacilityProfileId(req.user.id);
   const price = await facilitiesService.retirePriceItem(auditActor(req), facilityId, body);

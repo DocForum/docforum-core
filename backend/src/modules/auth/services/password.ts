@@ -16,13 +16,13 @@ export function isCommonPassword(plain: string): boolean {
 
 export function validatePasswordStrength(plain: string): void {
   if (plain.length < MIN_PASSWORD_LENGTH) {
-    throw new HttpError(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`, 'PASSWORD_TOO_SHORT');
+    throw new HttpError('PASSWORD_TOO_SHORT', `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`);
   }
   if (Buffer.byteLength(plain, 'utf8') > MAX_PASSWORD_BYTES) {
-    throw new HttpError(400, `Password must not exceed ${MAX_PASSWORD_BYTES} bytes.`, 'PASSWORD_TOO_LONG');
+    throw new HttpError('PASSWORD_TOO_LONG', `Password must not exceed ${MAX_PASSWORD_BYTES} bytes.`);
   }
   if (isCommonPassword(plain)) {
-    throw new HttpError(400, 'This password is too common and easily guessed. Choose a stronger password.', 'PASSWORD_COMMONLY_BREACHED');
+    throw new HttpError('PASSWORD_COMMONLY_BREACHED', 'This password is too common and easily guessed. Choose a stronger password.');
   }
 }
 

@@ -99,7 +99,7 @@ export async function validateSep10Config(): Promise<void> {
 async function requireSep10Config(): Promise<Sep10Config> {
   const problems = await sep10ConfigProblems();
   if (problems.length > 0) {
-    throw new HttpError(500, `SEP-10 is not configured — missing or invalid env var(s): ${problems.join(', ')}.`);
+    throw new HttpError('SEP10_NOT_CONFIGURED', `SEP-10 is not configured — missing or invalid env var(s): ${problems.join(', ')}.`);
   }
   const { Keypair } = await loadStellarSdk();
   const serverKeypair = Keypair.fromSecret(config.sep10.signingSecret!);
@@ -181,7 +181,7 @@ async function fetchAccountInfo(accountId: string): Promise<Sep10AccountInfo | n
     if (isHorizonNotFound(err)) return null;
     // Don't forward Horizon/axios internals (URLs, request config) to the
     // client — the fact that we couldn't load signers is all they get.
-    throw new HttpError(502, 'Could not load the account from Horizon to verify its signers.', 'SEP10_HORIZON_UNAVAILABLE');
+    throw new HttpError('SEP10_HORIZON_UNAVAILABLE', 'Could not load the account from Horizon to verify its signers.');
   }
 }
 
@@ -194,7 +194,7 @@ async function fetchAccountInfo(accountId: string): Promise<Sep10AccountInfo | n
 function challengeNonce(tx: Transaction): string {
   const [firstOp] = tx.operations;
   if (!firstOp || firstOp.type !== 'manageData') {
-    throw new HttpError(500, 'Built challenge is malformed (first operation is not Manage Data).');
+    throw new HttpError('SEP10_CHALLENGE_MALFORMED', 'Built challenge is malformed (first operation is not Manage Data).');
   }
   // Parsed Manage Data values arrive as a string for valid UTF-8 (which
   // a base64 nonce always is) and as a Buffer otherwise; normalise to
@@ -227,7 +227,7 @@ export async function createSep10Challenge(userId: string, account: string): Pro
   // shape — a checksum-invalid key would otherwise be discovered only at
   // wallet-signing time.
   if (!StrKey.isValidEd25519PublicKey(account)) {
-    throw new HttpError(400, 'account must be a valid Stellar public key (G…).', 'SEP10_INVALID_ACCOUNT');
+    throw new HttpError('SEP10_INVALID_ACCOUNT', 'account must be a valid Stellar public key (G…).');
   }
 
   const cfg = await requireSep10Config();
@@ -247,7 +247,7 @@ export async function createSep10Challenge(userId: string, account: string): Pro
   } catch (err) {
     // No secret can appear here (the keypair was already validated), but
     // keep the message generic anyway.
-    throw new HttpError(500, `Could not build the SEP-10 challenge: ${err instanceof Error ? err.message : 'unknown error'}`);
+    throw new HttpError('SEP10_CHALLENGE_BUILD_FAILED', `Could not build the SEP-10 challenge: ${err instanceof Error ? err.message : 'unknown error'}`);
   }
 
   // Read our own challenge back through the same validation path a client
@@ -257,7 +257,7 @@ export async function createSep10Challenge(userId: string, account: string): Pro
   const nonce = challengeNonce(read.tx);
   const maxTimeSeconds = Number(read.tx.timeBounds?.maxTime ?? NaN);
   if (!Number.isFinite(maxTimeSeconds)) {
-    throw new HttpError(500, 'Built challenge has no time bounds.');
+    throw new HttpError('SEP10_CHALLENGE_MALFORMED', 'Built challenge has no time bounds.');
   }
   const expiresAt = new Date(maxTimeSeconds * 1000);
 
@@ -336,7 +336,7 @@ export async function verifySep10Challenge(
       cfg.webAuthDomain,
     );
   } catch (err) {
-    throw new HttpError(400, `Invalid challenge: ${err instanceof Error ? err.message : 'could not parse transaction'}`, 'SEP10_INVALID_CHALLENGE');
+    throw new HttpError('SEP10_INVALID_CHALLENGE', `Invalid challenge: ${err instanceof Error ? err.message : 'could not parse transaction'}`);
   }
 
   const nonce = signedChallengeNonce(read.tx);
@@ -346,20 +346,20 @@ export async function verifySep10Challenge(
   // round trip so a mismatched submission can't make us fetch signers.
   const record = await paymentsRepo.findSep10ChallengeByNonce(nonce, db);
   if (!record) {
-    throw new HttpError(401, 'Challenge was not issued by this server.', 'SEP10_CHALLENGE_UNKNOWN');
+    throw new HttpError('SEP10_CHALLENGE_UNKNOWN', 'Challenge was not issued by this server.');
   }
   if (record.userId !== userId || record.account !== read.clientAccountID) {
     // A signed challenge is never transferable: not to another user, and
     // not for another account than the one the challenge was issued for.
-    throw new HttpError(403, 'This challenge was issued to a different user or account.', 'SEP10_CHALLENGE_NOT_FOR_CALLER');
+    throw new HttpError('SEP10_CHALLENGE_NOT_FOR_CALLER', 'This challenge was issued to a different user or account.');
   }
   if (record.consumedAt) {
-    throw new HttpError(401, 'This challenge has already been used.', 'SEP10_CHALLENGE_ALREADY_USED');
+    throw new HttpError('SEP10_CHALLENGE_ALREADY_USED', 'This challenge has already been used.');
   }
   // Strict check against OUR clock, without the SDK's 5-minute drift
   // grace — a challenge is good for exactly the window we issued it for.
   if (record.expiresAt.getTime() <= Date.now()) {
-    throw new HttpError(401, 'This challenge has expired.', 'SEP10_CHALLENGE_EXPIRED');
+    throw new HttpError('SEP10_CHALLENGE_EXPIRED', 'This challenge has expired.');
   }
 
   // Steps 7/8 of the SEP-10 list: client signatures.
@@ -396,7 +396,7 @@ export async function verifySep10Challenge(
   } catch (err) {
     // A structurally sound challenge whose client signature is missing,
     // unknown, or below threshold.
-    throw new HttpError(401, `Challenge signature verification failed: ${err instanceof Error ? err.message : 'unknown error'}`, 'SEP10_INVALID_SIGNATURE');
+    throw new HttpError('SEP10_INVALID_SIGNATURE', `Challenge signature verification failed: ${err instanceof Error ? err.message : 'unknown error'}`);
   }
 
   // Step 9 — single-use, consumed atomically and LAST: a bad signature
@@ -406,7 +406,7 @@ export async function verifySep10Challenge(
   const consumedAt = new Date();
   const { count } = await paymentsRepo.consumeSep10Challenge(nonce, consumedAt, db);
   if (count !== 1) {
-    throw new HttpError(401, 'This challenge has already been used.', 'SEP10_CHALLENGE_ALREADY_USED');
+    throw new HttpError('SEP10_CHALLENGE_ALREADY_USED', 'This challenge has already been used.');
   }
 
   return { account: read.clientAccountID, signers: matchedSigners };

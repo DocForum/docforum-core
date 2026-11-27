@@ -88,28 +88,28 @@ export async function bookFollowUp(
   followUpId: string,
   availabilitySlotId: string,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const patient = await patientsService.getMyPatientProfile(actor.userId);
 
   return prisma.$transaction(async (tx) => {
     const followUp = await consultationsRepo.findFollowUpById(tx, followUpId);
-    if (!followUp) throw new HttpError(404, 'Follow-up request not found.');
+    if (!followUp) throw new HttpError('FOLLOW_UP_NOT_FOUND', 'Follow-up request not found.');
     if (followUp.patientProfileId !== patient.id) {
-      throw new HttpError(403, 'This follow-up request does not belong to you.');
+      throw new HttpError('FOLLOW_UP_NOT_YOURS', 'This follow-up request does not belong to you.');
     }
     if (followUp.status === 'expired') {
-      throw new HttpError(409, 'This follow-up request has expired.', 'FOLLOW_UP_EXPIRED');
+      throw new HttpError('FOLLOW_UP_EXPIRED', 'This follow-up request has expired.');
     }
     if (followUp.status !== 'open') {
-      throw new HttpError(409, 'This follow-up request has already been booked.', 'FOLLOW_UP_ALREADY_BOOKED');
+      throw new HttpError('FOLLOW_UP_ALREADY_BOOKED', 'This follow-up request has already been booked.');
     }
     if (Date.now() > followUp.windowEnd.getTime()) {
-      throw new HttpError(409, 'This follow-up request has expired.', 'FOLLOW_UP_EXPIRED');
+      throw new HttpError('FOLLOW_UP_EXPIRED', 'This follow-up request has expired.');
     }
 
     const claimed = await consultationsRepo.claimOpenFollowUp(tx, followUpId);
     if (claimed.count !== 1) {
-      throw new HttpError(409, 'This follow-up request has already been booked.', 'FOLLOW_UP_ALREADY_BOOKED');
+      throw new HttpError('FOLLOW_UP_ALREADY_BOOKED', 'This follow-up request has already been booked.');
     }
 
     const appointment = await appointmentsService.bookForFollowUp(

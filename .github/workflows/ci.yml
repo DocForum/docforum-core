@@ -62,6 +62,11 @@ jobs:
       - name: Check message catalogue keys
         run: npm run i18n:check
 
+      # Issue #115: every HttpError is coded, and the generated catalogue page
+      # matches backend/src/error-catalogue.ts.
+      - name: Error codes and catalogue
+        run: npm run errors:check
+
       - name: Check notification templates for PHI
         run: npm run notifications:check
 

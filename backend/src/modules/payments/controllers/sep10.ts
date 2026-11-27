@@ -8,14 +8,14 @@ import { sep10ChallengeQuerySchema, sep10VerifySchema } from '../validation';
 import { HttpError } from '../../../http-error';
 
 export async function sep10Challenge(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { account } = sep10ChallengeQuerySchema.parse(req.query);
   const challenge = await paymentsService.createSep10Challenge(req.user.id, account);
   res.status(200).json(challenge);
 }
 
 export async function sep10Verify(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { transaction } = sep10VerifySchema.parse(req.body);
   const result = await paymentsService.verifySep10Challenge(req.user.id, transaction);
   res.status(200).json({ ...result, userId: req.user.id });

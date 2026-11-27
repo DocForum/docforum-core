@@ -70,7 +70,7 @@ export async function createAdminInvite(
   actor?: AuditActor,
 ): Promise<CreatedAdminInvite> {
   const email = input.email.trim().toLowerCase();
-  if (!email) throw new HttpError(400, 'An email address is required.');
+  if (!email) throw new HttpError('EMAIL_REQUIRED', 'An email address is required.');
 
   const existing = await usersRepo.findUserByEmail(email);
   if (existing) {
@@ -78,7 +78,7 @@ export async function createAdminInvite(
     // signup endpoint, and an admin inviting a colleague needs the real
     // reason rather than a coin flip. Refusing here keeps the invite table
     // to addresses that can actually be redeemed.
-    throw new HttpError(409, 'An account with this email already exists — deactivate or promote it instead of inviting it.');
+    throw new HttpError('EMAIL_TAKEN', 'An account with this email already exists — deactivate or promote it instead of inviting it.');
   }
 
   const token = generateAdminInviteToken();
@@ -158,7 +158,7 @@ function decodeCursor(cursor: string): { createdAt: Date; id: string } {
   const createdAt = new Date(raw.slice(0, separator));
   const id = raw.slice(separator + 1);
   if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
-    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+    throw new HttpError('INVALID_CURSOR', 'Invalid cursor.');
   }
   return { createdAt, id };
 }
@@ -209,9 +209,9 @@ export async function revokeAdminInvite(
 ): Promise<RevokeAdminInviteResult> {
   return prisma.$transaction(async (tx) => {
     const invite = await usersRepo.findAdminInviteById(inviteId, tx);
-    if (!invite) throw new HttpError(404, 'Admin invite not found.');
+    if (!invite) throw new HttpError('ADMIN_INVITE_NOT_FOUND', 'Admin invite not found.');
     if (invite.consumedAt) {
-      throw new HttpError(409, 'This invite has already been redeemed and cannot be revoked.');
+      throw new HttpError('ADMIN_INVITE_REDEEMED', 'This invite has already been redeemed and cannot be revoked.');
     }
     if (invite.revokedAt) {
       return { invite: toAdminInviteSummary(invite, new Date()), alreadyRevoked: true };
@@ -223,9 +223,9 @@ export async function revokeAdminInvite(
       // Lost the race with a redemption or another revocation. Re-read under
       // the same transaction so the caller gets the truthful reason.
       const current = await usersRepo.findAdminInviteById(inviteId, tx);
-      if (!current) throw new HttpError(404, 'Admin invite not found.');
+      if (!current) throw new HttpError('ADMIN_INVITE_NOT_FOUND', 'Admin invite not found.');
       if (current.consumedAt) {
-        throw new HttpError(409, 'This invite has already been redeemed and cannot be revoked.');
+        throw new HttpError('ADMIN_INVITE_REDEEMED', 'This invite has already been redeemed and cannot be revoked.');
       }
       return { invite: toAdminInviteSummary(current, new Date()), alreadyRevoked: true };
     }
@@ -310,16 +310,16 @@ export interface RedeemAdminInviteInput {
  * tokens exist beyond "this one isn't usable". */
 export async function redeemAdminInvite(input: RedeemAdminInviteInput): Promise<PublicUser> {
   const invite = await usersRepo.findAdminInviteByTokenHash(hashAdminInviteToken(input.token));
-  if (!invite) throw new HttpError(400, 'Invalid admin invite token.');
+  if (!invite) throw new HttpError('INVALID_ADMIN_INVITE', 'Invalid admin invite token.');
   if (invite.revokedAt) {
-    throw new HttpError(400, 'This invite has been revoked. Ask an admin for a new one.');
+    throw new HttpError('ADMIN_INVITE_REVOKED', 'This invite has been revoked. Ask an admin for a new one.');
   }
-  if (invite.consumedAt) throw new HttpError(400, 'This invite has already been used.');
+  if (invite.consumedAt) throw new HttpError('ADMIN_INVITE_ALREADY_USED', 'This invite has already been used.');
   if (invite.expiresAt.getTime() <= Date.now()) {
-    throw new HttpError(400, 'This invite has expired. Ask an admin for a new one.');
+    throw new HttpError('ADMIN_INVITE_EXPIRED', 'This invite has expired. Ask an admin for a new one.');
   }
   if (invite.email.toLowerCase() !== input.email.trim().toLowerCase()) {
-    throw new HttpError(403, 'This invite was issued for a different email address.');
+    throw new HttpError('ADMIN_INVITE_EMAIL_MISMATCH', 'This invite was issued for a different email address.');
   }
 
   const user = await usersRepo.consumeAdminInviteAndCreateAdmin({
@@ -330,7 +330,7 @@ export async function redeemAdminInvite(input: RedeemAdminInviteInput): Promise<
   });
 
   // Lost a race with a concurrent redemption of the same invite.
-  if (!user) throw new HttpError(400, 'This invite has already been used.');
+  if (!user) throw new HttpError('ADMIN_INVITE_ALREADY_USED', 'This invite has already been used.');
 
   return toPublicUser(user);
 }
@@ -369,7 +369,7 @@ export async function deactivateUser(input: DeactivateInput, actor?: AuditActor)
     await tx.$queryRaw`SELECT id FROM "User" WHERE role = 'admin'::"Role" AND "deactivatedAt" IS NULL ORDER BY id FOR UPDATE`;
 
     const user = await tx.user.findUnique({ where: { id: input.userId } });
-    if (!user) throw new HttpError(404, 'User not found.');
+    if (!user) throw new HttpError('USER_NOT_FOUND', 'User not found.');
     if (user.deactivatedAt) return toPublicUser(user); // idempotent: no audit event
 
     // The admin console is the only way back in, so the last active admin
@@ -377,7 +377,7 @@ export async function deactivateUser(input: DeactivateInput, actor?: AuditActor)
     if (user.role === 'admin') {
       const activeAdmins = await tx.user.count({ where: { role: 'admin', deactivatedAt: null } });
       if (activeAdmins <= 1) {
-        throw new HttpError(409, 'Cannot deactivate the last active admin.');
+        throw new HttpError('LAST_ADMIN_CANNOT_DEACTIVATE', 'Cannot deactivate the last active admin.');
       }
     }
 
@@ -404,7 +404,7 @@ export async function deactivateUser(input: DeactivateInput, actor?: AuditActor)
 export async function reactivateUser(input: DeactivateInput, actor?: AuditActor): Promise<PublicUser> {
   return prisma.$transaction(async (tx) => {
     const user = await tx.user.findUnique({ where: { id: input.userId } });
-    if (!user) throw new HttpError(404, 'User not found.');
+    if (!user) throw new HttpError('USER_NOT_FOUND', 'User not found.');
     if (!user.deactivatedAt) return toPublicUser(user); // idempotent: no audit event
 
     const now = new Date();

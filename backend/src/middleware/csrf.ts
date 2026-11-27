@@ -71,7 +71,7 @@ export function readCsrfHeader(req: Request): string | null {
 export function requireAllowedOrigin(req: Request, _res: Response, next: NextFunction) {
   const origin = req.get('origin');
   if (origin && !isAllowedOrigin(origin)) {
-    throw new HttpError(403, 'Origin not allowed.');
+    throw new HttpError('ORIGIN_NOT_ALLOWED', 'Origin not allowed.');
   }
   next();
 }

@@ -8,20 +8,20 @@ import * as consultationsRepo from '../repositories';
 
 async function assertAuthoringDoctor(userId: string, consultationId: string) {
   const consultation = await consultationsRepo.findConsultationById(prisma, consultationId);
-  if (!consultation) throw new HttpError(404, 'Consultation not found.');
+  if (!consultation) throw new HttpError('CONSULTATION_NOT_FOUND', 'Consultation not found.');
 
   const doctor = await doctorsService
     .getDoctorProfileById(consultation.appointment.doctorProfileId)
     .catch(() => null);
   if (!doctor || doctor.userId !== userId) {
-    throw new HttpError(403, 'Only the treating doctor can change this note.');
+    throw new HttpError('NOT_TREATING_DOCTOR', 'Only the treating doctor can change this note.');
   }
   return consultation;
 }
 
 async function loadView(consultationId: string) {
   const consultation = await consultationsRepo.findConsultationById(prisma, consultationId);
-  if (!consultation) throw new HttpError(404, 'Consultation not found.');
+  if (!consultation) throw new HttpError('CONSULTATION_NOT_FOUND', 'Consultation not found.');
   return viewConsultation(consultation);
 }
 
@@ -44,31 +44,31 @@ function viewConsultation(
  * (`WHERE signedAt IS NULL`) is the app-level guard; a DB trigger rejects a
  * direct UPDATE after sign-off even through Prisma. */
 export async function updateNotes(actor: auditService.AuditActor, consultationId: string, notes: string) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const consultation = await assertAuthoringDoctor(actor.userId, consultationId);
   if (consultation.signedAt) {
-    throw new HttpError(409, 'This note is signed and can no longer be edited; add an addendum instead.', 'CONSULTATION_NOTE_SIGNED');
+    throw new HttpError('CONSULTATION_NOTE_SIGNED', 'This note is signed and can no longer be edited; add an addendum instead.');
   }
 
   const result = await consultationsRepo.updateNotesIfUnsigned(prisma, consultationId, encryptField(notes)!);
   if (result.count !== 1) {
-    throw new HttpError(409, 'This note is signed and can no longer be edited; add an addendum instead.', 'CONSULTATION_NOTE_SIGNED');
+    throw new HttpError('CONSULTATION_NOTE_SIGNED', 'This note is signed and can no longer be edited; add an addendum instead.');
   }
   return loadView(consultationId);
 }
 
 /** Sign-off is once-only; a second attempt is a 409, not a silent no-op. */
 export async function signOff(actor: auditService.AuditActor, consultationId: string) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const consultation = await assertAuthoringDoctor(actor.userId, consultationId);
   if (consultation.signedAt) {
-    throw new HttpError(409, 'This consultation note is already signed.', 'CONSULTATION_ALREADY_SIGNED');
+    throw new HttpError('CONSULTATION_ALREADY_SIGNED', 'This consultation note is already signed.');
   }
 
   await prisma.$transaction(async (tx) => {
     const result = await consultationsRepo.markSignedIfUnsigned(tx, consultationId, new Date());
     if (result.count !== 1) {
-      throw new HttpError(409, 'This consultation note is already signed.', 'CONSULTATION_ALREADY_SIGNED');
+      throw new HttpError('CONSULTATION_ALREADY_SIGNED', 'This consultation note is already signed.');
     }
     await auditService.record(tx, actor, {
       entityType: 'Consultation',
@@ -86,14 +86,12 @@ export async function signOff(actor: auditService.AuditActor, consultationId: st
  * is the only writer, and only after signing — before that the note itself is
  * still editable, so an addendum would duplicate it. */
 export async function addAddendum(actor: auditService.AuditActor, consultationId: string, body: string) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const consultation = await assertAuthoringDoctor(actor.userId, consultationId);
   if (!consultation.signedAt) {
     throw new HttpError(
-      409,
-      'Sign the consultation note before adding an addendum; it is still editable.',
       'CONSULTATION_NOTE_NOT_SIGNED',
-    );
+      'Sign the consultation note before adding an addendum; it is still editable.');
   }
 
   await prisma.$transaction(async (tx) => {

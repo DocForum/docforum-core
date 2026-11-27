@@ -66,31 +66,31 @@ export async function attachLabResult(
   file: { body: unknown; contentType: string | undefined },
   abnormality: LabResultAbnormality = 'normal',
 ): Promise<LabResultView> {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const facilityProfileId = await facilitiesService.getOwnFacilityProfileId(actor.userId);
 
   const order = await ordersRepo.findLabOrderWithResult(labOrderId);
   // Only the facility the order was issued to may attach — any other
   // facility sees the order as nonexistent.
-  if (!order || order.facilityProfileId !== facilityProfileId) throw new HttpError(404, NOT_FOUND);
+  if (!order || order.facilityProfileId !== facilityProfileId) throw new HttpError('LAB_ORDER_NOT_FOUND', NOT_FOUND);
   if (order.correctedBy) {
-    throw new HttpError(409, 'This lab order was superseded by a correction; attach the result to the correction.', 'LAB_ORDER_SUPERSEDED');
+    throw new HttpError('LAB_ORDER_SUPERSEDED', 'This lab order was superseded by a correction; attach the result to the correction.');
   }
   if (order.result) {
-    throw new HttpError(409, 'A result has already been attached to this lab order.', 'LAB_RESULT_ALREADY_ATTACHED');
+    throw new HttpError('LAB_RESULT_ALREADY_ATTACHED', 'A result has already been attached to this lab order.');
   }
 
   const contentType = normaliseContentType(file.contentType);
   const signature = RESULT_FILE_SIGNATURES[contentType];
   if (!signature) {
-    throw new HttpError(415, `Result files must be one of: ${LAB_RESULT_CONTENT_TYPES.join(', ')}.`, 'LAB_RESULT_UNSUPPORTED_TYPE');
+    throw new HttpError('LAB_RESULT_UNSUPPORTED_TYPE', `Result files must be one of: ${LAB_RESULT_CONTENT_TYPES.join(', ')}.`);
   }
   if (!Buffer.isBuffer(file.body) || file.body.length === 0) {
-    throw new HttpError(400, 'The request body must be the result file.', 'LAB_RESULT_EMPTY');
+    throw new HttpError('LAB_RESULT_EMPTY', 'The request body must be the result file.');
   }
   const body = file.body;
   if (!signature.magic.every((byte, index) => body[index] === byte)) {
-    throw new HttpError(415, `The file content is not a valid ${contentType} file.`, 'LAB_RESULT_CONTENT_MISMATCH');
+    throw new HttpError('LAB_RESULT_CONTENT_MISMATCH', `The file content is not a valid ${contentType} file.`);
   }
 
   // Issue #324: scan before writing to object storage. The scanner result
@@ -98,11 +98,11 @@ export async function attachLabResult(
   // proceeds despite a scan error (fail-open vs fail-closed per config).
   const scanResult = await getFileScanner().scan(body);
   if (scanResult === 'infected') {
-    throw new HttpError(422, 'The uploaded file was refused by the malware scanner.', 'LAB_RESULT_INFECTED');
+    throw new HttpError('LAB_RESULT_INFECTED', 'The uploaded file was refused by the malware scanner.');
   }
   if (scanResult === 'error') {
     if (!config.fileScanning.failOpen) {
-      throw new HttpError(503, 'File scanning is unavailable and this environment requires it to pass.', 'LAB_RESULT_SCAN_UNAVAILABLE');
+      throw new HttpError('LAB_RESULT_SCAN_UNAVAILABLE', 'File scanning is unavailable and this environment requires it to pass.');
     }
     console.error('[file-scanner] scan error — failing open for lab result upload');
   }
@@ -184,7 +184,7 @@ export async function attachLabResult(
     // (best effort — an orphan is unreachable through the API either way).
     await storage.deleteObject(objectKey).catch(() => undefined);
     if (isUniqueViolation(error)) {
-      throw new HttpError(409, 'A result has already been attached to this lab order.', 'LAB_RESULT_ALREADY_ATTACHED');
+      throw new HttpError('LAB_RESULT_ALREADY_ATTACHED', 'A result has already been attached to this lab order.');
     }
     throw error;
   }
@@ -235,11 +235,11 @@ export async function openLabResultFile(
     ? await canReadResult(user, order, order.result?.fulfillingFacilityId, patientProfileId)
     : { allowed: false, viaGuardian: false };
   if (!order || !access.allowed) {
-    throw new HttpError(404, NOT_FOUND);
+    throw new HttpError('LAB_ORDER_NOT_FOUND', NOT_FOUND);
   }
   const result = order.result;
   if (!result?.resultObjectKey || !result.resultContentType) {
-    throw new HttpError(404, 'No result file has been attached to this lab order.', 'LAB_RESULT_NOT_FOUND');
+    throw new HttpError('LAB_RESULT_NOT_FOUND', 'No result file has been attached to this lab order.');
   }
 
   const stored = await getObjectStorage().getObject(result.resultObjectKey);

@@ -85,8 +85,8 @@ export async function resolveDispute(
     if (updated.count === 0) {
       // Distinguish "not found" from "already resolved".
       const existing = await tx.orderDispute.findUnique({ where: { id: disputeId } });
-      if (!existing) throw new HttpError(404, 'Dispute not found.');
-      throw new HttpError(409, 'Dispute has already been resolved.');
+      if (!existing) throw new HttpError('DISPUTE_NOT_FOUND', 'Dispute not found.');
+      throw new HttpError('DISPUTE_ALREADY_RESOLVED', 'Dispute has already been resolved.');
     }
 
     const resolution = await tx.orderDisputeResolution.create({

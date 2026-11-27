@@ -61,11 +61,11 @@ async function getOwnFacilityId(requester: Requester): Promise<string | null> {
 /** Hard rule 5: a facility can only ever touch records it owns. */
 async function requireOwnedRecord(recordId: string, requester: Requester) {
   const record = await repo.findFulfillmentRecordById(recordId);
-  if (!record) throw new HttpError(404, 'Fulfillment record not found.');
+  if (!record) throw new HttpError('FULFILLMENT_NOT_FOUND', 'Fulfillment record not found.');
   if (requester.role === 'admin') return record;
   const facilityId = await getOwnFacilityId(requester);
   if (!facilityId || record.facilityId !== facilityId) {
-    throw new HttpError(403, 'This fulfillment record belongs to a different facility.');
+    throw new HttpError('FULFILLMENT_NOT_YOURS', 'This fulfillment record belongs to a different facility.');
   }
   return record;
 }
@@ -123,7 +123,7 @@ export async function createFulfillment(
   requester: Requester,
 ) {
   if (requester.role !== 'patient' && requester.role !== 'admin') {
-    throw new HttpError(403, 'You do not have permission to perform this action.');
+    throw new HttpError('FORBIDDEN', 'You do not have permission to perform this action.');
   }
   await facilitiesService.assertFacilityActive(input.facilityId);
 
@@ -132,20 +132,19 @@ export async function createFulfillment(
 
   const duplicates = requestedIds.filter((id, index) => requestedIds.indexOf(id) !== index);
   if (duplicates.length > 0) {
-    throw new HttpError(400, `Duplicate items in request: ${[...new Set(duplicates)].join(', ')}.`);
+    throw new HttpError('DUPLICATE_ITEMS', `Duplicate items in request: ${[...new Set(duplicates)].join(', ')}.`);
   }
   const knownIds = new Set(orderItems.map((item) => item.id));
   const unknownIds = requestedIds.filter((id) => !knownIds.has(id));
   if (unknownIds.length > 0) {
-    throw new HttpError(400, `These items do not belong to this ${input.orderType}: ${unknownIds.join(', ')}.`);
+    throw new HttpError('ITEMS_NOT_IN_ORDER', `These items do not belong to this ${input.orderType}: ${unknownIds.join(', ')}.`);
   }
 
   const alreadyDispensed = await repo.listDispensedOrderItemIds(input.orderType, requestedIds);
   if (alreadyDispensed.length > 0) {
     throw new HttpError(
-      409,
-      `These items have already been dispensed and can't be routed again: ${alreadyDispensed.join(', ')}.`,
-    );
+      'ITEM_ALREADY_DISPENSED',
+      `These items have already been dispensed and can't be routed again: ${alreadyDispensed.join(', ')}.`);
   }
 
   const quantityById = new Map(orderItems.map((item) => [item.id, item.quantityOrdered]));
@@ -182,27 +181,27 @@ export async function updateFulfillmentItem(
     // Dispensing is the facility's own confirmation (§5.3 step 5) — an
     // admin may inspect records but must not dispense on a facility's
     // behalf.
-    throw new HttpError(403, 'Only the owning facility can update fulfillment items.');
+    throw new HttpError('FULFILLMENT_FORBIDDEN', 'Only the owning facility can update fulfillment items.');
   }
   if (record.status === 'rejected') {
-    throw new HttpError(409, 'This fulfillment record was rejected and can no longer be updated.');
+    throw new HttpError('FULFILLMENT_REJECTED', 'This fulfillment record was rejected and can no longer be updated.');
   }
   const item = record.items.find((candidate) => candidate.id === itemId);
-  if (!item) throw new HttpError(404, 'This item is not routed under this fulfillment record.');
+  if (!item) throw new HttpError('FULFILLMENT_ITEM_NOT_ROUTED', 'This item is not routed under this fulfillment record.');
   if (item.status !== 'pending') {
-    throw new HttpError(409, `This item was already marked ${item.status}.`);
+    throw new HttpError('FULFILLMENT_ITEM_ALREADY_UPDATED', `This item was already marked ${item.status}.`);
   }
   const quantityDispensed =
     input.status === 'dispensed' ? (input.quantityDispensed ?? item.quantityOrdered ?? 1) : 0;
   if (item.quantityOrdered !== null && quantityDispensed > item.quantityOrdered) {
-    throw new HttpError(400, 'quantityDispensed exceeds the quantity the order asked for.');
+    throw new HttpError('QUANTITY_EXCEEDS_ORDERED', 'quantityDispensed exceeds the quantity the order asked for.');
   }
 
   // Typed order FKs (docs/adr/0012): exactly one of prescriptionId /
   // labOrderId is set, which is the record's order reference.
   const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
   const orderId = record.prescriptionId ?? record.labOrderId;
-  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
+  if (!orderId) throw new HttpError('FULFILLMENT_ORDER_REFERENCE_MISSING', 'Fulfillment record has no order reference.');
   // Only a terminal "nothing dispensed here" outcome can trigger the
   // automatic refund (issue #84); read the item universe before the write.
   const orderItems = input.status === 'unfulfilled' ? await getOrderItems(orderType, orderId) : [];
@@ -230,7 +229,7 @@ export async function updateFulfillmentItem(
           // The (orderType, dispensedKey) unique index fired: another
           // facility's record already dispensed this order item. The DB
           // constraint is what makes this race-safe — not app timing.
-          throw new HttpError(409, 'This item has already been dispensed by another facility.');
+          throw new HttpError('FULFILLMENT_ITEM_DISPENSED_ELSEWHERE', 'This item has already been dispensed by another facility.');
         }
         throw error;
       }
@@ -260,12 +259,12 @@ export async function updateFulfillmentItem(
     .catch((error) => {
       if (error instanceof HttpError) throw error;
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new HttpError(409, 'This item has already been dispensed by another facility.');
+        throw new HttpError('FULFILLMENT_ITEM_DISPENSED_ELSEWHERE', 'This item has already been dispensed by another facility.');
       }
       throw error;
     });
 
-  if (!claimed) throw new HttpError(409, 'This item was already updated by the facility.');
+  if (!claimed) throw new HttpError('FULFILLMENT_ITEM_ALREADY_UPDATED', 'This item was already updated by the facility.');
 
   const orderStatus = await applyOrderStatus(orderType, orderId);
   return {
@@ -284,15 +283,15 @@ export async function updateFulfillmentRecord(
 ) {
   const record = await requireOwnedRecord(recordId, requester);
   if (requester.role !== 'facility') {
-    throw new HttpError(403, 'Only the owning facility can update fulfillment records.');
+    throw new HttpError('FULFILLMENT_FORBIDDEN', 'Only the owning facility can update fulfillment records.');
   }
   if (input.status === 'rejected' && record.items.some((item) => item.status === 'dispensed')) {
-    throw new HttpError(409, 'Items were already dispensed under this record — it can only be marked partially fulfilled.');
+    throw new HttpError('FULFILLMENT_PARTIAL_ONLY', 'Items were already dispensed under this record — it can only be marked partially fulfilled.');
   }
   // Typed order FKs (docs/adr/0012): exactly one of the two is set.
   const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
   const orderId = record.prescriptionId ?? record.labOrderId;
-  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
+  if (!orderId) throw new HttpError('FULFILLMENT_ORDER_REFERENCE_MISSING', 'Fulfillment record has no order reference.');
   // Read before the transaction: the item universe is used only to ask "was
   // anything dispensed for this order?", which decides whether a rejection
   // may trigger an automatic refund (issue #84).
@@ -333,7 +332,7 @@ export async function updateFulfillmentRecord(
     }
     return repo.findFulfillmentRecordById(recordId);
   });
-  if (!updated) throw new HttpError(409, 'This fulfillment record has already reached a terminal state.');
+  if (!updated) throw new HttpError('FULFILLMENT_TERMINAL', 'This fulfillment record has already reached a terminal state.');
   return updated;
 }
 
@@ -362,21 +361,21 @@ export async function getFulfillment(recordId: string, requester: Requester) {
     return requireOwnedRecord(recordId, requester);
   }
   if (requester.role !== 'patient') {
-    throw new HttpError(403, 'You do not have permission to view this fulfillment record.');
+    throw new HttpError('FULFILLMENT_FORBIDDEN', 'You do not have permission to view this fulfillment record.');
   }
   const record = await repo.findFulfillmentRecordById(recordId);
-  if (!record) throw new HttpError(404, 'Fulfillment record not found.');
+  if (!record) throw new HttpError('FULFILLMENT_NOT_FOUND', 'Fulfillment record not found.');
   const orderType: OrderType = record.prescriptionId ? 'prescription' : 'lab_order';
   const orderId = record.prescriptionId ?? record.labOrderId;
-  if (!orderId) throw new HttpError(500, 'Fulfillment record has no order reference.');
+  if (!orderId) throw new HttpError('FULFILLMENT_ORDER_REFERENCE_MISSING', 'Fulfillment record has no order reference.');
   const orderPatientProfileId = await getOrderPatientProfileId(orderType, orderId);
-  if (!orderPatientProfileId) throw new HttpError(404, 'Fulfillment record not found.');
+  if (!orderPatientProfileId) throw new HttpError('FULFILLMENT_NOT_FOUND', 'Fulfillment record not found.');
   // resolveActingProfile returns the profile the caller may act for (own or
   // an active dependent), or throws 403/404 — same ownership check used by
   // booking, appointments, etc.
   const actingProfile = await patientsService.resolveActingProfile(requester.userId, orderPatientProfileId).catch(() => null);
   if (!actingProfile || actingProfile.id !== orderPatientProfileId) {
-    throw new HttpError(404, 'Fulfillment record not found.');
+    throw new HttpError('FULFILLMENT_NOT_FOUND', 'Fulfillment record not found.');
   }
   return record;
 }
@@ -391,14 +390,14 @@ export async function listFulfillmentRecordsForOrder(
   requester: Requester,
 ) {
   if (requester.role !== 'patient' && requester.role !== 'admin') {
-    throw new HttpError(403, 'You do not have permission to view fulfillment records.');
+    throw new HttpError('FULFILLMENT_FORBIDDEN', 'You do not have permission to view fulfillment records.');
   }
   if (requester.role === 'patient') {
     const orderPatientProfileId = await getOrderPatientProfileId(orderType, orderId);
-    if (!orderPatientProfileId) throw new HttpError(404, 'Order not found.');
+    if (!orderPatientProfileId) throw new HttpError('ORDER_NOT_FOUND', 'Order not found.');
     const actingProfile = await patientsService.resolveActingProfile(requester.userId, orderPatientProfileId).catch(() => null);
     if (!actingProfile || actingProfile.id !== orderPatientProfileId) {
-      throw new HttpError(404, 'Order not found.');
+      throw new HttpError('ORDER_NOT_FOUND', 'Order not found.');
     }
   }
   return repo.listFulfillmentRecordsForOrder(orderType, orderId);
@@ -419,7 +418,7 @@ export async function getOrderFulfillmentSummaryForViewer(
       patientProfileId: lab.patientProfileId, issuingDoctorId: lab.orderingDoctorId, facilityProfileId: lab.facilityProfileId,
     })).catch(() => null);
   const allowed = order !== null && (await canViewOrder(viewer, { orderType, id: orderId, ...order }));
-  if (!order || !allowed) throw new HttpError(404, 'Order not found.');
+  if (!order || !allowed) throw new HttpError('ORDER_NOT_FOUND', 'Order not found.');
   return getOrderFulfillmentSummary(orderType, orderId);
 }
 
@@ -488,11 +487,11 @@ export async function listFacilityQueue(
   filters: { status?: FulfillmentStatus } = {},
 ): Promise<Awaited<ReturnType<typeof repo.listFulfillmentRecordsForFacility>>> {
   if (requester.role !== 'facility') {
-    throw new HttpError(403, 'Only facilities can view the fulfillment queue.');
+    throw new HttpError('FACILITY_ONLY', 'Only facilities can view the fulfillment queue.');
   }
   const facilityId = await getOwnFacilityId(requester);
   if (!facilityId) {
-    throw new HttpError(403, 'No facility profile is linked to this account.');
+    throw new HttpError('FACILITY_PROFILE_REQUIRED', 'No facility profile is linked to this account.');
   }
   return repo.listFulfillmentRecordsForFacility(facilityId, filters);
 }
@@ -535,7 +534,7 @@ export async function fulfillPharmacyOrder(
   // controller's Zod schema (issue #317).
   const facilityProfile = await facilitiesService.findFacilityProfileByUserId(facilityUserId);
   if (!facilityProfile) {
-    throw new HttpError(403, 'Facility profile required.');
+    throw new HttpError('FACILITY_PROFILE_REQUIRED', 'Facility profile required.');
   }
 
   const result = await prisma.$transaction(async (tx) => {
@@ -543,18 +542,18 @@ export async function fulfillPharmacyOrder(
     // An order already routed to a facility can only be fulfilled by that
     // facility; for any other facility it does not exist.
     if (!existing || (existing.facilityProfileId !== null && existing.facilityProfileId !== facilityProfile.id)) {
-      throw new HttpError(404, 'Pharmacy order not found.');
+      throw new HttpError('PHARMACY_ORDER_NOT_FOUND', 'Pharmacy order not found.');
     }
     if (existing.status === 'fulfilled') {
-      throw new HttpError(409, 'Pharmacy order has already been fulfilled.');
+      throw new HttpError('PHARMACY_ORDER_ALREADY_FULFILLED', 'Pharmacy order has already been fulfilled.');
     }
     if (existing.status !== 'issued') {
-      throw new HttpError(400, `Pharmacy order cannot be fulfilled from status: ${existing.status}`);
+      throw new HttpError('PHARMACY_ORDER_NOT_FULFILLABLE', `Pharmacy order cannot be fulfilled from status: ${existing.status}`);
     }
 
     const marked = await repo.markOrderFulfilled(tx, orderId, facilityProfile.id);
     if (!marked) {
-      throw new HttpError(409, 'Failed to transition order status to fulfilled.');
+      throw new HttpError('PHARMACY_ORDER_FULFILLMENT_FAILED', 'Failed to transition order status to fulfilled.');
     }
 
     await repo.createFulfillmentProof(tx, {
@@ -579,7 +578,7 @@ export async function fulfillPharmacyOrder(
 
     const updated = await repo.findOrderById(tx, orderId, 'pharmacy');
     if (!updated) {
-      throw new HttpError(500, 'Failed to fetch updated order.');
+      throw new HttpError('FULFILLMENT_ORDER_REFERENCE_MISSING', 'Failed to fetch updated order.');
     }
     return updated;
   });
@@ -631,7 +630,9 @@ export async function getLegacyOrderForViewer(
   const order = await repo.findOrderById(prisma, orderId, orderType);
   const allowed = order !== null && (await canViewLegacyOrder(viewer, order));
   if (!order || !allowed) {
-    throw new HttpError(404, orderType === 'pharmacy' ? 'Pharmacy order not found.' : 'Order not found.');
+    throw orderType === 'pharmacy'
+      ? new HttpError('PHARMACY_ORDER_NOT_FOUND', 'Pharmacy order not found.')
+      : new HttpError('ORDER_NOT_FOUND', 'Order not found.');
   }
   recordAccess({
     accessedBy: viewer.userId,

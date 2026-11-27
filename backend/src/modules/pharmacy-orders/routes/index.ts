@@ -101,9 +101,9 @@ function proofBody(req: Request, res: Response, next: NextFunction) {
     if (!err) return next();
     const status = (err as { status?: number }).status;
     if (status === 413) {
-      return next(new HttpError(413, `Proof files may be at most ${config.orders.proofMaxBytes} bytes.`, 'PROOF_TOO_LARGE'));
+      return next(new HttpError('PROOF_TOO_LARGE', `Proof files may be at most ${config.orders.proofMaxBytes} bytes.`));
     }
-    return next(new HttpError(400, 'The proof file could not be read.'));
+    return next(new HttpError('PROOF_UNREADABLE', 'The proof file could not be read.'));
   });
 }
 

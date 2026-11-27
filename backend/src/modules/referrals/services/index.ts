@@ -78,7 +78,7 @@ async function resolveTargetDoctor(
   if (target.targetDoctorId) return target.targetDoctorId;
 
   if (!target.targetSpecialtyId) {
-    throw new HttpError(422, 'A referral needs either a target doctor or a target specialty.');
+    throw new HttpError('REFERRAL_TARGET_REQUIRED', 'A referral needs either a target doctor or a target specialty.');
   }
 
   const eligibleDoctorIds = await doctorsService.listEligibleReferralTargets(target.targetSpecialtyId, [
@@ -87,10 +87,8 @@ async function resolveTargetDoctor(
   ]);
   if (eligibleDoctorIds.length === 0) {
     throw new HttpError(
-      422,
-      'No verified doctor is available to receive a referral for this specialty. Name a specific doctor instead.',
       'REFERRAL_NO_ELIGIBLE_TARGET',
-    );
+      'No verified doctor is available to receive a referral for this specialty. Name a specific doctor instead.');
   }
 
   const loadRows = await referralsRepo.countActiveReferralsByTargetDoctor(db, eligibleDoctorIds);
@@ -105,10 +103,8 @@ async function resolveTargetDoctor(
     // Unreachable: the candidate list is non-empty. Kept so the return
     // type is honest instead of asserted away.
     throw new HttpError(
-      422,
-      'No verified doctor is available to receive a referral for this specialty.',
       'REFERRAL_NO_ELIGIBLE_TARGET',
-    );
+      'No verified doctor is available to receive a referral for this specialty.');
   }
   return chosen.doctorProfileId;
 }
@@ -134,13 +130,13 @@ async function prepareReferralTarget(
   excludeFromRouting: string[] = [],
 ): Promise<PreparedReferral> {
   if (!consultation.appointment) {
-    throw new HttpError(422, 'Consultation has no appointment; lineage cannot be established.');
+    throw new HttpError('REFERRAL_NO_APPOINTMENT', 'Consultation has no appointment; lineage cannot be established.');
   }
   if (consultation.appointment.doctorProfileId !== referringDoctorId) {
-    throw new HttpError(403, 'You can only refer from your own consultation.');
+    throw new HttpError('REFERRAL_ONLY_OWN_CONSULTATION', 'You can only refer from your own consultation.');
   }
   if (consultation.appointment.status !== 'completed') {
-    throw new HttpError(409, 'A referral requires a completed appointment.');
+    throw new HttpError('REFERRAL_REQUIRES_COMPLETED_APPOINTMENT', 'A referral requires a completed appointment.');
   }
 
   const patientProfileId = consultation.appointment.patientProfileId;
@@ -156,7 +152,7 @@ async function prepareReferralTarget(
   const targetDoctorId = await resolveTargetDoctor(db, referringDoctorId, target, excludeFromRouting);
 
   if (targetDoctorId === referringDoctorId) {
-    throw new HttpError(422, 'A doctor cannot refer a patient to themselves.');
+    throw new HttpError('REFERRAL_SELF', 'A doctor cannot refer a patient to themselves.');
   }
   await doctorsService.assertDoctorVerified(targetDoctorId);
   if (target.targetSpecialtyId) {
@@ -169,7 +165,7 @@ async function prepareReferralTarget(
       (!!target.targetSpecialtyId && other.targetSpecialtyId === target.targetSpecialtyId),
   );
   if (duplicateInBatch) {
-    throw new HttpError(422, 'Duplicate target doctor or specialty in this set of referrals.');
+    throw new HttpError('REFERRAL_DUPLICATE_IN_BATCH', 'Duplicate target doctor or specialty in this set of referrals.');
   }
 
   const duplicateInConsultation = await referralsRepo.findByConsultationAndTarget(db, consultation.id, {
@@ -177,7 +173,7 @@ async function prepareReferralTarget(
     targetSpecialtyId: target.targetSpecialtyId ?? null,
   });
   if (duplicateInConsultation) {
-    throw new HttpError(409, 'A referral to this doctor or specialty already exists for this consultation.');
+    throw new HttpError('REFERRAL_DUPLICATE_TARGET', 'A referral to this doctor or specialty already exists for this consultation.');
   }
 
   const parentReferralId =
@@ -199,7 +195,7 @@ async function prepareReferralTarget(
       }
     } catch (error) {
       if (error instanceof LoopGuardError) {
-        throw new HttpError(422, error.message);
+        throw new HttpError('REFERRAL_INVALID_TARGET', error.message);
       }
       throw error;
     }
@@ -233,7 +229,7 @@ async function loadConsultationForReferringDoctor(db: Prisma.TransactionClient, 
     where: { id: sourceConsultationId },
     include: { appointment: true },
   });
-  if (!consultation) throw new HttpError(404, 'Consultation not found.');
+  if (!consultation) throw new HttpError('CONSULTATION_NOT_FOUND', 'Consultation not found.');
   return consultation;
 }
 
@@ -267,7 +263,7 @@ export async function createReferralBatch(
   targets: ReferralTargetInput[],
 ) {
   if (targets.length === 0) {
-    throw new HttpError(422, 'At least one referral target is required.');
+    throw new HttpError('REFERRAL_TARGETS_REQUIRED', 'At least one referral target is required.');
   }
   const referringDoctor = await doctorsService.getMyDoctorProfile(userId);
 
@@ -312,7 +308,7 @@ export async function acceptReferral(
   availabilitySlotId: string,
   patientProfileId?: string,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   // Issue #305: no patientProfileId keeps the self-service path; naming one
   // resolves an active guardianship (or the caller's own profile) first, so
   // an ended guardianship is refused before the referral is touched.
@@ -322,12 +318,12 @@ export async function acceptReferral(
 
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
-    if (!referral) throw new HttpError(404, 'Referral not found.');
+    if (!referral) throw new HttpError('REFERRAL_NOT_FOUND', 'Referral not found.');
     if (referral.patientProfileId !== patientProfile.id) {
-      throw new HttpError(403, 'This referral is not for you.');
+      throw new HttpError('REFERRAL_NOT_YOURS', 'This referral is not for you.');
     }
     if (referral.status !== 'pending') {
-      throw new HttpError(409, 'Only a pending referral can be accepted.');
+      throw new HttpError('REFERRAL_NOT_ACCEPTABLE', 'Only a pending referral can be accepted.');
     }
 
     // Ensure the target doctor is active (not deactivated or deleted)
@@ -342,7 +338,7 @@ export async function acceptReferral(
       { status: 'accepted' },
     );
     if (claimed.count !== 1) {
-      throw new HttpError(409, 'This referral is no longer pending.');
+      throw new HttpError('REFERRAL_NOT_PENDING', 'This referral is no longer pending.');
     }
 
     const appointment = await appointmentsService.bookForReferral(
@@ -397,18 +393,18 @@ export async function declineReferral(
   patientProfileId?: string,
   reason?: { enum?: ReferralDeclineReason; note?: string },
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const patientProfile = patientProfileId
     ? await patientsService.resolveActingProfile(actor.userId, patientProfileId)
     : await patientsService.getMyPatientProfile(actor.userId);
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
-    if (!referral) throw new HttpError(404, 'Referral not found.');
+    if (!referral) throw new HttpError('REFERRAL_NOT_FOUND', 'Referral not found.');
     if (referral.patientProfileId !== patientProfile.id) {
-      throw new HttpError(403, 'This referral is not for you.');
+      throw new HttpError('REFERRAL_NOT_YOURS', 'This referral is not for you.');
     }
     if (referral.status !== 'pending') {
-      throw new HttpError(409, 'Only a pending referral can be declined.');
+      throw new HttpError('REFERRAL_NOT_DECLINABLE', 'Only a pending referral can be declined.');
     }
 
     // Issue #309: resolve the optional decline reason once for both the row
@@ -422,7 +418,7 @@ export async function declineReferral(
       { status: 'declined', declineReason, declineReasonNote },
     );
     if (updated.count !== 1) {
-      throw new HttpError(409, 'This referral is no longer pending.');
+      throw new HttpError('REFERRAL_NOT_PENDING', 'This referral is no longer pending.');
     }
 
     // Only the enum goes into the audit metadata. The free-text note is
@@ -449,16 +445,16 @@ export async function withdrawReferral(
   referralId: string,
   input: { reason: string },
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const referringDoctor = await doctorsService.getMyDoctorProfile(actor.userId);
 
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
     if (!referral || referral.referringDoctorId !== referringDoctor.id) {
-      throw new HttpError(404, 'Referral not found.');
+      throw new HttpError('REFERRAL_NOT_FOUND', 'Referral not found.');
     }
     if (referral.status !== 'pending') {
-      throw new HttpError(409, 'Only a pending referral can be withdrawn.');
+      throw new HttpError('REFERRAL_NOT_WITHDRAWABLE', 'Only a pending referral can be withdrawn.');
     }
 
     const updated = await referralsRepo.updateReferralConditional(
@@ -467,7 +463,7 @@ export async function withdrawReferral(
       { status: 'cancelled', cancelledReason: input.reason },
     );
     if (updated.count !== 1) {
-      throw new HttpError(409, 'This referral is no longer pending.');
+      throw new HttpError('REFERRAL_NOT_PENDING', 'This referral is no longer pending.');
     }
 
     await auditService.record(tx, actor, {
@@ -524,7 +520,7 @@ function decodeIncomingCursor(cursor: string): { createdAt: Date; id: string } {
   const createdAt = new Date(raw.slice(0, separator));
   const id = raw.slice(separator + 1);
   if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
-    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+    throw new HttpError('INVALID_CURSOR', 'Invalid cursor.');
   }
   return { createdAt, id };
 }
@@ -548,9 +544,9 @@ export async function getReferralDetail(
   referralId: string,
   patientProfileId?: string,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const referral = await referralsRepo.findReferralById(prisma, referralId);
-  if (!referral) throw new HttpError(404, 'Referral not found.');
+  if (!referral) throw new HttpError('REFERRAL_NOT_FOUND', 'Referral not found.');
 
   let authorized = false;
   if (actor.role === 'admin') {
@@ -563,7 +559,7 @@ export async function getReferralDetail(
     authorized = actingProfile.id === referral.patientProfileId;
   }
 
-  if (!authorized) throw new HttpError(404, 'Referral not found.');
+  if (!authorized) throw new HttpError('REFERRAL_NOT_FOUND', 'Referral not found.');
 
   auditService.recordAccess({
     accessedBy: actor.userId,
@@ -765,7 +761,7 @@ export interface AdminQueueFilters {
 
 function parseDuration(value: string): number {
   const match = /^(\d+)([hd])$/.exec(value.trim());
-  if (!match) throw new HttpError(400, 'olderThan must look like "48h" or "7d".');
+  if (!match) throw new HttpError('INVALID_OLDER_THAN', 'olderThan must look like "48h" or "7d".');
   const amount = Number(match[1]);
   return match[2] === 'h' ? amount * 60 * 60 * 1000 : amount * 24 * 60 * 60 * 1000;
 }
@@ -821,15 +817,15 @@ export async function adminReassign(
 ) {
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
-    if (!referral) throw new HttpError(404, 'Referral not found.');
+    if (!referral) throw new HttpError('REFERRAL_NOT_FOUND', 'Referral not found.');
 
     // Reassigning an accepted referral would strand its live appointment
     // against the old doctor — cancel that path; admins cancel instead.
     if (referral.status !== 'pending') {
-      throw new HttpError(409, 'Only a pending referral can be reassigned.');
+      throw new HttpError('REFERRAL_NOT_REASSIGNABLE', 'Only a pending referral can be reassigned.');
     }
     if (input.targetDoctorId === referral.referringDoctorId) {
-      throw new HttpError(422, 'A doctor cannot be referred to themselves.');
+      throw new HttpError('REFERRAL_SELF', 'A doctor cannot be referred to themselves.');
     }
     if (referral.targetSpecialtyId) {
       await doctorsService.assertDoctorVerifiedInSpecialty(input.targetDoctorId, referral.targetSpecialtyId);
@@ -837,14 +833,14 @@ export async function adminReassign(
       await doctorsService.assertDoctorVerified(input.targetDoctorId);
     }
     if (input.targetDoctorId === referral.targetDoctorId) {
-      throw new HttpError(409, 'Referral already targets that doctor.');
+      throw new HttpError('REFERRAL_ADMIN_TARGET_DUPLICATE', 'Referral already targets that doctor.');
     }
 
     const updated = await referralsRepo.updateReferralIfStatus(tx, referralId, 'pending', {
       targetDoctorId: input.targetDoctorId,
     });
     if (updated.count !== 1) {
-      throw new HttpError(409, 'Referral is no longer pending; it changed while you were working.');
+      throw new HttpError('REFERRAL_CHANGED', 'Referral is no longer pending; it changed while you were working.');
     }
 
     await auditService.record(tx, actor, {
@@ -883,9 +879,9 @@ export async function adminCancel(
 ) {
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
-    if (!referral) throw new HttpError(404, 'Referral not found.');
+    if (!referral) throw new HttpError('REFERRAL_NOT_FOUND', 'Referral not found.');
     if (referral.status !== 'pending' && referral.status !== 'accepted') {
-      throw new HttpError(409, 'Only a pending or accepted referral can be cancelled.');
+      throw new HttpError('REFERRAL_NOT_CANCELLABLE', 'Only a pending or accepted referral can be cancelled.');
     }
 
     // Accepted + live appointment: close the appointment first (inside
@@ -900,7 +896,7 @@ export async function adminCancel(
       cancelledReason: input.reason,
     });
     if (updated.count !== 1) {
-      throw new HttpError(409, 'Referral changed while you were working; reload and retry.');
+      throw new HttpError('REFERRAL_CHANGED', 'Referral changed while you were working; reload and retry.');
     }
 
     await auditService.record(tx, actor, {
@@ -924,7 +920,7 @@ export async function adminCancel(
  */
 export async function listAuditEvents(referralId: string) {
   const referral = await referralsRepo.findReferralById(prisma, referralId);
-  if (!referral) throw new HttpError(404, 'Referral not found.');
+  if (!referral) throw new HttpError('REFERRAL_NOT_FOUND', 'Referral not found.');
   const page = await auditService.listAuditEvents({
     entityType: 'Referral',
     entityId: referralId,

@@ -32,26 +32,26 @@ export function parseStroopsAmount(
     parsed = value;
   } else if (typeof value === 'string') {
     if (!/^[0-9]+$/.test(value)) {
-      throw new HttpError(400, `${field} must be a positive integer string of smallest units.`);
+      throw new HttpError('INVALID_AMOUNT', `${field} must be a positive integer string of smallest units.`);
     }
     parsed = BigInt(value);
   } else if (typeof value === 'number') {
     if (!Number.isSafeInteger(value)) {
-      throw new HttpError(400, `${field} must be a safe integer; send it as a string instead.`);
+      throw new HttpError('INVALID_AMOUNT', `${field} must be a safe integer; send it as a string instead.`);
     }
     parsed = BigInt(value);
   } else {
-    throw new HttpError(400, `${field} is required.`);
+    throw new HttpError('INVALID_AMOUNT', `${field} is required.`);
   }
 
   if (parsed <= 0n) {
-    throw new HttpError(400, `${field} must be positive.`);
+    throw new HttpError('INVALID_AMOUNT', `${field} must be positive.`);
   }
   if (parsed > MAX_STROOPS) {
     // The asset has 7 decimals; an amount is already in those smallest units,
     // so "validating against the asset's decimals" here means refusing
     // fractional input above and an amount the contract cannot hold here.
-    throw new HttpError(400, `${field} exceeds the representable range for a ${PAYMENT_ASSET_DECIMALS}-decimal asset.`);
+    throw new HttpError('INVALID_AMOUNT', `${field} exceeds the representable range for a ${PAYMENT_ASSET_DECIMALS}-decimal asset.`);
   }
   return parsed;
 }

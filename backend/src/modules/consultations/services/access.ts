@@ -25,7 +25,7 @@ export interface ThreadContext {
  */
 export async function resolveThreadContext(userId: string, consultationId: string): Promise<ThreadContext> {
   const consultation = await consultationsRepo.findConsultationById(prisma, consultationId);
-  if (!consultation) throw new HttpError(404, 'Consultation not found.');
+  if (!consultation) throw new HttpError('CONSULTATION_NOT_FOUND', 'Consultation not found.');
 
   const doctor = await doctorsService
     .getDoctorProfileById(consultation.appointment.doctorProfileId)
@@ -41,7 +41,7 @@ export async function resolveThreadContext(userId: string, consultationId: strin
   if (doctorUserId === userId) role = 'doctor';
   else if (patientUserId === userId) role = 'patient';
 
-  if (!role) throw new HttpError(403, 'You do not have access to this consultation.');
+  if (!role) throw new HttpError('CONSULTATION_FORBIDDEN', 'You do not have access to this consultation.');
 
   return { consultation, role, patientUserId, doctorUserId };
 }
@@ -57,7 +57,7 @@ export function assertThreadOpen(consultation: { createdAt: Date }): void {
     consultation.createdAt.getTime() + config.consultations.threadCloseAfterDays * 24 * 60 * 60 * 1000,
   );
   if (Date.now() > closesAt.getTime()) {
-    throw new HttpError(409, 'This consultation thread is closed for new messages.', 'CONSULTATION_THREAD_CLOSED');
+    throw new HttpError('CONSULTATION_THREAD_CLOSED', 'This consultation thread is closed for new messages.');
   }
 }
 
