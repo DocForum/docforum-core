@@ -43,7 +43,7 @@ export class S3ObjectStorage implements ObjectStorage {
       Key: input.key,
       Body: input.body,
       ContentType: input.contentType,
-      ContentLength: input.body.length,
+      ContentLength: input.body.byteLength,
       // Encrypted at rest with S3-managed keys. No ACL is sent: the bucket's
       // own "block public access" setting is what keeps it private.
       ServerSideEncryption: 'AES256',

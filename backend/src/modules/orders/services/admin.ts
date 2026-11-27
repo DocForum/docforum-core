@@ -41,7 +41,7 @@ export async function listDisputes(input: ListDisputesInput = {}) {
               type: true,
             },
           },
-          fulfillmentProofs: true,
+          fulfillmentProofs: { omit: { attachmentObjectKey: true } },
         },
       },
       resolutions: {

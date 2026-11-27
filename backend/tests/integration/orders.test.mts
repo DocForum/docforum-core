@@ -10,6 +10,9 @@ import EmbeddedPostgres from 'embedded-postgres';
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 5457;
 const runId = Date.now();
+const PROOF_MAX_BYTES = 4096;
+const PDF = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(200, 0x20)]);
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docforum-orders-pg-'));
 const pg = new EmbeddedPostgres({
@@ -48,6 +51,8 @@ describe('Orders integration tests', () => {
     });
 
     process.env.DATABASE_URL = databaseUrl;
+    // Small proof cap so the size limit is cheap to exercise (issue #316).
+    process.env.FULFILLMENT_PROOF_MAX_BYTES = String(PROOF_MAX_BYTES);
 
     const appModule = await import('../../src/app.js');
     const dbModule = await import('../../src/db/prisma-client.js');
@@ -158,13 +163,20 @@ describe('Orders integration tests', () => {
       .send({ referenceNumber: '' });
     expect(missingRef.status).toBe(400);
 
-    // 4. Facility fulfills with reference number & optional attachment -> 200
+    // 4. A client-supplied attachment (URL or inline data) is refused: the
+    //    file goes through the upload route instead (issue #316).
+    const withUrl = await request(app)
+      .post(`/pharmacy-orders/${orderId}/fulfill`)
+      .set('Authorization', `Bearer ${facility1Token}`)
+      .send({ referenceNumber: 'REF-PHARM-99', attachment: { url: 'https://evil.example/receipt.pdf' } });
+    expect(withUrl.status).toBe(400);
+
+    // 5. Facility fulfills with reference number -> 200, proof without file
     const fulfillRes = await request(app)
       .post(`/pharmacy-orders/${orderId}/fulfill`)
       .set('Authorization', `Bearer ${facility1Token}`)
       .send({
         referenceNumber: 'REF-PHARM-99',
-        attachment: { fileName: 'receipt.pdf' },
         notes: 'Dispensed 30 capsules',
       });
 
@@ -172,14 +184,141 @@ describe('Orders integration tests', () => {
     expect(fulfillRes.body.status).toBe('fulfilled');
     expect(fulfillRes.body.fulfillmentProofs).toHaveLength(1);
     expect(fulfillRes.body.fulfillmentProofs[0].referenceNumber).toBe('REF-PHARM-99');
-    expect(fulfillRes.body.fulfillmentProofs[0].attachmentUrl).toMatch(/^storage:\/\/attachments\/\d+-receipt\.pdf$/);
+    expect(fulfillRes.body.fulfillmentProofs[0]).toMatchObject({
+      attachmentContentType: null,
+      attachmentByteSize: null,
+      legacyAttachmentUrl: null,
+    });
+    // The storage key never leaves the server.
+    expect(fulfillRes.body.fulfillmentProofs[0]).not.toHaveProperty('attachmentObjectKey');
 
-    // 5. Trying to fulfill again -> 409 Conflict
+    // 6. Trying to fulfill again -> 409 Conflict
     const secondFulfill = await request(app)
       .post(`/pharmacy-orders/${orderId}/fulfill`)
       .set('Authorization', `Bearer ${facility1Token}`)
       .send({ referenceNumber: 'REF-DUP' });
     expect(secondFulfill.status).toBe(409);
+  });
+
+  it('stores proof files privately and serves them only to the patient, the facility and admins (issue #316)', async () => {
+    const orderRes = await request(app)
+      .post('/pharmacy-orders')
+      .set('Authorization', `Bearer ${patient1Token}`)
+      .send({ patientProfileId: patient1ProfileId, details: 'Proof file order' });
+    const orderId = orderRes.body.id as string;
+    const fulfilled = await request(app)
+      .post(`/pharmacy-orders/${orderId}/fulfill`)
+      .set('Authorization', `Bearer ${facility1Token}`)
+      .send({ referenceNumber: 'REF-PROOF-1' });
+    expect(fulfilled.status).toBe(200);
+    const proofId = fulfilled.body.fulfillmentProofs[0].id as string;
+
+    // A second facility, which did not record this proof.
+    const bcryptjs = await import('bcryptjs');
+    const otherFacilityUser = await prisma.user.create({
+      data: {
+        email: `facility2-${runId}@example.com`,
+        passwordHash: await bcryptjs.hash('longenough123', 4),
+        role: 'facility',
+        emailVerifiedAt: new Date(),
+      },
+    });
+    await prisma.facilityProfile.create({ data: { userId: otherFacilityUser.id, name: `Other ${runId}`, type: 'pharmacy' } });
+    const otherFacilityToken = (
+      await request(app).post('/auth/login').send({ email: `facility2-${runId}@example.com`, password: 'longenough123' })
+    ).body.accessToken as string;
+
+    const upload = (token: string, body: Buffer, type: string) =>
+      request(app)
+        .put(`/fulfillment-proofs/${proofId}/attachment`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', type)
+        .send(body);
+    const download = (token: string) =>
+      request(app).get(`/fulfillment-proofs/${proofId}/attachment`).set('Authorization', `Bearer ${token}`);
+
+    // Before anything is attached there is nothing to download.
+    expect((await download(patient1Token)).status).toBe(404);
+
+    // Content-type allowlist, magic bytes, size cap, ownership.
+    expect((await upload(facility1Token, Buffer.from('<html></html>'), 'text/html')).status).toBe(415);
+    const mismatch = await upload(facility1Token, Buffer.from('not really a pdf'), 'application/pdf');
+    expect(mismatch.status).toBe(415);
+    expect(mismatch.body.code).toBe('PROOF_CONTENT_MISMATCH');
+    const tooBig = await upload(facility1Token, Buffer.concat([PDF, Buffer.alloc(PROOF_MAX_BYTES, 0x20)]), 'application/pdf');
+    expect(tooBig.status).toBe(413);
+    expect(tooBig.body.code).toBe('PROOF_TOO_LARGE');
+    expect((await upload(otherFacilityToken, PDF, 'application/pdf')).status).toBe(404);
+    expect((await upload(patient1Token, PDF, 'application/pdf')).status).toBe(403);
+
+    // The recording facility attaches a real PDF, once.
+    const attached = await upload(facility1Token, PDF, 'application/pdf');
+    expect(attached.status).toBe(201);
+    expect(attached.body).toEqual({ proofId, orderId, contentType: 'application/pdf', byteSize: PDF.length });
+    const again = await upload(facility1Token, PNG, 'image/png');
+    expect(again.status).toBe(409);
+    expect(again.body.code).toBe('PROOF_ALREADY_ATTACHED');
+
+    const row = await prisma.fulfillmentProof.findUniqueOrThrow({ where: { id: proofId } });
+    expect(row.attachmentObjectKey).toMatch(/^fulfillment-proofs\/[0-9a-f-]{36}$/);
+    expect(row.attachmentObjectKey).not.toContain(orderId);
+    expect(await prisma.auditEvent.count({ where: { entityType: 'FulfillmentProof', entityId: proofId, action: 'fulfillment_proof.attached' } })).toBe(1);
+
+    // Patient owner, recording facility and admin can read it...
+    for (const token of [patient1Token, facility1Token, adminToken]) {
+      const res = await download(token).buffer(true).parse((r, cb) => {
+        const chunks: Buffer[] = [];
+        r.on('data', (c: Buffer) => chunks.push(c));
+        r.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/^application\/pdf/);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers['x-content-type-options']).toBe('nosniff');
+      expect(Buffer.compare(res.body as Buffer, PDF)).toBe(0);
+    }
+    // ...and the patient's read is in their access log.
+    // (recordAccess is fire-and-forget, so give the write a moment.)
+    let logged = 0;
+    for (let i = 0; i < 20 && logged === 0; i += 1) {
+      logged = await prisma.accessLog.count({ where: { entityType: 'FulfillmentProof', entityId: proofId, patientProfileId: patient1ProfileId } });
+      if (logged === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(logged).toBeGreaterThan(0);
+    // ...nobody else can (same 404 as a missing proof).
+    expect((await download(patient2Token)).status).toBe(404);
+    expect((await download(otherFacilityToken)).status).toBe(404);
+    expect((await request(app).get(`/fulfillment-proofs/${proofId}/attachment`)).status).toBe(401);
+
+    // Order reads show the file's metadata, never the storage key.
+    const order = await request(app).get(`/pharmacy-orders/${orderId}`).set('Authorization', `Bearer ${patient1Token}`);
+    expect(order.body.fulfillmentProofs[0]).toMatchObject({ attachmentContentType: 'application/pdf', attachmentByteSize: PDF.length });
+    expect(order.body.fulfillmentProofs[0]).not.toHaveProperty('attachmentObjectKey');
+  });
+
+  it('keeps a pre-#316 client-supplied proof URL readable but untrusted, and never serves it', async () => {
+    const orderRes = await request(app)
+      .post('/lab-orders')
+      .set('Authorization', `Bearer ${patient1Token}`)
+      .send({ patientProfileId: patient1ProfileId, details: 'Legacy proof order' });
+    const orderId = orderRes.body.id as string;
+    const fulfilled = await request(app)
+      .post(`/lab-orders/${orderId}/fulfill`)
+      .set('Authorization', `Bearer ${facility1Token}`)
+      .send({ referenceNumber: 'REF-LEGACY' });
+    expect(fulfilled.status).toBe(200);
+    const proofId = fulfilled.body.fulfillmentProofs[0].id as string;
+    // What the old endpoint stored as attachmentUrl (renamed by the migration).
+    await prisma.fulfillmentProof.update({
+      where: { id: proofId },
+      data: { legacyAttachmentUrl: 'https://evil.example/phish' },
+    });
+
+    const order = await request(app).get(`/orders/${orderId}`).set('Authorization', `Bearer ${patient1Token}`);
+    expect(order.body.fulfillmentProofs[0]).toMatchObject({ legacyAttachmentUrl: 'https://evil.example/phish', attachmentContentType: null });
+    const res = await request(app).get(`/fulfillment-proofs/${proofId}/attachment`).set('Authorization', `Bearer ${patient1Token}`);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PROOF_FILE_NOT_FOUND');
   });
 
   it('patient confirm-receipt and dispute are mutually exclusive', async () => {

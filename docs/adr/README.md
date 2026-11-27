@@ -20,3 +20,4 @@
 | [0016](0016-releaser-key-custody.md) | Custody of the platform escrow releaser key | Accepted |
 | [0017](0017-multiple-referrals-per-consultation.md) | One consultation may spawn several referrals — created atomically, living independently | Accepted |
 | [0018](0018-lab-result-object-storage.md) | Lab result file storage (object storage provider) | Accepted |
+| [0019](0019-retire-legacy-order-table.md) | Retire the legacy `Order` / `FulfillmentProof` / `OrderDispute` tables | Proposed (issue #315) |

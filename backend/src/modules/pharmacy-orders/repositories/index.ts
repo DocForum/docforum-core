@@ -137,7 +137,7 @@ export async function findOrderById(tx: Prisma.TransactionClient, orderId: strin
       ...(orderType ? { orderType } : {}),
     },
     include: {
-      fulfillmentProofs: true,
+      fulfillmentProofs: { omit: PROOF_PUBLIC_OMIT },
       disputes: {
         include: {
           resolutions: true,
@@ -165,7 +165,7 @@ export async function createOrder(
       status: 'issued',
     },
     include: {
-      fulfillmentProofs: true,
+      fulfillmentProofs: { omit: PROOF_PUBLIC_OMIT },
       disputes: true,
     },
   });
@@ -177,7 +177,6 @@ export async function createFulfillmentProof(
     orderId: string;
     facilityProfileId: string;
     referenceNumber: string;
-    attachmentUrl?: string;
     notes?: string;
   },
 ) {
@@ -186,10 +185,40 @@ export async function createFulfillmentProof(
       orderId: data.orderId,
       facilityProfileId: data.facilityProfileId,
       referenceNumber: data.referenceNumber,
-      attachmentUrl: data.attachmentUrl,
       notes: data.notes,
     },
   });
+}
+
+/** Proof rows are returned with their order; the storage key stays
+ * server-side (issue #316) — clients use the attachment route instead. */
+export const PROOF_PUBLIC_OMIT = { attachmentObjectKey: true } as const;
+
+/** One proof plus the owning order's patient — what the attachment upload
+ * and download access checks need (issue #316). */
+export function findFulfillmentProofWithOrder(proofId: string) {
+  return prisma.fulfillmentProof.findUnique({
+    where: { id: proofId },
+    include: { order: { select: { id: true, orderType: true, patientProfileId: true } } },
+  });
+}
+
+/** Attach the stored file to a proof exactly once: conditional on no file
+ * being attached yet, so two concurrent uploads can't both win. */
+export async function setProofAttachmentIfEmpty(
+  db: DbClient,
+  proofId: string,
+  data: { objectKey: string; contentType: string; byteSize: number },
+): Promise<boolean> {
+  const result = await db.fulfillmentProof.updateMany({
+    where: { id: proofId, attachmentObjectKey: null },
+    data: {
+      attachmentObjectKey: data.objectKey,
+      attachmentContentType: data.contentType,
+      attachmentByteSize: data.byteSize,
+    },
+  });
+  return result.count === 1;
 }
 
 /** All fulfillment records assigned to a facility — the facility's own queue

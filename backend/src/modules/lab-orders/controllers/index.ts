@@ -1,28 +1,23 @@
 import type { Request, Response } from 'express';
 import { auditActor } from '../../../middleware/request-id';
-import * as services from '../services';
-import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
+import * as services from '../services';
+import { createLabOrderSchema, fulfillLabOrderSchema } from '../validation';
+import { HttpError } from '../../../http-error';
 
 export async function createLabOrder(req: Request, res: Response) {
-  const { patientProfileId, orderingDoctorId, details } = req.body || {};
-  const order = await services.createLabOrder({
-    patientProfileId,
-    orderingDoctorId,
-    details,
-  });
+  const input = createLabOrderSchema.parse(req.body);
+  const order = await services.createLabOrder(input);
   res.status(201).json(order);
 }
 
 export async function fulfillLabOrder(req: Request, res: Response) {
-  const id = req.params.id as string;
-  const { referenceNumber, attachment, notes } = req.body || {};
+  const input = fulfillLabOrderSchema.parse(req.body);
   const actor = auditActor(req);
-
   const order = await services.fulfillLabOrder(
-    id,
+    getParam(req, 'id'),
     req.user!.id,
-    { referenceNumber, attachment, notes },
+    input,
     actor,
   );
   res.status(200).json(order);
