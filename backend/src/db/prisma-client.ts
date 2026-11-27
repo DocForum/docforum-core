@@ -3,6 +3,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { config } from '../config';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Client as PgClient } from 'pg';
+import { recordQuery } from './query-count';
 
 export type RlsRequestContext = { userId: string; role: string };
 const rlsContext = new AsyncLocalStorage<RlsRequestContext>();
@@ -58,7 +59,21 @@ const adapter = new PrismaPg({
 // cannot retain a previous request's identity.
 // Single shared client for the whole process — Prisma's own guidance for
 // a long-running server (as opposed to a new client per request/lambda).
-const extendedClient = new PrismaClient({ adapter });
+// Issue #122: every model operation passes through one extension hook that
+// increments the current request's counter (a no-op outside a measured
+// request). Counting here rather than via `$on('query')` ties each query to
+// the caller's async context deterministically, which is what makes the
+// per-request count correct under parallel tests. A relation `include` is one
+// operation and, with Prisma's default `join` strategy, one SQL statement, so
+// a per-row query loop is exactly what this makes visible.
+const extendedClient = new PrismaClient({ adapter }).$extends({
+  query: {
+    $allOperations({ args, query }) {
+      recordQuery();
+      return query(args);
+    },
+  },
+});
 const protectedDelegates = new Set<PropertyKey>(['appointment', 'paymentIntent', 'consultation']);
 
 async function installRlsContext(
