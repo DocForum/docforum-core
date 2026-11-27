@@ -81,6 +81,37 @@ Constraints:
   This ADR makes S3 available for it, but moving export bundles is a
   separate change.
 
+## Amendment: Pluggable malware scanning (issue #324, Phase 8)
+
+A `FileScanner` interface (`backend/src/utils/file-scanner.ts`) is called in
+`attachLabResult` after magic-byte validation and before the `putObject` call.
+Result semantics: `clean` (proceed), `infected` (422 + `LAB_RESULT_INFECTED`,
+no object written, audit event recorded), `error` (scanner unavailable — see
+fail-open/fail-closed below).
+
+**Adapters:**
+- `NoOpFileScanner` — always returns `clean`. Default in development and when
+  `FILE_SCANNING_CLAMAV_ENABLED` is not `true`. Makes scanner opt-in, not opt-out,
+  so a misconfigured instance can't silently disable scanning.
+- `ClamAvFileScanner` — speaks the clamd TCP INSTREAM protocol to a clamd
+  daemon configured by `FILE_SCANNING_CLAMAV_HOST` / `FILE_SCANNING_CLAMAV_PORT`
+  (defaults `127.0.0.1:3310`).
+
+**Fail-open vs fail-closed:**
+Controlled by `FILE_SCANNING_FAIL_OPEN` (default `true`). When the scanner
+returns `error`:
+- Fail-open (dev / staging): the upload proceeds and the error is logged to
+  stderr. The object is stored and the lab result row is created normally.
+- Fail-closed (production hardening): the upload is refused with
+  `503 LAB_RESULT_SCAN_UNAVAILABLE`. An ops alert should monitor clamd
+  availability in this configuration.
+
+The choice is per-environment (env var) rather than per-request, so a
+degraded clamd does not silently flip from closed to open under load.
+
+**Test seam:** `setFileScannerForTests` / `resetFileScannerForTests` allow
+unit tests to inject a fake scanner without touching config.
+
 ## Alternatives considered
 
 - **Cloudflare R2 / DigitalOcean Spaces:** S3-compatible and cheaper egress,

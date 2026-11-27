@@ -85,6 +85,7 @@ describe('email verification', () => {
       .get('/doctors/me')
       .set('Authorization', `Bearer ${doctorSignup.body.accessToken as string}`);
     doctorProfileId = doctorMe.body.id as string;
+    await prisma.doctorProfile.update({ where: { id: doctorProfileId }, data: { verificationStatus: 'verified' } });
 
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const generate = await request(app)

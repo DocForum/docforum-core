@@ -154,8 +154,7 @@ Needs a Postgres instance — either via Docker Compose (`infra/docker/docker-co
 
 ```bash
 docker compose -f infra/docker/docker-compose.yml up --build -d
-cd backend && npx prisma migrate deploy
-curl http://localhost:4000/health
+curl http://localhost:4000/health/live
 ```
 
 ### Option 2: Local development server

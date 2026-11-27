@@ -34,7 +34,7 @@ See `PRD.md` for product scope and `ARCHITECTURE_ESSENTIALS.md` for the quick-re
 | Video/voice (if/when needed) | Third-party embed (Twilio/Daily/Agora) behind an interface, not built in-house | PRD §8.3.1 — explicitly flagged as overengineering risk if built custom. |
 | File/result storage | Object storage (S3-compatible) for lab result attachments — **decided 2026-10-24 (issue #16, `docs/adr/0018`): Amazon S3**, a private SSE-encrypted bucket per environment, via `@aws-sdk/client-s3` behind `backend/src/utils/object-storage.ts` | Never store clinical files directly in Postgres rows. Files are never addressed by URL (public or presigned): the row keeps an opaque key and the API serves the bytes after an access check on every read. |
 | Email / SMS delivery | **Postmark** (transactional email) and **Twilio** (SMS), both behind the provider-agnostic `notifications` dispatch interface and the `email-dispatcher.ts` seam. Decided per `docs/adr/` (Phase 6, issue #17). | Transactional-only providers with no marketing-list coupling; swappable because business logic only ever calls the internal `Notification` dispatch interface, never a provider SDK. |
-| Field-level encryption | AES-256-GCM envelope encryption (`backend/src/utils/field-encryption.ts`, Phase 8 issue #46) for clinical free text (`Consultation.notes`, `Referral.snapshotNotes`, `IntakeForm.freeTextNotes`) | Limits blast radius of a leaked DB dump / over-broad read replica — encryption at rest doesn't protect against those. Versioned key-id prefix enables rotation without rewriting every row. **Constraint: encrypted fields cannot be searched or indexed** — they're write-once/read-decrypt blobs. |
+| Field-level encryption | AES-256-GCM envelope encryption (`backend/src/utils/field-encryption.ts`, Phase 8 issue #46) for clinical free text (`Consultation.notes`, `Referral.snapshotNotes`, `Referral.snapshotIntake`, `IntakeForm.freeTextNotes`) | Limits blast radius of a leaked DB dump / over-broad read replica — encryption at rest doesn't protect against those. Versioned key-id prefix enables rotation without rewriting every row. **Constraint: encrypted fields cannot be searched or indexed** — they're write-once/read-decrypt blobs. |
 | Background jobs | Simple queue (BullMQ on Redis) for reminders, order-expiry checks, notification delivery | Needed for FR-15/16 and the "orphaned order" hard question (PRD §8.1.3). |
 | Infra | Docker Compose for local dev; containerized deploy target TBD (not decided — see Open Questions in ROADMAP) | Keep infra decisions deferred until a real deploy target is chosen; don't overbuild CI/CD for a repo with no code yet. |
 
@@ -134,7 +134,7 @@ Canonical source of truth: `backend/prisma/schema/` (one `.prisma` file per modu
 
 **Phase 1 models are real** (User, PatientProfile, DoctorProfile, Specialty, DoctorSpecialty, FacilityProfile, FacilityCapability, AvailabilitySlot, Appointment) — migrated via `backend/prisma/migrations/20260914110638_init/`. **Phase 2 adds the real `IntakeForm` and structured symptom records** (issue #1), extended from the original placeholder by `20261022120000_intake_forms/`. **Phase 3 added the real `Referral` and the `Consultation`↔appointment link** — migrated via `backend/prisma/migrations/20261016214929_referral_phase3/`; §4.3 and §4.4 describe what actually shipped, not a sketch. The audit trail (`AuditEvent`, §4.10) is the Phase 8 one (issue #43, `20261017212335_add_audit_event`) — the referral admin actions live in it rather than in a second table. Everything else below (§4.5 onward) is still the Phase 0 structural placeholder.
 
-Three intentional deviations from the original sketches, all flagged in the schema file itself: `Appointment.intakeId` is deferred until issue #2 adds booking-before-confirmation enforcement; `PatientProfile.guardianUserId` was replaced in Phase 8 (issue #42, `docs/adr/0011`) by the `Guardianship` relation (§4.1); and `Referral.snapshotIntakeId` still has no column. When referral snapshots are implemented, intake data must be copied into the referral rather than referenced as a mutable live record.
+Two remaining deviations from the original sketches, both flagged in the schema file itself: `Appointment.intakeId` is deferred until issue #2 adds booking-before-confirmation enforcement; `PatientProfile.guardianUserId` was replaced in Phase 8 (issue #42, `docs/adr/0011`) by the `Guardianship` relation (§4.1). **`Referral.snapshotIntakeId` is now closed** (issue #5, migration `20261126155359_referral_snapshot_intake`): the column is `snapshotIntake String?` — an AES-256-GCM encrypted JSON copy of `{ symptoms, freeTextNotes }` written once inside the creation transaction and unreachable by any subsequent write path.
 
 ### 4.1 User / Role model
 ```
@@ -465,11 +465,11 @@ Referral
   indexes: patient_profile_id, referring_doctor_id, target_doctor_id,
     status, loop_flagged_at
 ```
-Design note: `snapshot_notes` deliberately duplicates `Consultation.notes`
-rather than pointing live at it, so a later edit to the original
-consultation can never silently change what the specialist already acted
-on (PRD hard question 8.1.4). `snapshotIntakeId` from the original design
-has no column yet — see the §4 intro note.
+Design note: `snapshot_notes` and `snapshot_intake` deliberately duplicate
+rather than pointing live at their source, so a later edit to the original
+consultation or intake form can never silently change what the specialist
+already acted on (PRD hard question 8.1.4). `snapshotIntakeId` from the
+original design is now closed as `snapshotIntake` — see the §4 intro note.
 
 The other six fields are all Phase 3 issue work: `parentReferralId` +
 `loop_flagged_*` are loop detection (#65), `no_show_count` +
