@@ -193,6 +193,8 @@ export async function createConsultation(
   return res.body as { id: string };
 }
 
+let ritualSequence = 0;
+
 /** The end-to-end pre-referral ritual: slots, book, complete, consult. */
 export async function consultationRitual(
   app: App,
@@ -203,9 +205,16 @@ export async function consultationRitual(
   const slotId = slots[0];
   const appointment = await bookAppointment(app, patient, slotId);
   const { prisma } = await import('../../../src/db/prisma-client.js');
+  ritualSequence += 1;
+  const basePast = new Date('2026-01-01T00:00:00.000Z');
+  const pastStart = new Date(basePast.getTime() + ritualSequence * 3600_000);
+  const pastEnd = new Date(pastStart.getTime() + 30 * 60_000);
   await prisma.availabilitySlot.update({
     where: { id: slotId },
-    data: { startTime: new Date(Date.now() - 60000) },
+    data: {
+      startTime: pastStart,
+      endTime: pastEnd,
+    },
   });
   const completed = await setAppointmentStatus(app, doctor, appointment.id, 'completed');
   if (completed.status !== 200) throw new Error(`complete failed: ${completed.status} ${completed.text}`);
