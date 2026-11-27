@@ -65,5 +65,7 @@ export const cancelDaySchema = z.object({
     (value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().startsWith(value),
     'date must be a real calendar day.',
   ),
-  reason: z.string().trim().min(1).max(200).optional(),
+  // A code, not free text: it is written to the audit trail, which only
+  // ever holds ids and codes (no PHI).
+  reason: z.enum(['illness', 'emergency', 'personal', 'other']).optional(),
 });

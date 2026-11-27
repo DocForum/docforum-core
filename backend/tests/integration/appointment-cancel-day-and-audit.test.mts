@@ -100,7 +100,7 @@ describe('doctor cancel-day and appointment transition audit', () => {
     const untouched = await bookAppointment(app, patient, otherSlots[0]);
 
     const slotsBefore = (await slotsOn(doctor.profileId, tomorrow())).length;
-    const res = await cancelDay(doctor, { date: tomorrow(), reason: 'Unwell' });
+    const res = await cancelDay(doctor, { date: tomorrow(), reason: 'illness' });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ date: tomorrow(), cancelled: 2, failures: [] });
     expect(res.body.appointmentIds.sort()).toEqual([a1.id, a2.id].sort());
@@ -113,7 +113,7 @@ describe('doctor cancel-day and appointment transition audit', () => {
       const events = await prisma.auditEvent.findMany({ where: { entityType: 'Appointment', entityId: id, action: 'appointment.cancelled' } });
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ actorUserId: doctor.userId, fromState: 'scheduled', toState: 'cancelled' });
-      expect(events[0].metadata).toMatchObject({ reason: 'doctor_cancel_day', note: 'Unwell', slotReleased: true });
+      expect(events[0].metadata).toMatchObject({ reason: 'doctor_cancel_day', cancelReason: 'illness', slotReleased: true });
     }
     // Released slots were closed with the rest: nothing bookable is left.
     expect(await slotsOn(doctor.profileId, tomorrow())).toHaveLength(0);
@@ -179,6 +179,8 @@ describe('doctor cancel-day and appointment transition audit', () => {
       const res = await cancelDay(doctor, { date });
       expect(res.status).toBe(400);
     }
+    // reason is a code (it lands in the audit trail), never free text.
+    expect((await cancelDay(doctor, { date: tomorrow(), reason: 'I have the flu' })).status).toBe(400);
     const asPatient = await request(app)
       .post('/appointments/doctor/cancel-day')
       .set('Authorization', `Bearer ${patient.accessToken}`)

@@ -1019,7 +1019,7 @@ export interface CancelDayResult {
 export async function cancelDay(
   actor: auditService.AuditActor,
   date: string,
-  reason?: string,
+  reason?: 'illness' | 'emergency' | 'personal' | 'other',
   now: Date = new Date(),
 ): Promise<CancelDayResult> {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
@@ -1029,7 +1029,7 @@ export async function cancelDay(
   const from = start > now ? start : now;
 
   const result: CancelDayResult = { date, cancelled: 0, slotsClosed: 0, failures: [], appointmentIds: [] };
-  const auditMetadata = { reason: 'doctor_cancel_day', ...(reason ? { note: reason } : {}) };
+  const auditMetadata = { reason: 'doctor_cancel_day', ...(reason ? { cancelReason: reason } : {}) };
 
   const cancelScheduled = async () => {
     const appointments = await appointmentsRepo.findAppointmentsForDoctorOnDay(doctor.id, from, end);
