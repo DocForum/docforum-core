@@ -52,13 +52,13 @@ describe('availability service unit tests', () => {
     const fixedNow = new Date('2026-11-20T12:00:00.000Z');
 
     it('returns empty array when doctor profile is not found (404)', async () => {
-      vi.mocked(doctorsService.getDoctorProfileById).mockRejectedValueOnce(new HttpError(404, 'Doctor not found'));
+      vi.mocked(doctorsService.getDoctorProfileById).mockRejectedValueOnce(new HttpError('DOCTOR_NOT_FOUND', 'Doctor not found'));
       const slots = await listOpenSlots('non-existent-id', undefined, fixedNow);
       expect(slots).toEqual([]);
     });
 
     it('re-throws non-404 error from getDoctorProfileById', async () => {
-      vi.mocked(doctorsService.getDoctorProfileById).mockRejectedValueOnce(new HttpError(500, 'Database error'));
+      vi.mocked(doctorsService.getDoctorProfileById).mockRejectedValueOnce(new HttpError('INTERNAL', 'Database error'));
       await expect(listOpenSlots('doc-1', undefined, fixedNow)).rejects.toThrow('Database error');
     });
 

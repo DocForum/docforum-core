@@ -54,15 +54,15 @@ export interface WalletLinkOwner {
 async function resolveCallerOwner(userId: string, role: Role): Promise<WalletLinkOwner> {
   if (role === 'patient') {
     const profile = await findPatientProfileByUserId(userId);
-    if (!profile) throw new HttpError(403, 'No patient profile is associated with this account.');
+    if (!profile) throw new HttpError('PATIENT_PROFILE_REQUIRED', 'No patient profile is associated with this account.');
     return { ownerType: 'patient', ownerId: profile.id };
   }
   if (role === 'facility') {
     const profile = await findFacilityProfileByUserId(userId);
-    if (!profile) throw new HttpError(403, 'No facility profile is associated with this account.');
+    if (!profile) throw new HttpError('FACILITY_PROFILE_REQUIRED', 'No facility profile is associated with this account.');
     return { ownerType: 'facility', ownerId: profile.id };
   }
-  throw new HttpError(403, 'Only patient and facility accounts can link a wallet.');
+  throw new HttpError('WALLET_LINK_ACCOUNT_TYPE', 'Only patient and facility accounts can link a wallet.');
 }
 
 /**
@@ -100,7 +100,7 @@ export async function linkWalletViaSep10(
     // P2002 on activeOwnerKey = a concurrent request created the link
     // first (interactive transaction aborted, nonce restored above).
     if (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002') {
-      throw new HttpError(409, 'Another wallet link for this account was just created. Refresh and try again.', 'WALLET_LINK_CONFLICT');
+      throw new HttpError('WALLET_LINK_CONFLICT', 'Another wallet link for this account was just created. Refresh and try again.');
     }
     throw err;
   }
@@ -153,10 +153,8 @@ function cooldownMs(): number {
   const hours = config.walletLink.cooldownHours;
   if (Number.isNaN(hours)) {
     throw new HttpError(
-      500,
-      'WALLET_LINK_COOLDOWN_HOURS is not a valid non-negative number — wallet changes are refused until it is.',
       'PAYMENTS_MISCONFIGURED',
-    );
+      'WALLET_LINK_COOLDOWN_HOURS is not a valid non-negative number — wallet changes are refused until it is.');
   }
   return hours * 60 * 60 * 1000;
 }
@@ -230,10 +228,8 @@ export async function writeWalletLink(
 /** Thrown when an owner has a link but it is still inside its cool-down. */
 function cooldownError(effectiveAt: Date): HttpError {
   return new HttpError(
-    409,
-    `The facility's new payout wallet is in its security cool-down until ${effectiveAt.toISOString()}.`,
     'WALLET_LINK_COOLDOWN',
-  );
+    `The facility's new payout wallet is in its security cool-down until ${effectiveAt.toISOString()}.`);
 }
 
 /**
@@ -336,17 +332,13 @@ export function assertWalletLinkFundingAllowed(link: Pick<WalletLink, 'verificat
   const cutoffMs = config.payments.walletLinkUnverifiedFundingCutoff;
   if (Number.isNaN(cutoffMs)) {
     throw new HttpError(
-      500,
-      'WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF is not a valid date — funding is refused until it is.',
       'PAYMENTS_MISCONFIGURED',
-    );
+      'WALLET_LINK_UNVERIFIED_FUNDING_CUTOFF is not a valid date — funding is refused until it is.');
   }
   if (!walletLinkFundingAllowed(link.verificationMethod, cutoffMs, Date.now())) {
     throw new HttpError(
-      409,
-      "This facility's wallet link predates SEP-10 verification and the funding cutoff has passed. Re-link with a SEP-10-verified wallet to fund payments.",
       'WALLET_LINK_UNVERIFIED',
-    );
+      "This facility's wallet link predates SEP-10 verification and the funding cutoff has passed. Re-link with a SEP-10-verified wallet to fund payments.");
   }
 }
 

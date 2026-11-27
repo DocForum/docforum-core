@@ -11,7 +11,7 @@ import type { OrderStatus } from '@prisma/client';
 
 export async function getPrescription(id: string) {
   const prescription = await prescriptionsRepo.findPrescriptionById(id);
-  if (!prescription) throw new HttpError(404, 'Prescription not found.');
+  if (!prescription) throw new HttpError('PRESCRIPTION_NOT_FOUND', 'Prescription not found.');
   return prescription;
 }
 
@@ -27,7 +27,7 @@ export async function getItemsForFulfillment(prescriptionId: string): Promise<Pr
   await getPrescription(prescriptionId);
   const items = await prescriptionsRepo.listItems(prescriptionId);
   if (items.length === 0) {
-    throw new HttpError(400, 'This prescription has no items to fulfill.');
+    throw new HttpError('PRESCRIPTION_EMPTY', 'This prescription has no items to fulfill.');
   }
   // Issue #312: quantity is now on the PrescriptionItem row (nullable for
   // legacy rows pre-migration). null means the item pre-dates Phase 4 — the
@@ -91,7 +91,7 @@ export async function getPrescriptionForViewer(
     issuingDoctorId: prescription.prescribingDoctorId,
     facilityProfileId: prescription.facilityProfileId,
   }));
-  if (!prescription || !allowed) throw new HttpError(404, 'Prescription not found.');
+  if (!prescription || !allowed) throw new HttpError('PRESCRIPTION_NOT_FOUND', 'Prescription not found.');
 
   recordAccess({
     accessedBy: viewer.userId,

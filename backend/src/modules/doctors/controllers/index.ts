@@ -20,14 +20,14 @@ import { auditActor } from '../../../middleware/request-id';
 import { expectedVersion, setVersionEtag } from '../../../middleware/optimistic-concurrency';
 
 export async function getMe(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const profile = await doctorsService.getMyDoctorProfile(req.user.id);
   setVersionEtag(res, profile.version);
   res.status(200).json(profile);
 }
 
 export async function updateMe(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = updateDoctorProfileSchema.parse(req.body);
   const profile = await doctorsService.updateMyDoctorProfile(req.user.id, expectedVersion(req), input);
   setVersionEtag(res, profile.version);
@@ -54,7 +54,7 @@ export async function getPublicDoctor(req: Request, res: Response) {
 }
 
 export async function setMySpecialties(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { specialtyIds } = setMySpecialtiesSchema.parse(req.body);
   res.status(200).json(await doctorsService.setMySpecialties(req.user.id, specialtyIds));
 }
@@ -67,7 +67,7 @@ export async function setVerification(req: Request, res: Response) {
 }
 
 export async function setDoctorSpecialtyVerification(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { status, rejectionReason } = setDoctorSpecialtyVerificationSchema.parse(req.body);
   const doctorProfileId = getParam(req, 'doctorProfileId');
   const specialtyId = getParam(req, 'specialtyId');

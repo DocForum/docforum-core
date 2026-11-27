@@ -43,7 +43,7 @@ export async function accessLogStats(_req: Request, res: Response) {
  * can only ever see their own log. */
 export async function myAccessLog(req: Request, res: Response) {
   const query = patientAccessLogQuerySchema.parse(req.query);
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const profile = await getMyPatientProfile(req.user.id);
   const logs = await auditService.getAccessForPatient(profile.id, query.limit);
   res.status(200).json({ items: logs });

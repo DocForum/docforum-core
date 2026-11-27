@@ -116,7 +116,7 @@ async function requirePaymentsConfig() {
   // legacy ESCROW_TOKEN_ID is no longer required for every payment path.
   const { activeContractId } = config.payments;
   if (!activeContractId) {
-    throw new HttpError(500, 'Payments is not configured — missing env var(s): activeContractId.');
+    throw new HttpError('PAYMENTS_NOT_CONFIGURED', 'Payments is not configured — missing env var(s): activeContractId.');
   }
   const { payer, releaser } = await getPlatformSigners();
   return {
@@ -145,15 +145,15 @@ export async function verifyPaymentsNetwork(): Promise<void> {
 
 function requireRecordedContractId(intent: { sorobanContractId: string | null }): string {
   const contractId = intent.sorobanContractId;
-  if (!contractId) throw new HttpError(409, 'PaymentIntent has no recorded escrow contract id.');
+  if (!contractId) throw new HttpError('ESCROW_CONTRACT_MISSING', 'PaymentIntent has no recorded escrow contract id.');
   if (!config.payments.contractIds.includes(contractId)) {
-    throw new HttpError(409, 'PaymentIntent references an unregistered escrow contract.');
+    throw new HttpError('ESCROW_CONTRACT_UNREGISTERED', 'PaymentIntent references an unregistered escrow contract.');
   }
   return contractId;
 }
 export async function getOwnFacilityProfileId(userId: string): Promise<string> {
   const profile = await findFacilityProfileByUserId(userId);
-  if (!profile) throw new HttpError(403, 'No facility profile is associated with this account.');
+  if (!profile) throw new HttpError('FACILITY_PROFILE_REQUIRED', 'No facility profile is associated with this account.');
   return profile.id;
 }
 
@@ -161,7 +161,7 @@ export async function getOwnFacilityProfileId(userId: string): Promise<string> {
  * owned through this, never through a client-supplied profile id. */
 export async function getOwnPatientProfileId(userId: string): Promise<string> {
   const profile = await findPatientProfileByUserId(userId);
-  if (!profile) throw new HttpError(403, 'No patient profile is associated with this account.');
+  if (!profile) throw new HttpError('PATIENT_PROFILE_REQUIRED', 'No patient profile is associated with this account.');
   return profile.id;
 }
 
@@ -194,10 +194,8 @@ function resolveAsset(code: string): PaymentAsset {
   const asset = config.payments.assets.find((candidate) => candidate.code === code);
   if (!asset) {
     throw new HttpError(
-      400,
-      `Unsupported payment asset '${code}'. Allowed: ${config.payments.assets.map((a) => a.code).join(', ')}.`,
       'UNSUPPORTED_PAYMENT_ASSET',
-    );
+      `Unsupported payment asset '${code}'. Allowed: ${config.payments.assets.map((a) => a.code).join(', ')}.`);
   }
   return asset;
 }
@@ -218,10 +216,8 @@ function resolveAssetForIntent(intent: PaymentIntent): PaymentAsset {
     configured?.tokenContractId;
   if (!tokenContractId) {
     throw new HttpError(
-      409,
-      `PaymentIntent uses asset '${intent.assetCode}', whose token contract is not configured.`,
       'PAYMENT_ASSET_NOT_CONFIGURED',
-    );
+      `PaymentIntent uses asset '${intent.assetCode}', whose token contract is not configured.`);
   }
   return {
     code: intent.assetCode,
@@ -237,10 +233,8 @@ async function requirePayeeTrustline(payee: string, asset: PaymentAsset): Promis
   if (!asset.issuer) return;
   if (!(await hasTrustline(payee, asset))) {
     throw new HttpError(
-      409,
-      `The facility's linked wallet has no trustline for ${asset.code}. Ask the facility to link a wallet that can hold ${asset.code}.`,
       'PAYEE_TRUSTLINE_MISSING',
-    );
+      `The facility's linked wallet has no trustline for ${asset.code}. Ask the facility to link a wallet that can hold ${asset.code}.`);
   }
 }
 
@@ -255,7 +249,7 @@ export interface CreatePaymentIntentInput {
 }
 
 export function createPaymentIntent(input: CreatePaymentIntentInput) {
-  if (input.amount <= 0n) throw new HttpError(400, 'amount must be positive.');
+  if (input.amount <= 0n) throw new HttpError('INVALID_AMOUNT', 'amount must be positive.');
   const asset = resolveAsset(input.assetCode);
   return paymentsRepo.createPaymentIntent({
     orderType: input.orderType,
@@ -289,7 +283,7 @@ export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, i
   const catalogItemCode = input.catalogItemCode ?? null;
   const facility = await findFacilityProfileById(input.facilityProfileId, tx);
   const expectedType = input.kind === 'prescription' ? 'pharmacy' : 'lab';
-  if (!facility || facility.type !== expectedType) throw new HttpError(400, `The selected facility must be a ${expectedType} facility.`);
+  if (!facility || facility.type !== expectedType) throw new HttpError('FACILITY_TYPE_MISMATCH', `The selected facility must be a ${expectedType} facility.`);
 
   const orderPointer = input.kind === 'prescription'
     ? { prescriptionId: input.orderId, labOrderId: null }
@@ -329,7 +323,7 @@ export async function createIntentForIssuedOrder(tx: Prisma.TransactionClient, i
 
 export async function getPaymentIntent(id: string) {
   const intent = await paymentsRepo.findPaymentIntentById(id);
-  if (!intent) throw new HttpError(404, 'PaymentIntent not found.');
+  if (!intent) throw new HttpError('PAYMENT_INTENT_NOT_FOUND', 'PaymentIntent not found.');
   return intent;
 }
 
@@ -419,7 +413,7 @@ function decodePaymentCursor(cursor: string): { createdAt: Date; id: string } {
   const createdAt = new Date(raw.slice(0, separator));
   const id = raw.slice(separator + 1);
   if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
-    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+    throw new HttpError('INVALID_CURSOR', 'Invalid cursor.');
   }
   return { createdAt, id };
 }
@@ -534,12 +528,12 @@ async function commitTransition(
   write: (tx: any) => Promise<any>,
 ): Promise<any> {
   if (transitionPaymentIntentStatus(intent.status, to) !== to) {
-    throw new HttpError(409, `PaymentIntent cannot transition from '${intent.status}' to '${to}'.`);
+    throw new HttpError('PAYMENT_STATE_CONFLICT', `PaymentIntent cannot transition from '${intent.status}' to '${to}'.`);
   }
   return prisma.$transaction(async (tx) => {
     const updated = await write(tx);
     if (!updated) {
-      throw new HttpError(409, `PaymentIntent changed concurrently — it is no longer '${intent.status}'.`);
+      throw new HttpError('PAYMENT_STATE_CONFLICT', `PaymentIntent changed concurrently — it is no longer '${intent.status}'.`);
     }
     await auditService.record(tx, actor, {
       entityType: 'PaymentIntent',
@@ -564,7 +558,7 @@ async function commitTransition(
 export async function fundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (transitionPaymentIntentStatus(intent.status, 'escrowed') !== 'escrowed') {
-    throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
+    throw new HttpError('PAYMENT_STATE_CONFLICT', `PaymentIntent is '${intent.status}', not 'created' — cannot fund.`);
   }
 
   // The facility's EFFECTIVE link (issue #328): the newest link that has
@@ -572,7 +566,7 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   // payee — funding keeps using the previous effective address until then.
   const walletLink = await requireEffectiveFacilityPayee(
     intent.facilityId,
-    new HttpError(409, 'The facility for this payment has no linked wallet.'),
+    new HttpError('FACILITY_WALLET_NOT_LINKED', 'The facility for this payment has no linked wallet.'),
   );
   assertWalletLinkFundingAllowed(walletLink);
 
@@ -608,9 +602,8 @@ export async function fundPaymentIntent(actor: auditService.AuditActor, id: stri
   });
   if (!claimed) {
     throw new HttpError(
-      409,
-      `PaymentIntent is no longer 'created' — another funding request already claimed it.`,
-    );
+      'PAYMENT_STATE_CONFLICT',
+      `PaymentIntent is no longer 'created' — another funding request already claimed it.`);
   }
 
   let escrowId: bigint;
@@ -730,17 +723,17 @@ export async function preparePaymentIntent(
   id: string,
   now = new Date(),
 ): Promise<PreparePaymentIntentResult> {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   // ADR 0005: wallet funding launches "as an option, not the default" — it is
   // behind a flag (issue #132), off until an admin enables it for a cohort.
   if (!(await flagsService.isEnabled(flagsService.WALLET_FUNDING_FLAG, { id: actor.userId, role: actor.role ?? 'patient' }))) {
-    throw new HttpError(403, 'Wallet payments are not enabled for this account.', 'FEATURE_DISABLED');
+    throw new HttpError('FEATURE_DISABLED', 'Wallet payments are not enabled for this account.');
   }
   const patientProfileId = await getOwnPatientProfileId(actor.userId);
 
   let intent = await getPaymentIntent(id);
   // 404, not 403, for someone else's intent: don't confirm it exists.
-  if (intent.patientProfileId !== patientProfileId) throw new HttpError(404, 'PaymentIntent not found.');
+  if (intent.patientProfileId !== patientProfileId) throw new HttpError('PAYMENT_INTENT_NOT_FOUND', 'PaymentIntent not found.');
 
   if (intent.status === 'awaiting_signature') {
     const live =
@@ -750,7 +743,7 @@ export async function preparePaymentIntent(
       intent.preparedExpiresAt !== null &&
       intent.refundAfter !== null;
     if (!live) {
-      throw new HttpError(409, 'This payment already has a prepared transaction.', 'PREPARE_ALREADY_PENDING');
+      throw new HttpError('PREPARE_ALREADY_PENDING', 'This payment already has a prepared transaction.');
     }
     // Idempotent re-prepare while the transaction is still valid: return the
     // exact same transaction instead of building a second live one.
@@ -769,27 +762,25 @@ export async function preparePaymentIntent(
     await expirePreparedIntent(intent.id, now);
     intent = await getPaymentIntent(id);
     if (intent.status !== 'created') {
-      throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot prepare.`);
+      throw new HttpError('PAYMENT_STATE_CONFLICT', `PaymentIntent is '${intent.status}', not 'created' — cannot prepare.`);
     }
   }
 
   if (intent.status !== 'created') {
-    throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'created' — cannot prepare.`);
+    throw new HttpError('PAYMENT_STATE_CONFLICT', `PaymentIntent is '${intent.status}', not 'created' — cannot prepare.`);
   }
 
   const patientWallet = await getPatientWalletLink(patientProfileId);
   if (!patientWallet) {
     throw new HttpError(
-      409,
-      'No verified Stellar wallet is linked to this patient — link one before paying.',
       'WALLET_NOT_LINKED',
-    );
+      'No verified Stellar wallet is linked to this patient — link one before paying.');
   }
 
   // Issue #328: the effective payee, never a link inside its cool-down.
   const payeeWallet = await requireEffectiveFacilityPayee(
     intent.facilityId,
-    new HttpError(409, 'The facility for this payment has no linked wallet.', 'FACILITY_WALLET_NOT_LINKED'),
+    new HttpError('FACILITY_WALLET_NOT_LINKED', 'The facility for this payment has no linked wallet.'),
     now,
   );
 
@@ -800,10 +791,8 @@ export async function preparePaymentIntent(
   const client = (await escrowClient(escrowContractId)) as unknown as PrepareCapableClient;
   if (typeof client.prepareCreateEscrow !== 'function') {
     throw new HttpError(
-      503,
-      'The installed escrow SDK cannot prepare unsigned transactions yet (requires docforum-escrow SDK 0.3.0).',
       'ESCROW_SDK_PREPARE_UNSUPPORTED',
-    );
+      'The installed escrow SDK cannot prepare unsigned transactions yet (requires docforum-escrow SDK 0.3.0).');
   }
 
   const refundAfter = computeRefundAfter(intent, now);
@@ -844,7 +833,7 @@ export async function preparePaymentIntent(
 export async function releasePaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (transitionPaymentIntentStatus(intent.status, 'released') !== 'released' || intent.escrowId === null) {
-    throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
+    throw new HttpError('PAYMENT_STATE_CONFLICT', `PaymentIntent is '${intent.status}', not 'escrowed' — cannot release.`);
   }
   // Issue #328: never release to a payee that is only a not-yet-effective link.
   await assertEscrowPayeeEffective(intent);
@@ -864,7 +853,7 @@ export async function releasePaymentIntent(actor: auditService.AuditActor, id: s
 export async function refundPaymentIntent(actor: auditService.AuditActor, id: string) {
   const intent = await getPaymentIntent(id);
   if (transitionPaymentIntentStatus(intent.status, 'refunded') !== 'refunded' || intent.escrowId === null) {
-    throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'escrowed' — cannot refund.`);
+    throw new HttpError('PAYMENT_STATE_CONFLICT', `PaymentIntent is '${intent.status}', not 'escrowed' — cannot refund.`);
   }
 
   const { platformReleaser } = await requirePaymentsConfig();
@@ -1179,23 +1168,23 @@ export async function adoptObservedEscrow(input: {
 }): Promise<PaymentIntent | null> {
   const intent = await getPaymentIntent(input.paymentIntentId);
   if (intent.status !== 'funding') {
-    throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'funding' — nothing to reconcile.`);
+    throw new HttpError('PAYMENT_STATE_CONFLICT', `PaymentIntent is '${intent.status}', not 'funding' — nothing to reconcile.`);
   }
   if (!config.payments.contractIds.includes(input.contractId)) {
-    throw new HttpError(400, 'contractId is not a registered escrow contract.');
+    throw new HttpError('INVALID_CONTRACT_ID', 'contractId is not a registered escrow contract.');
   }
   let escrowId: bigint;
   try {
     escrowId = BigInt(input.escrowId);
   } catch {
-    throw new HttpError(400, 'escrowId must be a numeric escrow id.');
+    throw new HttpError('INVALID_ESCROW_ID', 'escrowId must be a numeric escrow id.');
   }
   const observed = await prisma.escrowChainEvent.findFirst({
     where: { contractId: input.contractId, escrowId },
     orderBy: { detectedAt: 'desc' },
   });
   if (!observed) {
-    throw new HttpError(404, 'That escrow has not been observed on-chain for this contract — refusing to adopt it.');
+    throw new HttpError('ESCROW_NOT_OBSERVED', 'That escrow has not been observed on-chain for this contract — refusing to adopt it.');
   }
   return commitTransition(auditService.SYSTEM_ACTOR, intent, 'payment_intent.reconciled', 'escrowed', (tx) =>
     paymentsRepo.markEscrowed(tx, intent.id, {
@@ -1211,7 +1200,7 @@ export async function adoptObservedEscrow(input: {
 export async function abandonStuckFundingClaim(paymentIntentId: string): Promise<PaymentIntent | null> {
   const intent = await getPaymentIntent(paymentIntentId);
   if (intent.status !== 'funding') {
-    throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'funding' — nothing to release.`);
+    throw new HttpError('PAYMENT_STATE_CONFLICT', `PaymentIntent is '${intent.status}', not 'funding' — nothing to release.`);
   }
   return commitTransition(auditService.SYSTEM_ACTOR, intent, 'payment_intent.funding_abandoned', 'created', (tx) =>
     paymentsRepo.releaseFundingClaim(tx, paymentIntentId),
@@ -1230,11 +1219,11 @@ export async function submitPaymentIntent(
   signedXdr: string,
   now = new Date(),
 ): Promise<SubmitPaymentIntentResult> {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const patientProfileId = await getOwnPatientProfileId(actor.userId);
 
   const intent = await getPaymentIntent(id);
-  if (intent.patientProfileId !== patientProfileId) throw new HttpError(404, 'PaymentIntent not found.');
+  if (intent.patientProfileId !== patientProfileId) throw new HttpError('PAYMENT_INTENT_NOT_FOUND', 'PaymentIntent not found.');
 
   // Idempotent: a retried submit of an already-escrowed intent never
   // double-submits.
@@ -1242,14 +1231,14 @@ export async function submitPaymentIntent(
     return { intent, escrowId: intent.escrowId, stellarTxHash: intent.stellarTxHash };
   }
   if (intent.status !== 'awaiting_signature') {
-    throw new HttpError(409, `PaymentIntent is '${intent.status}', not 'awaiting_signature' — cannot submit.`);
+    throw new HttpError('PAYMENT_STATE_CONFLICT', `PaymentIntent is '${intent.status}', not 'awaiting_signature' — cannot submit.`);
   }
   if (!intent.preparedTxHash || !intent.preparedExpiresAt) {
-    throw new HttpError(409, 'This payment has no prepared transaction.', 'PREPARE_REQUIRED');
+    throw new HttpError('PREPARE_REQUIRED', 'This payment has no prepared transaction.');
   }
   if (intent.preparedExpiresAt.getTime() <= now.getTime()) {
     await expirePreparedIntent(intent.id, now);
-    throw new HttpError(409, 'The prepared transaction has expired — prepare again.', 'PREPARED_EXPIRED');
+    throw new HttpError('PREPARED_EXPIRED', 'The prepared transaction has expired — prepare again.');
   }
 
   // Verify the submitted XDR is exactly the prepared transaction.
@@ -1258,16 +1247,16 @@ export async function submitPaymentIntent(
   try {
     tx = (stellar as any).TransactionBuilder.fromXDR(signedXdr, config.payments.networkPassphrase);
   } catch {
-    throw new HttpError(400, 'signedXdr is not a valid transaction.', 'INVALID_XDR');
+    throw new HttpError('INVALID_XDR', 'signedXdr is not a valid transaction.');
   }
   const hash = tx.hash().toString('hex');
   if (hash !== intent.preparedTxHash) {
-    throw new HttpError(400, 'The submitted transaction does not match the prepared one.', 'TX_HASH_MISMATCH');
+    throw new HttpError('TX_HASH_MISMATCH', 'The submitted transaction does not match the prepared one.');
   }
 
   const patientWallet = await getPatientWalletLink(patientProfileId);
   if (!patientWallet) {
-    throw new HttpError(409, 'No verified Stellar wallet is linked to this patient.', 'WALLET_NOT_LINKED');
+    throw new HttpError('WALLET_NOT_LINKED', 'No verified Stellar wallet is linked to this patient.');
   }
   let verified = false;
   try {
@@ -1278,7 +1267,7 @@ export async function submitPaymentIntent(
     verified = false;
   }
   if (!verified) {
-    throw new HttpError(400, 'The transaction is not signed by the linked patient account.', 'INVALID_SIGNATURE');
+    throw new HttpError('INVALID_SIGNATURE', 'The transaction is not signed by the linked patient account.');
   }
 
   // Fee-sponsor budget check (issue #82): per-patient and global limits
@@ -1286,12 +1275,12 @@ export async function submitPaymentIntent(
   const bucket = feeSponsorshipBuckets.get(patientProfileId) ?? { count: 0, lastReset: Date.now() };
   if (Date.now() - bucket.lastReset > FEE_SPONSOR_WINDOW_MS) bucket.count = 0;
   if (bucket.count >= FEE_SPONSOR_PER_PATIENT_LIMIT) {
-    throw new HttpError(429, 'Per-patient fee-sponsorship budget exceeded.', 'FEE_SPONSOR_PATIENT_LIMIT');
+    throw new HttpError('FEE_SPONSOR_PATIENT_LIMIT', 'Per-patient fee-sponsorship budget exceeded.');
   }
   let globalTotal = 0;
   for (const b of feeSponsorshipBuckets.values()) globalTotal += b.count;
   if (globalTotal >= FEE_SPONSOR_GLOBAL_LIMIT) {
-    throw new HttpError(429, 'Global fee-sponsorship budget exceeded.', 'FEE_SPONSOR_GLOBAL_LIMIT');
+    throw new HttpError('FEE_SPONSOR_GLOBAL_LIMIT', 'Global fee-sponsorship budget exceeded.');
   }
 
   // Claim the submit (awaiting_signature -> submitting) before any chain call.
@@ -1309,7 +1298,7 @@ export async function submitPaymentIntent(
     return row;
   });
   if (!claimed) {
-    throw new HttpError(409, 'PaymentIntent changed concurrently — it is no longer awaiting signature.');
+    throw new HttpError('PAYMENT_STATE_CONFLICT', 'PaymentIntent changed concurrently — it is no longer awaiting signature.');
   }
 
   const contractId = requireRecordedContractId(intent);
@@ -1335,10 +1324,8 @@ export async function submitPaymentIntent(
       }
     }).catch(() => undefined);
     throw new HttpError(
-      503,
-      'The installed escrow SDK cannot submit signed transactions yet (requires docforum-escrow SDK 0.3.0).',
       'ESCROW_SDK_SUBMIT_UNSUPPORTED',
-    );
+      'The installed escrow SDK cannot submit signed transactions yet (requires docforum-escrow SDK 0.3.0).');
   }
 
   let escrowId: bigint;
@@ -1371,7 +1358,7 @@ export async function submitPaymentIntent(
       stellarTxHash,
       sorobanContractId: contractId,
     });
-    if (!row) throw new HttpError(409, 'PaymentIntent changed concurrently during submit.');
+    if (!row) throw new HttpError('PAYMENT_STATE_CONFLICT', 'PaymentIntent changed concurrently during submit.');
     await auditService.record(txc, actor, {
       entityType: 'PaymentIntent',
       entityId: id,

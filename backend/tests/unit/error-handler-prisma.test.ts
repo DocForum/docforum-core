@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
 import type { Request, Response } from 'express';
 import { errorHandler, PRISMA_CLIENT_ERRORS } from '../../src/middleware/error-handler';
+import { ERROR_CATALOGUE } from '../../src/error-catalogue';
 
 function run(err: unknown) {
   const log = { warn: vi.fn(), error: vi.fn() };
@@ -32,8 +33,8 @@ describe('errorHandler Prisma mapping', () => {
   ])('maps %s to %i with a generic message', (code, status, meta) => {
     const { status: sent, body, log } = run(prismaError(code, meta));
     expect(sent).toBe(status);
-    expect(body).toEqual({ message: PRISMA_CLIENT_ERRORS[code].message });
-    expect(Object.keys(body)).toEqual(['message']);
+    expect(body).toEqual({ code: PRISMA_CLIENT_ERRORS[code].code, message: PRISMA_CLIENT_ERRORS[code].message });
+    expect(Object.keys(body).sort()).toEqual(['code', 'message']);
     expect(JSON.stringify(body)).not.toMatch(LEAKS);
     // Client errors are warnings server-side, with the full error attached.
     expect(log.warn).toHaveBeenCalledWith({ err: expect.any(Prisma.PrismaClientKnownRequestError) }, expect.any(String));
@@ -42,8 +43,9 @@ describe('errorHandler Prisma mapping', () => {
 
   it('keeps every mapped message free of schema detail', () => {
     for (const mapping of Object.values(PRISMA_CLIENT_ERRORS)) {
-      expect(mapping.status).toBeGreaterThanOrEqual(400);
-      expect(mapping.status).toBeLessThan(500);
+      const status = ERROR_CATALOGUE[mapping.code].status;
+      expect(status).toBeGreaterThanOrEqual(400);
+      expect(status).toBeLessThan(500);
       expect(mapping.message).not.toMatch(LEAKS);
     }
   });
@@ -51,7 +53,7 @@ describe('errorHandler Prisma mapping', () => {
   it('still answers 500 for an unmapped Prisma code, without leaking it', () => {
     const { status, body, log } = run(prismaError('P2034', {}));
     expect(status).toBe(500);
-    expect(body).toEqual({ message: 'Internal server error.' });
+    expect(body).toEqual({ code: 'INTERNAL', message: 'Internal server error.' });
     expect(log.error).toHaveBeenCalled();
   });
 

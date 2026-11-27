@@ -22,13 +22,13 @@ export async function requestEmailChange(
   ip?: string,
 ): Promise<{ message: string }> {
   const user = await findUserById(userId);
-  if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
+  if (!user || user.deletedAt) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
 
   const newEmail = input.newEmail.trim().toLowerCase();
-  if (!newEmail) throw new HttpError(400, 'A valid new email address is required.');
+  if (!newEmail) throw new HttpError('INVALID_EMAIL', 'A valid new email address is required.');
 
   if (user.email.toLowerCase() === newEmail) {
-    throw new HttpError(400, 'New email address must be different from current email.');
+    throw new HttpError('EMAIL_UNCHANGED', 'New email address must be different from current email.');
   }
 
   // Password confirmation (shares login-throttle brute-force protection)
@@ -37,7 +37,7 @@ export async function requestEmailChange(
   // Refuse if already registered
   const existing = await findUserByEmail(newEmail);
   if (existing) {
-    throw new HttpError(409, 'An account with this email already exists.', 'EMAIL_TAKEN');
+    throw new HttpError('EMAIL_TAKEN', 'An account with this email already exists.');
   }
 
   const token = generateVerificationToken();
@@ -102,13 +102,13 @@ export async function confirmEmailChange(
   });
 
   if (!record) {
-    throw new HttpError(400, 'Invalid email change token.', 'INVALID_TOKEN');
+    throw new HttpError('INVALID_TOKEN', 'Invalid email change token.');
   }
   if (record.consumedAt) {
-    throw new HttpError(400, 'This email change token has already been used.', 'TOKEN_ALREADY_USED');
+    throw new HttpError('TOKEN_ALREADY_USED', 'This email change token has already been used.');
   }
   if (record.expiresAt.getTime() <= Date.now()) {
-    throw new HttpError(400, 'This email change token has expired.', 'TOKEN_EXPIRED');
+    throw new HttpError('TOKEN_EXPIRED', 'This email change token has expired.');
   }
 
   return prisma.$transaction(async (tx) => {
@@ -118,7 +118,7 @@ export async function confirmEmailChange(
       data: { consumedAt: new Date() },
     });
     if (consumed.count !== 1) {
-      throw new HttpError(400, 'This email change token has already been used.', 'TOKEN_ALREADY_USED');
+      throw new HttpError('TOKEN_ALREADY_USED', 'This email change token has already been used.');
     }
 
     // Refuse if new address was taken in the meantime
@@ -126,7 +126,7 @@ export async function confirmEmailChange(
       where: { email: record.newEmail },
     });
     if (existing && existing.id !== record.userId) {
-      throw new HttpError(409, 'An account with this email already exists.', 'EMAIL_TAKEN');
+      throw new HttpError('EMAIL_TAKEN', 'An account with this email already exists.');
     }
 
     const currentUser = await tx.user.findUnique({
@@ -145,7 +145,7 @@ export async function confirmEmailChange(
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new HttpError(409, 'An account with this email already exists.', 'EMAIL_TAKEN');
+        throw new HttpError('EMAIL_TAKEN', 'An account with this email already exists.');
       }
       throw err;
     }

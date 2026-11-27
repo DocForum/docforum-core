@@ -58,9 +58,6 @@ export const IDEMPOTENCY_HEADER = 'idempotency-key';
 
 // Machine-readable discriminators, matching the `code` field convention
 // introduced by issue #34 so docforum-web can branch without parsing prose.
-export const CODE_INVALID_KEY = 'INVALID_IDEMPOTENCY_KEY';
-export const CODE_KEY_REUSED = 'IDEMPOTENCY_KEY_REUSED';
-export const CODE_IN_PROGRESS = 'IN_PROGRESS';
 
 // What a client should wait before repeating a request that collided with one
 // already in flight. Short on purpose — the winner is usually a booking or an
@@ -284,9 +281,9 @@ export function idempotency() {
 
     const key = raw.trim();
     if (!isValidIdempotencyKey(key)) {
-      throw new HttpError(400, `\`${IDEMPOTENCY_HEADER}\` must be 1-${MAX_KEY_LENGTH} printable ASCII characters.`, CODE_INVALID_KEY);
+      throw new HttpError('INVALID_IDEMPOTENCY_KEY', `\`${IDEMPOTENCY_HEADER}\` must be 1-${MAX_KEY_LENGTH} printable ASCII characters.`);
     }
-    if (!req.user) throw new HttpError(401, 'Authentication required.');
+    if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
 
     // `req.baseUrl` is the router's mount path and `req.route.path` the
     // pattern under it, so the stored route reads '/payments/intents/:id/fund'
@@ -311,18 +308,14 @@ export function idempotency() {
 
     if (claim.kind === 'mismatch') {
       throw new HttpError(
-        422,
-        'This Idempotency-Key was already used for a different request. Use a new key.',
-        CODE_KEY_REUSED,
-      );
+        'IDEMPOTENCY_KEY_REUSED',
+        'This Idempotency-Key was already used for a different request. Use a new key.');
     }
     if (claim.kind === 'in_progress' || claim.kind === 'unknown') {
       res.set('Retry-After', String(RETRY_AFTER_SECONDS));
       throw new HttpError(
-        409,
-        'A request with this Idempotency-Key is still in progress. Retry shortly with the same key.',
-        CODE_IN_PROGRESS,
-      );
+        'IN_PROGRESS',
+        'A request with this Idempotency-Key is still in progress. Retry shortly with the same key.');
     }
     if (claim.kind === 'replay') {
       res.set('Idempotency-Replayed', 'true');

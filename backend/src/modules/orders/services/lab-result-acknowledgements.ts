@@ -46,17 +46,17 @@ async function requireDoctorProfileId(userId: string): Promise<string> {
  * the first acknowledgement is the record and is never overwritten.
  */
 export async function acknowledgeLabResult(actor: AuditActor, labResultId: string) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const doctorProfileId = await requireDoctorProfileId(actor.userId);
 
   const acknowledgement = await repo.findAcknowledgementForReply(labResultId);
   // Not mine (or no task at all) reads the same as a missing result, so a
   // doctor cannot probe other clinicians' results.
   if (!acknowledgement || acknowledgement.orderingDoctorId !== doctorProfileId) {
-    throw new HttpError(404, ACK_REQUIRED_NOT_FOUND);
+    throw new HttpError('ACKNOWLEDGEMENT_NOT_REQUIRED', ACK_REQUIRED_NOT_FOUND);
   }
   if (acknowledgement.acknowledgedAt) {
-    throw new HttpError(409, 'This result has already been acknowledged.');
+    throw new HttpError('LAB_RESULT_ALREADY_ACKNOWLEDGED', 'This result has already been acknowledged.');
   }
 
   const now = new Date();
@@ -87,7 +87,7 @@ export async function acknowledgeLabResult(actor: AuditActor, labResultId: strin
     return tx.labResultAcknowledgement.findUniqueOrThrow({ where: { labResultId } });
   });
 
-  if (!updated) throw new HttpError(409, 'This result has already been acknowledged.');
+  if (!updated) throw new HttpError('LAB_RESULT_ALREADY_ACKNOWLEDGED', 'This result has already been acknowledged.');
   return updated;
 }
 
@@ -100,7 +100,7 @@ export async function listUnacknowledgedResults(
   actor: AuditActor & { role: Role },
   options: { take: number; now?: Date } = { take: 50 },
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const now = options.now ?? new Date();
   const isAdmin = actor.role === 'admin';
   const orderingDoctorId = isAdmin ? undefined : await requireDoctorProfileId(actor.userId);

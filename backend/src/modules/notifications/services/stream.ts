@@ -45,7 +45,7 @@ export class NotificationHub {
   subscribe(userId: string, sink: StreamSink, maxPerUser = MAX_STREAMS_PER_USER): () => void {
     const existing = this.streams.get(userId) ?? new Set<StreamSink>();
     if (existing.size >= maxPerUser) {
-      throw new HttpError(429, 'Too many open notification streams. Close one and try again.', 'STREAM_LIMIT');
+      throw new HttpError('STREAM_LIMIT', 'Too many open notification streams. Close one and try again.');
     }
     existing.add(sink);
     this.streams.set(userId, existing);

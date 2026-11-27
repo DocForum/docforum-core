@@ -18,14 +18,14 @@ import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
 
 export async function create(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = createReferralSchema.parse(req.body);
   const referral = await referralsService.createReferral(req.user.id, input);
   res.status(201).json(referral);
 }
 
 export async function createBatch(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const sourceConsultationId = getParam(req, 'consultationId');
   const { targets } = createReferralBatchSchema.parse(req.body);
   const referrals = await referralsService.createReferralBatch(req.user.id, sourceConsultationId, targets);
@@ -33,7 +33,7 @@ export async function createBatch(req: Request, res: Response) {
 }
 
 export async function accept(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { availabilitySlotId, patientProfileId } = acceptReferralSchema.parse(req.body);
   const referral = await referralsService.acceptReferral(
     auditActor(req),
@@ -45,14 +45,14 @@ export async function accept(req: Request, res: Response) {
 }
 
 export async function decline(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { patientProfileId, reason } = declineReferralSchema.parse(req.body ?? {});
   const referral = await referralsService.declineReferral(auditActor(req), getParam(req, 'referralId'), patientProfileId, reason);
   res.status(200).json(referral);
 }
 
 export async function withdraw(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = withdrawReferralSchema.parse(req.body);
   const referral = await referralsService.withdrawReferral(
     auditActor(req),
@@ -63,7 +63,7 @@ export async function withdraw(req: Request, res: Response) {
 }
 
 export async function listMine(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { patientProfileId } = listMineQuerySchema.parse(req.query);
   const referrals = await referralsService.listMine(req.user.id, patientProfileId);
   // Grouped by source consultation for the patient's "one visit, several
@@ -77,20 +77,20 @@ export async function listMine(req: Request, res: Response) {
 }
 
 export async function listCreated(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const referrals = await referralsService.listCreated(req.user.id);
   res.status(200).json(referrals);
 }
 
 export async function listIncoming(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const filters = incomingReferralsQuerySchema.parse(req.query);
   const page = await referralsService.listIncoming(req.user.id, filters);
   res.status(200).json(page);
 }
 
 export async function getOne(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { patientProfileId } = referralDetailQuerySchema.parse(req.query);
   const referral = await referralsService.getReferralDetail(
     auditActor(req),
@@ -101,14 +101,14 @@ export async function getOne(req: Request, res: Response) {
 }
 
 export async function adminQueue(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const filters = adminQueueQuerySchema.parse(req.query);
   const rows = await referralsService.adminListReferrals(req.user.id, filters);
   res.status(200).json(rows);
 }
 
 export async function adminReassign(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = adminReassignSchema.parse(req.body);
   const referral = await referralsService.adminReassign(
     auditActor(req),
@@ -119,14 +119,14 @@ export async function adminReassign(req: Request, res: Response) {
 }
 
 export async function adminCancel(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = adminCancelSchema.parse(req.body);
   const referral = await referralsService.adminCancel(auditActor(req), getParam(req, 'referralId'), input);
   res.status(200).json(referral);
 }
 
 export async function auditTrail(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const events = await referralsService.listAuditEvents(getParam(req, 'referralId'));
   res.status(200).json(events);
 }

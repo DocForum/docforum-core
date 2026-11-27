@@ -87,7 +87,7 @@ describe('security response headers', () => {
     const res = await request(app).get(`/no-such-route-${runId}`);
     expect(res.status).toBe(404);
     expect(res.headers['content-type']).toMatch(/application\/json/);
-    expect(res.body).toEqual({ message: 'Not found.' });
+    expect(res.body).toEqual({ code: 'ROUTE_NOT_FOUND', message: 'Not found.' });
     expectBaselineHeaders(res.headers);
   });
 

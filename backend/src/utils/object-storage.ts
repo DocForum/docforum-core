@@ -104,7 +104,7 @@ export function getObjectStorage(): ObjectStorage {
       settings.bucket,
     );
   } else {
-    throw new HttpError(503, 'Result file storage is not configured on this server.', 'OBJECT_STORAGE_NOT_CONFIGURED');
+    throw new HttpError('OBJECT_STORAGE_NOT_CONFIGURED', 'Result file storage is not configured on this server.');
   }
   return instance;
 }

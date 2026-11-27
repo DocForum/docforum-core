@@ -42,7 +42,7 @@ export function parseEffectiveFrom(value: string | Date | undefined, now = new D
   if (value === undefined) return now;
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) {
-    throw new HttpError(400, 'effectiveFrom must be a valid ISO-8601 timestamp.');
+    throw new HttpError('INVALID_EFFECTIVE_FROM', 'effectiveFrom must be a valid ISO-8601 timestamp.');
   }
   return date;
 }
@@ -55,18 +55,14 @@ export function parseEffectiveFrom(value: string | Date | undefined, now = new D
  */
 export function priceOnRequestError(catalogItemCode: string): HttpError {
   return new HttpError(
-    422,
-    `This facility has no price for '${catalogItemCode}' yet — price on request.`,
     'PRICE_ON_REQUEST',
-  );
+    `This facility has no price for '${catalogItemCode}' yet — price on request.`);
 }
 
 /** 422 for a retired item — a stable `ITEM_RETIRED` code so callers
  * distinguish "never had a price" from "stopped offering this item". */
 export function itemRetiredError(catalogItemCode: string): HttpError {
   return new HttpError(
-    422,
-    `This facility no longer offers '${catalogItemCode}'.`,
     'ITEM_RETIRED',
-  );
+    `This facility no longer offers '${catalogItemCode}'.`);
 }

@@ -23,13 +23,13 @@ async function horizonTrustline(account: string, asset: PaymentAsset): Promise<b
   } catch {
     // Network/timeout — a transport failure, not "no trustline". Failing
     // closed with a distinct code keeps the two distinguishable.
-    throw new HttpError(502, 'Could not reach Horizon to check the payee trustline.', 'HORIZON_UNAVAILABLE');
+    throw new HttpError('HORIZON_UNAVAILABLE', 'Could not reach Horizon to check the payee trustline.');
   }
   // A Stellar account that doesn't exist (or was merged) can't hold the
   // asset. That's a real "no trustline" answer, not an outage.
   if (response.status === 404) return false;
   if (!response.ok) {
-    throw new HttpError(502, `Horizon trustline check failed (${response.status}).`, 'HORIZON_UNAVAILABLE');
+    throw new HttpError('HORIZON_UNAVAILABLE', `Horizon trustline check failed (${response.status}).`);
   }
 
   const body = (await response.json()) as {

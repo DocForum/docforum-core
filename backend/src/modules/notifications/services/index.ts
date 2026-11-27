@@ -129,7 +129,7 @@ export async function notify<T extends NotificationType>(
   options: { sourceEventId?: string } = {},
 ) {
   const parsed = notificationPayloadSchemas[type].safeParse(payload);
-  if (!parsed.success) throw new HttpError(400, 'Invalid notification payload.', 'INVALID_NOTIFICATION_PAYLOAD');
+  if (!parsed.success) throw new HttpError('INVALID_NOTIFICATION_PAYLOAD', 'Invalid notification payload.');
 
   const persisted = await notificationsRepo.createNotification(
     userId,
@@ -186,7 +186,7 @@ export function getUnreadCount(userId: string) {
 
 export async function markMyNotificationRead(userId: string, id: string) {
   const notification = await notificationsRepo.markNotificationRead(userId, id);
-  if (!notification) throw new HttpError(404, 'Notification not found.');
+  if (!notification) throw new HttpError('NOTIFICATION_NOT_FOUND', 'Notification not found.');
   return notification;
 }
 
@@ -215,6 +215,6 @@ function decodeCursor(value: string): { createdAt: Date; id: string } {
     }
     return { createdAt, id };
   } catch {
-    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+    throw new HttpError('INVALID_CURSOR', 'Invalid cursor.');
   }
 }

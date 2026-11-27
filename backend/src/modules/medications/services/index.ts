@@ -50,7 +50,7 @@ export async function searchMedications(input: { q: string; limit: number }): Pr
   // The trigram index needs at least a couple of characters to be selective;
   // a single-letter query is a full scan dressed up as a feature.
   if (query.length < 2) {
-    throw new HttpError(400, 'q must be at least 2 characters.', 'MEDICATION_QUERY_TOO_SHORT');
+    throw new HttpError('MEDICATION_QUERY_TOO_SHORT', 'q must be at least 2 characters.');
   }
   const rows = await medicationsRepo.searchByGenericName(query, input.limit);
   return rows.map(toSearchResult);
@@ -75,10 +75,8 @@ export async function getMedicationsByIds(
   const missing = uniqueIds.filter((id) => !byId.has(id));
   if (missing.length > 0) {
     throw new HttpError(
-      400,
-      `Unknown medicationId(s): ${missing.join(', ')}. Pick a medication from GET /medications or use the unlisted-medication path.`,
       'UNKNOWN_MEDICATION',
-    );
+      `Unknown medicationId(s): ${missing.join(', ')}. Pick a medication from GET /medications or use the unlisted-medication path.`);
   }
   return byId;
 }

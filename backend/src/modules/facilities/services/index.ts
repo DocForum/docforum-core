@@ -66,18 +66,18 @@ export interface PriceView {
 
 function assertCatalogItemCode(value: string): string {
   const trimmed = value.trim();
-  if (trimmed.length === 0) throw new HttpError(400, 'catalogItemCode is required.');
+  if (trimmed.length === 0) throw new HttpError('INVALID_CATALOG_ITEM', 'catalogItemCode is required.');
   if (trimmed.length > MAX_CATALOG_ITEM_CODE_LENGTH) {
-    throw new HttpError(400, `catalogItemCode must be at most ${MAX_CATALOG_ITEM_CODE_LENGTH} characters.`);
+    throw new HttpError('INVALID_CATALOG_ITEM', `catalogItemCode must be at most ${MAX_CATALOG_ITEM_CODE_LENGTH} characters.`);
   }
   return trimmed;
 }
 
 function assertAsset(value: string | undefined): string {
   const asset = (value ?? NATIVE_PRICE_ASSET).trim();
-  if (asset.length === 0) throw new HttpError(400, 'asset must not be empty.');
+  if (asset.length === 0) throw new HttpError('INVALID_CATALOG_ITEM', 'asset must not be empty.');
   if (asset.length > MAX_ASSET_ID_LENGTH) {
-    throw new HttpError(400, `asset must be at most ${MAX_ASSET_ID_LENGTH} characters.`);
+    throw new HttpError('INVALID_CATALOG_ITEM', `asset must be at most ${MAX_ASSET_ID_LENGTH} characters.`);
   }
   return asset;
 }
@@ -86,15 +86,15 @@ function assertAsset(value: string | undefined): string {
  * "my" facility, never a client-supplied id (no IDOR surface). */
 export async function getOwnFacilityProfileId(userId: string): Promise<string> {
   const facility = await facilitiesRepo.findFacilityProfileByUserId(userId);
-  if (!facility) throw new HttpError(403, 'No facility profile is linked to this account.');
+  if (!facility) throw new HttpError('FACILITY_PROFILE_REQUIRED', 'No facility profile is linked to this account.');
   return facility.id;
 }
 
 async function requireFacilityForWrite(actor: auditService.AuditActor, facilityId: string) {
   const facility = await facilitiesRepo.findFacilityProfileById(facilityId);
-  if (!facility) throw new HttpError(404, 'Facility not found.');
+  if (!facility) throw new HttpError('FACILITY_NOT_FOUND', 'Facility not found.');
   if (actor.role !== 'admin' && (actor.userId === null || facility.userId !== actor.userId)) {
-    throw new HttpError(403, 'Only the facility owner can manage this price list.');
+    throw new HttpError('NOT_FACILITY_OWNER', 'Only the facility owner can manage this price list.');
   }
   return facility;
 }
@@ -109,7 +109,7 @@ export async function listPrices(
   filters: { catalogItemCode?: string; asset?: string } = {},
 ): Promise<PriceView[]> {
   const facility = await facilitiesRepo.findFacilityProfileById(facilityId);
-  if (!facility) throw new HttpError(404, 'Facility not found.');
+  if (!facility) throw new HttpError('FACILITY_NOT_FOUND', 'Facility not found.');
   return facilitiesRepo.listPriceHistory(facilityId, filters);
 }
 
@@ -123,7 +123,7 @@ export async function createPriceVersion(
   facilityId: string,
   input: PriceVersionInput,
 ): Promise<PriceView> {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   await requireFacilityForWrite(actor, facilityId);
 
   const catalogItemCode = assertCatalogItemCode(input.catalogItemCode);
@@ -158,7 +158,7 @@ export async function createPriceVersion(
     });
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new HttpError(409, 'A price for this item and asset already exists with that effectiveFrom.');
+      throw new HttpError('PRICE_EFFECTIVE_FROM_CONFLICT', 'A price for this item and asset already exists with that effectiveFrom.');
     }
     throw error;
   }
@@ -210,7 +210,7 @@ export async function retirePriceItem(
   facilityId: string,
   input: { catalogItemCode: string; asset?: string; effectiveFrom?: string | Date },
 ): Promise<PriceView & { retired: boolean }> {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   await requireFacilityForWrite(actor, facilityId);
 
   const catalogItemCode = assertCatalogItemCode(input.catalogItemCode);
@@ -244,7 +244,7 @@ export async function retirePriceItem(
     });
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new HttpError(409, 'A price (or retirement) for this item and asset already exists with that effectiveFrom.');
+      throw new HttpError('PRICE_EFFECTIVE_FROM_CONFLICT', 'A price (or retirement) for this item and asset already exists with that effectiveFrom.');
     }
     throw error;
   }
@@ -283,16 +283,16 @@ export async function addFacilityCapability(
   facilityId: string,
   input: FacilityCapabilityInput,
 ): Promise<CapabilityView> {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const facility = await facilitiesRepo.findFacilityProfileById(facilityId);
-  if (!facility) throw new HttpError(404, 'Facility not found.');
+  if (!facility) throw new HttpError('FACILITY_NOT_FOUND', 'Facility not found.');
 
   const capabilityType = input.capabilityType as CapabilityType;
   const detail = input.detail === null || input.detail === undefined
     ? null
     : String(input.detail).trim() || null;
   if (detail !== null && detail.length > MAX_CAPABILITY_DETAIL_LENGTH) {
-    throw new HttpError(400, `capability detail must be at most ${MAX_CAPABILITY_DETAIL_LENGTH} characters.`);
+    throw new HttpError('INVALID_CAPABILITY', `capability detail must be at most ${MAX_CAPABILITY_DETAIL_LENGTH} characters.`);
   }
 
   try {
@@ -310,7 +310,7 @@ export async function addFacilityCapability(
     });
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new HttpError(409, 'This facility already holds this capability.');
+      throw new HttpError('CAPABILITY_ALREADY_HELD', 'This facility already holds this capability.');
     }
     throw error;
   }
@@ -326,12 +326,12 @@ export async function removeFacilityCapability(
   facilityId: string,
   capabilityId: string,
 ): Promise<void> {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const facility = await facilitiesRepo.findFacilityProfileById(facilityId);
-  if (!facility) throw new HttpError(404, 'Facility not found.');
+  if (!facility) throw new HttpError('FACILITY_NOT_FOUND', 'Facility not found.');
   const capability = await facilitiesRepo.findCapabilityById(capabilityId);
   if (!capability || capability.facilityProfileId !== facilityId) {
-    throw new HttpError(404, 'Capability not found for this facility.');
+    throw new HttpError('CAPABILITY_NOT_FOUND', 'Capability not found for this facility.');
   }
 
   await prisma.$transaction(async (tx) => {
@@ -378,7 +378,7 @@ function capabilityForFacilityType(type: FacilityType): CapabilityType {
   // hasOwn, not a bare lookup: an inherited key (`constructor`) must not
   // pass as a capability.
   if (!Object.hasOwn(CAPABILITY_BY_FACILITY_TYPE, type)) {
-    throw new HttpError(400, 'type must be "lab" or "pharmacy".');
+    throw new HttpError('INVALID_FACILITY_TYPE', 'type must be "lab" or "pharmacy".');
   }
   return CAPABILITY_BY_FACILITY_TYPE[type];
 }
@@ -398,7 +398,7 @@ export function facilityRequirementForOrderKind(orderKind: FacilityOrderKind) {
   const requirement = Object.hasOwn(REQUIREMENT_BY_ORDER_KIND, orderKind)
     ? REQUIREMENT_BY_ORDER_KIND[orderKind]
     : undefined;
-  if (!requirement) throw new HttpError(400, `Unknown order kind: ${String(orderKind)}`);
+  if (!requirement) throw new HttpError('INVALID_ORDER_KIND', `Unknown order kind: ${String(orderKind)}`);
   return { ...requirement };
 }
 
@@ -413,10 +413,10 @@ export async function requireFacilityForOrderKind(db: Db, facilityProfileId: str
   const { facilityType } = facilityRequirementForOrderKind(orderKind);
   const facility = await facilitiesRepo.findFacilityProfileById(facilityProfileId, db);
   if (!facility || facility.type !== facilityType) {
-    throw new HttpError(400, `The selected facility must be a ${facilityType} facility.`);
+    throw new HttpError('FACILITY_TYPE_MISMATCH', `The selected facility must be a ${facilityType} facility.`);
   }
   if (facility.user?.deactivatedAt) {
-    throw new HttpError(400, 'The selected facility has been deactivated.');
+    throw new HttpError('FACILITY_DEACTIVATED', 'The selected facility has been deactivated.');
   }
   return { id: facility.id, type: facility.type };
 }
@@ -428,10 +428,10 @@ export async function requireFacilityForOrderKind(db: Db, facilityProfileId: str
 export async function assertFacilityActive(facilityProfileId: string, db: Db = prisma) {
   const facility = await facilitiesRepo.findFacilityProfileById(facilityProfileId, db);
   if (!facility) {
-    throw new HttpError(404, 'Facility not found.');
+    throw new HttpError('FACILITY_NOT_FOUND', 'Facility not found.');
   }
   if (facility.user?.deactivatedAt) {
-    throw new HttpError(400, 'The selected facility has been deactivated.');
+    throw new HttpError('FACILITY_DEACTIVATED', 'The selected facility has been deactivated.');
   }
   return facility;
 }
@@ -591,39 +591,38 @@ export async function createFacilityAccount(
   actor: auditService.AuditActor,
   input: CreateFacilityInput,
 ): Promise<CreatedFacility> {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
 
   const email = (input.email ?? '').trim();
-  if (!email) throw new HttpError(400, 'An email address is required.');
+  if (!email) throw new HttpError('EMAIL_REQUIRED', 'An email address is required.');
   const name = (input.name ?? '').trim();
-  if (!name) throw new HttpError(400, 'A facility name is required.');
+  if (!name) throw new HttpError('FACILITY_NAME_REQUIRED', 'A facility name is required.');
   if (typeof input.password !== 'string' || input.password.length < MIN_FACILITY_PASSWORD_LENGTH) {
-    throw new HttpError(400, `password must be at least ${MIN_FACILITY_PASSWORD_LENGTH} characters.`);
+    throw new HttpError('PASSWORD_TOO_SHORT', `password must be at least ${MIN_FACILITY_PASSWORD_LENGTH} characters.`);
   }
   const requiredCapability = capabilityForFacilityType(input.type);
   if (!Array.isArray(input.capabilities) || input.capabilities.length === 0) {
-    throw new HttpError(400, 'A facility needs at least one capability — unqualified facilities are never eligible.');
+    throw new HttpError('FACILITY_CAPABILITIES_REQUIRED', 'A facility needs at least one capability — unqualified facilities are never eligible.');
   }
 
   const capabilities: { capabilityType: CapabilityType; detail: string | null }[] = [];
   for (const capability of input.capabilities) {
     if (!capability || typeof capability !== 'object') {
-      throw new HttpError(400, 'Each capability must be an object.');
+      throw new HttpError('INVALID_CAPABILITY', 'Each capability must be an object.');
     }
     // Declared `string` on the input (callers may arrive from JSON); the
     // comparison against the facility type's capability is the real check.
     const capabilityType = capability.capabilityType as CapabilityType;
     if (capabilityType !== requiredCapability) {
       throw new HttpError(
-        400,
-        `A ${input.type} facility can only hold "${requiredCapability}" capabilities, not "${String(capability.capabilityType)}".`,
-      );
+        'CAPABILITY_TYPE_MISMATCH',
+        `A ${input.type} facility can only hold "${requiredCapability}" capabilities, not "${String(capability.capabilityType)}".`);
     }
     const detail = capability.detail === null || capability.detail === undefined
       ? null
       : String(capability.detail).trim();
     if (detail !== null && detail.length > MAX_CAPABILITY_DETAIL_LENGTH) {
-      throw new HttpError(400, `capability detail must be at most ${MAX_CAPABILITY_DETAIL_LENGTH} characters.`);
+      throw new HttpError('INVALID_CAPABILITY', `capability detail must be at most ${MAX_CAPABILITY_DETAIL_LENGTH} characters.`);
     }
     capabilities.push({ capabilityType, detail: detail === '' ? null : detail });
   }
@@ -662,7 +661,7 @@ export async function createFacilityAccount(
     });
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new HttpError(409, 'An account with this email already exists.');
+      throw new HttpError('EMAIL_TAKEN', 'An account with this email already exists.');
     }
     throw error;
   }
@@ -688,15 +687,15 @@ function checkVerifyRateLimit(facilityId: string): void {
     return;
   }
   if (bucket.count >= VERIFY_RATE_LIMIT) {
-    throw new HttpError(429, 'Too many verification attempts.', 'VERIFY_RATE_LIMITED');
+    throw new HttpError('VERIFY_RATE_LIMITED', 'Too many verification attempts.');
   }
   bucket.count += 1;
 }
 
 export async function verifyOrder(actor: auditService.AuditActor, token: string) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const facility = await findFacilityProfileByUserId(actor.userId);
-  if (!facility) throw new HttpError(403, 'No facility profile is linked to this account.');
+  if (!facility) throw new HttpError('FACILITY_PROFILE_REQUIRED', 'No facility profile is linked to this account.');
   checkVerifyRateLimit(facility.id);
 
   const payload = verifyOrderToken(token);

@@ -40,20 +40,16 @@ export function requireIfMatch(req: Request, _res: Response, next: NextFunction)
   const value = req.get('If-Match');
   if (!value) {
     throw new HttpError(
-      428,
-      'If-Match is required. Read the resource first and retry with its ETag in the If-Match header.',
       'IF_MATCH_REQUIRED',
-    );
+      'If-Match is required. Read the resource first and retry with its ETag in the If-Match header.');
   }
 
   const match = VERSION_ETAG.exec(value.trim());
   const version = match ? Number(match[1]) : Number.NaN;
   if (!Number.isSafeInteger(version)) {
     throw new HttpError(
-      400,
-      'If-Match must be the strong version ETag returned by this API, e.g. If-Match: "4".',
       'INVALID_IF_MATCH',
-    );
+      'If-Match must be the strong version ETag returned by this API, e.g. If-Match: "4".');
   }
 
   req.expectedVersion = version;
@@ -77,8 +73,6 @@ export function expectedVersion(req: Request): number {
  * the same status, message and code. */
 export function versionConflict() {
   return new HttpError(
-    412,
-    'This record changed since you read it. Fetch it again and reapply your change.',
     'VERSION_CONFLICT',
-  );
+    'This record changed since you read it. Fetch it again and reapply your change.');
 }

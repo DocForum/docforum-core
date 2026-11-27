@@ -150,6 +150,9 @@ describe('booking concurrency', () => {
 
     expect(succeeded).toHaveLength(1);
     expect(conflicted).toHaveLength(CONCURRENT_PATIENTS - 1);
+    // Issue #115: the losers get a stable code, so docforum-web can tell
+    // "slot already taken" apart from "not verified" without matching text.
+    for (const res of conflicted) expect(res.body.code).toBe('SLOT_TAKEN');
     const winnerIndex = responses.findIndex((res) => res.status === 201);
     expect(winnerIndex).toBeGreaterThanOrEqual(0);
     winningPatientToken = patientTokens[winnerIndex];

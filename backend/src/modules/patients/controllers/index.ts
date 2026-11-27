@@ -9,14 +9,14 @@ import { expectedVersion, setVersionEtag } from '../../../middleware/optimistic-
 
 // Phase 2, issue #272: patient profile read/update with optimistic concurrency.
 export async function getMe(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const profile = await patientsService.getMyPatientProfile(req.user.id);
   setVersionEtag(res, profile.version);
   res.status(200).json(profile);
 }
 
 export async function updateMe(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = updatePatientProfileSchema.parse(req.body);
   const profile = await patientsService.updateMyPatientProfile(req.user.id, expectedVersion(req), input);
   setVersionEtag(res, profile.version);
@@ -27,7 +27,7 @@ export async function updateMe(req: Request, res: Response) {
 // no route here accepts a patient id.
 
 export async function requestExport(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { export: view } = await patientsService.requestMyExport(req.user.id);
   res.set('Location', `/patients/me/export/${view.id}`);
   // 202 for a new job and for an already-running one alike: either way the
@@ -36,7 +36,7 @@ export async function requestExport(req: Request, res: Response) {
 }
 
 export async function getExport(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const view = await patientsService.getMyExport(req.user.id, getParam(req, 'exportId'));
   res.status(200).json(view);
 }
@@ -44,7 +44,7 @@ export async function getExport(req: Request, res: Response) {
 /** Streams the stored bundle chunk by chunk, honouring backpressure, so a
  * large export never sits in memory whole. */
 export async function downloadExport(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const download = await patientsService.openMyExportDownload(req.user.id, getParam(req, 'exportId'));
 
   res.status(200);
@@ -72,7 +72,7 @@ export async function downloadExport(req: Request, res: Response) {
 /** Phase 8, issue #41 — account deletion (docs/adr/0010). 204 whether this
  * call anonymised the account or it was already deleted (idempotent). */
 export async function deleteMe(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { password } = deleteAccountSchema.parse(req.body ?? {});
   try {
     await patientsService.deleteMyAccount(req.user.id, password, req.ip);
@@ -87,13 +87,13 @@ export async function deleteMe(req: Request, res: Response) {
 // Phase 8, issue #42 (docs/adr/0011). The guardian is always `req.user`.
 
 export async function createDependent(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = createDependentSchema.parse(req.body ?? {});
   const dependent = await patientsService.createMyDependent(req.user.id, input);
   res.status(201).json(dependent);
 }
 
 export async function listDependents(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   res.status(200).json(await patientsService.listMyDependents(req.user.id));
 }

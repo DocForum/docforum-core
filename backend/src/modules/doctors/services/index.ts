@@ -10,7 +10,7 @@ type DbClient = typeof prisma | Prisma.TransactionClient;
 
 export async function getMyDoctorProfile(userId: string) {
   const profile = await doctorsRepo.findDoctorProfileByUserId(userId);
-  if (!profile) throw new HttpError(404, 'No doctor profile for this account.');
+  if (!profile) throw new HttpError('NO_DOCTOR_PROFILE', 'No doctor profile for this account.');
   return profile;
 }
 
@@ -114,7 +114,7 @@ export async function getPublicDoctor(doctorProfileId: string) {
   const details = await doctorsRepo.findPublicDoctorDetails([doctorProfileId]);
   const doctor = details[0];
   if (!doctor) {
-    throw new HttpError(404, 'Doctor not found.');
+    throw new HttpError('DOCTOR_NOT_FOUND', 'Doctor not found.');
   }
   const nextSlots = await availabilityService.getNextAvailableSlots([doctor.id]);
   const nextSlot = nextSlots.get(doctor.id);
@@ -130,11 +130,11 @@ export async function setMySpecialties(userId: string, requestedIds: string[]) {
   const specialtyIds = [...new Set(requestedIds)];
   return prisma.$transaction(async (tx) => {
     const profile = await doctorsRepo.findDoctorProfileByUserId(userId, tx);
-    if (!profile) throw new HttpError(404, 'No doctor profile for this account.');
+    if (!profile) throw new HttpError('NO_DOCTOR_PROFILE', 'No doctor profile for this account.');
 
     const specialties = await doctorsRepo.findSpecialtiesByIds(specialtyIds, tx);
     if (specialties.length !== specialtyIds.length) {
-      throw new HttpError(400, 'One or more specialty ids are unknown.');
+      throw new HttpError('UNKNOWN_SPECIALTIES', 'One or more specialty ids are unknown.');
     }
 
     // Check existing specialties for this doctor (issue #279, #282)
@@ -149,7 +149,7 @@ export async function setMySpecialties(userId: string, requestedIds: string[]) {
     const newSpecialties = specialties.filter((s) => !existingIds.has(s.id));
     const retiredNew = newSpecialties.find((s) => s.isRetired);
     if (retiredNew) {
-      throw new HttpError(400, `Cannot assign retired specialty: ${retiredNew.name}.`);
+      throw new HttpError('RETIRED_SPECIALTY', `Cannot assign retired specialty: ${retiredNew.name}.`);
     }
 
     // Note on pending referrals (issue #279):
@@ -163,7 +163,7 @@ export async function setMySpecialties(userId: string, requestedIds: string[]) {
 
 export async function getDoctorProfileById(doctorProfileId: string, db: DbClient = prisma) {
   const profile = await doctorsRepo.findDoctorProfileById(doctorProfileId, db);
-  if (!profile) throw new HttpError(404, 'Doctor profile not found.');
+  if (!profile) throw new HttpError('DOCTOR_PROFILE_NOT_FOUND', 'Doctor profile not found.');
   return profile;
 }
 
@@ -180,7 +180,7 @@ export async function getDoctorSummariesByIds(ids: string[]): Promise<Map<string
 export async function assertOwnsDoctorProfile(userId: string, doctorProfileId: string) {
   const profile = await getDoctorProfileById(doctorProfileId);
   if (profile.userId !== userId) {
-    throw new HttpError(403, 'You can only manage your own doctor profile.');
+    throw new HttpError('NOT_YOUR_DOCTOR_PROFILE', 'You can only manage your own doctor profile.');
   }
   return profile;
 }
@@ -202,7 +202,7 @@ export async function setVerificationStatus(
 ) {
   return prisma.$transaction(async (tx) => {
     const current = await doctorsRepo.lockVerificationStatus(tx, doctorProfileId);
-    if (current === null) throw new HttpError(404, 'Doctor profile not found.');
+    if (current === null) throw new HttpError('DOCTOR_PROFILE_NOT_FOUND', 'Doctor profile not found.');
     if (current === status) {
       return (await doctorsRepo.findDoctorProfileById(doctorProfileId, tx))!;
     }
@@ -230,7 +230,7 @@ export async function isDoctorVerified(doctorProfileId: string, db: DbClient = p
 export async function assertDoctorVerified(doctorProfileId: string, message?: string, db: DbClient = prisma) {
   const profile = await getDoctorProfileById(doctorProfileId, db);
   if (profile.verificationStatus !== 'verified') {
-    throw new HttpError(422, message ?? 'Target doctor is not verified.');
+    throw new HttpError('TARGET_DOCTOR_NOT_VERIFIED', message ?? 'Target doctor is not verified.');
   }
   return profile;
 }
@@ -250,7 +250,7 @@ export async function assertDoctorVerifiedInSpecialty(
   const specialties = await doctorsRepo.findDoctorSpecialties(doctorProfileId, db);
   const holds = specialties.some((link) => link.specialtyId === specialtyId);
   if (!holds) {
-    throw new HttpError(422, 'Target doctor does not hold the referral’s specialty.');
+    throw new HttpError('SPECIALTY_MISMATCH', 'Target doctor does not hold the referral’s specialty.');
   }
   return profile;
 }
@@ -263,7 +263,7 @@ export async function assertDoctorVerifiedInSpecialty(
 export async function assertDoctorActive(doctorProfileId: string, db?: DbClient) {
   const profile = await getDoctorProfileById(doctorProfileId, db);
   if (profile.user.deactivatedAt || profile.user.deletedAt) {
-    throw new HttpError(409, 'Doctor is not available for booking.');
+    throw new HttpError('DOCTOR_NOT_AVAILABLE', 'Doctor is not available for booking.');
   }
   return profile;
 }
@@ -274,7 +274,7 @@ export async function assertDoctorActive(doctorProfileId: string, db?: DbClient)
 export async function assertSpecialtyExists(specialtyId: string) {
   const specialty = await doctorsRepo.findSpecialtyById(specialtyId);
   if (!specialty) {
-    throw new HttpError(422, 'The target specialty does not exist.', 'SPECIALTY_NOT_FOUND');
+    throw new HttpError('SPECIALTY_NOT_FOUND', 'The target specialty does not exist.');
   }
   return specialty;
 }
@@ -323,7 +323,7 @@ export async function setDoctorSpecialtyVerification(
       include: { specialty: true },
     });
     if (!assignment) {
-      throw new HttpError(404, 'Doctor does not have this specialty assigned.');
+      throw new HttpError('SPECIALTY_NOT_ASSIGNED', 'Doctor does not have this specialty assigned.');
     }
     // Same-status updates must be a no-op without an event, matching setVerificationStatus.
     if (assignment.verificationStatus === status) {
@@ -385,7 +385,7 @@ export function decodeQueueCursor(cursor: string): { createdAt: Date; id: string
   const createdAt = new Date(raw.slice(0, separator));
   const id = raw.slice(separator + 1);
   if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
-    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+    throw new HttpError('INVALID_CURSOR', 'Invalid cursor.');
   }
   return { createdAt, id };
 }
@@ -495,12 +495,12 @@ export async function createSpecialty(
   const name = input.name.trim();
   const slug = input.slug?.trim() || slugify(name);
   if (!slug) {
-    throw new HttpError(400, 'Invalid specialty name or slug.');
+    throw new HttpError('INVALID_SPECIALTY', 'Invalid specialty name or slug.');
   }
 
   const existing = await doctorsRepo.findSpecialtyByNameOrSlug(name, slug);
   if (existing) {
-    throw new HttpError(409, 'Specialty with this name or slug already exists.');
+    throw new HttpError('SPECIALTY_DUPLICATE', 'Specialty with this name or slug already exists.');
   }
 
   return prisma.$transaction(async (tx) => {
@@ -517,7 +517,7 @@ export async function createSpecialty(
       return specialty;
     } catch (err: any) {
       if (err?.code === 'P2002') {
-        throw new HttpError(409, 'Specialty with this name or slug already exists.');
+        throw new HttpError('SPECIALTY_DUPLICATE', 'Specialty with this name or slug already exists.');
       }
       throw err;
     }
@@ -532,14 +532,14 @@ export async function updateSpecialty(
   return prisma.$transaction(async (tx) => {
     const specialty = await doctorsRepo.findSpecialtyById(id, tx);
     if (!specialty) {
-      throw new HttpError(404, 'Specialty not found.');
+      throw new HttpError('SPECIALTY_LOOKUP_NOT_FOUND', 'Specialty not found.');
     }
 
     const trimmedName = input.name?.trim();
     if (trimmedName && trimmedName !== specialty.name) {
       const duplicate = await doctorsRepo.findSpecialtyByName(trimmedName, id, tx);
       if (duplicate) {
-        throw new HttpError(409, 'Specialty with this name already exists.');
+        throw new HttpError('SPECIALTY_DUPLICATE', 'Specialty with this name already exists.');
       }
     }
 
@@ -609,12 +609,12 @@ export async function createSymptom(actor: auditService.AuditActor, input: { nam
   const name = input.name.trim();
   const slug = input.slug?.trim() || slugify(name);
   if (!slug) {
-    throw new HttpError(400, 'Invalid symptom name or slug.');
+    throw new HttpError('INVALID_SYMPTOM', 'Invalid symptom name or slug.');
   }
 
   const existing = await doctorsRepo.findSymptomByNameOrSlug(name, slug);
   if (existing) {
-    throw new HttpError(409, 'Symptom with this name or slug already exists.');
+    throw new HttpError('SYMPTOM_DUPLICATE', 'Symptom with this name or slug already exists.');
   }
 
   return prisma.$transaction(async (tx) => {
@@ -631,7 +631,7 @@ export async function createSymptom(actor: auditService.AuditActor, input: { nam
       return symptom;
     } catch (err: any) {
       if (err?.code === 'P2002') {
-        throw new HttpError(409, 'Symptom with this name or slug already exists.');
+        throw new HttpError('SYMPTOM_DUPLICATE', 'Symptom with this name or slug already exists.');
       }
       throw err;
     }
@@ -646,14 +646,14 @@ export async function updateSymptom(
   return prisma.$transaction(async (tx) => {
     const symptom = await doctorsRepo.findSymptomById(id, tx);
     if (!symptom) {
-      throw new HttpError(404, 'Symptom not found.');
+      throw new HttpError('SYMPTOM_NOT_FOUND', 'Symptom not found.');
     }
 
     const trimmedName = input.name?.trim();
     if (trimmedName && trimmedName !== symptom.name) {
       const duplicate = await doctorsRepo.findSymptomByName(trimmedName, id, tx);
       if (duplicate) {
-        throw new HttpError(409, 'Symptom with this name already exists.');
+        throw new HttpError('SYMPTOM_DUPLICATE', 'Symptom with this name already exists.');
       }
     }
 
@@ -715,7 +715,7 @@ export async function setSymptomSpecialties(
   return prisma.$transaction(async (tx) => {
     const symptom = await doctorsRepo.findSymptomById(id, tx);
     if (!symptom) {
-      throw new HttpError(404, 'Symptom not found.');
+      throw new HttpError('SYMPTOM_NOT_FOUND', 'Symptom not found.');
     }
     if (mappings.length > 0) {
       const specialties = await doctorsRepo.findSpecialtiesByIds(
@@ -723,7 +723,7 @@ export async function setSymptomSpecialties(
         tx,
       );
       if (specialties.length !== mappings.length) {
-        throw new HttpError(400, 'One or more specialty ids are unknown.');
+        throw new HttpError('UNKNOWN_SPECIALTIES', 'One or more specialty ids are unknown.');
       }
     }
 

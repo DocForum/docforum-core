@@ -78,7 +78,7 @@ export function rateLimitMiddleware(config: RateLimitConfig) {
       res.setHeader('RateLimit-Remaining', '0');
       res.setHeader('RateLimit-Reset', result.resetAt.toISOString());
       res.setHeader('Retry-After', String(retryAfter));
-      return next(new HttpError(429, 'Too many requests. Try again later.', 'RATE_LIMITED'));
+      return next(new HttpError('RATE_LIMITED', 'Too many requests. Try again later.'));
     }
 
     res.setHeader('RateLimit-Limit', config.maxRequests.toString());

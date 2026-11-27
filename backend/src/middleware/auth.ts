@@ -25,14 +25,14 @@ declare global {
 export async function authenticate(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
-    throw new HttpError(401, 'Missing or malformed Authorization header.');
+    throw new HttpError('MISSING_ACCESS_TOKEN', 'Missing or malformed Authorization header.');
   }
 
   let payload;
   try {
     payload = verifyAccessToken(header.slice('Bearer '.length));
   } catch {
-    throw new HttpError(401, 'Invalid or expired access token.');
+    throw new HttpError('INVALID_ACCESS_TOKEN', 'Invalid or expired access token.');
   }
 
   await assertActiveSession(payload.sub, payload.iat);
@@ -50,7 +50,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
 export async function authenticateMfaEnrollmentOrAccess(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
-    throw new HttpError(401, 'Missing or malformed Authorization header.');
+    throw new HttpError('MISSING_ACCESS_TOKEN', 'Missing or malformed Authorization header.');
   }
   const token = header.slice('Bearer '.length);
 
@@ -62,7 +62,7 @@ export async function authenticateMfaEnrollmentOrAccess(req: Request, _res: Resp
       payload = verifyAccessToken(token);
     }
   } catch {
-    throw new HttpError(401, 'Invalid or expired token.');
+    throw new HttpError('INVALID_BEARER_TOKEN', 'Invalid or expired token.');
   }
 
   await assertActiveSession(payload.sub, payload.iat);
@@ -80,7 +80,7 @@ export async function authenticateMfaEnrollmentOrAccess(req: Request, _res: Resp
  * It is deliberately *not* the doctor/facility `verificationStatus` gate:
  * that is a separate, manual credential review (§4.1). */
 export async function requireVerifiedEmail(req: Request, _res: Response, next: NextFunction) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   await assertEmailVerified(req.user.id);
   next();
 }
@@ -89,9 +89,9 @@ export async function requireVerifiedEmail(req: Request, _res: Response, next: N
  * user's role isn't in the allowed set. */
 export function requireRole(...allowedRoles: Role[]) {
   return (req: Request, _res: Response, next: NextFunction) => {
-    if (!req.user) throw new HttpError(401, 'Authentication required.');
+    if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
     if (!allowedRoles.includes(req.user.role)) {
-      throw new HttpError(403, 'You do not have permission to perform this action.');
+      throw new HttpError('FORBIDDEN', 'You do not have permission to perform this action.');
     }
     next();
   };

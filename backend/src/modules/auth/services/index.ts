@@ -219,12 +219,12 @@ export async function signup(input: SignupInput, context: SessionContext = {}): 
   // the type already narrows this at compile time; this is the runtime
   // guard for a request that bypasses the frontend entirely.
   if (input.role !== 'patient' && input.role !== 'doctor') {
-    throw new HttpError(400, 'Self-serve signup is only available for patient or doctor accounts.');
+    throw new HttpError('SIGNUP_ROLE_NOT_ALLOWED', 'Self-serve signup is only available for patient or doctor accounts.');
   }
 
   const existing = await findUserByEmail(input.email);
   if (existing) {
-    throw new HttpError(409, 'An account with this email already exists.');
+    throw new HttpError('EMAIL_TAKEN', 'An account with this email already exists.');
   }
 
   const passwordHash = await hashPassword(input.password);
@@ -340,7 +340,7 @@ export async function login(input: LoginInput, context: SessionContext = {}): Pr
   if (!user || !valid || user.deletedAt) {
     const afterFailure = await registerFailedLogin(throttleKeys);
     if (afterFailure.blocked) throw new LoginThrottledError(afterFailure.retryAfterSeconds);
-    throw new HttpError(401, 'Invalid email or password.');
+    throw new HttpError('INVALID_CREDENTIALS', 'Invalid email or password.');
   }
 
   await resetLoginThrottle(throttleKeys.emailKey);
@@ -349,7 +349,7 @@ export async function login(input: LoginInput, context: SessionContext = {}): Pr
   // distinguishable from a non-existent one without knowing the password
   // (Phase 8, issue #39).
   if (user.deactivatedAt) {
-    throw new HttpError(403, 'This account has been deactivated. Contact an administrator.');
+    throw new HttpError('ACCOUNT_DEACTIVATED', 'This account has been deactivated. Contact an administrator.');
   }
 
   // Phase 8, issue #36: a second factor replaces the session for this step.
@@ -402,17 +402,17 @@ export async function verifySecondFactorLogin(
   try {
     payload = verifyMfaToken(mfaToken, 'mfa_pending');
   } catch {
-    throw new HttpError(401, 'Invalid or expired two-factor token. Sign in again.', 'INVALID_MFA_TOKEN');
+    throw new HttpError('INVALID_MFA_TOKEN', 'Invalid or expired two-factor token. Sign in again.');
   }
 
   await assertActiveSession(payload.sub, payload.iat);
   const user = await findUserById(payload.sub);
-  if (!user || user.deletedAt) throw new HttpError(401, 'Invalid or expired two-factor token.', 'INVALID_MFA_TOKEN');
+  if (!user || user.deletedAt) throw new HttpError('INVALID_MFA_TOKEN', 'Invalid or expired two-factor token.');
   if ((payload.tv ?? 0) !== user.tokenVersion) {
-    throw new HttpError(401, 'Invalid or expired two-factor token. Sign in again.', 'INVALID_MFA_TOKEN');
+    throw new HttpError('INVALID_MFA_TOKEN', 'Invalid or expired two-factor token. Sign in again.');
   }
   if (!user.totpEnabledAt || !user.totpSecret) {
-    throw new HttpError(401, 'Two-factor authentication is not enabled for this account.', 'TWO_FACTOR_NOT_ENABLED');
+    throw new HttpError('MFA_NOT_ENABLED', 'Two-factor authentication is not enabled for this account.');
   }
 
   await twoFactor.verifySecondFactor(user.id, code);
@@ -454,17 +454,15 @@ export interface VerifyEmailResult {
 export async function verifyEmail(rawToken: string): Promise<VerifyEmailResult> {
   const record = await findVerificationTokenByHash(hashVerificationToken(rawToken));
   if (!record) {
-    throw new HttpError(400, 'Invalid email verification token.', 'INVALID_VERIFICATION_TOKEN');
+    throw new HttpError('INVALID_VERIFICATION_TOKEN', 'Invalid email verification token.');
   }
   if (record.consumedAt) {
     throw new HttpError(
-      400,
-      'This verification link has already been used. Request a new one if your email is still unverified.',
       'INVALID_VERIFICATION_TOKEN',
-    );
+      'This verification link has already been used. Request a new one if your email is still unverified.');
   }
   if (record.expiresAt.getTime() <= Date.now()) {
-    throw new HttpError(400, 'This verification link has expired. Request a new one.', 'VERIFICATION_TOKEN_EXPIRED');
+    throw new HttpError('VERIFICATION_TOKEN_EXPIRED', 'This verification link has expired. Request a new one.');
   }
 
   const now = new Date();
@@ -472,7 +470,7 @@ export async function verifyEmail(rawToken: string): Promise<VerifyEmailResult> 
   // must not both report success.
   const consumed = await consumeVerificationToken(record.id, now);
   if (!consumed) {
-    throw new HttpError(400, 'This verification link has already been used.', 'INVALID_VERIFICATION_TOKEN');
+    throw new HttpError('INVALID_VERIFICATION_TOKEN', 'This verification link has already been used.');
   }
 
   const user = await markUserEmailVerified(record.userId, now);
@@ -488,10 +486,10 @@ export interface ResendVerificationResult {
  * authenticated, so it can't be used to probe which addresses exist. */
 export async function resendVerificationEmail(userId: string): Promise<ResendVerificationResult> {
   const user = await findUserById(userId);
-  if (!user) throw new HttpError(401, 'Authentication required.');
+  if (!user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
 
   if (user.emailVerifiedAt) {
-    throw new HttpError(409, 'This email address is already verified.', 'EMAIL_ALREADY_VERIFIED');
+    throw new HttpError('EMAIL_ALREADY_VERIFIED', 'This email address is already verified.');
   }
 
   const intervalSeconds = config.auth.emailVerification.resendIntervalSeconds;
@@ -500,10 +498,8 @@ export async function resendVerificationEmail(userId: string): Promise<ResendVer
     const waitedSeconds = (Date.now() - latest.createdAt.getTime()) / 1000;
     if (waitedSeconds < intervalSeconds) {
       throw new HttpError(
-        429,
-        `Please wait ${Math.ceil(intervalSeconds - waitedSeconds)}s before requesting another verification email.`,
         'EMAIL_VERIFICATION_RATE_LIMITED',
-      );
+        `Please wait ${Math.ceil(intervalSeconds - waitedSeconds)}s before requesting another verification email.`);
     }
   }
 
@@ -517,9 +513,9 @@ export async function resendVerificationEmail(userId: string): Promise<ResendVer
  * immediately instead of after the token's 15-minute TTL. */
 export async function assertEmailVerified(userId: string): Promise<void> {
   const user = await findUserById(userId);
-  if (!user) throw new HttpError(401, 'Authentication required.');
+  if (!user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   if (!user.emailVerifiedAt) {
-    throw new HttpError(403, 'Verify your email address before continuing.', 'EMAIL_NOT_VERIFIED');
+    throw new HttpError('EMAIL_NOT_VERIFIED', 'Verify your email address before continuing.');
   }
 }
 
@@ -536,24 +532,23 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   try {
     payload = verifyRefreshToken(refreshToken);
   } catch {
-    throw new HttpError(401, 'Invalid or expired refresh token.');
+    throw new HttpError('INVALID_REFRESH_TOKEN', 'Invalid or expired refresh token.');
   }
 
   if (!payload.csrf || !csrfToken || !csrfTokensMatch(csrfToken, payload.csrf)) {
     throw new HttpError(
-      403,
-      'Missing or invalid CSRF token. Send the csrfToken from your login response in the X-CSRF-Token header.',
-    );
+      'CSRF_TOKEN_MISSING',
+      'Missing or invalid CSRF token. Send the csrfToken from your login response in the X-CSRF-Token header.');
   }
 
   const user = await findUserById(payload.sub);
   // A deleted account (issue #41) can't refresh its way back in.
-  if (!user || user.deletedAt) throw new HttpError(401, 'Invalid or expired refresh token.');
+  if (!user || user.deletedAt) throw new HttpError('INVALID_REFRESH_TOKEN', 'Invalid or expired refresh token.');
 
   // Deactivated accounts can't refresh out of their deactivation, and a
   // session revoked by deactivation/reactivation can't come back to life
   // through a refresh cookie either (Phase 8, issue #39).
-  if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
+  if (user.deactivatedAt) throw new HttpError('ACCOUNT_DEACTIVATED', 'This account has been deactivated.');
 
   // `tv` check: a password reset (or anything else that bumps
   // `User.tokenVersion`) kills every refresh token issued before it. Tokens
@@ -561,17 +556,17 @@ export async function refresh(refreshToken: string, csrfToken?: string | null): 
   // exactly right — they stay valid only while the user has never had a
   // version bump.
   if ((payload.tv ?? 0) !== user.tokenVersion) {
-    throw new HttpError(401, 'Invalid or expired refresh token.');
+    throw new HttpError('INVALID_REFRESH_TOKEN', 'Invalid or expired refresh token.');
   }
 
   if (isSessionRevoked(user.sessionsInvalidatedAt, payload.iat)) {
-    throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
+    throw new HttpError('SESSION_REVOKED', 'Your session has been revoked. Please sign in again.');
   }
 
   // Tokens minted before session records existed carry no `sid` and are
   // rejected: the migration logs existing sessions out once, which is the
   // honest trade for actually having a revocation store.
-  if (!payload.sid) throw new HttpError(401, 'Invalid or expired refresh token.');
+  if (!payload.sid) throw new HttpError('INVALID_REFRESH_TOKEN', 'Invalid or expired refresh token.');
 
   await assertSessionUsable({ sessionId: payload.sid, userId: user.id });
   await recordSessionUse(payload.sid);
@@ -609,10 +604,10 @@ export function sessionIdFromRefreshToken(refreshToken: string | undefined): str
  */
 export async function assertActiveSession(userId: string, issuedAtSeconds?: number): Promise<void> {
   const user = await findUserById(userId);
-  if (!user) throw new HttpError(401, 'Invalid or expired access token.');
-  if (user.deactivatedAt) throw new HttpError(401, 'This account has been deactivated.');
+  if (!user) throw new HttpError('INVALID_ACCESS_TOKEN', 'Invalid or expired access token.');
+  if (user.deactivatedAt) throw new HttpError('ACCESS_TOKEN_ACCOUNT_DEACTIVATED', 'This account has been deactivated.');
   if (isSessionRevoked(user.sessionsInvalidatedAt, issuedAtSeconds)) {
-    throw new HttpError(401, 'Your session has been revoked. Please sign in again.');
+    throw new HttpError('SESSION_REVOKED', 'Your session has been revoked. Please sign in again.');
   }
 }
 
@@ -657,8 +652,8 @@ export const accountExportSection: PatientExportSection = {
  */
 export async function confirmPassword(userId: string, password: string, ip?: string | null): Promise<void> {
   const user = await findUserById(userId);
-  if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
-  if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
+  if (!user || user.deletedAt) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
+  if (user.deactivatedAt) throw new HttpError('ACCOUNT_DEACTIVATED', 'This account has been deactivated.');
 
   const throttleKeys = { emailKey: emailThrottleKey(user.email), ipKey: normalizeClientIp(ip) };
   const gate = await checkLoginThrottle(throttleKeys);
@@ -670,7 +665,7 @@ export async function confirmPassword(userId: string, password: string, ip?: str
   if (!(await verifyPassword(password, user.passwordHash))) {
     const afterFailure = await registerFailedLogin(throttleKeys);
     if (afterFailure.blocked) throw new LoginThrottledError(afterFailure.retryAfterSeconds);
-    throw new HttpError(403, 'Password confirmation failed.', 'PASSWORD_CONFIRMATION_FAILED');
+    throw new HttpError('PASSWORD_CONFIRMATION_FAILED', 'Password confirmation failed.');
   }
 }
 
@@ -696,12 +691,12 @@ export async function changePassword(
   actor?: AuditActor,
 ): Promise<{ tokenVersion: number }> {
   if (input.currentPassword === input.newPassword) {
-    throw new HttpError(400, 'New password must be different from current password.', 'PASSWORD_UNCHANGED');
+    throw new HttpError('PASSWORD_UNCHANGED', 'New password must be different from current password.');
   }
 
   const user = await findUserById(input.userId);
-  if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
-  if (user.deactivatedAt) throw new HttpError(403, 'This account has been deactivated.');
+  if (!user || user.deletedAt) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
+  if (user.deactivatedAt) throw new HttpError('ACCOUNT_DEACTIVATED', 'This account has been deactivated.');
 
   await confirmPassword(input.userId, input.currentPassword, input.ip);
   validatePasswordStrength(input.newPassword);
@@ -758,7 +753,7 @@ export async function changePassword(
  */
 export async function reissueCallerSession(userId: string, sessionId: string): Promise<AuthSession> {
   const user = await findUserById(userId);
-  if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
+  if (!user || user.deletedAt) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   return { user: toPublicUser(user), ...issueTokensForSession(user, sessionId), sessionId };
 }
 

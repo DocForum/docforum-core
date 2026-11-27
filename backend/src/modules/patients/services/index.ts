@@ -32,7 +32,7 @@ export async function getMyPatientProfile(userId: string) {
   // patient route resolves the caller through here, so a still-valid access
   // token stops reaching booking, listing, etc. the moment the account is
   // deleted.
-  if (!profile || profile.anonymizedAt) throw new HttpError(404, 'No patient profile for this account.');
+  if (!profile || profile.anonymizedAt) throw new HttpError('PATIENT_PROFILE_NOT_FOUND', 'No patient profile for this account.');
   return profile;
 }
 
@@ -43,7 +43,7 @@ export async function updateMyPatientProfile(
 ) {
   const current = await getMyPatientProfile(userId);
   if (input.dateOfBirth && input.dateOfBirth.getTime() > Date.now()) {
-    throw new HttpError(400, 'dateOfBirth cannot be in the future.');
+    throw new HttpError('INVALID_DATE_OF_BIRTH', 'dateOfBirth cannot be in the future.');
   }
   const updated = await patientsRepo.updatePatientProfile(current.id, version, input);
   if (!updated) throw versionConflict();
@@ -135,7 +135,7 @@ async function findMyExport(userId: string, exportId: string): Promise<PatientEx
   const profile = await getMyPatientProfile(userId);
   const record = await patientsRepo.findExportForPatient(exportId, profile.id);
   // 404, not 403, for someone else's id: don't confirm it exists.
-  if (!record) throw new HttpError(404, 'Export not found.');
+  if (!record) throw new HttpError('EXPORT_NOT_FOUND', 'Export not found.');
   return record;
 }
 
@@ -155,10 +155,10 @@ export async function openMyExportDownload(userId: string, exportId: string): Pr
   const record = await findMyExport(userId, exportId);
   const status = effectiveStatus(record, new Date());
   if (status === 'expired') {
-    throw new HttpError(410, 'This export has expired. Request a new one.', 'EXPORT_EXPIRED');
+    throw new HttpError('EXPORT_EXPIRED', 'This export has expired. Request a new one.');
   }
   if (status !== 'ready' || record.chunkCount === null || record.sizeBytes === null) {
-    throw new HttpError(409, `This export is '${status}', not ready to download.`, 'EXPORT_NOT_READY');
+    throw new HttpError('EXPORT_NOT_READY', `This export is '${status}', not ready to download.`);
   }
   const { attempt, chunkCount } = record;
   return {
@@ -312,7 +312,7 @@ export async function expireExports(now = new Date()): Promise<{ expired: number
 
 export async function getPatientProfileById(id: string) {
   const profile = await patientsRepo.findPatientProfileById(id);
-  if (!profile) throw new HttpError(404, 'Patient profile not found.');
+  if (!profile) throw new HttpError('PATIENT_PROFILE_NOT_FOUND', 'Patient profile not found.');
   return profile;
 }
 
@@ -517,14 +517,12 @@ export async function createMyDependent(
   // requires the patient role).
   await getMyPatientProfile(guardianUserId);
   if (input.dateOfBirth.getTime() > now.getTime()) {
-    throw new HttpError(400, 'dateOfBirth cannot be in the future.');
+    throw new HttpError('INVALID_DATE_OF_BIRTH', 'dateOfBirth cannot be in the future.');
   }
   if (!isMinor(input.dateOfBirth, config.patients.ageOfMajorityYears, now)) {
     throw new HttpError(
-      400,
-      `A dependent must be under ${config.patients.ageOfMajorityYears}. An adult needs their own account.`,
       'DEPENDENT_NOT_A_MINOR',
-    );
+      `A dependent must be under ${config.patients.ageOfMajorityYears}. An adult needs their own account.`);
   }
   const { profile, guardianship } = await patientsRepo.createDependentWithGuardianship({
     guardianUserId,
@@ -561,21 +559,19 @@ export async function resolveActingProfile(
   const own = await patientsRepo.findPatientProfileByUserId(userId);
   // A deleted account (issue #41) acts for no one — not for itself and not
   // for its former dependents — even while its access token is still valid.
-  if (own?.anonymizedAt) throw new HttpError(404, 'No patient profile for this account.');
+  if (own?.anonymizedAt) throw new HttpError('PATIENT_PROFILE_NOT_FOUND', 'No patient profile for this account.');
   if (!patientProfileId) {
-    if (!own) throw new HttpError(404, 'No patient profile for this account.');
+    if (!own) throw new HttpError('PATIENT_PROFILE_NOT_FOUND', 'No patient profile for this account.');
     return own;
   }
   if (own && own.id === patientProfileId) return own;
 
   const guardianship = await patientsRepo.findGuardianship(userId, patientProfileId);
-  if (!guardianship) throw new HttpError(404, 'Patient profile not found.');
+  if (!guardianship) throw new HttpError('PATIENT_PROFILE_NOT_FOUND', 'Patient profile not found.');
   if (!isActive(guardianship, now)) {
     throw new HttpError(
-      403,
-      'Your guardianship of this patient has ended, so you can no longer act for them.',
       'GUARDIANSHIP_INACTIVE',
-    );
+      'Your guardianship of this patient has ended, so you can no longer act for them.');
   }
   return guardianship.dependentProfile;
 }

@@ -65,14 +65,14 @@ export interface ConsultationInput {
  *   design; reads decrypt in the app layer.
  */
 export async function createConsultation(actor: auditService.AuditActor, input: ConsultationInput) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
 
   const appointment = await appointmentsService.getAppointmentForDoctor(actor.userId, input.appointmentId);
   if (!appointment) {
-    throw new HttpError(404, 'Appointment not found.');
+    throw new HttpError('APPOINTMENT_NOT_FOUND', 'Appointment not found.');
   }
   if (appointment.status !== 'completed') {
-    throw new HttpError(409, 'A consultation is recorded against a completed appointment.');
+    throw new HttpError('CONSULTATION_APPOINTMENT_NOT_COMPLETED', 'A consultation is recorded against a completed appointment.');
   }
 
   const notes = input.notes ?? null;
@@ -94,7 +94,7 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
       const existing = await consultationsRepo.findConsultationByAppointmentId(tx, input.appointmentId);
       if (existing) {
         if (existing.outcome !== null) {
-          throw new HttpError(409, 'A consultation for this appointment has already been closed.');
+          throw new HttpError('CONSULTATION_ALREADY_CLOSED', 'A consultation for this appointment has already been closed.');
         }
 
         const updateData: { outcome: ConsultationOutcome; notes?: string | null } = {
@@ -108,7 +108,7 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
         if (outcome !== null) {
           const updated = await consultationsRepo.closeOpenConsultation(tx, { appointmentId: input.appointmentId }, updateData);
           if (!updated) {
-            throw new HttpError(409, 'A consultation for this appointment has already been closed.');
+            throw new HttpError('CONSULTATION_ALREADY_CLOSED', 'A consultation for this appointment has already been closed.');
           }
 
           await auditService.record(tx, actor, {
@@ -190,7 +190,7 @@ export async function createConsultation(actor: auditService.AuditActor, input: 
     // The DB unique constraint is the actual guarantee; translate the race's
     // loser into a 409 rather than a 500.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      throw new HttpError(409, 'A consultation for this appointment has already been closed.');
+      throw new HttpError('CONSULTATION_ALREADY_CLOSED', 'A consultation for this appointment has already been closed.');
     }
     throw err;
   }
@@ -217,7 +217,7 @@ function decodeConsultationCursor(cursor: string): { createdAt: Date; id: string
   const createdAt = new Date(raw.slice(0, separator));
   const id = raw.slice(separator + 1);
   if (separator < 1 || Number.isNaN(createdAt.getTime()) || !id) {
-    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+    throw new HttpError('INVALID_CURSOR', 'Invalid cursor.');
   }
   return { createdAt, id };
 }
@@ -314,7 +314,7 @@ export async function listDoctorConsultations(userId: string, filters: ListConsu
  * rule 4). */
 export async function getConsultationRecord(consultationId: string) {
   const consultation = await consultationsRepo.findConsultationById(prisma, consultationId);
-  if (!consultation) throw new HttpError(404, 'Consultation not found.');
+  if (!consultation) throw new HttpError('CONSULTATION_NOT_FOUND', 'Consultation not found.');
   return consultation;
 }
 
@@ -331,7 +331,7 @@ export async function getConsultationRecord(consultationId: string) {
  */
 export function assertConsultationAcceptsOrders(consultation: { appointment: { status: string } | null }) {
   if (!consultation.appointment || consultation.appointment.status !== 'completed') {
-    throw new HttpError(409, 'Orders can only be issued from a consultation whose appointment is completed.');
+    throw new HttpError('ORDERS_REQUIRE_COMPLETED_CONSULTATION', 'Orders can only be issued from a consultation whose appointment is completed.');
   }
 }
 
@@ -349,7 +349,7 @@ export async function getConsultation(userId: string, consultationId: string, pa
     ? await patientsService.resolveActingProfile(userId, patientProfileId)
     : null;
   const consultation = await consultationsRepo.findConsultationById(prisma, consultationId);
-  if (!consultation) throw new HttpError(404, 'Consultation not found.');
+  if (!consultation) throw new HttpError('CONSULTATION_NOT_FOUND', 'Consultation not found.');
 
   if (consultation.appointment) {
     const addenda = consultation.addenda.map((addendum) => ({
@@ -387,7 +387,7 @@ export async function getConsultation(userId: string, consultationId: string, pa
       return { ...consultation, notes: decryptField(consultation.notes), addenda };
     }
   }
-  throw new HttpError(403, 'You do not have access to this consultation.');
+  throw new HttpError('CONSULTATION_FORBIDDEN', 'You do not have access to this consultation.');
 }
 
 /**

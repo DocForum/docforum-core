@@ -8,7 +8,7 @@ import { HttpError } from './http-error';
 export function getParam(req: Request, name: string): string {
   const value = req.params[name];
   if (typeof value !== 'string') {
-    throw new HttpError(400, `Missing or invalid path parameter: ${name}`);
+    throw new HttpError('INVALID_PATH_PARAMETER', `Missing or invalid path parameter: ${name}`);
   }
   return value;
 }

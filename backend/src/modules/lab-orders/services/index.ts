@@ -24,7 +24,7 @@ import * as paymentsService from '../../payments/services';
 
 export async function getLabOrder(id: string) {
   const labOrder = await repo.findLabOrderById(id);
-  if (!labOrder) throw new HttpError(404, 'Lab order not found.');
+  if (!labOrder) throw new HttpError('LAB_ORDER_NOT_FOUND', 'Lab order not found.');
   return labOrder;
 }
 
@@ -61,7 +61,7 @@ export async function createLabOrder(data: {
   details?: string;
 }) {
   if (!data.patientProfileId || typeof data.patientProfileId !== 'string') {
-    throw new HttpError(400, 'Patient profile ID is required.');
+    throw new HttpError('PATIENT_PROFILE_ID_REQUIRED', 'Patient profile ID is required.');
   }
 
   await patientsService.getPatientProfileById(data.patientProfileId);
@@ -85,21 +85,21 @@ export async function fulfillLabOrder(
   actor: AuditActor,
 ) {
   if (!orderId || typeof orderId !== 'string') {
-    throw new HttpError(400, 'Order ID is required.');
+    throw new HttpError('ORDER_ID_REQUIRED', 'Order ID is required.');
   }
 
   const existingCheck = await prisma.order.findUnique({ where: { id: orderId } });
   if (!existingCheck || existingCheck.orderType !== 'lab') {
-    throw new HttpError(404, 'Lab order not found.');
+    throw new HttpError('LAB_ORDER_NOT_FOUND', 'Lab order not found.');
   }
 
   if (!input?.referenceNumber || typeof input.referenceNumber !== 'string' || input.referenceNumber.trim().length === 0) {
-    throw new HttpError(400, 'Reference number is required for fulfillment proof.');
+    throw new HttpError('REFERENCE_NUMBER_REQUIRED', 'Reference number is required for fulfillment proof.');
   }
 
   const facilityProfile = await facilitiesService.findFacilityProfileByUserId(facilityUserId);
   if (!facilityProfile) {
-    throw new HttpError(403, 'Facility profile required.');
+    throw new HttpError('FACILITY_PROFILE_REQUIRED', 'Facility profile required.');
   }
 
   let attachmentUrl: string | undefined = undefined;
@@ -110,18 +110,18 @@ export async function fulfillLabOrder(
   const result = await prisma.$transaction(async (tx) => {
     const existing = await repo.findOrderById(tx, orderId, 'lab');
     if (!existing) {
-      throw new HttpError(404, 'Lab order not found.');
+      throw new HttpError('LAB_ORDER_NOT_FOUND', 'Lab order not found.');
     }
     if (existing.status === 'fulfilled') {
-      throw new HttpError(409, 'Lab order has already been fulfilled.');
+      throw new HttpError('LAB_ORDER_ALREADY_FULFILLED', 'Lab order has already been fulfilled.');
     }
     if (existing.status !== 'issued') {
-      throw new HttpError(400, `Lab order cannot be fulfilled from status: ${existing.status}`);
+      throw new HttpError('LAB_ORDER_NOT_FULFILLABLE', `Lab order cannot be fulfilled from status: ${existing.status}`);
     }
 
     const marked = await repo.markOrderFulfilled(tx, orderId, facilityProfile.id);
     if (!marked) {
-      throw new HttpError(409, 'Failed to transition order status to fulfilled.');
+      throw new HttpError('LAB_ORDER_FULFILLMENT_FAILED', 'Failed to transition order status to fulfilled.');
     }
 
     await repo.createFulfillmentProof(tx, {
@@ -147,7 +147,7 @@ export async function fulfillLabOrder(
 
     const updated = await repo.findOrderById(tx, orderId, 'lab');
     if (!updated) {
-      throw new HttpError(500, 'Failed to fetch updated order.');
+      throw new HttpError('ORDER_FETCH_FAILED', 'Failed to fetch updated order.');
     }
     return updated;
   });
@@ -208,7 +208,7 @@ export async function getLabOrderForViewer(
     issuingDoctorId: labOrder.orderingDoctorId,
     facilityProfileId: labOrder.facilityProfileId,
   }));
-  if (!labOrder || !allowed) throw new HttpError(404, 'Lab order not found.');
+  if (!labOrder || !allowed) throw new HttpError('LAB_ORDER_NOT_FOUND', 'Lab order not found.');
 
   recordAccess({
     accessedBy: viewer.userId,

@@ -78,7 +78,15 @@ export default defineConfig({
         },
       ],
 
-      '/api/': [{ text: 'API', items: [{ text: 'Reference', link: '/api/reference' }] }],
+      '/api/': [
+        {
+          text: 'API',
+          items: [
+            { text: 'Reference', link: '/api/reference' },
+            { text: 'Error catalogue', link: '/api/errors' },
+          ],
+        },
+      ],
 
       '/roadmap/': [
         {

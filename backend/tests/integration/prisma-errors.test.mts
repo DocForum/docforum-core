@@ -80,15 +80,15 @@ describe('Prisma error mapping against a real database', () => {
   });
 
   it.each([
-    ['/p2025', 404, 'Record not found.'],
-    ['/p2025-in-transaction', 404, 'Record not found.'],
-    ['/p2003', 422, 'The request refers to a record that does not exist or is still in use.'],
-    ['/p2003-in-transaction', 422, 'The request refers to a record that does not exist or is still in use.'],
-    ['/p2002', 409, 'A record with this value already exists.'],
-  ])('%s answers %i with only a generic message', async (route, status, message) => {
+    ['/p2025', 404, 'NOT_FOUND', 'Record not found.'],
+    ['/p2025-in-transaction', 404, 'NOT_FOUND', 'Record not found.'],
+    ['/p2003', 422, 'INVALID_REFERENCE', 'The request refers to a record that does not exist or is still in use.'],
+    ['/p2003-in-transaction', 422, 'INVALID_REFERENCE', 'The request refers to a record that does not exist or is still in use.'],
+    ['/p2002', 409, 'DUPLICATE_RECORD', 'A record with this value already exists.'],
+  ])('%s answers %i with a coded generic message', async (route, status, code, message) => {
     const res = await request(app).post(route);
     expect(res.status).toBe(status);
-    expect(res.body).toEqual({ message });
+    expect(res.body).toEqual({ code, message });
     expect(res.text).not.toMatch(LEAKS);
   });
 

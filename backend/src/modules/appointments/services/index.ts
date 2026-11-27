@@ -42,7 +42,7 @@ import { getCalendarDayBounds, parseScheduleDateRange } from '../time-zones';
  * profile id.
  */
 export async function bookSlot(actor: auditService.AuditActor, availabilitySlotId: string, patientProfileId?: string) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const patientProfile = await patientsService.resolveActingProfile(actor.userId, patientProfileId);
 
   return prisma.$transaction(async (tx) => {
@@ -50,19 +50,19 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
     if (!claimed) {
       const slot = await availabilityService.getSlot(tx, availabilitySlotId);
       if (!slot) {
-        throw new HttpError(404, 'Slot not found.');
+        throw new HttpError('SLOT_NOT_FOUND', 'Slot not found.');
       }
       if (slot.startTime <= new Date()) {
-        throw new HttpError(409, 'This slot has already passed and is no longer bookable.');
+        throw new HttpError('SLOT_ALREADY_PASSED', 'This slot has already passed and is no longer bookable.');
       }
-      throw new HttpError(409, 'This slot is no longer available.');
+      throw new HttpError('SLOT_TAKEN', 'This slot is no longer available.');
     }
 
     const slot = await availabilityService.getSlot(tx, availabilitySlotId);
     if (!slot) {
       // Can't happen in practice (claimOpenSlot just matched this id), but
       // keeps TypeScript honest and fails loudly instead of silently.
-      throw new HttpError(404, 'Slot not found.');
+      throw new HttpError('SLOT_NOT_FOUND', 'Slot not found.');
     }
     await doctorsService.assertDoctorVerified(slot.doctorProfileId, undefined, tx);
 
@@ -143,30 +143,30 @@ export async function rescheduleSlot(
   newSlotId: string,
   cutoffHours: number = config.appointments.cutoffHours,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const userId = actor.userId;
 
   return prisma.$transaction(async (tx) => {
     // First, get the existing appointment to find its current slot
     const existingAppointment = await appointmentsRepo.findAppointmentById(tx, appointmentId);
     if (!existingAppointment) {
-      throw new HttpError(404, 'Appointment not found.');
+      throw new HttpError('APPOINTMENT_NOT_FOUND', 'Appointment not found.');
     }
 
     const patientProfile = await patientsService.resolveActingProfile(userId, existingAppointment.patientProfileId);
 
     // Check that the appointment belongs to this patient
     if (existingAppointment.patientProfileId !== patientProfile.id) {
-      throw new HttpError(403, 'This appointment does not belong to you.');
+      throw new HttpError('APPOINTMENT_NOT_YOURS', 'This appointment does not belong to you.');
     }
 
     if (existingAppointment.status !== 'scheduled') {
-      throw new HttpError(409, 'Only a scheduled appointment can be rescheduled.');
+      throw new HttpError('APPOINTMENT_NOT_RESCHEDULABLE', 'Only a scheduled appointment can be rescheduled.');
     }
 
     const currentSlotId = existingAppointment.availabilitySlotId;
     if (!currentSlotId) {
-      throw new HttpError(409, 'Appointment no longer has an active slot.');
+      throw new HttpError('APPOINTMENT_NO_ACTIVE_SLOT', 'Appointment no longer has an active slot.');
     }
 
     // Rescheduling onto the same slot is a no-op
@@ -177,27 +177,27 @@ export async function rescheduleSlot(
     // Check cutoff: no reschedule within cutoffHours of slot start
     const slot = await availabilityService.getSlot(tx, currentSlotId);
     if (!slot) {
-      throw new HttpError(404, 'Original slot not found.');
+      throw new HttpError('SLOT_NOT_FOUND', 'Original slot not found.');
     }
 
     const slotStart = slot.startTime;
     const now = new Date();
     const cutoffMs = cutoffHours * 60 * 60 * 1000;
     if (slotStart.getTime() - now.getTime() < cutoffMs) {
-      throw new HttpError(409, `Rescheduling is not allowed within ${cutoffHours} hours of the slot start time.`);
+      throw new HttpError('RESCHEDULE_CUTOFF', `Rescheduling is not allowed within ${cutoffHours} hours of the slot start time.`);
     }
 
     // Validate new slot
     const newSlot = await availabilityService.getSlot(tx, newSlotId);
     if (!newSlot) {
-      throw new HttpError(404, 'New slot not found.');
+      throw new HttpError('NEW_SLOT_NOT_FOUND', 'New slot not found.');
     }
 
     await doctorsService.assertDoctorVerified(newSlot.doctorProfileId, undefined, tx);
     await doctorsService.assertDoctorActive(newSlot.doctorProfileId, tx);
 
     if (newSlot.doctorProfileId !== existingAppointment.doctorProfileId) {
-      throw new HttpError(400, 'The new slot must belong to the same doctor.');
+      throw new HttpError('SLOT_DOCTOR_MISMATCH', 'The new slot must belong to the same doctor.');
     }
 
     // Claim the new slot atomically
@@ -205,12 +205,12 @@ export async function rescheduleSlot(
     if (!newClaimed) {
       const newSlot = await availabilityService.getSlot(tx, newSlotId);
       if (!newSlot) {
-        throw new HttpError(404, 'The new slot does not exist.');
+        throw new HttpError('NEW_SLOT_NOT_FOUND', 'The new slot does not exist.');
       }
       if (newSlot.startTime <= now) {
-        throw new HttpError(409, 'The new slot has already passed and is no longer bookable.');
+        throw new HttpError('SLOT_ALREADY_PASSED', 'The new slot has already passed and is no longer bookable.');
       }
-      throw new HttpError(409, 'The new slot is no longer available.');
+      throw new HttpError('SLOT_TAKEN', 'The new slot is no longer available.');
     }
 
     // Release the old slot through availabilityService
@@ -219,12 +219,12 @@ export async function rescheduleSlot(
     // Re-point the appointment conditionally
     const repointed = await appointmentsRepo.rescheduleIfScheduled(tx, appointmentId, newSlotId);
     if (repointed.count !== 1) {
-      throw new HttpError(409, 'This appointment is no longer scheduled.');
+      throw new HttpError('APPOINTMENT_NOT_SCHEDULED', 'This appointment is no longer scheduled.');
     }
 
     const updatedAppointment = await appointmentsRepo.findAppointmentById(tx, appointmentId);
     if (!updatedAppointment) {
-      throw new HttpError(404, 'Appointment not found.');
+      throw new HttpError('APPOINTMENT_NOT_FOUND', 'Appointment not found.');
     }
 
     await auditService.record(tx, actor, {
@@ -259,7 +259,7 @@ export async function cancelAppointment(
   appointmentId: string,
   _reason: 'patient' | 'doctor' = 'patient',
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   return cancelByPatient(actor, appointmentId);
 }
 
@@ -281,7 +281,7 @@ export async function joinWaitlist(
   latestAcceptable: Date | undefined,
   holdDurationMinutes: number | undefined,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -290,7 +290,7 @@ export async function joinWaitlist(
         where: { id: patientProfileId },
       });
       if (!patientProfile) {
-        throw new HttpError(404, 'Patient profile not found.');
+        throw new HttpError('PATIENT_PROFILE_NOT_FOUND', 'Patient profile not found.');
       }
 
       // Create the waitlist entry: DB-level partial unique index prevents concurrent duplicates
@@ -310,7 +310,7 @@ export async function joinWaitlist(
     });
   } catch (err: any) {
     if ((err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') || err?.code === 'P2002') {
-      throw new HttpError(409, 'You are already on the waitlist for this doctor/specialty.');
+      throw new HttpError('WAITLIST_DUPLICATE', 'You are already on the waitlist for this doctor/specialty.');
     }
     throw err;
   }
@@ -323,13 +323,13 @@ export async function leaveWaitlist(
   actor: auditService.AuditActor,
   entryId: string,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
 
   const entry = await prisma.waitlistEntry.findUnique({
     where: { id: entryId },
   });
   if (!entry) {
-    throw new HttpError(404, 'Waitlist entry not found.');
+    throw new HttpError('WAITLIST_NOT_FOUND', 'Waitlist entry not found.');
   }
 
   // Verify the entry belongs to the caller (or their active dependent)
@@ -344,11 +344,11 @@ export async function leaveWaitlist(
   }
 
   if (!isOwner) {
-    throw new HttpError(403, 'This waitlist entry does not belong to you.');
+    throw new HttpError('WAITLIST_NOT_YOURS', 'This waitlist entry does not belong to you.');
   }
 
   if (entry.status === 'accepted') {
-    throw new HttpError(409, 'Cannot leave an already accepted waitlist entry.');
+    throw new HttpError('WAITLIST_ALREADY_ACCEPTED', 'Cannot leave an already accepted waitlist entry.');
   }
 
   const updated = await prisma.waitlistEntry.updateMany({
@@ -357,7 +357,7 @@ export async function leaveWaitlist(
   });
 
   if (updated.count === 0) {
-    throw new HttpError(409, 'This waitlist entry is no longer active.');
+    throw new HttpError('WAITLIST_NOT_ACTIVE', 'This waitlist entry is no longer active.');
   }
 
   return { cancelled: true };
@@ -382,28 +382,28 @@ export async function acceptWaitlistOffer(
   actor: auditService.AuditActor,
   entryId: string,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
 
   return prisma.$transaction(async (tx) => {
     const entry = await prisma.waitlistEntry.findUnique({
       where: { id: entryId },
     });
     if (!entry) {
-      throw new HttpError(404, 'Waitlist entry not found.');
+      throw new HttpError('WAITLIST_NOT_FOUND', 'Waitlist entry not found.');
     }
     if (entry.status !== 'pending') {
-      throw new HttpError(409, 'This waitlist entry is no longer active.');
+      throw new HttpError('WAITLIST_NOT_ACTIVE', 'This waitlist entry is no longer active.');
     }
 
     // Get open slots for the doctor directly (no need to find first)
     if (!entry.doctorProfileId) {
-      throw new HttpError(404, 'No doctor profile specified for waitlist entry.');
+      throw new HttpError('WAITLIST_NO_DOCTOR', 'No doctor profile specified for waitlist entry.');
     }
     await doctorsService.assertDoctorVerified(entry.doctorProfileId, undefined, tx);
 
     const openSlots = await availabilityService.listOpenSlots(entry.doctorProfileId);
     if (!openSlots.length) {
-      throw new HttpError(404, 'No open slots available for this doctor.');
+      throw new HttpError('NO_OPEN_SLOTS', 'No open slots available for this doctor.');
     }
 
     // Claim the first open slot
@@ -411,9 +411,9 @@ export async function acceptWaitlistOffer(
     if (!claimed) {
       const slot = await availabilityService.getSlot(tx, openSlots[0].id);
       if (slot && slot.startTime <= new Date()) {
-        throw new HttpError(409, 'This slot has already passed and is no longer bookable.');
+        throw new HttpError('SLOT_ALREADY_PASSED', 'This slot has already passed and is no longer bookable.');
       }
-      throw new HttpError(409, 'The slot was taken before we could claim it.');
+      throw new HttpError('SLOT_TAKEN', 'The slot was taken before we could claim it.');
     }
 
     // Create the appointment
@@ -422,7 +422,7 @@ export async function acceptWaitlistOffer(
     });
 
     if (!patientProfile) {
-      throw new HttpError(404, 'Patient profile not found.');
+      throw new HttpError('PATIENT_PROFILE_NOT_FOUND', 'Patient profile not found.');
     }
 
     const appointment = await appointmentsRepo.createAppointment(tx, {
@@ -480,7 +480,7 @@ export async function getAppointmentForDoctor(doctorUserId: string, appointmentI
 export async function getAppointmentDetail(userId: string, appointmentId: string) {
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
   if (!appointment) {
-    throw new HttpError(404, 'Appointment not found.');
+    throw new HttpError('APPOINTMENT_NOT_FOUND', 'Appointment not found.');
   }
 
   let authorized = false;
@@ -508,7 +508,7 @@ export async function getAppointmentDetail(userId: string, appointmentId: string
   }
 
   if (!authorized) {
-    throw new HttpError(404, 'Appointment not found.');
+    throw new HttpError('APPOINTMENT_NOT_FOUND', 'Appointment not found.');
   }
 
   const slotTimes = appointment.availabilitySlotId
@@ -656,9 +656,9 @@ export const waitlistExportSection: patientsService.PatientExportSection = {
  * the appointments repository across the module boundary. */
 export async function getDoctorAppointmentContext(userId: string, appointmentId: string) {
   const appointment = await appointmentsRepo.findAppointmentDoctorContext(appointmentId);
-  if (!appointment) throw new HttpError(404, 'Appointment not found.');
-  if (appointment.doctorProfile.userId !== userId) throw new HttpError(403, 'You can only issue orders for your own appointments.');
-  if (appointment.doctorProfile.verificationStatus !== 'verified') throw new HttpError(403, 'A verified doctor profile is required to issue orders.');
+  if (!appointment) throw new HttpError('APPOINTMENT_NOT_FOUND', 'Appointment not found.');
+  if (appointment.doctorProfile.userId !== userId) throw new HttpError('ORDERS_WRONG_APPOINTMENT', 'You can only issue orders for your own appointments.');
+  if (appointment.doctorProfile.verificationStatus !== 'verified') throw new HttpError('DOCTOR_NOT_VERIFIED', 'A verified doctor profile is required to issue orders.');
   return { id: appointment.id, patientProfileId: appointment.patientProfileId, doctorProfileId: appointment.doctorProfileId };
 }
 
@@ -680,22 +680,22 @@ export async function bookForReferral(
   },
   actor: auditService.AuditActor,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
   if (!slot) {
-    throw new HttpError(404, 'Slot not found.');
+    throw new HttpError('SLOT_NOT_FOUND', 'Slot not found.');
   }
   if (slot.doctorProfileId !== input.doctorProfileId) {
-    throw new HttpError(409, 'That slot does not belong to the referral’s target doctor.');
+    throw new HttpError('SLOT_NOT_REFERRAL_TARGET', 'That slot does not belong to the referral’s target doctor.');
   }
   await doctorsService.assertDoctorVerified(slot.doctorProfileId, undefined, db);
 
   const claimed = await availabilityService.claimOpenSlot(db, input.availabilitySlotId);
   if (!claimed) {
     if (slot.startTime <= new Date()) {
-      throw new HttpError(409, 'This slot has already passed and is no longer bookable.');
+      throw new HttpError('SLOT_ALREADY_PASSED', 'This slot has already passed and is no longer bookable.');
     }
-    throw new HttpError(409, 'This slot is no longer available.');
+    throw new HttpError('SLOT_TAKEN', 'This slot is no longer available.');
   }
 
   // Ensure the doctor is active (not deactivated or deleted)
@@ -748,22 +748,22 @@ export async function bookForFollowUp(
   input: { patientProfileId: string; doctorProfileId: string; availabilitySlotId: string },
   actor: auditService.AuditActor,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const slot = await availabilityService.getSlot(db, input.availabilitySlotId);
   if (!slot) {
-    throw new HttpError(404, 'Slot not found.');
+    throw new HttpError('SLOT_NOT_FOUND', 'Slot not found.');
   }
   if (slot.doctorProfileId !== input.doctorProfileId) {
-    throw new HttpError(409, 'That slot does not belong to the follow-up’s doctor.');
+    throw new HttpError('SLOT_NOT_FOLLOW_UP_DOCTOR', 'That slot does not belong to the follow-up’s doctor.');
   }
   await doctorsService.assertDoctorVerified(slot.doctorProfileId, undefined, db);
 
   const claimed = await availabilityService.claimOpenSlot(db, input.availabilitySlotId);
   if (!claimed) {
     if (slot.startTime <= new Date()) {
-      throw new HttpError(409, 'This slot has already passed and is no longer bookable.');
+      throw new HttpError('SLOT_ALREADY_PASSED', 'This slot has already passed and is no longer bookable.');
     }
-    throw new HttpError(409, 'This slot is no longer available.');
+    throw new HttpError('SLOT_TAKEN', 'This slot is no longer available.');
   }
 
   // Ensure the doctor is active (not deactivated or deleted)
@@ -818,7 +818,7 @@ async function applyScheduledTransition(
 ) {
   const updated = await appointmentsRepo.updateStatusIfScheduled(tx, appointment.id, newStatus);
   if (updated.count !== 1) {
-    throw new HttpError(409, 'This appointment is no longer scheduled.');
+    throw new HttpError('APPOINTMENT_NOT_SCHEDULED', 'This appointment is no longer scheduled.');
   }
 
   // Only cancellations free the calendar slot, and only while it's still
@@ -872,27 +872,23 @@ export async function updateStatusByDoctor(
   now = new Date(),
 ) {
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
-  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  if (!appointment) throw new HttpError('APPOINTMENT_NOT_FOUND', 'Appointment not found.');
   await doctorsService.assertOwnsDoctorProfile(actor.userId ?? '', appointment.doctorProfileId);
   if (transitionAppointmentStatus(appointment.status, newStatus) === null) {
-    throw new HttpError(409, 'Only a scheduled appointment can change status.');
+    throw new HttpError('APPOINTMENT_NOT_SCHEDULED', 'Only a scheduled appointment can change status.');
   }
 
   if (newStatus === 'completed' || newStatus === 'no_show') {
     if (!appointment.availabilitySlotId) {
       throw new HttpError(
-        409,
-        'Appointments with a released slot cannot be marked completed or no-show.',
         'APPOINTMENT_NOT_STARTED',
-      );
+        'Appointments with a released slot cannot be marked completed or no-show.');
     }
     const slot = await availabilityService.getSlot(prisma, appointment.availabilitySlotId);
     if (!slot || !canFinalizeAppointment(slot.startTime, now)) {
       throw new HttpError(
-        409,
-        'Cannot mark appointment completed or no-show before the slot start time.',
         'APPOINTMENT_NOT_STARTED',
-      );
+        'Cannot mark appointment completed or no-show before the slot start time.');
     }
   }
 
@@ -914,15 +910,15 @@ export async function cancelByPatient(
   actor: auditService.AuditActor,
   appointmentId: string,
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const appointment = await appointmentsRepo.findAppointmentById(prisma, appointmentId);
-  if (!appointment) throw new HttpError(404, 'Appointment not found.');
+  if (!appointment) throw new HttpError('APPOINTMENT_NOT_FOUND', 'Appointment not found.');
   const patientProfile = await patientsService.resolveActingProfile(actor.userId, appointment.patientProfileId);
   if (appointment.patientProfileId !== patientProfile.id) {
-    throw new HttpError(403, 'You can only cancel your own appointments.');
+    throw new HttpError('APPOINTMENT_NOT_YOURS', 'You can only cancel your own appointments.');
   }
   if (appointment.status !== 'scheduled') {
-    throw new HttpError(409, 'Only a scheduled appointment can be cancelled.');
+    throw new HttpError('APPOINTMENT_NOT_CANCELLABLE', 'Only a scheduled appointment can be cancelled.');
   }
 
   // Determine status (cancelled vs late_cancelled) based on cutoff config
@@ -1022,7 +1018,7 @@ export async function cancelDay(
   reason?: 'illness' | 'emergency' | 'personal' | 'other',
   now: Date = new Date(),
 ): Promise<CancelDayResult> {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const doctor = await doctorsService.getMyDoctorProfile(actor.userId);
   const { start, end } = parseScheduleDateRange(doctor.timeZone, date, date, now);
   // Never touch anything that has already started.

@@ -6,7 +6,7 @@ import { flagKeySchema, updateFlagSchema } from '../validation';
 
 /** `GET /me/flags` — the caller's evaluated flags, for the frontend. */
 export async function myFlags(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const flags = await flagsService.evaluateAllFor({ id: req.user.id, role: req.user.role });
   res.status(200).json({ flags });
 }

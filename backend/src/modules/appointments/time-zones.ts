@@ -5,7 +5,7 @@ import { isValidIanaTimeZone } from '../../utils/time-zones';
 
 export function assertValidTimeZone(timeZone: string): void {
   if (!isValidIanaTimeZone(timeZone)) {
-    throw new HttpError(400, `Invalid time zone: ${timeZone}`, 'INVALID_TIME_ZONE');
+    throw new HttpError('INVALID_TIME_ZONE', `Invalid time zone: ${timeZone}`);
   }
 }
 
@@ -45,7 +45,7 @@ export function parseScheduleDateRange(
     } else {
       start = new Date(from);
       if (Number.isNaN(start.getTime())) {
-        throw new HttpError(400, 'Invalid from date format.', 'INVALID_DATE');
+        throw new HttpError('INVALID_DATE', 'Invalid from date format.');
       }
     }
   } else {
@@ -64,7 +64,7 @@ export function parseScheduleDateRange(
     } else {
       end = new Date(to);
       if (Number.isNaN(end.getTime())) {
-        throw new HttpError(400, 'Invalid to date format.', 'INVALID_DATE');
+        throw new HttpError('INVALID_DATE', 'Invalid to date format.');
       }
     }
   } else {
@@ -73,16 +73,14 @@ export function parseScheduleDateRange(
   }
 
   if (start > end) {
-    throw new HttpError(400, 'from must be before or equal to to.', 'INVALID_DATE_RANGE');
+    throw new HttpError('INVALID_DATE_RANGE', 'from must be before or equal to to.');
   }
 
   const maxSpanMs = config.availability.slotsMaxRangeDays * 24 * 60 * 60 * 1_000;
   if (end.getTime() - start.getTime() > maxSpanMs) {
     throw new HttpError(
-      400,
-      `Date range cannot exceed ${config.availability.slotsMaxRangeDays} days.`,
       'DATE_RANGE_TOO_LARGE',
-    );
+      `Date range cannot exceed ${config.availability.slotsMaxRangeDays} days.`);
   }
 
   return { start, end };

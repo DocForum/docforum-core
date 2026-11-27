@@ -129,7 +129,7 @@ export interface ThrottleKeys {
  */
 export class LoginThrottledError extends HttpError {
   constructor(public readonly retryAfterSeconds: number) {
-    super(429, `Too many failed login attempts. Try again in ${retryAfterSeconds}s.`);
+    super('LOGIN_THROTTLED', `Too many failed login attempts. Try again in ${retryAfterSeconds}s.`);
   }
 }
 

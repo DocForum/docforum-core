@@ -17,7 +17,7 @@ import { getAdminOverview } from '../../../admin-overview-sections';
  * there is no email provider yet (Phase 6, issue #17).
  */
 export async function createInvite(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { email } = createAdminInviteSchema.parse(req.body);
   const invite = await usersService.createAdminInvite({ email, invitedByUserId: req.user.id }, auditActor(req));
   res.status(201).json(invite);
@@ -49,7 +49,7 @@ export async function listInvites(req: Request, res: Response) {
 /** Revokes an invite. `409` if it was already redeemed; revoking an
  * already-revoked invite is idempotent (`200`, `alreadyRevoked: true`). */
 export async function revokeInvite(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const inviteId = getParam(req, 'id');
   const result = await usersService.revokeAdminInvite(auditActor(req), inviteId);
   // eslint-disable-next-line no-console

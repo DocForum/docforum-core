@@ -20,7 +20,7 @@ import { getParam } from '../../../request-params';
 /** POST /appointments/:appointmentId/consultation — close (create) the
  * consultation for the appointment in the path. */
 export async function closeConsultation(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const appointmentId = getParam(req, 'appointmentId');
   const { outcome, notes, followUpWindowStart, followUpWindowEnd } = closeConsultationSchema.parse(req.body);
 
@@ -38,7 +38,7 @@ export async function closeConsultation(req: Request, res: Response) {
 /** POST /consultations — the same write, with the appointment in the body.
  * Kept because Phase 3's referral flow and its tests address it this way. */
 export async function create(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = createConsultationSchema.parse(req.body);
   const { consultation } = await consultationsService.createConsultation(auditActor(req), {
     ...input,
@@ -49,7 +49,7 @@ export async function create(req: Request, res: Response) {
 }
 
 export async function getOne(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { patientProfileId } = getConsultationQuerySchema.parse(req.query);
   const consultation = await consultationsService.getConsultation(
     req.user.id,
@@ -60,14 +60,14 @@ export async function getOne(req: Request, res: Response) {
 }
 
 export async function listMine(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const query = listConsultationsQuerySchema.parse(req.query);
   const result = await consultationsService.listMyConsultations(req.user.id, query);
   res.status(200).json(result);
 }
 
 export async function listDoctor(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const query = listConsultationsQuerySchema.parse(req.query);
   const result = await consultationsService.listDoctorConsultations(req.user.id, query);
   res.status(200).json(result);
@@ -76,14 +76,14 @@ export async function listDoctor(req: Request, res: Response) {
 // --- Issue #61/#62: thread -------------------------------------------------
 
 export async function listMessages(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const query = listMessagesQuerySchema.parse(req.query);
   const result = await consultationsService.listMessages(req.user.id, getParam(req, 'consultationId'), query);
   res.status(200).json(result);
 }
 
 export async function postMessage(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = postMessageSchema.parse(req.body);
   const message = await consultationsService.postMessage(
     auditActor(req),
@@ -94,7 +94,7 @@ export async function postMessage(req: Request, res: Response) {
 }
 
 export async function attachmentDownloadUrl(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const baseUrl = `${req.protocol}://${req.get('host') ?? 'localhost'}`;
   const result = await consultationsService.authorizeAttachmentDownload(
     req.user.id,
@@ -125,7 +125,7 @@ export async function downloadAttachmentFile(req: Request, res: Response) {
 // --- Issue #64: notes, sign-off, addenda -----------------------------------
 
 export async function updateNotes(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { notes } = updateNotesSchema.parse(req.body);
   const consultation = await consultationsService.updateNotes(
     auditActor(req),
@@ -136,13 +136,13 @@ export async function updateNotes(req: Request, res: Response) {
 }
 
 export async function signOff(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const consultation = await consultationsService.signOff(auditActor(req), getParam(req, 'consultationId'));
   res.status(200).json(consultation);
 }
 
 export async function addAddendum(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { body } = addAddendumSchema.parse(req.body);
   const consultation = await consultationsService.addAddendum(
     auditActor(req),
@@ -155,14 +155,14 @@ export async function addAddendum(req: Request, res: Response) {
 // --- Issue #63: follow-up requests -----------------------------------------
 
 export async function listMyFollowUps(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { status } = listFollowUpsQuerySchema.parse(req.query);
   const followUps = await consultationsService.listMyFollowUps(req.user.id, status);
   res.status(200).json(followUps);
 }
 
 export async function bookFollowUp(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { availabilitySlotId } = bookFollowUpSchema.parse(req.body);
   const result = await consultationsService.bookFollowUp(
     auditActor(req),
@@ -173,7 +173,7 @@ export async function bookFollowUp(req: Request, res: Response) {
 }
 
 export async function createReferrals(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const { targets } = createReferralsSchema.parse(req.body);
   const referrals = await consultationsService.createReferrals(
     req.user.id,

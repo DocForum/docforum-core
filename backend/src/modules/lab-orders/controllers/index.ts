@@ -30,7 +30,7 @@ export async function fulfillLabOrder(req: Request, res: Response) {
 
 /** `GET /lab-orders/:id` (issue #314). */
 export async function getLabOrder(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const order = await services.getLabOrderForViewer(
     getParam(req, 'id'),
     { userId: req.user.id, role: req.user.role },

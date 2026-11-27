@@ -267,6 +267,7 @@ describe('email verification', () => {
     // guard was what stopped it a moment ago.
     const unblocked = await request(app).post('/payments/intents/00000000-0000-4000-8000-000000000000/fund').set('Authorization', `Bearer ${adminToken}`).send({});
     expect(unblocked.status).toBe(404);
-    expect(unblocked.body.code).toBeUndefined();
+    // Issue #115: the guard is gone and the handler's own coded 404 answers.
+    expect(unblocked.body.code).toBe('PAYMENT_INTENT_NOT_FOUND');
   });
 });

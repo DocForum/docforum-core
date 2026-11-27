@@ -35,11 +35,11 @@ function sanitizeFileName(raw: string): string {
 function decodeBase64(raw: string): Buffer {
   const compact = raw.replace(/\s+/g, '');
   if (compact.length === 0 || compact.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
-    throw new HttpError(400, 'Attachment data must be valid base64.', 'ATTACHMENT_INVALID_BASE64');
+    throw new HttpError('ATTACHMENT_INVALID_BASE64', 'Attachment data must be valid base64.');
   }
   const buffer = Buffer.from(compact, 'base64');
   if (buffer.length === 0) {
-    throw new HttpError(400, 'Attachment data must be valid base64.', 'ATTACHMENT_INVALID_BASE64');
+    throw new HttpError('ATTACHMENT_INVALID_BASE64', 'Attachment data must be valid base64.');
   }
   return buffer;
 }
@@ -53,34 +53,28 @@ function decodeBase64(raw: string): Buffer {
 export function prepareAttachments(inputs: AttachmentUploadInput[]): Array<PreparedAttachment & { body: Buffer }> {
   if (inputs.length > config.consultations.attachmentMaxPerMessage) {
     throw new HttpError(
-      400,
-      `A message may carry at most ${config.consultations.attachmentMaxPerMessage} attachments.`,
       'ATTACHMENT_TOO_MANY',
-    );
+      `A message may carry at most ${config.consultations.attachmentMaxPerMessage} attachments.`);
   }
 
   return inputs.map((input) => {
     const declared = input.contentType.toLowerCase().split(';')[0].trim();
     if (!(ALLOWED_ATTACHMENT_CONTENT_TYPES as readonly string[]).includes(declared)) {
-      throw new HttpError(400, 'Only JPEG, PNG and PDF attachments are accepted.', 'ATTACHMENT_TYPE_NOT_ALLOWED');
+      throw new HttpError('ATTACHMENT_TYPE_NOT_ALLOWED', 'Only JPEG, PNG and PDF attachments are accepted.');
     }
 
     const raw = decodeBase64(input.dataBase64);
     if (raw.length > config.consultations.attachmentMaxBytes) {
       throw new HttpError(
-        413,
-        `An attachment may be at most ${config.consultations.attachmentMaxBytes} bytes.`,
         'ATTACHMENT_TOO_LARGE',
-      );
+        `An attachment may be at most ${config.consultations.attachmentMaxBytes} bytes.`);
     }
 
     const sniffed = sniffAttachmentContentType(raw);
     if (!sniffed || sniffed !== declared) {
       throw new HttpError(
-        400,
-        'Attachment content does not match its declared type.',
         'ATTACHMENT_CONTENT_MISMATCH',
-      );
+        'Attachment content does not match its declared type.');
     }
 
     const body = stripImageMetadata(raw, sniffed);
@@ -99,7 +93,7 @@ export function prepareAttachments(inputs: AttachmentUploadInput[]): Array<Prepa
  * can overshoot it by at most one message's worth. */
 export function assertWithinQuota(existingBytes: number, addedBytes: number): void {
   if (existingBytes + addedBytes > config.consultations.attachmentQuotaBytes) {
-    throw new HttpError(413, 'Attachment storage quota exceeded.', 'ATTACHMENT_QUOTA_EXCEEDED');
+    throw new HttpError('ATTACHMENT_QUOTA_EXCEEDED', 'Attachment storage quota exceeded.');
   }
 }
 
@@ -126,13 +120,13 @@ export async function readSignedAttachment(
   signature: string,
 ): Promise<{ attachment: { fileName: string; contentType: string; sizeBytes: number }; object: StoredObject }> {
   if (!verifyAttachmentToken(attachmentId, expiresAtMs, signature)) {
-    throw new HttpError(403, 'This download link is invalid or has expired.', 'ATTACHMENT_LINK_INVALID');
+    throw new HttpError('ATTACHMENT_LINK_INVALID', 'This download link is invalid or has expired.');
   }
   const attachment = await consultationsRepo.findAttachmentById(prisma, attachmentId);
-  if (!attachment) throw new HttpError(404, 'Attachment not found.');
+  if (!attachment) throw new HttpError('ATTACHMENT_NOT_FOUND', 'Attachment not found.');
 
   const object = await getObjectStorage().getObject(attachment.objectKey);
-  if (!object) throw new HttpError(404, 'Attachment file not found.');
+  if (!object) throw new HttpError('ATTACHMENT_FILE_NOT_FOUND', 'Attachment file not found.');
   return { attachment, object };
 }
 

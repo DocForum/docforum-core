@@ -1,0 +1,5 @@
+---
+file: ROADMAP.md
+section: Phase 9 — Deploy & CI
+---
+- [x] Machine-readable error codes and a generated error catalogue ([issue #115](https://github.com/DocForum/docforum-core/issues/115)): `HttpError` takes a code from `backend/src/error-catalogue.ts` and derives the HTTP status from it, every `HttpError` construction in `src/` is coded (`npm run errors:lint` fails CI otherwise), the envelope is `{ code, message, details? }` everywhere, Zod failures collapse to `400 VALIDATION_FAILED` with `details.fields[]`, and unknown errors return `500 INTERNAL` without internals. `npm run errors:catalogue` generates `docs/api/error-catalogue.md` (code, status, meaning, client guidance) from the catalogue, and the docs site's error page now copies that file instead of a hand-maintained list that had already drifted. Tests assert codes for booking (`SLOT_TAKEN`), email verification, concurrency, referrals, payments, lab results and attachment failures.

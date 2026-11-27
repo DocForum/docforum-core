@@ -141,7 +141,7 @@ export async function signupWithInvite(req: Request, res: Response) {
 
 export async function refresh(req: Request, res: Response) {
   const token = refreshCookieValue(req);
-  if (!token) throw new HttpError(401, 'No refresh token provided.');
+  if (!token) throw new HttpError('NO_REFRESH_TOKEN', 'No refresh token provided.');
 
   const session = await authService.refresh(token, readCsrfHeader(req));
   sessionResponse(res, session);
@@ -159,14 +159,14 @@ export async function verifyEmail(req: Request, res: Response) {
  * addresses, and being logged in is exactly the state a user is in when
  * they need it (login is allowed while unverified). */
 export async function resendVerificationEmail(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const result = await authService.resendVerificationEmail(req.user.id);
   res.status(200).json(result);
 }
 
 // Phase 8, issue #271 — change account email.
 export async function requestEmailChange(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = requestEmailChangeSchema.parse(req.body);
   const result = await authService.requestEmailChange(req.user.id, input, auditActor(req), req.ip);
   res.status(200).json(result);
@@ -192,7 +192,7 @@ export async function confirmEmailChange(req: Request, res: Response) {
  */
 export function logout(req: Request, res: Response) {
   if (!readCsrfHeader(req)) {
-    throw new HttpError(403, 'Missing CSRF token. Send the csrfToken from your login response in the X-CSRF-Token header.');
+    throw new HttpError('CSRF_TOKEN_MISSING', 'Missing CSRF token. Send the csrfToken from your login response in the X-CSRF-Token header.');
   }
   res.clearCookie(REFRESH_COOKIE, config.cookie);
   res.status(204).send();
@@ -298,7 +298,7 @@ function refreshCookieValue(req: Request): string | undefined {
 }
 
 function requireUserId(req: Request): string {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   return req.user.id;
 }
 
@@ -321,7 +321,7 @@ export async function revokeSession(req: Request, res: Response) {
     currentSessionId,
   });
 
-  if (!result.revoked) throw new HttpError(404, 'Session not found.');
+  if (!result.revoked) throw new HttpError('SESSION_NOT_FOUND', 'Session not found.');
   // Revoking the session you're using has to clear the cookie in the same
   // response, or the browser keeps sending a dead refresh token.
   if (result.wasCurrent) res.clearCookie(REFRESH_COOKIE, config.cookie);

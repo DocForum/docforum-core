@@ -163,7 +163,7 @@ export function decodeEscrowEventsCursor(cursor: string): EscrowEventsCursor {
   const detectedAt = new Date(raw.slice(0, separator));
   const id = raw.slice(separator + 1);
   if (separator < 1 || Number.isNaN(detectedAt.getTime()) || !id) {
-    throw new HttpError(400, 'Invalid cursor.', 'INVALID_CURSOR');
+    throw new HttpError('INVALID_CURSOR', 'Invalid cursor.');
   }
   return { detectedAt, id };
 }

@@ -24,14 +24,14 @@ import { formatOrderResponse } from '../../../utils/order-utils';
 export async function createConsultation(actor: auditService.AuditActor, input: {
   appointmentId: string; outcome: 'resolved' | 'referred' | 'follow_up_needed' | null; notes: string | null;
 }) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   await appointmentsService.getDoctorAppointmentContext(actor.userId, input.appointmentId);
   const { consultation } = await consultationsService.createConsultation(actor, input);
   return consultation;
 }
 
 async function consultationContext(actor: auditService.AuditActor, id: string) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   // Read through the consultations service, never its table (AGENTS.md hard rule 4).
   const consultation = await consultationsService.getConsultationRecord(id);
   // Who first (treating doctor, verified profile — 403 otherwise), then the
@@ -46,7 +46,7 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 function requirePositiveAmount(amount: bigint) {
-  if (amount <= 0n) throw new HttpError(400, 'amountStroops must be positive.');
+  if (amount <= 0n) throw new HttpError('ORDER_AMOUNT_NOT_POSITIVE', 'amountStroops must be positive.');
 }
 
 /**
@@ -70,7 +70,7 @@ async function resolveOrderAmount(tx: Prisma.TransactionClient, input: {
     return { amountStroops: price.amount, catalogItemCode: input.catalogItemCode };
   }
   if (input.amountStroops === undefined) {
-    throw new HttpError(400, 'Either amountStroops or catalogItemCode is required.');
+    throw new HttpError('ORDER_AMOUNT_REQUIRED', 'Either amountStroops or catalogItemCode is required.');
   }
   requirePositiveAmount(input.amountStroops);
   return { amountStroops: input.amountStroops, catalogItemCode: null };
@@ -160,7 +160,7 @@ export async function issuePrescription(actor: auditService.AuditActor, input: {
   if (input.supersedesPrescriptionId) {
     predecessor = await ordersRepo.findPrescriptionForCorrection(input.supersedesPrescriptionId);
     if (!predecessor || predecessor.consultationId !== consultation.id || predecessor.correctedBy) {
-      throw new HttpError(409, 'The prescription to correct does not exist, belongs to another consultation, or already has a correction.');
+      throw new HttpError('PRESCRIPTION_CORRECTION_INVALID', 'The prescription to correct does not exist, belongs to another consultation, or already has a correction.');
     }
   }
   try {
@@ -193,7 +193,7 @@ export async function issuePrescription(actor: auditService.AuditActor, input: {
       return { ...order, paymentIntent };
     });
   } catch (error) {
-    if (isUniqueViolation(error)) throw new HttpError(409, 'This order already has a correction or payment intent.');
+    if (isUniqueViolation(error)) throw new HttpError('ORDER_CORRECTION_CONFLICT', 'This order already has a correction or payment intent.');
     throw error;
   }
 }
@@ -207,7 +207,7 @@ export async function issueLabOrder(actor: auditService.AuditActor, input: {
   if (input.supersedesLabOrderId) {
     predecessor = await ordersRepo.findLabOrderForCorrection(input.supersedesLabOrderId);
     if (!predecessor || predecessor.consultationId !== consultation.id || predecessor.correctedBy) {
-      throw new HttpError(409, 'The lab order to correct does not exist, belongs to another consultation, or already has a correction.');
+      throw new HttpError('LAB_ORDER_CORRECTION_INVALID', 'The lab order to correct does not exist, belongs to another consultation, or already has a correction.');
     }
   }
   try {
@@ -244,7 +244,7 @@ export async function issueLabOrder(actor: auditService.AuditActor, input: {
       return { ...order, notes: decryptField(order.notes), paymentIntent };
     });
   } catch (error) {
-    if (isUniqueViolation(error)) throw new HttpError(409, 'This order already has a correction or payment intent.');
+    if (isUniqueViolation(error)) throw new HttpError('ORDER_CORRECTION_CONFLICT', 'This order already has a correction or payment intent.');
     throw error;
   }
 }
@@ -255,14 +255,14 @@ export async function confirmOrderReceipt(
   actor: auditService.AuditActor,
 ) {
   if (!orderId || typeof orderId !== 'string') {
-    throw new HttpError(400, 'Order ID is required.');
+    throw new HttpError('ORDER_ID_REQUIRED', 'Order ID is required.');
   }
 
   const patientProfile = await prisma.patientProfile.findUnique({
     where: { userId: patientUserId },
   });
   if (!patientProfile) {
-    throw new HttpError(403, 'Patient profile required.');
+    throw new HttpError('PATIENT_PROFILE_REQUIRED', 'Patient profile required.');
   }
 
   const windowStart = new Date(
@@ -288,7 +288,7 @@ export async function confirmOrderReceipt(
       });
 
       const updated = await ordersRepo.findOrderForPatient(tx, orderId, patientProfile.id);
-      if (!updated) throw new HttpError(500, 'Failed to fetch updated order.');
+      if (!updated) throw new HttpError('ORDER_FETCH_FAILED', 'Failed to fetch updated order.');
       return updated;
     }
 
@@ -297,9 +297,9 @@ export async function confirmOrderReceipt(
     if (!existing) {
       const orderExists = await tx.order.findUnique({ where: { id: orderId } });
       if (!orderExists) {
-        throw new HttpError(404, 'Order not found.');
+        throw new HttpError('ORDER_NOT_FOUND', 'Order not found.');
       }
-      throw new HttpError(403, 'You do not have permission to confirm this order.');
+      throw new HttpError('ORDER_CONFIRM_FORBIDDEN', 'You do not have permission to confirm this order.');
     }
 
     if (existing.confirmed) {
@@ -307,16 +307,16 @@ export async function confirmOrderReceipt(
       return existing;
     }
     if (existing.disputed) {
-      throw new HttpError(409, 'Cannot confirm receipt of a disputed order.');
+      throw new HttpError('ORDER_ALREADY_DISPUTED', 'Cannot confirm receipt of a disputed order.');
     }
     if (existing.status !== 'fulfilled') {
-      throw new HttpError(400, 'Order must be fulfilled before receipt can be confirmed.');
+      throw new HttpError('ORDER_NOT_FULFILLED', 'Order must be fulfilled before receipt can be confirmed.');
     }
     if (existing.fulfilledAt && existing.fulfilledAt < windowStart) {
-      throw new HttpError(409, 'Confirmation window has elapsed.');
+      throw new HttpError('ORDER_DISPUTE_WINDOW_ELAPSED', 'Confirmation window has elapsed.');
     }
 
-    throw new HttpError(409, 'Unable to confirm order receipt.');
+    throw new HttpError('ORDER_CONFIRM_FAILED', 'Unable to confirm order receipt.');
   });
 
   return formatOrderResponse(result);
@@ -329,23 +329,23 @@ export async function disputeOrder(
   actor: auditService.AuditActor,
 ) {
   if (!orderId || typeof orderId !== 'string') {
-    throw new HttpError(400, 'Order ID is required.');
+    throw new HttpError('ORDER_ID_REQUIRED', 'Order ID is required.');
   }
 
   const orderExists = await prisma.order.findUnique({ where: { id: orderId } });
   if (!orderExists) {
-    throw new HttpError(404, 'Order not found.');
+    throw new HttpError('ORDER_NOT_FOUND', 'Order not found.');
   }
 
   if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
-    throw new HttpError(400, 'Dispute reason is required.');
+    throw new HttpError('DISPUTE_REASON_REQUIRED', 'Dispute reason is required.');
   }
 
   const patientProfile = await prisma.patientProfile.findUnique({
     where: { userId: patientUserId },
   });
   if (!patientProfile) {
-    throw new HttpError(403, 'Patient profile required.');
+    throw new HttpError('PATIENT_PROFILE_REQUIRED', 'Patient profile required.');
   }
 
   const windowStart = new Date(
@@ -357,22 +357,22 @@ export async function disputeOrder(
     if (!existingBefore) {
       const orderExists = await tx.order.findUnique({ where: { id: orderId } });
       if (!orderExists) {
-        throw new HttpError(404, 'Order not found.');
+        throw new HttpError('ORDER_NOT_FOUND', 'Order not found.');
       }
-      throw new HttpError(403, 'You do not have permission to dispute this order.');
+      throw new HttpError('ORDER_DISPUTE_FORBIDDEN', 'You do not have permission to dispute this order.');
     }
 
     if (existingBefore.confirmed) {
-      throw new HttpError(409, 'Cannot dispute an order that has already been confirmed.');
+      throw new HttpError('ORDER_ALREADY_CONFIRMED', 'Cannot dispute an order that has already been confirmed.');
     }
     if (existingBefore.disputed) {
-      throw new HttpError(409, 'Order is already disputed.');
+      throw new HttpError('ORDER_ALREADY_DISPUTED', 'Order is already disputed.');
     }
     if (existingBefore.status !== 'fulfilled') {
-      throw new HttpError(400, 'Order must be fulfilled before it can be disputed.');
+      throw new HttpError('ORDER_NOT_FULFILLED', 'Order must be fulfilled before it can be disputed.');
     }
     if (existingBefore.fulfilledAt && existingBefore.fulfilledAt < windowStart) {
-      throw new HttpError(409, 'Confirmation window has elapsed; order can no longer be disputed.');
+      throw new HttpError('ORDER_DISPUTE_WINDOW_ELAPSED', 'Confirmation window has elapsed; order can no longer be disputed.');
     }
 
     const success = await ordersRepo.disputeOrderConditional(
@@ -383,7 +383,7 @@ export async function disputeOrder(
     );
 
     if (!success) {
-      throw new HttpError(409, 'Unable to dispute order.');
+      throw new HttpError('ORDER_DISPUTE_FAILED', 'Unable to dispute order.');
     }
 
     await ordersRepo.createOrderDispute(tx, {
@@ -402,7 +402,7 @@ export async function disputeOrder(
     });
 
     const updated = await ordersRepo.findOrderForPatient(tx, orderId, patientProfile.id);
-    if (!updated) throw new HttpError(500, 'Failed to fetch updated order.');
+    if (!updated) throw new HttpError('ORDER_FETCH_FAILED', 'Failed to fetch updated order.');
     return updated;
   });
 
@@ -417,11 +417,11 @@ export async function disputeOrder(
  * traverse the chain itself.
  */
 export async function listMineOrders(patientUserId: string) {
-  if (!patientUserId) throw new HttpError(401, 'Authentication required.');
+  if (!patientUserId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const patientProfile = await prisma.patientProfile.findUnique({
     where: { userId: patientUserId },
   });
-  if (!patientProfile) throw new HttpError(403, 'Patient profile required.');
+  if (!patientProfile) throw new HttpError('PATIENT_PROFILE_REQUIRED', 'Patient profile required.');
 
   const [prescriptions, labOrders] = await Promise.all([
     ordersRepo.findCurrentPrescriptionsForPatient(patientProfile.id),
@@ -439,7 +439,7 @@ export async function listMineOrders(patientUserId: string) {
 
 export async function getOrderById(orderId: string) {
   if (!orderId || typeof orderId !== 'string') {
-    throw new HttpError(400, 'Order ID is required.');
+    throw new HttpError('ORDER_ID_REQUIRED', 'Order ID is required.');
   }
   const order = await prisma.order.findUnique({
     where: { id: orderId },
@@ -453,7 +453,7 @@ export async function getOrderById(orderId: string) {
     },
   });
   if (!order) {
-    throw new HttpError(404, 'Order not found.');
+    throw new HttpError('ORDER_NOT_FOUND', 'Order not found.');
   }
   return formatOrderResponse(order);
 }
