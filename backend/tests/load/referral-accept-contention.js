@@ -17,7 +17,8 @@ import { Counter, Trend } from 'k6/metrics';
 const BASE_URL = __ENV.LOAD_TEST_BASE_URL || 'http://localhost:4000';
 const SEED_FILE = __ENV.LOAD_TEST_SEED_FILE || './seed-referral-accept-contention.json';
 
-if (BASE_URL.includes('render.com')) {
+const BASE_HOST = ((/^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:?#]+)/i.exec(BASE_URL) || [])[1] || '').toLowerCase();
+if (['render.com', 'onrender.com'].some((domain) => BASE_HOST === domain || BASE_HOST.endsWith(`.${domain}`))) {
   fail('Refusing to run the referral accept contention test against a Render host');
 }
 
