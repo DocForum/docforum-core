@@ -66,6 +66,9 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
     }
     await doctorsService.assertDoctorVerified(slot.doctorProfileId, undefined, tx);
 
+    // Ensure the doctor is active (not deactivated or deleted)
+    await doctorsService.assertDoctorActive(slot.doctorProfileId, tx);
+
     const appointment = await appointmentsRepo.createAppointment(tx, {
       patientProfileId: patientProfile.id,
       doctorProfileId: slot.doctorProfileId,
@@ -195,6 +198,9 @@ export async function rescheduleSlot(
     if (newSlot.startTime.getTime() <= now.getTime()) {
       throw new HttpError(400, 'The new slot must be in the future.');
     }
+
+    // Ensure the doctor is active (not deactivated or deleted)
+    await doctorsService.assertDoctorActive(newSlot.doctorProfileId, tx);
 
     // Claim the new slot atomically
     const newClaimed = await availabilityService.claimOpenSlot(tx, newSlotId, now);
@@ -671,6 +677,9 @@ export async function bookForReferral(
     throw new HttpError(409, 'This slot is no longer available.');
   }
 
+  // Ensure the doctor is active (not deactivated or deleted)
+  await doctorsService.assertDoctorActive(slot.doctorProfileId, db);
+
   const appointment = await appointmentsRepo.createAppointment(db, {
     patientProfileId: input.patientProfileId,
     doctorProfileId: input.doctorProfileId,
@@ -735,6 +744,9 @@ export async function bookForFollowUp(
     }
     throw new HttpError(409, 'This slot is no longer available.');
   }
+
+  // Ensure the doctor is active (not deactivated or deleted)
+  await doctorsService.assertDoctorActive(slot.doctorProfileId, db);
 
   const appointment = await appointmentsRepo.createAppointment(db, {
     patientProfileId: input.patientProfileId,
