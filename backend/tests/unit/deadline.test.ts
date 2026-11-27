@@ -78,6 +78,7 @@ describe('requestDeadline', () => {
       '/orders/lab-orders/abc/result',
       '/consultations/messages/attachments/abc/file',
       '/patients/me/export/abc/download',
+      '/fulfillment-proofs/abc/attachment',
     ]) {
       expect(isDeadlineExempt(path)).toBe(true);
       const res = run(path);

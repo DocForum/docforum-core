@@ -91,6 +91,28 @@ export function createPriceVersion(
   return db.facilityPrice.create({ data });
 }
 
+/** Conditional update for facility profile fields (issue #319).
+ * Returns the updated row or null on a version conflict. */
+export function updateFacilityProfile(
+  id: string,
+  version: number,
+  data: { name?: string; address?: string; latitude?: number; longitude?: number },
+  db: Db = prisma,
+) {
+  return db.facilityProfile
+    .updateManyAndReturn({
+      where: { id, version },
+      data: {
+        ...(data.name !== undefined ? { name: data.name } : {}),
+        ...(data.address !== undefined ? { address: data.address } : {}),
+        ...(data.latitude !== undefined ? { latitude: data.latitude } : {}),
+        ...(data.longitude !== undefined ? { longitude: data.longitude } : {}),
+        version: { increment: 1 },
+      },
+    })
+    .then((rows) => rows[0] ?? null);
+}
+
 /** Capability management (issue #320) */
 
 export function findCapabilityById(id: string, db: Db = prisma) {

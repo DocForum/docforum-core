@@ -5,6 +5,6 @@ import * as controllers from '../controllers';
 
 export const labOrdersRouter = Router();
 
-labOrdersRouter.post('/', authenticate, controllers.createLabOrder);
+labOrdersRouter.post('/', apiRateLimit, authenticate, controllers.createLabOrder);
 labOrdersRouter.get('/:id', apiRateLimit, authenticate, controllers.getLabOrder);
-labOrdersRouter.post('/:id/fulfill', authenticate, requireRole('facility'), controllers.fulfillLabOrder);
+labOrdersRouter.post('/:id/fulfill', apiRateLimit, authenticate, requireRole('facility'), controllers.fulfillLabOrder);

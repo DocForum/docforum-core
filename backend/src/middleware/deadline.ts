@@ -5,7 +5,7 @@
 // error handler ignores errors once headers are sent).
 //
 // Exempt: the SSE stream, which is open by design, and the routes that move
-// whole files (lab-result upload/download, consultation attachment files,
+// whole files (lab-result upload/download, consultation attachment files, fulfillment proof files,
 // patient-export download), which
 // are bounded by the server-level requestTimeout and their size caps.
 import type { NextFunction, Request, Response } from 'express';
@@ -17,6 +17,7 @@ const EXEMPT = [
   /^\/orders\/lab-orders\/[^/]+\/result\/?$/,
   /^\/consultations\/messages\/attachments\/[^/]+\/file\/?$/,
   /^\/patients\/me\/export\/[^/]+\/download\/?$/,
+  /^\/fulfillment-proofs\/[^/]+\/attachment\/?$/,
 ];
 
 export function isDeadlineExempt(path: string): boolean {

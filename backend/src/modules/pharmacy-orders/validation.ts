@@ -69,6 +69,33 @@ export const orderFulfillmentStatusQuerySchema = z.object({
   orderType: z.enum(['prescription', 'lab_order']),
 });
 
+/** POST /pharmacy-orders — create a new pharmacy order (issue #317). */
+export const createPharmacyOrderSchema = z.object({
+  patientProfileId: z.string().uuid(),
+  prescribingDoctorId: z.string().uuid().optional(),
+  details: z.string().trim().max(5000).optional(),
+});
+
+/** POST /pharmacy-orders/:id/fulfill (issue #317). Strict: the proof file is no
+ * longer sent here (no client URL, no base64) — it is uploaded afterwards to
+ * PUT /fulfillment-proofs/:proofId/attachment (issue #316), so a request that
+ * still carries `attachment` is rejected rather than silently dropped. */
+export const fulfillPharmacyOrderSchema = z
+  .object({
+    referenceNumber: z.string().trim().min(1).max(200),
+    notes: z.string().trim().max(5000).optional(),
+  })
+  .strict();
+
+export type CreatePharmacyOrderBody = z.infer<typeof createPharmacyOrderSchema>;
+export type FulfillPharmacyOrderBody = z.infer<typeof fulfillPharmacyOrderSchema>;
+
 export const listOrderFulfillmentsQuerySchema = z.object({
   orderType: z.enum(['prescription', 'lab_order']),
+});
+
+/** GET /fulfillment-proofs/:proofId/attachment (issue #316): a guardian names
+ * the dependent whose proof they are reading. */
+export const proofDownloadQuerySchema = z.object({
+  patientProfileId: z.string().uuid().optional(),
 });

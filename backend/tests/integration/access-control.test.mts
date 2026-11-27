@@ -67,6 +67,10 @@ const KNOWN_ROUTES = [
   'POST /orders/consultations/:consultationId/lab-orders',
   'POST /pharmacy-orders/:id/fulfill',
   'POST /lab-orders/:id/fulfill',
+  'PUT /fulfillment-proofs/:proofId/attachment',
+  'GET /fulfillment-proofs/:proofId/attachment',
+  'GET /facilities/me',
+  'PATCH /facilities/me',
   'POST /orders/:id/confirm-receipt',
   'POST /orders/:id/dispute',
   'GET /orders/:id',
@@ -139,8 +143,16 @@ const ACCESS_MATRIX: MatrixRow[] = [
   { method: 'POST', path: '/orders/consultations/:consultationId/lab-orders', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 403 } },
 
   // Pharmacy & Lab Orders fulfillment — facility-only
-  { method: 'POST', path: '/pharmacy-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 404, admin: 403 } },
-  { method: 'POST', path: '/lab-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 404, admin: 403 } },
+  // Facility passes authorization; missing body → 400 (issue #317 schemas).
+  { method: 'POST', path: '/pharmacy-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 400, admin: 403 } },
+  { method: 'POST', path: '/lab-orders/:id/fulfill', expected: { anon: 401, patient: 403, doctor: 403, facility: 400, admin: 403 } },
+  // Fulfillment proof files (issue #316): upload is facility-only; download
+  // is checked per proof, so an unknown id is 404 for every signed-in role.
+  { method: 'PUT', path: '/fulfillment-proofs/:proofId/attachment', expected: { anon: 401, patient: 403, doctor: 403, facility: 404, admin: 403 } },
+  { method: 'GET', path: '/fulfillment-proofs/:proofId/attachment', expected: { anon: 401, patient: 404, doctor: 404, facility: 404, admin: 404 } },
+  // Facility self-service profile (issue #319); PATCH without If-Match → 428.
+  { method: 'GET', path: '/facilities/me', expected: { anon: 401, patient: 403, doctor: 403, facility: 200, admin: 403 } },
+  { method: 'PATCH', path: '/facilities/me', expected: { anon: 401, patient: 403, doctor: 403, facility: 428, admin: 403 } },
 
   // Patient Order Confirm & Dispute — patient-only
   { method: 'POST', path: '/orders/:id/confirm-receipt', expected: { anon: 401, patient: 404, doctor: 403, facility: 403, admin: 403 } },

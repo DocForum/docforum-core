@@ -1,4 +1,7 @@
-import { Router } from 'express';
+import express, { Router, type NextFunction, type Request, type Response } from 'express';
+import { config } from '../../../config';
+import { HttpError } from '../../../http-error';
+import { PROOF_CONTENT_TYPES } from '../services/proof-files';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
 import { apiRateLimit } from '../../../middleware/rate-limit';
 import * as pharmacyOrdersController from '../controllers';
@@ -71,11 +74,51 @@ pharmacyOrdersRouter.get(
 );
 
 // Generic pharmacy order (Order model) creation and fulfillment proof.
-pharmacyOrdersRouter.post('/', authenticate, pharmacyOrdersController.createPharmacyOrder);
-pharmacyOrdersRouter.get('/:id', authenticate, pharmacyOrdersController.getPharmacyOrder);
+// The proof's file is uploaded separately (issue #316, below).
+pharmacyOrdersRouter.post('/', apiRateLimit, authenticate, pharmacyOrdersController.createPharmacyOrder);
+pharmacyOrdersRouter.get('/:id', apiRateLimit, authenticate, pharmacyOrdersController.getPharmacyOrder);
 pharmacyOrdersRouter.post(
   '/:id/fulfill',
+  apiRateLimit,
   authenticate,
   requireRole('facility'),
   pharmacyOrdersController.fulfillPharmacyOrder,
+);
+
+// Issue #316: fulfillment proof files, for both legacy pharmacy and lab
+// orders (the proof row is shared), mounted at /fulfillment-proofs. The file
+// is the raw request body, parsed only after authentication and the role
+// check so an anonymous caller can't make the server buffer an upload; the
+// parser's limit is the size cap and its errors map to clean 4xx answers.
+export const fulfillmentProofsRouter = Router();
+
+const parseProofBody = express.raw({ type: PROOF_CONTENT_TYPES, limit: config.orders.proofMaxBytes });
+function proofBody(req: Request, res: Response, next: NextFunction) {
+  parseProofBody(req, res, (err?: unknown) => {
+    if (!err) return next();
+    const status = (err as { status?: number }).status;
+    if (status === 413) {
+      return next(new HttpError(413, `Proof files may be at most ${config.orders.proofMaxBytes} bytes.`, 'PROOF_TOO_LARGE'));
+    }
+    return next(new HttpError(400, 'The proof file could not be read.'));
+  });
+}
+
+fulfillmentProofsRouter.put(
+  '/:proofId/attachment',
+  apiRateLimit,
+  authenticate,
+  requireRole('facility'),
+  requireVerifiedEmail,
+  proofBody,
+  pharmacyOrdersController.attachProofFile,
+);
+
+// Patient (or active guardian via ?patientProfileId=), the facility that
+// recorded the proof, or an admin; anyone else gets 404.
+fulfillmentProofsRouter.get(
+  '/:proofId/attachment',
+  apiRateLimit,
+  authenticate,
+  pharmacyOrdersController.downloadProofFile,
 );
