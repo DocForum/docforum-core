@@ -1,0 +1,5 @@
+---
+file: docs/api/README.md
+section: Appointments (`/appointments`) — `backend/src/modules/appointments`
+---
+| `POST /appointments/doctor/cancel-day` | doctor (own calendar; verified email) | `{ date: 'YYYY-MM-DD', reason? }` | Issue #338 (sick day). `date` is a day in the doctor's `DoctorProfile.timeZone`. Cancels every still-`scheduled` appointment of that day that has not started yet, one transaction each through the normal transition (slot released, referral cascade, one `appointment.cancelled` AuditEvent with `reason: 'doctor_cancel_day'` and the optional `note`), then closes (deletes) the day's remaining future open slots. A booking that races the call is caught by a second pass and cancelled. Appointments that already started are left alone. Answers `{ date, cancelled, slotsClosed, failures: [{ appointmentId, message }], appointmentIds }`; `400` for a malformed or impossible date. Idempotent. |

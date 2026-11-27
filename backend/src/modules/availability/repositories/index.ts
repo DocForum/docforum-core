@@ -118,3 +118,22 @@ export async function releaseBookedSlotIfFuture(db: DbClient, slotId: string): P
   });
   return result.count === 1;
 }
+
+/**
+ * Closes (deletes) a doctor's still-open slots that start in [from, end)
+ * — the doctor-cancels-a-day action (issue #338). Conditional on
+ * `status = 'open'` with no appointment attached, so a slot booked or held
+ * concurrently is never removed from under its booking. Returns how many
+ * slots were closed.
+ */
+export async function closeOpenSlotsInRange(doctorProfileId: string, from: Date, end: Date): Promise<number> {
+  const result = await prisma.availabilitySlot.deleteMany({
+    where: {
+      doctorProfileId,
+      status: 'open',
+      startTime: { gte: from, lt: end },
+      appointment: { is: null },
+    },
+  });
+  return result.count;
+}

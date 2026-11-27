@@ -1,11 +1,20 @@
-import { requireEnv } from '../helpers';
+import { positiveNumber, requireEnv } from '../helpers';
 
-// Render's proxy idle timeout is 5 minutes; keep-alive above that.
-// See: https://render.com/docs/proxies#idle-timeout
+// HTTP server timeouts (Phase 8, issue #335), all in milliseconds.
+// - keepAliveTimeout must stay above the reverse proxy's idle timeout, or
+//   Node closes a pooled connection the proxy is about to reuse and the
+//   client sees a 502. Render's proxy keeps idle connections for up to
+//   5 minutes, so the default is just above that.
+// - headersTimeout / requestTimeout bound how long a client may take to
+//   send its headers / whole request (slow-loris protection). They do not
+//   limit how long a response (e.g. the SSE stream) stays open.
+// - requestDeadline is the per-request deadline middleware's budget for
+//   producing a response on non-streaming routes (middleware/deadline.ts).
 export const http = {
-  keepAliveTimeout: Number(process.env.KEEP_ALIVE_TIMEOUT ?? 300_000), // 5 minutes
-  headersTimeout: Number(process.env.HEADERS_TIMEOUT ?? 30_000), // 30 seconds
-  requestTimeout: Number(process.env.REQUEST_TIMEOUT ?? 120_000), // 2 minutes
+  keepAliveTimeout: positiveNumber(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS, 305_000),
+  headersTimeout: positiveNumber(process.env.HTTP_HEADERS_TIMEOUT_MS, 30_000),
+  requestTimeout: positiveNumber(process.env.HTTP_REQUEST_TIMEOUT_MS, 120_000),
+  requestDeadline: positiveNumber(process.env.HTTP_REQUEST_DEADLINE_MS, 30_000),
 } as const;
 
 export const port = Number(process.env.PORT ?? 4000);

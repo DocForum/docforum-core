@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { apiRateLimit } from '../../../middleware/rate-limit';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
 import { idempotency } from '../../../middleware/idempotency';
 import * as appointmentsController from '../controllers';
@@ -107,10 +108,11 @@ appointmentsRouter.patch(
   appointmentsController.cancelMine,
 );
 
-// Doctor cancels all scheduled appointments for a given date (Phase 2, issue #338).
-// Optional `reason` query parameter may be included.
+// Doctor cancels the rest of a day (Phase 2, issue #338). Body:
+// `{ date: 'YYYY-MM-DD', reason? }`, the date in the doctor's time zone.
 appointmentsRouter.post(
   '/doctor/cancel-day',
+  apiRateLimit,
   authenticate,
   requireRole('doctor'),
   requireVerifiedEmail,

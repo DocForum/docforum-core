@@ -712,7 +712,10 @@ export const referralsExportSection: patientsService.PatientExportSection = {
         referringDoctorId: row.referringDoctorId,
         targetDoctorId: row.targetDoctorId,
         targetSpecialtyId: row.targetSpecialtyId,
-        snapshotNotes: row.snapshotNotes,
+        // Clinical text is stored encrypted; the export is for the patient
+        // to read, so it carries the plaintext (issue #336).
+        snapshotNotes: readableSnapshotNotes(row.snapshotNotes),
+        declineReason: row.declineReason,
         createdAt: row.createdAt,
         expiredAt: row.expiredAt,
         expiredReason: row.expiredReason,

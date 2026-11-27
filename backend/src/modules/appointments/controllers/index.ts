@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import * as appointmentsService from '../services';
 import * as patientsService from '../../patients/services';
 import {
+  cancelDaySchema,
   acceptWaitlistSchema,
   bookSlotSchema,
   doctorScheduleQuerySchema,
@@ -116,16 +117,12 @@ export async function cancelMine(req: Request, res: Response) {
   res.status(200).json(appointment);
 }
 
+/** `POST /appointments/doctor/cancel-day` — the caller (a doctor) cancels
+ * the rest of one day in their own time zone (issue #338). */
 export async function cancelDay(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const { date } = req.query;
-  if (!date) throw new HttpError(400, 'date query parameter is required.');
-  const result = await appointmentsService.cancelDay(
-    auditActor(req),
-    req.user.id,
-    String(date),
-  );
-  res.status(200).json(result);
+  const { date, reason } = cancelDaySchema.parse(req.body);
+  res.status(200).json(await appointmentsService.cancelDay(auditActor(req), date, reason));
 }
 
 export async function getOne(req: Request, res: Response) {

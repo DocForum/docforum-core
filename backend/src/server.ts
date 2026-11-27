@@ -61,14 +61,12 @@ async function startServer() {
   server = app.listen(config.port, () => {
     logger.info(`docforum-core backend listening on :${config.port}`);
   });
-  // Phase 8, issue #335: configure HTTP-level timeouts after the server
-  // is listening, since Node's `app.listen` options are only accepted
-  // during the listen call. We set them via the server object directly.
-  if (server?.setTimeout) {
-    server.setTimeout(config.http.requestTimeout);
-  }
-  // Per-request socket timeouts are handled by the deadlineMiddleware
-  // registered in app.ts, which overrides res.end to clear its timeout.
+  // Phase 8, issue #335: slow-client limits and a keep-alive above the
+  // proxy's idle timeout (config.http documents the values). Node requires
+  // headersTimeout <= requestTimeout.
+  server.keepAliveTimeout = config.http.keepAliveTimeout;
+  server.headersTimeout = Math.min(config.http.headersTimeout, config.http.requestTimeout);
+  server.requestTimeout = config.http.requestTimeout;
 }
 
 void startServer().catch((_error: unknown) => {
