@@ -102,8 +102,12 @@ export async function downloadLabResult(req: Request, res: Response) {
 }
 
 export async function getOrder(req: Request, res: Response) {
-  const id = req.params.id as string;
-  const order = await ordersService.getOrderById(id);
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const order = await ordersService.getOrderById(
+    getParam(req, 'id'),
+    { userId: req.user.id, role: req.user.role },
+    req.originalUrl,
+  );
   res.status(200).json(serialize(order));
 }
 

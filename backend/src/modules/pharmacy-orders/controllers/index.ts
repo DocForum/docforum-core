@@ -56,9 +56,10 @@ export async function updateFulfillmentItem(req: Request, res: Response) {
 
 export async function getOrderFulfillmentStatus(req: Request, res: Response) {
   const { orderType } = orderFulfillmentStatusQuerySchema.parse(req.query);
-  const summary = await pharmacyOrdersService.getOrderFulfillmentSummary(
+  const summary = await pharmacyOrdersService.getOrderFulfillmentSummaryForViewer(
     orderType,
     getParam(req, 'orderId'),
+    requireUser(req),
   );
   res.status(200).json(summary);
 }
@@ -96,7 +97,7 @@ export async function fulfillPharmacyOrder(req: Request, res: Response) {
 }
 
 export async function getPharmacyOrder(req: Request, res: Response) {
-  const order = await pharmacyOrdersService.getPharmacyOrderById(getParam(req, 'id'));
+  const order = await pharmacyOrdersService.getPharmacyOrderById(getParam(req, 'id'), requireUser(req), req.originalUrl);
   res.status(200).json(order);
 }
 
