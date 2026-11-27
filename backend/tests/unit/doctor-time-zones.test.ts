@@ -43,7 +43,7 @@ describe('doctor time zones & day bounds (issues #290, #291, #360)', () => {
       const res = signupSchema.safeParse({
         role: 'doctor',
         email: 'doc@example.com',
-        password: 'password123',
+        password: 'StrongPassword!2026',
         fullName: 'Dr. Test',
         timeZone: 'Africa/Lagos',
       });
@@ -54,7 +54,7 @@ describe('doctor time zones & day bounds (issues #290, #291, #360)', () => {
       const res = signupSchema.safeParse({
         role: 'doctor',
         email: 'doc@example.com',
-        password: 'password123',
+        password: 'StrongPassword!2026',
         fullName: 'Dr. Test',
       });
       expect(res.success).toBe(true);
@@ -64,7 +64,7 @@ describe('doctor time zones & day bounds (issues #290, #291, #360)', () => {
       const res = signupSchema.safeParse({
         role: 'doctor',
         email: 'doc@example.com',
-        password: 'password123',
+        password: 'StrongPassword!2026',
         fullName: 'Dr. Test',
         timeZone: 'EST',
       });
@@ -75,7 +75,7 @@ describe('doctor time zones & day bounds (issues #290, #291, #360)', () => {
       const res = signupSchema.safeParse({
         role: 'patient',
         email: 'pat@example.com',
-        password: 'password123',
+        password: 'StrongPassword!2026',
         fullName: 'Patient Test',
         timeZone: 'Africa/Lagos',
       });
@@ -86,7 +86,7 @@ describe('doctor time zones & day bounds (issues #290, #291, #360)', () => {
       const res = signupSchema.safeParse({
         role: 'patient',
         email: 'pat@example.com',
-        password: 'password123',
+        password: 'StrongPassword!2026',
         fullName: 'Patient Test',
       });
       expect(res.success).toBe(true);
