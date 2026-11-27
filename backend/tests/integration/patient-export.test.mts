@@ -499,7 +499,7 @@ describe('patient data export', () => {
           sourceConsultationId: consultation.id,
           referringDoctorId: doctorProfileId,
           targetDoctorId: doctorProfileId,
-          snapshotNotes: encryptField(`${label} referral notes`),
+          snapshotNotes: encryptField(`${label} referral notes`) as string,
         },
       });
       await prisma.waitlistEntry.create({
