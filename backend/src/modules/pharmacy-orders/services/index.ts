@@ -19,8 +19,6 @@ import type { FulfillmentItem, FulfillmentRejectionReason, FulfillmentStatus, Fu
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { publish } from '../../../events';
-import { getObjectStorage } from '../../../utils/object-storage';
-import crypto from 'node:crypto';
 import { computeConfirmedSignal, formatOrderResponse } from '../../../utils/order-utils';
 import { record as recordAudit, type AuditActor } from '../../audit/services';
 import * as repo from '../repositories';
@@ -483,27 +481,22 @@ export { computeConfirmedSignal, formatOrderResponse };
 
 export interface FulfillOrderInput {
   referenceNumber: string;
-  /** Base64-encoded file content with optional MIME type, stored in object
-   * storage (issue #316). The key is never returned to callers. */
-  attachment?: { data: string; contentType?: string };
+  /** The proof file is not part of this call: it is uploaded afterwards to
+   * PUT /fulfillment-proofs/:proofId/attachment (issue #316). */
   notes?: string;
 }
 
 export async function createPharmacyOrder(data: {
-  patientProfileId?: string;
+  patientProfileId: string;
   prescribingDoctorId?: string;
   details?: string;
 }) {
-  if (!data.patientProfileId || typeof data.patientProfileId !== 'string') {
-    throw new HttpError(400, 'Patient profile ID is required.');
-  }
-
   await patientsService.getPatientProfileById(data.patientProfileId);
 
   const order = await prisma.$transaction(async (tx) => {
     return repo.createOrder(tx, {
       orderType: 'pharmacy',
-      patientProfileId: data.patientProfileId!,
+      patientProfileId: data.patientProfileId,
       prescribingDoctorId: data.prescribingDoctorId,
       details: data.details,
     });
@@ -518,38 +511,18 @@ export async function fulfillPharmacyOrder(
   input: FulfillOrderInput,
   actor: AuditActor,
 ) {
-  if (!orderId || typeof orderId !== 'string') {
-    throw new HttpError(400, 'Order ID is required.');
-  }
-
-  const existingCheck = await prisma.order.findUnique({ where: { id: orderId } });
-  if (!existingCheck || existingCheck.orderType !== 'pharmacy') {
-    throw new HttpError(404, 'Pharmacy order not found.');
-  }
-
-  if (!input?.referenceNumber || typeof input.referenceNumber !== 'string' || input.referenceNumber.trim().length === 0) {
-    throw new HttpError(400, 'Reference number is required for fulfillment proof.');
-  }
-
+  // Input shape (ids, a non-empty referenceNumber) is guaranteed by the
+  // controller's Zod schema (issue #317).
   const facilityProfile = await facilitiesService.findFacilityProfileByUserId(facilityUserId);
   if (!facilityProfile) {
     throw new HttpError(403, 'Facility profile required.');
   }
 
-  let attachmentUrl: string | undefined;
-  if (input.attachment?.data) {
-    const key = `fulfillment-proofs/${crypto.randomUUID()}`;
-    await getObjectStorage().putObject({
-      key,
-      body: Buffer.from(input.attachment.data, 'base64'),
-      contentType: input.attachment.contentType ?? 'application/octet-stream',
-    });
-    attachmentUrl = key;
-  }
-
   const result = await prisma.$transaction(async (tx) => {
     const existing = await repo.findOrderById(tx, orderId, 'pharmacy');
-    if (!existing) {
+    // An order already routed to a facility can only be fulfilled by that
+    // facility; for any other facility it does not exist.
+    if (!existing || (existing.facilityProfileId !== null && existing.facilityProfileId !== facilityProfile.id)) {
       throw new HttpError(404, 'Pharmacy order not found.');
     }
     if (existing.status === 'fulfilled') {
@@ -567,8 +540,7 @@ export async function fulfillPharmacyOrder(
     await repo.createFulfillmentProof(tx, {
       orderId,
       facilityProfileId: facilityProfile.id,
-      referenceNumber: input.referenceNumber.trim(),
-      attachmentUrl,
+      referenceNumber: input.referenceNumber,
       notes: input.notes,
     });
 
@@ -580,7 +552,7 @@ export async function fulfillPharmacyOrder(
       toState: 'fulfilled',
       metadata: {
         orderType: 'pharmacy',
-        referenceNumber: input.referenceNumber.trim(),
+        referenceNumber: input.referenceNumber,
         facilityProfileId: facilityProfile.id,
       },
     });
@@ -596,9 +568,6 @@ export async function fulfillPharmacyOrder(
 }
 
 export async function getPharmacyOrderById(orderId: string) {
-  if (!orderId || typeof orderId !== 'string') {
-    throw new HttpError(400, 'Order ID is required.');
-  }
   const order = await repo.findOrderById(prisma, orderId, 'pharmacy');
   if (!order) {
     throw new HttpError(404, 'Pharmacy order not found.');

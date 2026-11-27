@@ -430,7 +430,7 @@ export async function getOrderById(orderId: string) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: {
-      fulfillmentProofs: true,
+      fulfillmentProofs: { omit: { attachmentObjectKey: true } },
       disputes: {
         include: {
           resolutions: true,

@@ -1,10 +1,9 @@
-Facility self-service profile read and update: GET/PATCH /facilities/me
+Phase 5: facility self-service profile
 ([issue #319](https://github.com/DocForum/docforum-core/issues/319)).
-Facilities can now read their own full profile (`GET /facilities/me`, returns
-ETag) and update `name`, `address`, `latitude`, `longitude` with optimistic
-concurrency (`PATCH /facilities/me`, requires `If-Match`). The update uses the
-`version Int @default(1)` column already on `FacilityProfile` with the same
-`updateManyAndReturn` conditional-update pattern as patients and doctors, and
-records a `facility.profile_updated` audit event. New `facilityUpdateSchema` in
-`facilities/validation.ts`; new `updateFacilityProfile` repo function; new
-`getOwnFacilityProfile` / `updateOwnFacilityProfile` service functions.
+`GET /facilities/me` returns the caller's facility profile with a version
+`ETag`; `PATCH /facilities/me` updates `name`, `address`, `latitude` and
+`longitude` with `If-Match` (`428` without it, `412` on a stale version)
+through a conditional update on `FacilityProfile.version`, and writes a
+`facility.profile_updated` audit event. Coordinates change together or not at
+all, within the same bounds as the `near` search parameter; `type` stays
+admin-only. Integration tests in `facility-self-service.test.mts` (port 5495).

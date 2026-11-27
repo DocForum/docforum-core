@@ -1,10 +1,8 @@
-Add Zod request validation to unvalidated order controllers
+Phase 8: Zod validation for the legacy order controllers
 ([issue #317](https://github.com/DocForum/docforum-core/issues/317)).
-`createPharmacyOrder` and `fulfillPharmacyOrder` now parse their request bodies
-through `createPharmacyOrderSchema` and `fulfillPharmacyOrderSchema`
-(`pharmacy-orders/validation.ts`). `createLabOrder` and `fulfillLabOrder` get
-the equivalent schemas in a new `lab-orders/validation.ts`. The admin
-`resolveDispute` and `listDisputes` handlers use `resolveDisputeSchema` and
-`listDisputesQuerySchema` added to `orders/validation.ts`. All controllers also
-use `getParam(req, 'id')` and `getParam(req, 'orderId')` instead of raw
-`req.params.id as string`.
+Pharmacy-order and lab-order create/fulfill (new `lab-orders/validation.ts`)
+and the admin dispute list/resolve parse their input with Zod schemas, and
+the duplicated `typeof`/empty-string checks are gone from the services. A
+missing or malformed body is now a `400` before any lookup (the
+access-control matrix rows say so). Unit tests in
+`tests/unit/legacy-order-schemas.test.ts`.

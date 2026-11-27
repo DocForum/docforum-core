@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
 import { requireIfMatch } from '../../../middleware/optimistic-concurrency';
+import { apiRateLimit } from '../../../middleware/rate-limit';
 import * as facilitiesController from '../controllers';
 
 export const facilitiesRouter = Router();
@@ -18,9 +19,10 @@ facilitiesRouter.post(
 
 // Self-service profile (issue #319). Declared before `/:facilityId/prices` so
 // the literal `/me` segment is never captured as a facilityId.
-facilitiesRouter.get('/me', authenticate, requireRole('facility'), facilitiesController.getOwnProfile);
+facilitiesRouter.get('/me', apiRateLimit, authenticate, requireRole('facility'), facilitiesController.getOwnProfile);
 facilitiesRouter.patch(
   '/me',
+  apiRateLimit,
   authenticate,
   requireRole('facility'),
   requireIfMatch,

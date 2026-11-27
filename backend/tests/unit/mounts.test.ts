@@ -19,7 +19,7 @@ import { ordersRouter } from '../../src/modules/orders/routes';
 import { adminOrdersRouter } from '../../src/modules/orders/routes/admin';
 import { labResultsRouter } from '../../src/modules/orders/routes/lab-results';
 import { metricsRouter } from '../../src/modules/metrics/routes';
-import { pharmacyOrdersRouter } from '../../src/modules/pharmacy-orders/routes';
+import { fulfillmentProofsRouter, pharmacyOrdersRouter } from '../../src/modules/pharmacy-orders/routes';
 import { labOrdersRouter } from '../../src/modules/lab-orders/routes';
 import { labTestsRouter } from '../../src/modules/lab-tests/routes';
 import { paymentsAdminRouter, paymentsRouter } from '../../src/modules/payments/routes';
@@ -54,6 +54,7 @@ const EXPECTED: Array<[string, unknown]> = [
   ['/medications', medicationsRouter],
   ['/lab-results', labResultsRouter],
   ['/pharmacy-orders', pharmacyOrdersRouter],
+  ['/fulfillment-proofs', fulfillmentProofsRouter],
   ['/lab-orders', labOrdersRouter],
   ['/lab-tests', labTestsRouter],
   ['/admin', adminOrdersRouter],

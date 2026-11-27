@@ -60,9 +60,22 @@ model FulfillmentProof {
   orderId           String
   facilityProfileId String
   referenceNumber   String
-  attachmentUrl     String?
   notes             String?
   createdAt         DateTime @default(now())
+
+  // Issue #316: the proof file lives in the private object store under a
+  // server-generated key (never a client URL). Uploaded through
+  // PUT /fulfillment-proofs/:id/attachment and read back through the
+  // access-checked GET on the same path.
+  attachmentObjectKey   String?
+  attachmentContentType String?
+  attachmentByteSize    Int?
+
+  // Issue #316: what the pre-#316 fulfill endpoints stored as
+  // `attachmentUrl` (a client-supplied URL or a `storage://` placeholder).
+  // Kept so no data is lost, but untrusted: never written again and never
+  // served as a link by default.
+  legacyAttachmentUrl String?
 
   order           Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
   facilityProfile FacilityProfile @relation(fields: [facilityProfileId], references: [id])

@@ -28,7 +28,7 @@ export async function listDisputes(status?: DisputeStatus) {
               type: true,
             },
           },
-          fulfillmentProofs: true,
+          fulfillmentProofs: { omit: { attachmentObjectKey: true } },
         },
       },
       resolutions: {
@@ -51,16 +51,14 @@ export async function listDisputes(status?: DisputeStatus) {
 export async function resolveDispute(
   disputeId: string,
   adminUserId: string,
+  // Shape (non-empty trimmed notes and outcome) is guaranteed by
+  // resolveDisputeSchema in the controller (issue #317).
   data: {
-    resolutionNotes?: string;
-    outcome?: string;
+    resolutionNotes: string;
+    outcome: string;
   },
   actor: AuditActor,
 ) {
-  if (!disputeId || typeof disputeId !== 'string') {
-    throw new HttpError(400, 'Dispute ID is required.');
-  }
-
   const dispute = await prisma.orderDispute.findUnique({
     where: { id: disputeId },
   });
@@ -68,15 +66,7 @@ export async function resolveDispute(
     throw new HttpError(404, 'Dispute not found.');
   }
 
-  if (!data || !data.resolutionNotes || typeof data.resolutionNotes !== 'string' || data.resolutionNotes.trim().length === 0) {
-    throw new HttpError(400, 'Resolution notes are required.');
-  }
-  if (!data.outcome || typeof data.outcome !== 'string' || data.outcome.trim().length === 0) {
-    throw new HttpError(400, 'Resolution outcome is required.');
-  }
-
-  const resolutionNotes = data.resolutionNotes.trim();
-  const outcome = data.outcome.trim();
+  const { resolutionNotes, outcome } = data;
 
   const result = await prisma.$transaction(async (tx) => {
 

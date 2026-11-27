@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+/** Coordinate bounds shared by the `near` parser and the facility profile
+ * update (issue #319), so a facility can't store a point search rejects. */
+export const LATITUDE_BOUNDS = { min: -90, max: 90 } as const;
+export const LONGITUDE_BOUNDS = { min: -180, max: 180 } as const;
+
 /** `?near=lat,lng` — a patient-supplied point. Used in-memory as query
  * parameters only: never persisted, never logged (issue #74 hard
  * constraint). */
@@ -10,8 +15,8 @@ const nearSchema = z
     const [lat, lng] = value.split(',').map(Number);
     return { lat, lng };
   })
-  .refine((point) => point.lat >= -90 && point.lat <= 90, 'near latitude must be between -90 and 90.')
-  .refine((point) => point.lng >= -180 && point.lng <= 180, 'near longitude must be between -180 and 180.');
+  .refine((point) => point.lat >= LATITUDE_BOUNDS.min && point.lat <= LATITUDE_BOUNDS.max, 'near latitude must be between -90 and 90.')
+  .refine((point) => point.lng >= LONGITUDE_BOUNDS.min && point.lng <= LONGITUDE_BOUNDS.max, 'near longitude must be between -180 and 180.');
 
 /** `effectiveFrom` accepts any ISO-8601 string the Date constructor parses;
  * the service rejects garbage so the error is a 400, not a 500. */
@@ -71,12 +76,28 @@ export const facilityUpdateSchema = z
   .object({
     name: z.string().trim().min(1).max(200).optional(),
     address: z.string().trim().min(1).max(500).optional(),
-    latitude: z.number().min(-90).max(90).optional(),
-    longitude: z.number().min(-180).max(180).optional(),
+    latitude: z
+      .number()
+      .finite()
+      .min(LATITUDE_BOUNDS.min, 'latitude must be between -90 and 90.')
+      .max(LATITUDE_BOUNDS.max, 'latitude must be between -90 and 90.')
+      .optional(),
+    longitude: z
+      .number()
+      .finite()
+      .min(LONGITUDE_BOUNDS.min, 'longitude must be between -180 and 180.')
+      .max(LONGITUDE_BOUNDS.max, 'longitude must be between -180 and 180.')
+      .optional(),
   })
   .strict()
   .refine((data) => Object.values(data).some((v) => v !== undefined), {
     message: 'At least one field must be provided.',
+  })
+  // A half-updated point would move the facility somewhere it isn't: the
+  // coordinates change together or not at all.
+  .refine((data) => (data.latitude === undefined) === (data.longitude === undefined), {
+    message: 'latitude and longitude must be provided together.',
+    path: ['latitude'],
   });
 
 export type FacilityUpdateBody = z.infer<typeof facilityUpdateSchema>;
