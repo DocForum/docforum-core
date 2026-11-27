@@ -11,5 +11,13 @@ BEGIN
   END IF;
 END $$;
 
+-- Canonicalise existing rows: the API now lowercases every email it receives
+-- (login included), so a row stored as "Ana@x.com" would otherwise become
+-- unreachable by login. Safe after the check above: no two rows share a
+-- lowercased value. Tombstoned emails of deleted accounts are rewritten too,
+-- which keeps them unique and unusable.
+UPDATE "User" SET "email" = LOWER("email") WHERE "email" <> LOWER("email");
+UPDATE "AdminInvite" SET "email" = LOWER("email") WHERE "email" <> LOWER("email");
+
 -- Enforce case-insensitive email uniqueness at the database level (Issue #268)
 CREATE UNIQUE INDEX IF NOT EXISTS "User_lower_email_idx" ON "User" (LOWER("email"));
