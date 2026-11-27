@@ -146,3 +146,15 @@ export function clearAvailabilitySlotLink(db: DbClient, id: string) {
 export async function patientHasAppointments(patientProfileId: string): Promise<boolean> {
   return (await prisma.appointment.findFirst({ where: { patientProfileId }, select: { id: true } })) !== null;
 }
+
+/** One keyset page of a patient's waitlist entries (issue #336). Waitlist
+ * columns only — doctor/specialty details come from those modules' services,
+ * not a join. */
+export function findWaitlistEntriesPageForPatient(patientProfileId: string, cursor: string | undefined, take: number) {
+  return prisma.waitlistEntry.findMany({
+    where: { patientProfileId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  });
+}

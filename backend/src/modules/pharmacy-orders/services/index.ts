@@ -26,6 +26,7 @@ import * as facilitiesService from '../../facilities/services';
 import * as prescriptionsService from '../../prescriptions/services';
 import * as labOrdersService from '../../lab-orders/services';
 import * as patientsService from '../../patients/services';
+import * as doctorsService from '../../doctors/services';
 
 export type OrderType = 'prescription' | 'lab_order';
 export type DerivedOrderStatus = 'issued' | 'partially_fulfilled' | 'fulfilled';
@@ -573,4 +574,47 @@ export async function getPharmacyOrderById(orderId: string) {
     throw new HttpError(404, 'Pharmacy order not found.');
   }
   return formatOrderResponse(order);
+}
+
+export interface OrderViewer {
+  userId: string;
+  role: Role;
+}
+
+/**
+ * Who may read one prescription or lab order by id (issue #314), shared by
+ * the prescriptions and lab-orders detail reads so the rule lives once:
+ *   - admin: always;
+ *   - doctor: only the issuing doctor (resolved through doctors' service);
+ *   - patient: the owner or an ACTIVE guardian (patients' resolveActingProfile,
+ *     which enforces guardianship end dates);
+ *   - facility: the facility the order was sent to, or any facility holding
+ *     a fulfillment record on it. A facility routed only some items still
+ *     sees the whole order: it needs the full context to dispense safely.
+ * Everyone else gets `false`; callers answer 404 so existence never leaks.
+ */
+export async function canViewOrder(
+  viewer: OrderViewer,
+  order: { orderType: 'prescription' | 'lab_order'; id: string; patientProfileId: string; issuingDoctorId: string; facilityProfileId: string },
+): Promise<boolean> {
+  switch (viewer.role) {
+    case 'admin':
+      return true;
+    case 'doctor': {
+      const doctor = await doctorsService.getMyDoctorProfile(viewer.userId).catch(() => null);
+      return doctor !== null && doctor.id === order.issuingDoctorId;
+    }
+    case 'patient': {
+      const acting = await patientsService.resolveActingProfile(viewer.userId, order.patientProfileId).catch(() => null);
+      return acting !== null && acting.id === order.patientProfileId;
+    }
+    case 'facility': {
+      const facility = await facilitiesService.findFacilityProfileByUserId(viewer.userId);
+      if (!facility) return false;
+      if (facility.id === order.facilityProfileId) return true;
+      return repo.facilityHasRecordForOrder(order.orderType, order.id, facility.id);
+    }
+    default:
+      return false;
+  }
 }

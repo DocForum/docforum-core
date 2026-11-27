@@ -278,7 +278,7 @@ describe('patient data export', () => {
     expect(bundle.schemaVersion).toBe(1);
     expect(bundle.exportId).toBe(exportId);
     expect(new Date(bundle.generatedAt).toISOString()).toBe(bundle.generatedAt);
-    expect(Object.keys(bundle.sections)).toEqual(['account', 'appointments', 'consultations', 'intake', 'lab_orders', 'payments', 'prescriptions', 'profile']);
+    expect(Object.keys(bundle.sections)).toEqual(['account', 'appointments', 'consultations', 'intake', 'lab_orders', 'order_disputes', 'payments', 'prescriptions', 'profile', 'referrals', 'waitlist']);
 
     expect(bundle.sections.account.items).toEqual([
       expect.objectContaining({ id: alice.userId, email: alice.email, role: 'patient' }),
@@ -477,5 +477,66 @@ describe('patient data export', () => {
     await requestAndGenerate(alice.token);
     expect(await prisma.appointment.count({ where: { patientProfileId: alice.profileId } })).toBe(before);
     expect(await prisma.availabilitySlot.count({ where: { doctorProfileId, status: 'open' } })).toBe(1);
+  });
+  it('exports the patient\'s referrals (decrypted notes), waitlist entries and order disputes, and nobody else\'s (issue #336)', async () => {
+    const { encryptField } = await import('../../src/utils/field-encryption.js');
+    const seedFor = async (patientProfileId: string, label: string) => {
+      const slot = await prisma.availabilitySlot.create({
+        data: {
+          doctorProfileId,
+          status: 'booked',
+          startTime: new Date(Date.now() - (label === 'alice' ? 3 : 4) * 24 * 60 * 60 * 1000),
+          endTime: new Date(Date.now() - (label === 'alice' ? 3 : 4) * 24 * 60 * 60 * 1000 + 30 * 60 * 1000),
+        },
+      });
+      const appointment = await prisma.appointment.create({
+        data: { patientProfileId, doctorProfileId, availabilitySlotId: slot.id, status: 'completed' },
+      });
+      const consultation = await prisma.consultation.create({ data: { appointmentId: appointment.id } });
+      const referral = await prisma.referral.create({
+        data: {
+          patientProfileId,
+          sourceConsultationId: consultation.id,
+          referringDoctorId: doctorProfileId,
+          targetDoctorId: doctorProfileId,
+          snapshotNotes: encryptField(`${label} referral notes`) as string,
+        },
+      });
+      await prisma.waitlistEntry.create({
+        data: {
+          patientProfileId,
+          doctorProfileId,
+          earliestAcceptable: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          latestAcceptable: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          holdDurationMinutes: 30,
+        },
+      });
+      const order = await prisma.order.create({ data: { orderType: 'lab', patientProfileId } });
+      const dispute = await prisma.orderDispute.create({
+        data: { orderId: order.id, patientProfileId, reason: `${label} dispute reason` },
+      });
+      return { referral, dispute, appointment };
+    };
+    const mine = await seedFor(alice.profileId, 'alice');
+    await seedFor(bob.profileId, 'bob');
+
+    const exportId = await requestAndGenerate(alice.token);
+    const res = await download(alice.token, exportId);
+    expect(res.status).toBe(200);
+    const bundle = JSON.parse(res.body);
+
+    expect(bundle.sections.referrals.items).toEqual([
+      expect.objectContaining({ id: mine.referral.id, status: 'pending', snapshotNotes: 'alice referral notes' }),
+    ]);
+    expect(bundle.sections.waitlist.items).toEqual([
+      expect.objectContaining({ doctorProfileId, status: 'pending', holdDurationMinutes: 30 }),
+    ]);
+    expect(bundle.sections.order_disputes.items).toEqual([
+      expect.objectContaining({ id: mine.dispute.id, reason: 'alice dispute reason', status: 'pending' }),
+    ]);
+    expect(res.body).not.toContain('bob referral notes');
+    expect(res.body).not.toContain('bob dispute reason');
+    // Ciphertext never reaches the bundle.
+    expect(res.body).not.toContain(mine.referral.snapshotNotes);
   });
 });

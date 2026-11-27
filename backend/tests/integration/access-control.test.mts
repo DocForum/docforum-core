@@ -162,7 +162,7 @@ const ACCESS_MATRIX: MatrixRow[] = [
   // Admin Order Disputes — admin-only
   { method: 'GET', path: '/admin/orders/disputes', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 200 } },
   { method: 'GET', path: '/admin/metrics', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 400 } }, // admin passes authorization; required UTC range is missing
-  { method: 'POST', path: '/admin/orders/disputes/:id/resolve', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 400 } }, // admin passes authorization; missing body → 400
+  { method: 'POST', path: '/admin/orders/disputes/:id/resolve', expected: { anon: 401, patient: 403, doctor: 403, facility: 403, admin: 400 } }, // admin-only; missing body → 400 (Zod, issue #311)
 
   // Payments — admin-triggered in v1; wallet-link is patient and facility (issue #78)
   { method: 'POST', path: '/payments/wallet-link', expected: { anon: 401, patient: 403, doctor: 403, facility: 400, admin: 403 } },

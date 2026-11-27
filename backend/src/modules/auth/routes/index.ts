@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate, authenticateMfaEnrollmentOrAccess, requireRole } from '../../../middleware/auth';
 import { requireAllowedOrigin } from '../../../middleware/csrf';
+import { apiRateLimit } from '../../../middleware/rate-limit';
 import * as authController from '../controllers';
 
 export const authRouter = Router();
@@ -47,6 +48,12 @@ authRouter.post('/logout', requireAllowedOrigin, authController.logout);
 // emailed single-use token is the credential for the confirm step.
 authRouter.post('/password-reset/request', authController.requestPasswordReset);
 authRouter.post('/password-reset/confirm', authController.confirmPasswordReset);
+
+// Phase 8, issue #270 — authenticated password change. Rate-limited like the
+// other authenticated write routes (CodeQL js/missing-rate-limiting): a
+// successful call also burns a bcrypt comparison via the re-auth step, so an
+// unthrottled caller could otherwise use it as a CPU amplifier.
+authRouter.post('/password', apiRateLimit, authenticate, authController.changePassword);
 
 // Session management (Phase 8 #38). Note the ordering: `DELETE /sessions`
 // (revoke all others) is registered before `DELETE /sessions/:id` — Express

@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import * as appointmentsService from '../services';
 import * as patientsService from '../../patients/services';
 import {
+  cancelDaySchema,
   acceptWaitlistSchema,
   bookSlotSchema,
   doctorScheduleQuerySchema,
@@ -100,7 +101,7 @@ export async function updateStatus(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
   const { status } = updateStatusSchema.parse(req.body);
   const appointment = await appointmentsService.updateStatusByDoctor(
-    req.user.id,
+    auditActor(req),
     getParam(req, 'appointmentId'),
     status,
   );
@@ -109,8 +110,19 @@ export async function updateStatus(req: Request, res: Response) {
 
 export async function cancelMine(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');
-  const appointment = await appointmentsService.cancelByPatient(req.user.id, getParam(req, 'appointmentId'), auditActor(req));
+  const appointment = await appointmentsService.cancelByPatient(
+    auditActor(req),
+    getParam(req, 'appointmentId'),
+  );
   res.status(200).json(appointment);
+}
+
+/** `POST /appointments/doctor/cancel-day` — the caller (a doctor) cancels
+ * the rest of one day in their own time zone (issue #338). */
+export async function cancelDay(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const { date, reason } = cancelDaySchema.parse(req.body);
+  res.status(200).json(await appointmentsService.cancelDay(auditActor(req), date, reason));
 }
 
 export async function getOne(req: Request, res: Response) {

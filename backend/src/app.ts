@@ -5,6 +5,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
+import { requestDeadline } from './middleware/deadline';
 import { registerPatientExportSections } from './export-sections';
 import { requestId } from './middleware/request-id';
 import { securityHeaders } from './middleware/security-headers';
@@ -54,6 +55,9 @@ export function createApp() {
   // and error responses carry the headers too.
   app.use(securityHeaders(config.securityHeaders));
   app.use(cors({ origin: config.corsOrigins, credentials: true }));
+  // Phase 8, issue #335: answer 503 REQUEST_TIMEOUT instead of hanging when
+  // a handler stalls. After CORS so the browser can read the 503.
+  app.use(requestDeadline());
   app.use(express.json());
   app.use(cookieParser());
   // Unauthenticated requests must not inherit a previous patient's identity.

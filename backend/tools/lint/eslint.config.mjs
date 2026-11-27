@@ -84,6 +84,8 @@ export default tseslint.config(
         __ENV: 'readonly',
         __VU: 'readonly',
         __ITER: 'readonly',
+        // init-context file loader (k6/js open())
+        open: 'readonly',
       },
     },
   },

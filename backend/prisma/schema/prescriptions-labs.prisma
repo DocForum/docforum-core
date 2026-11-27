@@ -61,6 +61,11 @@ model PrescriptionItem {
   /// Set when the item was not chosen from the catalog, so a pharmacy can
   /// see that the drug needs a pharmacist's review before dispensing.
   flaggedForPharmacistReview Boolean @default(false)
+  /// Issue #312: how many units the prescriber ordered; required on new
+  /// prescriptions. Nullable so existing rows migrate without backfill.
+  quantity                   Int?
+  /// The dispense unit matching `quantity` (e.g. "tablets", "mL").
+  unit                       String?
 
   prescription Prescription @relation(fields: [prescriptionId], references: [id])
   medication   Medication?  @relation(fields: [medicationId], references: [id], onDelete: Restrict)

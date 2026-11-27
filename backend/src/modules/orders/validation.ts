@@ -22,6 +22,9 @@ const item = z
     dosage: z.string().trim().min(1).max(200),
     frequency: z.string().trim().min(1).max(200),
     duration: z.string().trim().min(1).max(200),
+    // Issue #312: quantity ordered and its dispense unit (e.g. 30, "tablets").
+    quantity: z.number().int().positive(),
+    unit: z.string().trim().min(1).max(50),
   })
   .refine((value) => value.medicationId !== undefined || value.drugName !== undefined, {
     message: 'Each item needs medicationId (from GET /medications) or drugName (unlisted medication).',
@@ -62,6 +65,18 @@ export const unacknowledgedResultsQuerySchema = z
   .object({ limit: z.coerce.number().int().min(1).max(100).default(50) })
   .strict();
 
+// Issue #311: dispute resolution validation schemas.
+export const resolveDisputeSchema = z.object({
+  resolutionNotes: z.string().trim().min(1).max(2000),
+  outcome: z.enum(['upheld', 'rejected', 'refunded']),
+});
+
+export const listDisputesQuerySchema = z.object({
+  status: z.enum(['pending', 'resolved']).optional(),
+  cursor: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
 /** Issue #305: an active guardian downloads a dependent's result by naming
  * the dependent. Service-side authorisation through resolveActingProfile. */
 export const labResultDownloadQuerySchema = z.object({
@@ -75,15 +90,4 @@ export const labOrderSchema = requireExactlyOnePrice({
   urgency: z.enum(['routine', 'urgent']).default('routine'),
   notes: z.string().max(20000).optional(),
   supersedesLabOrderId: z.string().uuid().optional(),
-});
-
-/** GET /admin/disputes?status= (issue #317). */
-export const listDisputesQuerySchema = z.object({
-  status: z.enum(['pending', 'resolved']).optional(),
-});
-
-/** POST /admin/disputes/:id/resolve (issue #317). */
-export const resolveDisputeSchema = z.object({
-  resolutionNotes: z.string().trim().min(1).max(5000),
-  outcome: z.string().trim().min(1).max(100),
 });

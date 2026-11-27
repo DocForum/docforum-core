@@ -15,6 +15,9 @@ import { profileExportSection, registerExportSection } from './modules/patients/
 import { prescriptionsExportSection, labOrdersExportSection } from './modules/orders/services';
 import { intakeExportSection } from './modules/intake/services';
 import { consultationsExportSection } from './modules/consultations/services';
+import { referralsExportSection } from './modules/referrals/services';
+import { waitlistExportSection } from './modules/appointments/services';
+import { orderDisputesExportSection } from './modules/orders/services';
 
 export const PATIENT_EXPORT_SECTIONS = [
   accountExportSection,
@@ -25,6 +28,9 @@ export const PATIENT_EXPORT_SECTIONS = [
   prescriptionsExportSection,
   labOrdersExportSection,
   consultationsExportSection,
+  referralsExportSection,
+  waitlistExportSection,
+  orderDisputesExportSection,
 ];
 
 export function registerPatientExportSections(): void {

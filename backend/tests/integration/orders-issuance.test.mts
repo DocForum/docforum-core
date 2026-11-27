@@ -55,7 +55,7 @@ type App = ReturnType<typeof import('../../src/app.js').createApp>;
 type Prisma = typeof import('../../src/db/prisma-client.js').prisma;
 
 const PASSWORD = 'longenough123';
-const ITEM = { drugName: 'Amoxicillin', dosage: '500 mg', frequency: 'three times daily', duration: '7 days' };
+const ITEM = { drugName: 'Amoxicillin', dosage: '500 mg', frequency: 'three times daily', duration: '7 days', quantity: 21, unit: 'tablets' };
 
 describe('issue #10: issuing prescriptions and lab orders from a consultation', () => {
   let app: App;

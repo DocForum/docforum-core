@@ -17,6 +17,8 @@ export function createPrescription(db: DbClient, input: {
     drugName: string; dosage: string; frequency: string; duration: string;
     /* Issue #69: catalog link (null = unlisted) + its review flag. */
     medicationId: string | null; flaggedForPharmacistReview: boolean;
+    /* Issue #312: quantity ordered and its unit (e.g. 30 "tablets"). */
+    quantity: number; unit: string;
   }>;
 }) {
   const { items, ...data } = input;
@@ -31,6 +33,8 @@ export function createLabOrder(db: DbClient, input: {
   consultationId: string; patientProfileId: string; orderingDoctorId: string;
   facilityProfileId: string; amountStroops: bigint; testType: string; urgency: 'routine' | 'urgent';
   notes: string | null; supersedesLabOrderId: string | null;
+  // Issue #313: set at issuance so the expiry job has a target.
+  expiresAt: Date;
 }) {
   return db.labOrder.create({ data: input });
 }
@@ -213,6 +217,17 @@ export async function patientHasOrders(patientProfileId: string): Promise<boolea
     prisma.labOrder.findFirst({ where: { patientProfileId }, select: { id: true } }),
   ]);
   return prescription !== null || labOrder !== null;
+}
+
+/** One keyset page of a patient's order disputes (issue #336). Dispute
+ * columns only — resolution data comes from this table directly. */
+export function findOrderDisputesPageForPatient(patientProfileId: string, cursor: string | undefined, take: number) {
+  return prisma.orderDispute.findMany({
+    where: { patientProfileId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  });
 }
 
 export async function findOrderForPatient(

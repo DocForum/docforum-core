@@ -45,16 +45,16 @@ describe('fulfill schemas (issues #316, #317)', () => {
 });
 
 describe('dispute schemas (issue #317)', () => {
-  it('resolveDisputeSchema requires trimmed notes and outcome', () => {
-    expect(resolveDisputeSchema.parse({ resolutionNotes: ' n ', outcome: ' refunded ' })).toEqual({ resolutionNotes: 'n', outcome: 'refunded' });
+  it('resolveDisputeSchema requires trimmed notes and a known outcome (issue #311)', () => {
+    expect(resolveDisputeSchema.parse({ resolutionNotes: ' n ', outcome: 'refunded' })).toEqual({ resolutionNotes: 'n', outcome: 'refunded' });
     expect(resolveDisputeSchema.safeParse({}).success).toBe(false);
-    expect(resolveDisputeSchema.safeParse({ resolutionNotes: ' ', outcome: 'x' }).success).toBe(false);
-    expect(resolveDisputeSchema.safeParse({ resolutionNotes: 'n', outcome: '' }).success).toBe(false);
+    expect(resolveDisputeSchema.safeParse({ resolutionNotes: ' ', outcome: 'upheld' }).success).toBe(false);
+    expect(resolveDisputeSchema.safeParse({ resolutionNotes: 'n', outcome: 'resolved' }).success).toBe(false);
   });
-  it('listDisputesQuerySchema only accepts known statuses', () => {
-    expect(listDisputesQuerySchema.parse({})).toEqual({});
-    expect(listDisputesQuerySchema.parse({ status: 'pending' })).toEqual({ status: 'pending' });
+  it('listDisputesQuerySchema only accepts known statuses and bounded pages', () => {
+    expect(listDisputesQuerySchema.parse({ status: 'pending' })).toMatchObject({ status: 'pending' });
     expect(listDisputesQuerySchema.safeParse({ status: 'bogus' }).success).toBe(false);
+    expect(listDisputesQuerySchema.safeParse({ limit: '0' }).success).toBe(false);
   });
   it('proofDownloadQuerySchema takes an optional uuid patientProfileId', () => {
     expect(proofDownloadQuerySchema.parse({})).toEqual({});

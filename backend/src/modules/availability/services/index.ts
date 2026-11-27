@@ -128,7 +128,7 @@ export async function generateSlots(input: GenerateSlotsInput) {
  * points into this module's booking-concurrency primitive, slot reads and
  * slot release. Never import availability/repositories from another
  * module directly. */
-export { claimOpenSlot, findSlotById as getSlot, releaseBookedSlotIfFuture } from '../repositories';
+export { claimOpenSlot, closeOpenSlotsInRange, findSlotById as getSlot, releaseBookedSlotIfFuture } from '../repositories';
 
 /** Batch slot-time lookup for other modules (patient data export, issue
  * #40). Times only — no status or doctor internals. */
