@@ -34,13 +34,17 @@ const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30d — matches c
 // docforum-web (GitHub Pages) and this API (Render) are different sites, and
 // `SameSite=Lax`/insecure for local dev over plain http. See
 // docs/adr/0003.
+//
+// Expected CodeQL finding, not a suppression: js/clear-text-storage-of-
+// sensitive-data reports this sink for every refresh-token issuer (signup,
+// login, refresh, password change). Its heuristics treat a `*Token` value and
+// the return value of a `*Password` function as sensitive, and a cookie as
+// clear-text storage — so any new path that re-issues the cookie is reported,
+// and only a reviewer can dismiss it as the intended httpOnly-cookie design.
+// `#270` requires the caller to stay signed in across a password change, and
+// the tokenVersion bump invalidates the old refresh token, which is why this
+// path has to write a new one.
 function setRefreshCookie(res: Response, token: string) {
-  // The token is a refresh credential and belongs in the browser's cookie jar
-  // by design (see the comment above and docs/adr/0003); encrypting it again
-  // here would only move the key next to the lock. CodeQL's
-  // clear-text-storage query treats every cookie sink as storage, so every
-  // issuer — signup, login, refresh and password change — is flagged.
-  // codeql[js/clear-text-storage-of-sensitive-data]
   res.cookie(REFRESH_COOKIE, token, {
     ...config.cookie,
     httpOnly: true,
