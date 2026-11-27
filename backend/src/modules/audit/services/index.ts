@@ -212,7 +212,9 @@ export type AccessEntityType =
   | 'PatientProfile'
   | 'Appointment'
   // Issue #316: a fulfillment proof file download.
-  | 'FulfillmentProof';
+  | 'FulfillmentProof'
+  // A legacy pharmacy/lab `Order` read (GET /orders/:id, /pharmacy-orders/:id).
+  | 'Order';
 
 export interface AccessLogInput {
   /** The viewer. Null only for anonymous/system reads (there are none today). */
