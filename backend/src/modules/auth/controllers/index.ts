@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import * as authService from '../services';
 import {
+  changePasswordSchema,
   clearLoginAttemptsSchema,
   confirmEmailChangeSchema,
   loginSchema,
@@ -33,6 +34,11 @@ const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30d — matches c
 // docforum-web (GitHub Pages) and this API (Render) are different sites, and
 // `SameSite=Lax`/insecure for local dev over plain http. See
 // docs/adr/0003.
+//
+// Every route that mints a session (signup, login, refresh, 2FA verify,
+// password change) goes through `sessionResponse`/`reissuedSessionResponse`,
+// so a token pair reaches the client by exactly one path: the refresh token as
+// this httpOnly cookie, the access and CSRF tokens in the JSON body.
 function setRefreshCookie(res: Response, token: string) {
   res.cookie(REFRESH_COOKIE, token, {
     ...config.cookie,
@@ -53,6 +59,21 @@ function sessionResponse(res: Response, session: authService.AuthSession) {
   // middleware/csrf.ts for why a cross-site frontend can't use a cookie for
   // this. docforum-web keeps it in memory alongside the access token.
   res.status(200).json({
+    user: session.user,
+    accessToken: session.accessToken,
+    csrfToken: session.csrfToken,
+    sessionId: session.sessionId,
+  });
+}
+
+/** `POST /auth/password` answers with a message *and* the caller's re-issued
+ * pair: the tokenVersion bump killed the old access and CSRF tokens along
+ * with the old refresh cookie, so the client needs the replacements in the
+ * same response to stay signed in (#270). */
+function reissuedSessionResponse(res: Response, session: authService.AuthSession) {
+  setRefreshCookie(res, session.refreshToken);
+  res.status(200).json({
+    message: 'Password changed successfully.',
     user: session.user,
     accessToken: session.accessToken,
     csrfToken: session.csrfToken,
@@ -197,6 +218,40 @@ export async function confirmPasswordReset(req: Request, res: Response) {
   // still holds the old one isn't left sending a dead token.
   res.clearCookie(REFRESH_COOKIE, config.cookie);
   res.status(200).json({ message: 'Password updated. Please sign in with your new password.' });
+}
+
+/** `POST /auth/password` — Authenticated password change (Phase 8, issue #270). */
+export async function changePassword(req: Request, res: Response) {
+  const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
+  const userId = requireUserId(req);
+  const currentSessionId = authService.sessionIdFromRefreshToken(refreshCookieValue(req));
+  try {
+    await authService.changePassword(
+      {
+        userId,
+        currentPassword,
+        newPassword,
+        ip: req.ip,
+        currentSessionId,
+      },
+      auditActor(req),
+    );
+
+    // The tokenVersion bump invalidated every token issued before it, the
+    // caller's own included. When this request carried a session cookie, give
+    // that same session a fresh pair so the caller stays signed in (#270).
+    if (currentSessionId) {
+      reissuedSessionResponse(res, await authService.reissueCallerSession(userId, currentSessionId));
+      return;
+    }
+
+    res.status(200).json({ message: 'Password changed successfully.' });
+  } catch (err) {
+    if (err instanceof authService.LoginThrottledError) {
+      res.set('Retry-After', String(err.retryAfterSeconds));
+    }
+    throw err;
+  }
 }
 
 // --- TOTP two-factor authentication (Phase 8, issue #36) ----------------
