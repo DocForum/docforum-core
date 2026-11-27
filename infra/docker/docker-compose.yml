@@ -1,10 +1,17 @@
-# Local dev stack. See ARCHITECTURE.md §8 (deployment target still undecided).
+# Local dev stack (not a production deployment recipe). See ARCHITECTURE.md §8.
 #
 # Usage:
 #   docker compose -f infra/docker/docker-compose.yml up --build -d
-#   cd backend && npx prisma migrate deploy
+#   docker compose -f infra/docker/docker-compose.yml ps   # `migrate` should show "Exited (0)"
+#
+# `migrate` is a one-shot service: it runs `prisma migrate deploy` once and
+# exits, and `backend` starts only after it has exited successfully and
+# Postgres reports healthy. This auto-migration is deliberately local-only —
+# the production image's CMD is still `node dist/server.js` with no entrypoint
+# flag, so a replicated deploy never runs migrations from every replica.
 #
 # Endpoints:
+#   GET http://localhost:4000/health/live
 #   GET http://localhost:4000/health
 #   GET http://localhost:4000/specialties
 services:
@@ -25,6 +32,23 @@ services:
       timeout: 5s
       retries: 10
 
+  # Applies pending migrations once, then exits 0. Built from the `build`
+  # stage because the Prisma CLI is a devDependency and is not copied into
+  # the runtime image (the app itself talks to Postgres through the driver
+  # adapter, not the CLI).
+  migrate:
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      target: build
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    environment:
+      DATABASE_URL: postgresql://docforum:docforum@postgres:5432/docforum_dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
   backend:
     build:
       context: ../..
@@ -44,6 +68,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   docforum_postgres_data:

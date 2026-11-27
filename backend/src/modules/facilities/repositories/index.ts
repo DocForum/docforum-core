@@ -18,7 +18,10 @@ export function findFacilityProfileByUserId(userId: string) {
 }
 
 export function findFacilityProfileById(id: string, db: Db = prisma) {
-  return db.facilityProfile.findUnique({ where: { id } });
+  return db.facilityProfile.findUnique({
+    where: { id },
+    include: { user: { select: { deactivatedAt: true } } },
+  });
 }
 
 /** Every version of the facility's price list, newest first. Optionally
@@ -212,7 +215,9 @@ export function listEligibleFacilityProfiles(
         fp."id", fp."name", fp."type"::text AS "type", fp."address",
         NULL::float8 AS "distanceKm"
       FROM "FacilityProfile" fp
-      WHERE ${typeFilter} AND ${capabilityFilter}
+      JOIN "User" u ON u."id" = fp."userId"
+      WHERE u."deactivatedAt" IS NULL
+        AND ${typeFilter} AND ${capabilityFilter}
       ORDER BY fp."name" ASC
       LIMIT ${filters.limit}
     `);
@@ -262,7 +267,9 @@ export function listEligibleFacilityProfiles(
           )))
         END AS "distanceKm"
       FROM "FacilityProfile" fp
-      WHERE ${typeFilter} AND ${capabilityFilter}
+      JOIN "User" u ON u."id" = fp."userId"
+      WHERE u."deactivatedAt" IS NULL
+        AND ${typeFilter} AND ${capabilityFilter}
       ${boxFilter}
     )
     SELECT * FROM scored

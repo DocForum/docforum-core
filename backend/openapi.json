@@ -3018,6 +3018,30 @@
         }
       }
     },
+    "/payments/intents": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "operationId": "payments_get_payments_intents",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
     "/facilities/me": {
       "get": {
         "tags": [

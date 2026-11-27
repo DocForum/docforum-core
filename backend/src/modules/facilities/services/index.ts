@@ -452,7 +452,25 @@ export async function requireFacilityForOrderKind(db: Db, facilityProfileId: str
   if (!facility || facility.type !== facilityType) {
     throw new HttpError(400, `The selected facility must be a ${facilityType} facility.`);
   }
+  if (facility.user?.deactivatedAt) {
+    throw new HttpError(400, 'The selected facility has been deactivated.');
+  }
   return { id: facility.id, type: facility.type };
+}
+
+/**
+ * Asserts that a facility exists and its account is active (not deactivated).
+ * Used by cross-module consumers like pharmacy-orders before routing fulfillment.
+ */
+export async function assertFacilityActive(facilityProfileId: string, db: Db = prisma) {
+  const facility = await facilitiesRepo.findFacilityProfileById(facilityProfileId, db);
+  if (!facility) {
+    throw new HttpError(404, 'Facility not found.');
+  }
+  if (facility.user?.deactivatedAt) {
+    throw new HttpError(400, 'The selected facility has been deactivated.');
+  }
+  return facility;
 }
 
 /**

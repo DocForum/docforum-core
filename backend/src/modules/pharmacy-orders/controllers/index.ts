@@ -97,3 +97,11 @@ export async function getPharmacyOrder(req: Request, res: Response) {
   const order = await pharmacyOrdersService.getPharmacyOrderById(getParam(req, 'id'));
   res.status(200).json(order);
 }
+
+/** GET /pharmacy-orders/facility/queue — the facility's own assigned queue.
+ * Hard rule 5: only the facility's own records; fulfilled is never directly
+ * settable (issue #15). */
+export async function listFacilityQueue(req: Request, res: Response) {
+  const records = await pharmacyOrdersService.listFacilityQueue(requireUser(req));
+  res.status(200).json({ records });
+}

@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import EmbeddedPostgres from 'embedded-postgres';
 import { createOrderFixture } from './order-fixtures.mjs';
+import { shiftSlotToPast } from './helpers/fixtures.mjs';
 
 const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const MIGRATIONS_DIR = path.join(BACKEND_ROOT, 'prisma', 'migrations');
@@ -117,17 +118,12 @@ describe('guardian and dependent profiles', () => {
 
   /** Book → complete → close → refer, all over HTTP, for the dependent. */
   async function setupClinicalRecords(dependentProfileId: string, label: string) {
-    const slot = await prisma.availabilitySlot.create({
-      data: {
-        doctorProfileId,
-        startTime: new Date(Date.now() - 3600_000),
-        endTime: new Date(Date.now() - 1800_000),
-        status: 'open',
-      },
-    });
-    const booked = await book(g1, { availabilitySlotId: slot.id, patientProfileId: dependentProfileId });
+    const slotId = nextSlot();
+    const booked = await book(g1, { availabilitySlotId: slotId, patientProfileId: dependentProfileId });
     expect(booked.status, JSON.stringify(booked.body)).toBe(201);
     const appointmentId = booked.body.id as string;
+
+    await shiftSlotToPast(prisma, slotId);
 
     const completed = await request(app)
       .patch(`/appointments/${appointmentId}/status`)
@@ -212,11 +208,12 @@ describe('guardian and dependent profiles', () => {
     const doctor = await signup('doctor', 'guardian-doctor');
     doctorToken = doctor.token;
     doctorProfileId = (await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: doctor.userId } })).id;
+    await prisma.doctorProfile.update({ where: { id: doctorProfileId }, data: { verificationStatus: 'verified' } });
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const generated = await request(app)
       .post(`/availability/doctors/${doctorProfileId}/slots/generate`)
       .set('Authorization', `Bearer ${doctorToken}`)
-      .send({ date: tomorrow, startHour: 8, endHour: 18, slotLengthMinutes: 30 });
+      .send({ date: tomorrow, startHour: 6, endHour: 22, slotLengthMinutes: 30 });
     expect(generated.status).toBe(201);
     freeSlots.push(...((await request(app).get(`/availability/doctors/${doctorProfileId}/slots`)).body as { id: string }[]).map((s) => s.id));
 
@@ -234,7 +231,7 @@ describe('guardian and dependent profiles', () => {
     const specialistGeneration = await request(app)
       .post(`/availability/doctors/${specialistProfileId}/slots/generate`)
       .set('Authorization', `Bearer ${specialistToken}`)
-      .send({ date: tomorrow, startHour: 8, endHour: 18, slotLengthMinutes: 30 });
+      .send({ date: tomorrow, startHour: 6, endHour: 22, slotLengthMinutes: 30 });
     expect(specialistGeneration.status).toBe(201);
     specialistSlots.push(
       ...((await request(app).get(`/availability/doctors/${specialistProfileId}/slots`)).body as { id: string }[]).map((s) => s.id),

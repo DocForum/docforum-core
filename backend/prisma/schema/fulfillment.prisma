@@ -14,6 +14,32 @@ enum FulfillmentStatus {
   rejected
 }
 
+/// Phase 5 (issue #322): structured reason for a whole-record rejection.
+/// `unspecified` is the read-time default for existing rows that pre-date
+/// this field; a facility must supply an explicit reason on new rejections.
+enum FulfillmentRejectionReason {
+  unspecified
+  out_of_stock
+  expired_stock
+  facility_capacity
+  no_staff_available
+  facility_closure
+  other
+}
+
+/// Phase 5 (issue #322): structured reason for an individual item that
+/// cannot be dispensed. `unspecified` is the read-time default for
+/// pre-existing rows; new unfulfilled transitions must supply a reason.
+enum FulfillmentUnfulfilledReason {
+  unspecified
+  out_of_stock
+  expired_stock
+  item_not_stocked
+  item_discontinued
+  partial_stock
+  other
+}
+
 /// Phase 5 (issue #73): terminal-per-item state under a FulfillmentRecord.
 /// `pending` is the only non-terminal value, which is what makes the
 /// dispense/unfulfil transition a one-shot `UPDATE ... WHERE status =
@@ -39,13 +65,17 @@ enum FulfillmentItemStatus {
 /// queue is indexable on this table and ownership lives on the row the
 /// facility writes.
 model FulfillmentRecord {
-  id             String            @id @default(uuid())
-  prescriptionId String?
-  labOrderId     String?
-  facilityId     String
-  status         FulfillmentStatus @default(pending)
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  id              String                      @id @default(uuid())
+  prescriptionId  String?
+  labOrderId      String?
+  facilityId      String
+  status          FulfillmentStatus           @default(pending)
+  // Issue #322: structured reason stored atomically with the rejection.
+  rejectionReason FulfillmentRejectionReason?
+  // Optional free-text note (max 500 chars) the facility may add.
+  rejectionNote   String?                     @db.VarChar(500)
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
 
   prescription Prescription?     @relation(fields: [prescriptionId], references: [id], onDelete: Restrict)
   labOrder     LabOrder?         @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
@@ -80,7 +110,7 @@ model FulfillmentRecord {
 /// discriminator within one already-typed order, not a second cross-table
 /// reference that could dangle (contrast ADR 0012).
 model FulfillmentItem {
-  id                  String                @id @default(uuid())
+  id                  String                        @id @default(uuid())
   fulfillmentRecordId String
   // 'prescription' | 'lab_order' — matches the parent record's order FK.
   // Free text rather than an enum so a third order kind doesn't need a
@@ -90,8 +120,11 @@ model FulfillmentItem {
   // Null = "not tracked", never a fake zero: the Phase 4 item models carry
   // no quantity column yet (ARCHITECTURE.md §4.7).
   quantityOrdered     Int?
-  quantityDispensed   Int                   @default(0)
-  status              FulfillmentItemStatus @default(pending)
+  quantityDispensed   Int                           @default(0)
+  status              FulfillmentItemStatus         @default(pending)
+  // Issue #322: structured reason stored atomically with the unfulfilled transition.
+  unfulfilledReason   FulfillmentUnfulfilledReason?
+  unfulfilledNote     String?                       @db.VarChar(500)
   // Equals orderItemId exactly when status = 'dispensed', NULL otherwise.
   // This is how "one item can never be dispensed by two facilities" becomes
   // a plain unique index instead of a partial one Prisma can't represent:
@@ -100,8 +133,8 @@ model FulfillmentItem {
   // (the P2002 the service maps to 409).
   dispensedKey        String?
   dispensedAt         DateTime?
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
+  createdAt           DateTime                      @default(now())
+  updatedAt           DateTime                      @updatedAt
 
   fulfillmentRecord FulfillmentRecord @relation(fields: [fulfillmentRecordId], references: [id], onDelete: Cascade)
 

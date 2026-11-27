@@ -1,0 +1,1 @@
+Phase 4: exclude deactivated facilities from order routing queries and refuse routing attempts ([issue #284](https://github.com/DocForum/docforum-core/issues/284)). Facilities whose associated user account is deactivated (`deactivatedAt IS NOT NULL`) are omitted from eligible facility lookups and rejected with 400 when routing pharmacy or lab orders.
