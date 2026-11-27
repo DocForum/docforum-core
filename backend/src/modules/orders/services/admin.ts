@@ -1,12 +1,25 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { record, type AuditActor } from '../../audit/services';
-import type { DisputeStatus } from '@prisma/client';
+import type { DisputeStatus, DisputeOutcome } from '@prisma/client';
 
-export async function listDisputes(status?: DisputeStatus) {
+// --- listDisputes (issue #311): keyset-paginated, status validated by Zod ---
+
+export interface ListDisputesInput {
+  status?: DisputeStatus;
+  cursor?: string;
+  limit?: number;
+}
+
+export async function listDisputes(input: ListDisputesInput = {}) {
+  const take = Math.min(input.limit ?? 25, 100);
   const disputes = await prisma.orderDispute.findMany({
-    where: status ? { status } : undefined,
-    orderBy: { createdAt: 'desc' },
+    where: input.status ? { status: input.status } : undefined,
+    orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+    take: take + 1,
+    ...(input.cursor
+      ? { cursor: { id: input.cursor }, skip: 1 }
+      : {}),
     include: {
       patientProfile: {
         select: {
@@ -45,57 +58,43 @@ export async function listDisputes(status?: DisputeStatus) {
     },
   });
 
-  return disputes;
+  const items = disputes.slice(0, take);
+  const nextCursor = disputes.length > take ? items[items.length - 1]?.id ?? null : null;
+  return { items, nextCursor };
 }
+
+// --- resolveDispute (issue #311): conditional transition, 409 on re-resolve --
 
 export async function resolveDispute(
   disputeId: string,
   adminUserId: string,
   data: {
-    resolutionNotes?: string;
-    outcome?: string;
+    resolutionNotes: string;
+    outcome: DisputeOutcome;
   },
   actor: AuditActor,
 ) {
-  if (!disputeId || typeof disputeId !== 'string') {
-    throw new HttpError(400, 'Dispute ID is required.');
-  }
-
-  const dispute = await prisma.orderDispute.findUnique({
-    where: { id: disputeId },
-  });
-  if (!dispute) {
-    throw new HttpError(404, 'Dispute not found.');
-  }
-
-  if (!data || !data.resolutionNotes || typeof data.resolutionNotes !== 'string' || data.resolutionNotes.trim().length === 0) {
-    throw new HttpError(400, 'Resolution notes are required.');
-  }
-  if (!data.outcome || typeof data.outcome !== 'string' || data.outcome.trim().length === 0) {
-    throw new HttpError(400, 'Resolution outcome is required.');
-  }
-
-  const resolutionNotes = data.resolutionNotes.trim();
-  const outcome = data.outcome.trim();
-
   const result = await prisma.$transaction(async (tx) => {
+    // Conditional update: only transitions from pending → resolved.
+    // Returns count=0 if already resolved — 409 for the caller.
+    const updated = await tx.orderDispute.updateMany({
+      where: { id: disputeId, status: 'pending' },
+      data: { status: 'resolved' },
+    });
+
+    if (updated.count === 0) {
+      // Distinguish "not found" from "already resolved".
+      const existing = await tx.orderDispute.findUnique({ where: { id: disputeId } });
+      if (!existing) throw new HttpError(404, 'Dispute not found.');
+      throw new HttpError(409, 'Dispute has already been resolved.');
+    }
 
     const resolution = await tx.orderDisputeResolution.create({
       data: {
         disputeId,
         adminUserId,
-        resolutionNotes,
-        outcome,
-      },
-    });
-
-    const updatedDispute = await tx.orderDispute.update({
-      where: { id: disputeId },
-      data: {
-        status: 'resolved',
-      },
-      include: {
-        resolutions: true,
+        resolutionNotes: data.resolutionNotes,
+        outcome: data.outcome,
       },
     });
 
@@ -103,15 +102,20 @@ export async function resolveDispute(
       entityType: 'OrderDispute',
       entityId: disputeId,
       action: 'dispute.resolved',
-      fromState: dispute.status,
+      fromState: 'pending',
       toState: 'resolved',
       metadata: {
-        outcome,
+        outcome: data.outcome,
         adminUserId,
       },
     });
 
-    return { dispute: updatedDispute, resolution };
+    const dispute = await tx.orderDispute.findUnique({
+      where: { id: disputeId },
+      include: { resolutions: true },
+    });
+
+    return { dispute, resolution };
   });
 
   return result;

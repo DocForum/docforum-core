@@ -10,12 +10,38 @@ export function findPrescriptionById(id: string) {
   return prisma.prescription.findUnique({ where: { id } });
 }
 
+/** Issue #314: full prescription + items for the detail-read endpoint. */
+export function findPrescriptionWithItems(id: string) {
+  return prisma.prescription.findUnique({
+    where: { id },
+    include: {
+      items: {
+        select: {
+          id: true,
+          drugName: true,
+          dosage: true,
+          frequency: true,
+          duration: true,
+          quantity: true,
+          unit: true,
+          medicationId: true,
+          flaggedForPharmacistReview: true,
+        },
+      },
+      // Issue #314: a superseded prescription points at its correction.
+      correctedBy: { select: { id: true } },
+    },
+  });
+}
+
 export function listItems(prescriptionId: string) {
   // No orderBy: PrescriptionItem has no created_at (ARCHITECTURE.md §4.5),
   // and the item universe is order-insensitive for the derivation.
   return prisma.prescriptionItem.findMany({
     where: { prescriptionId },
-    select: { id: true, drugName: true },
+    // Issue #312: quantity included so getItemsForFulfillment can populate
+    // FulfillmentItem.quantityOrdered for over-dispensing checks.
+    select: { id: true, drugName: true, quantity: true },
   });
 }
 

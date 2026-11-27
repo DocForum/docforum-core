@@ -3075,6 +3075,30 @@
           }
         }
       }
+    },
+    "/prescriptions/:id": {
+      "get": {
+        "tags": [
+          "prescriptions"
+        ],
+        "operationId": "prescriptions_get_prescriptions_id",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
     }
   },
   "components": {

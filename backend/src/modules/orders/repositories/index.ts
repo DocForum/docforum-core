@@ -17,6 +17,8 @@ export function createPrescription(db: DbClient, input: {
     drugName: string; dosage: string; frequency: string; duration: string;
     /* Issue #69: catalog link (null = unlisted) + its review flag. */
     medicationId: string | null; flaggedForPharmacistReview: boolean;
+    /* Issue #312: quantity ordered and its unit (e.g. 30 "tablets"). */
+    quantity: number; unit: string;
   }>;
 }) {
   const { items, ...data } = input;
@@ -31,6 +33,8 @@ export function createLabOrder(db: DbClient, input: {
   consultationId: string; patientProfileId: string; orderingDoctorId: string;
   facilityProfileId: string; amountStroops: bigint; testType: string; urgency: 'routine' | 'urgent';
   notes: string | null; supersedesLabOrderId: string | null;
+  // Issue #313: set at issuance so the expiry job has a target.
+  expiresAt: Date;
 }) {
   return db.labOrder.create({ data: input });
 }

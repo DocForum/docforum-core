@@ -15,6 +15,7 @@ export * from './featureFlags';
 export * from './fileScanning';
 export * from './idempotency';
 export * from './jwt';
+export * from './labOrders';
 export * from './labResults';
 export * from './log';
 export * from './loginThrottle';
