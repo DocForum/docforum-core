@@ -16,6 +16,7 @@ export interface CreateReferralData {
   targetDoctorId: string;
   targetSpecialtyId?: string;
   snapshotNotes: string;
+  snapshotIntake?: string | null;
   parentReferralId?: string;
   loopFlaggedAt?: Date;
   loopFlagReason?: string;
