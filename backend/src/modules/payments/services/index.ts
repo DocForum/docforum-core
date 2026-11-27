@@ -381,7 +381,12 @@ export async function listAdminPaymentIntents(filters: AdminIntentFilters) {
   const page = rows.slice(0, filters.limit);
   const last = page[page.length - 1];
   return {
-    items: page.map(serializePayment),
+    // The admin view names both parties so the list can be filtered/audited.
+    items: page.map((row) => ({
+      ...serializePayment(row),
+      facilityId: row.facilityId,
+      patientProfileId: row.patientProfileId,
+    })),
     nextCursor: rows.length > filters.limit && last ? encodePaymentCursor(last) : null,
   };
 }

@@ -127,7 +127,7 @@ describe('malware scanning (issue #324)', () => {
     const before = objects.size;
 
     const res = await attach(labOrderId, PDF);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     expect(objects.size).toBe(before + 1);
     const result = await prisma.labResult.findFirst({ where: { labOrderId } });
     expect(result).not.toBeNull();
@@ -153,16 +153,16 @@ describe('malware scanning (issue #324)', () => {
     const before = objects.size;
 
     const res = await attach(labOrderId, PDF);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     expect(objects.size).toBe(before + 1);
   });
 
   it('scan error + fail-closed: upload refused with 503', async () => {
-    scannerModule.setFileScannerForTests({ scan: async () => 'error' });
+    // `config.fileScanning.failOpen` is a getter, so setting the env var is
+    // enough; the injected scanner must stay in place (resetting it would
+    // fall back to the no-op scanner, which always reports clean).
     process.env.FILE_SCANNING_FAIL_OPEN = 'false';
-    // Re-load config to pick up the new env var — we need to reset the
-    // cached scanner too.
-    scannerModule.resetFileScannerForTests();
+    scannerModule.setFileScannerForTests({ scan: async () => 'error' });
     const labOrderId = await makeLabOrder();
     const before = objects.size;
 
@@ -178,7 +178,7 @@ describe('malware scanning (issue #324)', () => {
     const before = objects.size;
 
     const res = await attach(labOrderId, PDF);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     expect(objects.size).toBe(before + 1);
   });
 });

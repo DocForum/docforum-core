@@ -39,6 +39,11 @@ export class ClamAvFileScanner implements FileScanner {
     // Only a real Buffer can be framed for INSTREAM; anything else is a scan
     // error, so callers apply the fail-open / fail-closed policy.
     if (!Buffer.isBuffer(body)) return Promise.resolve('error');
+    // INSTREAM: send "zINSTREAM\0", then 4-byte big-endian length + data, then 4-byte zero to end.
+    // Built here, right after the Buffer check, so the frame is only ever made from a Buffer.
+    const lengthBuf = Buffer.alloc(4);
+    lengthBuf.writeUInt32BE(body.byteLength, 0);
+    const frame = Buffer.concat([Buffer.from('zINSTREAM\0'), lengthBuf, body, Buffer.alloc(4)]);
     return new Promise((resolve) => {
       const socket = net.connect({ host: this.host, port: this.port });
       let response = '';
@@ -70,12 +75,7 @@ export class ClamAvFileScanner implements FileScanner {
       });
 
       socket.on('connect', () => {
-        // INSTREAM: send "zINSTREAM\0", then 4-byte big-endian length + data, then 4-byte zero to end.
-        const header = Buffer.from('zINSTREAM\0');
-        const lengthBuf = Buffer.allocUnsafe(4);
-        lengthBuf.writeUInt32BE(body.length, 0);
-        const terminator = Buffer.alloc(4);
-        socket.write(Buffer.concat([header, lengthBuf, body, terminator]));
+        socket.write(frame);
         socket.end();
       });
     });
