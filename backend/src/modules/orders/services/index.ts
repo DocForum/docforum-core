@@ -395,6 +395,34 @@ export async function disputeOrder(
   return formatOrderResponse(result);
 }
 
+/**
+ * Patient-facing view of their current (non-superseded) prescriptions and
+ * lab orders (issue #11). The supersedes-chain is resolved at the DB level:
+ * only rows whose `correctedBy` relation is absent are returned, so an
+ * issued correction replaces its predecessor without the UI needing to
+ * traverse the chain itself.
+ */
+export async function listMineOrders(patientUserId: string) {
+  if (!patientUserId) throw new HttpError(401, 'Authentication required.');
+  const patientProfile = await prisma.patientProfile.findUnique({
+    where: { userId: patientUserId },
+  });
+  if (!patientProfile) throw new HttpError(403, 'Patient profile required.');
+
+  const [prescriptions, labOrders] = await Promise.all([
+    ordersRepo.findCurrentPrescriptionsForPatient(patientProfile.id),
+    ordersRepo.findCurrentLabOrdersForPatient(patientProfile.id),
+  ]);
+
+  return {
+    prescriptions,
+    labOrders: labOrders.map((order) => ({
+      ...order,
+      notes: decryptField(order.notes),
+    })),
+  };
+}
+
 export async function getOrderById(orderId: string) {
   if (!orderId || typeof orderId !== 'string') {
     throw new HttpError(400, 'Order ID is required.');
