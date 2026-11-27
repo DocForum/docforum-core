@@ -35,11 +35,14 @@ model AvailabilitySlot {
   appointment   Appointment?
 
   // Prevents two slot ROWS for the same doctor/time range (duplicate
-  // generation). This is NOT what prevents double-BOOKING of one slot by
-  // two patients — that's the conditional `UPDATE ... WHERE status =
-  // 'open'` in availability/services, inside a transaction. See
-  // ARCHITECTURE.md §5.1 and the integration test in
-  // backend/tests/integration/booking.test.ts.
+  // generation). Also backed at the database level by a PostgreSQL exclusion
+  // constraint (issue #287):
+  //   EXCLUDE USING gist ("doctorProfileId" WITH =, tsrange("startTime", "endTime") WITH &&)
+  // preventing any overlapping slots per doctor regardless of slot length.
+  // This is NOT what prevents double-BOOKING of one slot by two patients —
+  // that's the conditional `UPDATE ... WHERE status = 'open' AND "startTime" > now`
+  // in availability/services, inside a transaction (issue #285). See
+  // ARCHITECTURE.md §5.1 and backend/tests/integration/booking.test.mts.
   @@unique([doctorProfileId, startTime, endTime])
   @@index([doctorProfileId, status, startTime])
 }

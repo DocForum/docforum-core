@@ -27,7 +27,7 @@ export function findSlotTimesByIds(slotIds: string[]) {
 
 export function findExistingSlotRanges(doctorProfileId: string, startTime: Date, endTime: Date) {
   return prisma.availabilitySlot.findMany({
-    where: { doctorProfileId, startTime: { gte: startTime }, endTime: { lte: endTime } },
+    where: { doctorProfileId, startTime: { lt: endTime }, endTime: { gt: startTime } },
     select: { startTime: true, endTime: true },
   });
 }
@@ -88,14 +88,17 @@ export async function findDoctorProfileIdsWithAvailableSlotsBefore(
  * concurrent caller's WHERE clause evaluates against the now-committed
  * `booked` row and matches zero rows.
  *
+ * Issue #285: conditional on `startTime > now` so a slot whose time has
+ * passed can never be claimed by any path at the DB level.
+ *
  * Accepts a transaction client so callers (appointments/services) can run
  * this as one step inside a larger transaction that also creates the
  * Appointment row — see backend/tests/integration/booking.test.ts for the
  * concurrency proof.
  */
-export async function claimOpenSlot(db: DbClient, slotId: string): Promise<boolean> {
+export async function claimOpenSlot(db: DbClient, slotId: string, now: Date = new Date()): Promise<boolean> {
   const result = await db.availabilitySlot.updateMany({
-    where: { id: slotId, status: 'open' },
+    where: { id: slotId, status: 'open', startTime: { gt: now } },
     data: { status: 'booked' },
   });
   return result.count === 1;

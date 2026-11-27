@@ -192,6 +192,25 @@ export async function createFulfillmentProof(
   });
 }
 
+/** All fulfillment records assigned to a facility — the facility's own queue
+ * (issue #15). `status` filter is optional; omitting it returns all records. */
+export function listFulfillmentRecordsForFacility(
+  facilityId: string,
+  filters: { status?: FulfillmentStatus } = {},
+) {
+  return prisma.fulfillmentRecord.findMany({
+    where: {
+      facilityId,
+      ...(filters.status ? { status: filters.status } : {}),
+    },
+    include: {
+      items: { orderBy: { createdAt: 'asc' } },
+      facility: { select: { id: true, name: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
 /** All fulfillment records for one order — patient list endpoint (issue #323). */
 export function listFulfillmentRecordsForOrder(orderType: 'prescription' | 'lab_order', orderId: string) {
   const where =

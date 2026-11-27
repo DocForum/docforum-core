@@ -31,6 +31,10 @@ export const acceptReferralSchema = z.object({
 
 export const declineReferralSchema = z.object({
   patientProfileId: z.string().uuid().optional(),
+  reason: z.object({
+    enum: z.enum(['cost', 'distance', 'second_opinion', 'other']),
+    note: z.string().trim().max(200).optional(),
+  }).optional(),
 });
 
 /** GET /referrals/mine — issue #305: an active guardian lists a dependent's

@@ -44,6 +44,7 @@
     "date-fns-tz": "^3.2.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "8.7.4",
     "intl-messageformat": "^10.7.18",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.1",
