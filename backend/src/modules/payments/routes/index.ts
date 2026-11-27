@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
 import { idempotency } from '../../../middleware/idempotency';
+import { apiRateLimit } from '../../../middleware/rate-limit';
 import * as paymentsController from '../controllers';
 
 export const paymentsRouter = Router();
@@ -26,7 +27,7 @@ paymentsRouter.get(
 );
 
 // Issue #325: admin list of all payment intents with filters.
-paymentsRouter.get('/intents', authenticate, requireRole('admin'), paymentsController.listIntents);
+paymentsRouter.get('/intents', apiRateLimit, authenticate, requireRole('admin'), paymentsController.listIntents);
 
 // Issue #326: patient (payer) and payee facility can read their own intent.
 // Admin gets the full admin view; owners get the reduced owner view (no
@@ -34,6 +35,7 @@ paymentsRouter.get('/intents', authenticate, requireRole('admin'), paymentsContr
 // routes admin vs owner internally.
 paymentsRouter.get(
   '/intents/:id',
+  apiRateLimit,
   authenticate,
   requireRole('admin', 'patient', 'facility'),
   async (req, res) => {
