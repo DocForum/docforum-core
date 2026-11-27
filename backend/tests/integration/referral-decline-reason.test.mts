@@ -2,8 +2,8 @@
 //
 // Covers the whole decline write path — the endpoint's backwards-compatible
 // empty body, the structured enum reason, the bounded free-text note, the
-// validation rejections, the AuditEvent metadata (and its 200-character
-// bound), and the referring doctor seeing the reason via GET /referrals/created.
+// validation rejections, the AuditEvent metadata (enum only, never the note), and the referring doctor seeing the
+// reason via GET /referrals/created.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -150,7 +150,7 @@ describe('patient declines a referral with an optional reason (issue #309)', () 
     expect(metadata.declineReasonText).toBeUndefined();
   });
 
-  it('stores an enum reason plus a bounded free-text note, recording both in the audit metadata', async () => {
+  it('stores an enum reason plus a bounded free-text note, auditing only the enum', async () => {
     const referralId = await pendingReferral();
     const note = 'Too expensive for my current budget.';
 
@@ -169,9 +169,9 @@ describe('patient declines a referral with an optional reason (issue #309)', () 
     const [event] = await declineEvents(referralId);
     const metadata = event.metadata as { declineReason?: string; declineReasonText?: string };
     expect(metadata.declineReason).toBe('cost');
-    expect(metadata.declineReasonText).toBe(note);
-    // The audit module rejects any metadata string over 200 characters.
-    expect((metadata.declineReasonText as string).length).toBeLessThanOrEqual(200);
+    // The patient-written note may carry PHI, so it never reaches the audit row.
+    expect(metadata.declineReasonText).toBeUndefined();
+    expect(JSON.stringify(event.metadata)).not.toContain(note);
   });
 
   it('records a note at the 200-character bound intact', async () => {
@@ -185,7 +185,7 @@ describe('patient declines a referral with an optional reason (issue #309)', () 
     expect(stored.declineReasonNote).toBe(note);
 
     const [event] = await declineEvents(referralId);
-    expect((event.metadata as { declineReasonText?: string }).declineReasonText).toBe(note);
+    expect(JSON.stringify(event.metadata)).not.toContain(note);
   });
 
   it('trims a blank note to null instead of storing whitespace', async () => {

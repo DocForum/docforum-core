@@ -413,13 +413,11 @@ export async function declineReferral(
       throw new HttpError(409, 'This referral is no longer pending.');
     }
 
-    // The audit guard rejects any metadata key containing "note" (it is
-    // treated as a PHI-carrying field), so the bounded free text travels as
-    // `declineReasonText`. Both values are within the 200-char metadata
-    // string limit enforced by audit/services (MAX_METADATA_STRING).
+    // Only the enum goes into the audit metadata. The free-text note is
+    // patient-written and may carry PHI, which the audit guard keeps out of
+    // metadata (it rejects "note"-like keys), so it stays on the referral row.
     const auditMetadata: auditService.AuditMetadata = { patientProfileId: patientProfile.id };
     if (declineReason) auditMetadata.declineReason = declineReason;
-    if (declineReasonNote) auditMetadata.declineReasonText = declineReasonNote;
 
     await auditService.record(tx, actor, {
       entityType: 'Referral',

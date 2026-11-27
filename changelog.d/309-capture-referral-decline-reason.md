@@ -7,10 +7,9 @@ Phase 3: capture an optional reason when a patient declines a referral
 note? }`. The body may still be omitted entirely (backwards compatible), send
 the enum alone, or the enum plus a note of at most 200 characters; an invalid
 enum or an over-long note is a `400` and changes nothing. The reason is stored
-on the referral row, and the `referral.declined` AuditEvent records the enum as
-`metadata.declineReason` and the note as `metadata.declineReasonText` (the audit
-guard rejects keys containing `note`, and both values sit within the 200-char
-metadata limit — ARCHITECTURE.md §4.10).
+on the referral row, and the `referral.declined` AuditEvent records only the
+enum as `metadata.declineReason`. The free-text note is patient-written and may
+carry PHI, so it is never copied into audit metadata (ARCHITECTURE.md §4.10).
 
 `GET /referrals/created` now returns `declineReason` and `declineReasonNote` on
 each row so the referring doctor can see why the patient declined.
