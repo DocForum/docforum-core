@@ -10,7 +10,10 @@ Every failed request answers with the same envelope:
 translated, and may change between releases, so never match on its text.
 `details` is present only when the code carries structured, non-sensitive
 context — validation failures put one entry per failing field in
-`details.fields[]` (`path`, field-level `code`, `message`).
+`details.fields[]` (`path`, field-level `code`, `message`). A validation
+failure is `VALIDATION_FAILED` unless a field rule carries its own
+catalogue code (for example `PASSWORD_TOO_SHORT`), which is then the
+top-level code.
 
 HTTP status is fixed by the code: `backend/src/error-catalogue.ts` is the
 single source of truth, and `HttpError` derives the status from it.
@@ -24,7 +27,7 @@ This page is generated — edit the catalogue and run
 |---|---|---|---|
 | `ACCESS_TOKEN_ACCOUNT_DEACTIVATED` | 401 | The account behind the access token was deactivated after the token was issued. | Contact an administrator; do not keep retrying with the token. |
 | `ACCOUNT_DEACTIVATED` | 403 | An administrator deactivated the account. | Contact an administrator; signing in again will not help. |
-| `AUTHENTICATION_REQUIRED` | 401 | The route needs an authenticated caller and none was supplied. | Sign in and send the access token as Authorization: Bearer &lt;token&gt;. |
+| `AUTHENTICATION_REQUIRED` | 401 | The route needs an authenticated caller and none was supplied. | Sign in and send the access token as `Authorization: Bearer <token>`. |
 | `CONFLICT` | 409 | The resource changed, or is not in the state the request needs. | Re-read the resource, then retry if the operation still makes sense. |
 | `CSRF_TOKEN_MISSING` | 403 | The cookie-authenticated route needs the per-session CSRF token. | Send X-CSRF-Token with the csrfToken returned by signup/login/refresh. |
 | `DUPLICATE_RECORD` | 409 | A database uniqueness constraint was violated. The response never names the column or constraint. | Use a different value; retrying unchanged cannot succeed. |
@@ -47,7 +50,7 @@ This page is generated — edit the catalogue and run
 | `INVALID_REFRESH_TOKEN` | 401 | The refresh cookie is absent, expired, revoked or not a refresh token. | Sign in again and replace the stored tokens. |
 | `INVALID_REQUEST` | 400 | The request is malformed or a required value is missing; the message says which. | Fix the request as described in message and retry. Do not retry unchanged. |
 | `INVALID_REQUEST_BODY` | 400 | The body could not be decoded (for example a corrupt compressed payload). | Send an uncompressed or validly compressed body. |
-| `MISSING_ACCESS_TOKEN` | 401 | The Authorization header is absent or not a Bearer token. | Send Authorization: Bearer &lt;accessToken&gt;. |
+| `MISSING_ACCESS_TOKEN` | 401 | The Authorization header is absent or not a Bearer token. | Send `Authorization: Bearer <accessToken>`. |
 | `NO_REFRESH_TOKEN` | 401 | The refresh endpoint was called without the refresh cookie. | Send the request with credentials included. |
 | `NOT_FOUND` | 404 | The requested resource does not exist, or is not visible to the caller. | Check the identifier; do not retry unchanged. |
 | `OBJECT_STORAGE_NOT_CONFIGURED` | 503 | The object-storage driver has no credentials in this environment. | This is an operator problem; retrying will not help. |
@@ -332,14 +335,16 @@ This page is generated — edit the catalogue and run
 | `PHARMACY_ORDER_FULFILLMENT_FAILED` | 409 | The conditional status update matched no row (state changed concurrently). | Re-read the order and retry only if it is still open. |
 | `PHARMACY_ORDER_NOT_FOUND` | 404 | No pharmacy order matches the identifier, or it is not visible to the caller. | Check the order id. |
 | `PHARMACY_ORDER_NOT_FULFILLABLE` | 400 | The status transition is not allowed from here. | Re-read the order; only an open order can be fulfilled. |
-| `PROOF_ALREADY_ATTACHED` | 409 | A fulfillment proof carries exactly one file; attaching is a once-only write. | Read the existing proof instead of attaching another file. |
-| `PROOF_CONTENT_MISMATCH` | 415 | Byte sniffing disagreed with the declared content type. | Send a file whose bytes match its declared type. |
-| `PROOF_EMPTY` | 400 | The upload carried no bytes. | Send the file as the raw request body. |
-| `PROOF_FILE_NOT_FOUND` | 404 | The fulfillment proof has no attachment yet, or it was removed. | Ask the facility that recorded the proof to attach the file. |
-| `PROOF_INFECTED` | 422 | The file scan flagged the upload. | Do not retry the same file; investigate and upload a clean copy. |
-| `PROOF_SCAN_UNAVAILABLE` | 503 | The malware scanner is unreachable and scanning is mandatory here. | Retry later. |
+| `PROOF_ALREADY_ATTACHED` | 409 | A proof holds at most one file and this one already has it. | Do not retry; record a new proof if a different file is needed. |
+| `PROOF_CONTENT_MISMATCH` | 415 | The file’s leading bytes do not match the declared content type. | Send the file with its real content type. |
+| `PROOF_EMPTY` | 400 | The upload had no file bytes. | Send the file as raw bytes with its content type. |
+| `PROOF_FILE_NOT_FOUND` | 404 | The proof exists but has no attached file. | Attach a file first, or treat the proof as reference-only. |
+| `PROOF_INFECTED` | 422 | The malware scanner flagged the upload. | Do not retry with the same file. |
+| `PROOF_NOT_FOUND` | 404 | No fulfillment proof matches the identifier, or it is not visible to the caller. | Check the proof id; only the recording facility, the patient, the prescriber and admins can see a proof. |
+| `PROOF_SCAN_UNAVAILABLE` | 503 | The malware scanner could not be reached and this environment requires a clean scan. | Retry later. |
 | `PROOF_TOO_LARGE` | 413 | The upload exceeds the fulfillment-proof size limit. | Upload a smaller file. |
-| `PROOF_UNSUPPORTED_TYPE` | 415 | The uploaded file type is not accepted for fulfillment proofs. | Upload a JPEG, PNG or PDF file. |
+| `PROOF_UNREADABLE` | 400 | The upload could not be decoded as a file. | Send the file as raw bytes with its content type. |
+| `PROOF_UNSUPPORTED_TYPE` | 415 | The declared content type is not one of the accepted proof file types. | Upload one of the types listed in message. |
 | `QUANTITY_EXCEEDS_ORDERED` | 400 | Dispensing cannot exceed the prescribed quantity. | Send a dispensed quantity at or below the ordered quantity. |
 | `REFERENCE_NUMBER_REQUIRED` | 400 | Fulfillment proof needs the facility’s reference number. | Send the reference number the facility records. |
 

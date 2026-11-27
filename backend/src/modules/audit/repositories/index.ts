@@ -80,6 +80,12 @@ export function recordAccess(row: AccessLogRow) {
   return prisma.accessLog.create({ data: row });
 }
 
+/** One INSERT for a whole list read (issue #122): a per-row write loop is an
+ * N+1 just like a per-row read, and it grows with the page size. */
+export function recordAccessMany(rows: AccessLogRow[]) {
+  return prisma.accessLog.createMany({ data: rows });
+}
+
 /** Viewer id/role only — callers that surface results to patients must
  * strip even this (see services getAccessForPatient). */
 const ACCESS_LOG_VIEWER = { select: { id: true, role: true } } as const;

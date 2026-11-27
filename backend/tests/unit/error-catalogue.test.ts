@@ -80,7 +80,7 @@ describe('coded error envelope', () => {
     }
   });
 
-  it('keeps a field-level validation code inside details.fields', () => {
+  it('keeps a catalogue code from a schema refinement at the top level and in details.fields', () => {
     const schema = z.object({
       password: z.string().superRefine((_value, ctx) => {
         ctx.addIssue({
@@ -93,8 +93,11 @@ describe('coded error envelope', () => {
     const parsed = schema.safeParse({ password: 'x' });
     expect(parsed.success).toBe(false);
 
-    const { body } = run(parsed.error);
-    expect(body.code).toBe('VALIDATION_FAILED');
+    const { status, body } = run(parsed.error);
+    // Backwards compatible with the pre-catalogue envelope: clients branch on
+    // the top-level PASSWORD_TOO_SHORT.
+    expect(status).toBe(400);
+    expect(body.code).toBe('PASSWORD_TOO_SHORT');
     expect(body.details.fields).toEqual([
       { path: 'password', code: 'PASSWORD_TOO_SHORT', message: 'Password is too short.' },
     ]);

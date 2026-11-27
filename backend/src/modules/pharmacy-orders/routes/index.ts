@@ -103,7 +103,7 @@ function proofBody(req: Request, res: Response, next: NextFunction) {
     if (status === 413) {
       return next(new HttpError('PROOF_TOO_LARGE', `Proof files may be at most ${config.orders.proofMaxBytes} bytes.`));
     }
-    return next(new HttpError('INVALID_REQUEST_BODY', 'The proof file could not be read.'));
+    return next(new HttpError('PROOF_UNREADABLE', 'The proof file could not be read.'));
   });
 }
 

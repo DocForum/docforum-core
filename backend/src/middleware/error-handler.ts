@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
 import { HttpError } from '../http-error';
-import { ERROR_CATALOGUE, type ErrorCode } from '../error-catalogue';
+import { ERROR_CATALOGUE, isErrorCode, type ErrorCode } from '../error-catalogue';
 import type { Logger } from 'pino';
 import { logger as rootLogger } from '../logger';
 import { localizedErrorMessage, resolveLocale } from '../i18n';
@@ -109,14 +109,23 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     requestLogger.warn({ err }, 'Request validation failed');
     const locale = resolveLocale(req.user?.locale, req.headers['accept-language']);
     const message = err.issues.map((issue) => issue.message).join('; ');
+    const customCodeOf = (issue: unknown) => (issue as { params?: { code?: string } }).params?.code;
     const fields = err.issues.map((issue) => ({
       path: issue.path.map(String).join('.'),
-      code: (issue as unknown as { params?: { code?: string } }).params?.code ?? issue.code,
+      code: customCodeOf(issue) ?? issue.code,
       message: issue.message,
     }));
+    // Backwards compatibility: before the catalogue, a schema refinement that
+    // carried its own catalogue code (e.g. PASSWORD_TOO_SHORT) answered with
+    // that code at the top level, and clients branch on it. Keep doing so;
+    // everything else is VALIDATION_FAILED. The status stays 400 either way.
+    const customCode = err.issues
+      .map(customCodeOf)
+      .find((candidate): candidate is ErrorCode => candidate !== undefined && isErrorCode(candidate));
+    const code: ErrorCode = customCode ?? 'VALIDATION_FAILED';
     res.status(ERROR_CATALOGUE.VALIDATION_FAILED.status).json({
-      code: 'VALIDATION_FAILED' as const,
-      message: localizedErrorMessage(locale, 'VALIDATION_FAILED', message),
+      code,
+      message: localizedErrorMessage(locale, code, message),
       details: { fields },
     });
     return;

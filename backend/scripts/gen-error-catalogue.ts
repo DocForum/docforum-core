@@ -37,14 +37,10 @@ const TITLES: Record<ErrorModule, string> = {
   'lab-tests': 'Lab tests',
 };
 
-// Table cells must not carry raw HTML (a `<token>` placeholder would be parsed
-// as a tag by the docs site) and must escape Markdown table pipes.
-const cell = (value: string) =>
-  value
-    .replace(/\\/g, '\\\\')
-    .replace(/\|/g, '\\|')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+// Markdown table cell: escape backslashes first, then the column separator.
+// A bare `<` outside inline code would be parsed as an HTML/Vue tag by the
+// docs site build, so catalogue text keeps placeholders in backticks.
+const cell = (value: string) => value.replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
 
 export function renderErrorCatalogue(): string {
   const lines: string[] = [
@@ -60,7 +56,10 @@ export function renderErrorCatalogue(): string {
     'translated, and may change between releases, so never match on its text.',
     '`details` is present only when the code carries structured, non-sensitive',
     'context — validation failures put one entry per failing field in',
-    '`details.fields[]` (`path`, field-level `code`, `message`).',
+    '`details.fields[]` (`path`, field-level `code`, `message`). A validation',
+    'failure is `VALIDATION_FAILED` unless a field rule carries its own',
+    'catalogue code (for example `PASSWORD_TOO_SHORT`), which is then the',
+    'top-level code.',
     '',
     'HTTP status is fixed by the code: `backend/src/error-catalogue.ts` is the',
     'single source of truth, and `HttpError` derives the status from it.',

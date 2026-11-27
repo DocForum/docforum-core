@@ -45,7 +45,7 @@ export async function attachProofFile(
   // Only the facility that recorded the proof may attach; for anyone else
   // the proof does not exist.
   if (!proof || facilityProfileId === null || proof.facilityProfileId !== facilityProfileId) {
-    throw new HttpError('NOT_FOUND', NOT_FOUND);
+    throw new HttpError('PROOF_NOT_FOUND', NOT_FOUND);
   }
   if (proof.attachmentObjectKey) {
     throw new HttpError('PROOF_ALREADY_ATTACHED', 'A file has already been attached to this proof.');
@@ -131,7 +131,7 @@ export async function openProofFile(
 ): Promise<{ body: Buffer; contentType: string; filename: string }> {
   const proof = await repo.findFulfillmentProofWithOrder(proofId);
   const access = proof ? await canReadProof(user, proof, patientProfileId) : { allowed: false, viaGuardian: false };
-  if (!proof || !access.allowed) throw new HttpError('NOT_FOUND', NOT_FOUND);
+  if (!proof || !access.allowed) throw new HttpError('PROOF_NOT_FOUND', NOT_FOUND);
   if (!proof.attachmentObjectKey || !proof.attachmentContentType) {
     // Includes legacy rows: their client-supplied URL is never served.
     throw new HttpError('PROOF_FILE_NOT_FOUND', 'No file has been attached to this proof.');
