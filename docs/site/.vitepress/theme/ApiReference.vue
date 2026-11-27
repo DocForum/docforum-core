@@ -22,7 +22,7 @@ onMounted(() => {
     initRedoc(specUrl);
   } else {
     const script = document.createElement('script');
-    script.src = 'https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js';
+    script.src = 'https://cdn.jsdelivr.net/npm/redoc@2.1.5/bundles/redoc.standalone.js';
     script.onload = () => {
       initRedoc(specUrl);
     };
