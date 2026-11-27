@@ -162,7 +162,6 @@ export async function setMySpecialties(userId: string, requestedIds: string[]) {
 }
 
 export async function getDoctorProfileById(doctorProfileId: string, db: DbClient = prisma) {
-export async function getDoctorProfileById(doctorProfileId: string, db?: DbClient) {
   const profile = await doctorsRepo.findDoctorProfileById(doctorProfileId, db);
   if (!profile) throw new HttpError(404, 'Doctor profile not found.');
   return profile;

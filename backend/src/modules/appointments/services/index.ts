@@ -192,15 +192,13 @@ export async function rescheduleSlot(
     if (!newSlot) {
       throw new HttpError(404, 'New slot not found.');
     }
+
+    await doctorsService.assertDoctorVerified(newSlot.doctorProfileId, undefined, tx);
+    await doctorsService.assertDoctorActive(newSlot.doctorProfileId, tx);
+
     if (newSlot.doctorProfileId !== existingAppointment.doctorProfileId) {
       throw new HttpError(400, 'The new slot must belong to the same doctor.');
     }
-    if (newSlot.startTime.getTime() <= now.getTime()) {
-      throw new HttpError(400, 'The new slot must be in the future.');
-    }
-
-    // Ensure the doctor is active (not deactivated or deleted)
-    await doctorsService.assertDoctorActive(newSlot.doctorProfileId, tx);
 
     // Claim the new slot atomically
     const newClaimed = await availabilityService.claimOpenSlot(tx, newSlotId, now);
@@ -214,8 +212,6 @@ export async function rescheduleSlot(
       }
       throw new HttpError(409, 'The new slot is no longer available.');
     }
-
-    await doctorsService.assertDoctorVerified(newSlot.doctorProfileId, undefined, tx);
 
     // Release the old slot through availabilityService
     await availabilityService.releaseBookedSlotIfFuture(tx, currentSlotId);

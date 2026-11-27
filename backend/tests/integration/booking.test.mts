@@ -303,11 +303,13 @@ describe('booking concurrency', () => {
   it('prevents overlapping slots when mixing lengths and enforces DB exclusion constraint (issue #287)', async () => {
     const [doctor] = await prisma.doctorProfile.findMany({ where: { verificationStatus: 'verified' }, take: 1 });
     const availabilityService = await import('../../src/modules/availability/services/index.js');
+    const testDate = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const testDate2 = new Date(Date.now() + 6 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-    // 1. Generate 30-min slots for 09:00 - 11:00 on 2026-11-25 (4 slots)
+    // 1. Generate 30-min slots for 09:00 - 11:00 on testDate (4 slots)
     const gen30 = await availabilityService.generateSlots({
       doctorProfileId: doctor.id,
-      date: '2026-11-25',
+      date: testDate,
       startHour: 9,
       endHour: 11,
       slotLengthMinutes: 30,
@@ -319,7 +321,7 @@ describe('booking concurrency', () => {
     // All 6 candidate slots overlap existing 30-min slots and must be skipped
     const gen20Same = await availabilityService.generateSlots({
       doctorProfileId: doctor.id,
-      date: '2026-11-25',
+      date: testDate,
       startHour: 9,
       endHour: 11,
       slotLengthMinutes: 20,
@@ -332,7 +334,7 @@ describe('booking concurrency', () => {
     // 09:00-09:20, 09:20-09:40, 09:40-10:00 overlap existing 30m slots and are skipped (3 slots)
     const gen20Wider = await availabilityService.generateSlots({
       doctorProfileId: doctor.id,
-      date: '2026-11-25',
+      date: testDate,
       startHour: 8,
       endHour: 10,
       slotLengthMinutes: 20,
@@ -347,8 +349,8 @@ describe('booking concurrency', () => {
         data: {
           doctorProfileId: doctor.id,
           status: 'open',
-          startTime: new Date('2026-11-25T09:15:00.000Z'),
-          endTime: new Date('2026-11-25T09:45:00.000Z'),
+          startTime: new Date(`${testDate}T09:15:00.000Z`),
+          endTime: new Date(`${testDate}T09:45:00.000Z`),
         },
       }),
     ).rejects.toThrow();
@@ -357,14 +359,14 @@ describe('booking concurrency', () => {
     const results = await Promise.allSettled([
       availabilityService.generateSlots({
         doctorProfileId: doctor.id,
-        date: '2026-11-26',
+        date: testDate2,
         startHour: 9,
         endHour: 12,
         slotLengthMinutes: 30,
       }),
       availabilityService.generateSlots({
         doctorProfileId: doctor.id,
-        date: '2026-11-26',
+        date: testDate2,
         startHour: 10,
         endHour: 13,
         slotLengthMinutes: 20,
