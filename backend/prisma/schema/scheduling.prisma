@@ -61,6 +61,10 @@ model Appointment {
   availabilitySlotId String?           @unique
   status             AppointmentStatus @default(scheduled)
   origin             AppointmentOrigin @default(direct_booking)
+  // Latest booked slot times are retained after a cancellation releases its
+  // unique slot link, so subscribed calendars can receive STATUS:CANCELLED.
+  calendarStartTime  DateTime?
+  calendarEndTime    DateTime?
   // Set when this appointment was produced by accepting a Referral (issue
   // #7). The cascade rules (#67 / PRD §8.2.3) react to status transitions
   // on exactly these appointments. NOT unique: one referral can produce
@@ -95,6 +99,7 @@ model Appointment {
 
   @@index([patientProfileId, createdAt])
   @@index([doctorProfileId, status])
+  @@index([doctorProfileId, status, calendarStartTime])
 }
 
 enum WaitlistStatus {

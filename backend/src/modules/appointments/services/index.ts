@@ -1,4 +1,4 @@
-import { prisma } from '../../../db/prisma-client';
+import { prisma, withRlsBypass } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { config } from '../../../config';
 import { Prisma, type AppointmentStatus } from '@prisma/client';
@@ -73,6 +73,8 @@ export async function bookSlot(actor: auditService.AuditActor, availabilitySlotI
       patientProfileId: patientProfile.id,
       doctorProfileId: slot.doctorProfileId,
       availabilitySlotId,
+      calendarStartTime: slot.startTime,
+      calendarEndTime: slot.endTime,
     });
 
     await auditService.record(tx, actor, {
@@ -217,7 +219,13 @@ export async function rescheduleSlot(
     await availabilityService.releaseBookedSlotIfFuture(tx, currentSlotId);
 
     // Re-point the appointment conditionally
-    const repointed = await appointmentsRepo.rescheduleIfScheduled(tx, appointmentId, newSlotId);
+    const repointed = await appointmentsRepo.rescheduleIfScheduled(
+      tx,
+      appointmentId,
+      newSlotId,
+      newSlot.startTime,
+      newSlot.endTime,
+    );
     if (repointed.count !== 1) {
       throw new HttpError('APPOINTMENT_NOT_SCHEDULED', 'This appointment is no longer scheduled.');
     }
@@ -429,6 +437,8 @@ export async function acceptWaitlistOffer(
       patientProfileId: patientProfile.id,
       doctorProfileId: entry.doctorProfileId,
       availabilitySlotId: openSlots[0].id,
+      calendarStartTime: openSlots[0].startTime,
+      calendarEndTime: openSlots[0].endTime,
     });
 
     // Mark the waitlist entry as accepted
@@ -576,6 +586,27 @@ export async function listDoctorSchedule(
   });
 }
 
+export async function getCalendarFeedEvents(token: string) {
+  const doctorProfileId = await doctorsService.getDoctorProfileIdForCalendarFeedToken(token);
+  if (!doctorProfileId) throw new HttpError('ROUTE_NOT_FOUND', 'Not found.');
+
+  const appointments = await withRlsBypass((tx) =>
+    appointmentsRepo.findAppointmentsForCalendarFeed(doctorProfileId, tx),
+  );
+  return appointments.flatMap((appointment) => {
+    const startTime = appointment.calendarStartTime ?? appointment.availabilitySlot?.startTime;
+    const endTime = appointment.calendarEndTime ?? appointment.availabilitySlot?.endTime;
+    if (!startTime || !endTime) return [];
+    return [{
+      id: appointment.id,
+      status: appointment.status,
+      startTime,
+      endTime,
+      updatedAt: appointment.updatedAt,
+    }];
+  });
+}
+
 /**
  * The participants of an appointment, for modules that own a per-visit
  * record (consultations: the async thread, issue #61). Profile IDs only —
@@ -705,6 +736,8 @@ export async function bookForReferral(
     patientProfileId: input.patientProfileId,
     doctorProfileId: input.doctorProfileId,
     availabilitySlotId: input.availabilitySlotId,
+    calendarStartTime: slot.startTime,
+    calendarEndTime: slot.endTime,
     origin: 'referral',
     referralId: input.referralId,
   });
@@ -773,6 +806,8 @@ export async function bookForFollowUp(
     patientProfileId: input.patientProfileId,
     doctorProfileId: input.doctorProfileId,
     availabilitySlotId: input.availabilitySlotId,
+    calendarStartTime: slot.startTime,
+    calendarEndTime: slot.endTime,
     origin: 'follow_up',
   });
 

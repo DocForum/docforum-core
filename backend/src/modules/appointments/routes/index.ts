@@ -5,6 +5,9 @@ import { idempotency } from '../../../middleware/idempotency';
 import * as appointmentsController from '../controllers';
 
 export const appointmentsRouter = Router();
+export const calendarRouter = Router();
+
+calendarRouter.get('/:token.ics', apiRateLimit, appointmentsController.calendarFeed);
 
 // Booking is a mutation against someone else's calendar, and the patient
 // gets notifications about it — so it requires a verified address

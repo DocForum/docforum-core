@@ -31,11 +31,20 @@ model DoctorProfile {
   referringReferrals        Referral[]                 @relation("ReferralReferringDoctor")
   targetedReferrals         Referral[]                 @relation("ReferralTargetDoctor")
   followUpRequests          FollowUpRequest[]          @relation("FollowUpRequestsAsDoctor")
+  calendarFeed              DoctorCalendarFeed?
 
   @@index([verificationStatus])
   // Trigram index for doctor search (similarity() in doctors/repositories);
   // created by migration 20261021090000_doctor_discovery_trigram_search.
   @@index([fullName(ops: raw("gin_trgm_ops"))], type: Gin, map: "DoctorProfile_fullName_trgm_idx")
+}
+
+model DoctorCalendarFeed {
+  doctorProfileId String   @id
+  tokenHash       String   @unique
+  createdAt       DateTime @default(now())
+
+  doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
 }
 
 model Specialty {
