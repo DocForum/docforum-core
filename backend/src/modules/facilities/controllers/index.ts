@@ -57,7 +57,7 @@ function serializeEligible(facility: facilitiesService.EligibleFacility) {
 
 /** GET /facilities/me — the signed-in facility owner's full profile (issue #319). */
 export async function getOwnProfile(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const profile = await facilitiesService.getOwnFacilityProfile(req.user.id);
   setVersionEtag(res, profile.version);
   res.status(200).json(profile);
@@ -65,7 +65,7 @@ export async function getOwnProfile(req: Request, res: Response) {
 
 /** PATCH /facilities/me — update the facility's own profile (issue #319). */
 export async function updateOwnProfile(req: Request, res: Response) {
-  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  if (!req.user) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const input = facilityUpdateSchema.parse(req.body);
   const profile = await facilitiesService.updateOwnFacilityProfile(
     auditActor(req),

@@ -88,6 +88,7 @@ ordersRouter.post(
 
 ordersRouter.get(
   '/:id',
+  apiRateLimit,
   authenticate,
   ordersController.getOrder,
 );

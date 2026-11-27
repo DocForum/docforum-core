@@ -28,9 +28,10 @@ Two codes are worth calling out because they replace whole classes of
 otherwise-uncoded failures:
 
 - `400 VALIDATION_FAILED` — any schema-validation failure. The specific
-  per-field validation code (for example `PASSWORD_TOO_SHORT`) is inside
-  `details.fields[].code`, so one top-level code still tells clients how to
-  handle the response class.
+  per-field validation code is inside `details.fields[].code`. A schema
+  refinement that carries its own catalogue code (for example
+  `PASSWORD_TOO_SHORT`) keeps answering with that code at the top level, as
+  it did before the catalogue, so existing clients are unaffected.
 - `500 INTERNAL` — any unexpected error. The response is always
   `{ "code": "INTERNAL", "message": "Internal server error." }`; no exception
   message, stack, table name, column or constraint is ever returned.

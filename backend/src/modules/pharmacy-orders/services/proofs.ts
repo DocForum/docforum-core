@@ -39,27 +39,27 @@ export async function attachProofFile(
   proofId: string,
   file: { body: unknown; contentType: string | undefined },
 ): Promise<ProofAttachmentView> {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const facilityProfileId = await facilitiesService.getOwnFacilityProfileId(actor.userId).catch(() => null);
   const proof = await repo.findFulfillmentProofWithOrder(proofId);
   // Only the facility that recorded the proof may attach; for anyone else
   // the proof does not exist.
   if (!proof || facilityProfileId === null || proof.facilityProfileId !== facilityProfileId) {
-    throw new HttpError(404, NOT_FOUND);
+    throw new HttpError('PROOF_NOT_FOUND', NOT_FOUND);
   }
   if (proof.attachmentObjectKey) {
-    throw new HttpError(409, 'A file has already been attached to this proof.', 'PROOF_ALREADY_ATTACHED');
+    throw new HttpError('PROOF_ALREADY_ATTACHED', 'A file has already been attached to this proof.');
   }
 
   const { body, contentType } = assertAcceptableProofFile(file);
 
   const scanResult = await getFileScanner().scan(body);
   if (scanResult === 'infected') {
-    throw new HttpError(422, 'The uploaded file was refused by the malware scanner.', 'PROOF_INFECTED');
+    throw new HttpError('PROOF_INFECTED', 'The uploaded file was refused by the malware scanner.');
   }
   if (scanResult === 'error') {
     if (!config.fileScanning.failOpen) {
-      throw new HttpError(503, 'File scanning is unavailable and this environment requires it to pass.', 'PROOF_SCAN_UNAVAILABLE');
+      throw new HttpError('PROOF_SCAN_UNAVAILABLE', 'File scanning is unavailable and this environment requires it to pass.');
     }
     logger.error('[file-scanner] scan error — failing open for fulfillment proof upload');
   }
@@ -77,7 +77,7 @@ export async function attachProofFile(
         byteSize: body.byteLength,
       });
       if (!attached) {
-        throw new HttpError(409, 'A file has already been attached to this proof.', 'PROOF_ALREADY_ATTACHED');
+        throw new HttpError('PROOF_ALREADY_ATTACHED', 'A file has already been attached to this proof.');
       }
       await auditService.record(tx, actor, {
         entityType: 'FulfillmentProof',
@@ -131,10 +131,10 @@ export async function openProofFile(
 ): Promise<{ body: Buffer; contentType: string; filename: string }> {
   const proof = await repo.findFulfillmentProofWithOrder(proofId);
   const access = proof ? await canReadProof(user, proof, patientProfileId) : { allowed: false, viaGuardian: false };
-  if (!proof || !access.allowed) throw new HttpError(404, NOT_FOUND);
+  if (!proof || !access.allowed) throw new HttpError('PROOF_NOT_FOUND', NOT_FOUND);
   if (!proof.attachmentObjectKey || !proof.attachmentContentType) {
     // Includes legacy rows: their client-supplied URL is never served.
-    throw new HttpError(404, 'No file has been attached to this proof.', 'PROOF_FILE_NOT_FOUND');
+    throw new HttpError('PROOF_FILE_NOT_FOUND', 'No file has been attached to this proof.');
   }
 
   const stored = await getObjectStorage().getObject(proof.attachmentObjectKey);

@@ -55,6 +55,7 @@ pharmacyOrdersRouter.patch(
 // fulfilled) — computed from item rows, never a hand-set flag.
 pharmacyOrdersRouter.get(
   '/orders/:orderId/fulfillment-status',
+  apiRateLimit,
   authenticate,
   pharmacyOrdersController.getOrderFulfillmentStatus,
 );
@@ -75,7 +76,9 @@ pharmacyOrdersRouter.get(
 
 // Generic pharmacy order (Order model) creation and fulfillment proof.
 // The proof's file is uploaded separately (issue #316, below).
-pharmacyOrdersRouter.post('/', apiRateLimit, authenticate, pharmacyOrdersController.createPharmacyOrder);
+// Legacy `Order` creation bypasses the consultation-scoped, verified-doctor
+// issuance path (POST /orders/consultations/...), so it is admin-only.
+pharmacyOrdersRouter.post('/', apiRateLimit, authenticate, requireRole('admin'), pharmacyOrdersController.createPharmacyOrder);
 pharmacyOrdersRouter.get('/:id', apiRateLimit, authenticate, pharmacyOrdersController.getPharmacyOrder);
 pharmacyOrdersRouter.post(
   '/:id/fulfill',
@@ -98,9 +101,9 @@ function proofBody(req: Request, res: Response, next: NextFunction) {
     if (!err) return next();
     const status = (err as { status?: number }).status;
     if (status === 413) {
-      return next(new HttpError(413, `Proof files may be at most ${config.orders.proofMaxBytes} bytes.`, 'PROOF_TOO_LARGE'));
+      return next(new HttpError('PROOF_TOO_LARGE', `Proof files may be at most ${config.orders.proofMaxBytes} bytes.`));
     }
-    return next(new HttpError(400, 'The proof file could not be read.'));
+    return next(new HttpError('PROOF_UNREADABLE', 'The proof file could not be read.'));
   });
 }
 

@@ -8,7 +8,8 @@ model AccessLog {
   // Which patient's records were viewed (the record owner, not the viewer).
   patientProfileId String?
   // Entity that was read: 'IntakeForm' | 'Consultation' | 'Prescription' |
-  // 'LabOrder' | 'LabResult' | 'Referral' | 'PaymentIntent' | 'PatientProfile'
+  // 'LabOrder' | 'LabResult' | 'Referral' | 'PaymentIntent' | 'PatientProfile' |
+  // 'Appointment' | 'FulfillmentProof' | 'Order'
   entityType       String
   entityId         String
   // The HTTP route that returned the payload (for correlating with access logs).

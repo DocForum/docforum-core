@@ -20,7 +20,7 @@ import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { publish } from '../../../events';
 import { computeConfirmedSignal, formatOrderResponse } from '../../../utils/order-utils';
-import { record as recordAudit, type AuditActor } from '../../audit/services';
+import { record as recordAudit, recordAccess, type AuditActor } from '../../audit/services';
 import * as repo from '../repositories';
 import * as facilitiesService from '../../facilities/services';
 import * as prescriptionsService from '../../prescriptions/services';
@@ -403,6 +403,25 @@ export async function listFulfillmentRecordsForOrder(
   return repo.listFulfillmentRecordsForOrder(orderType, orderId);
 }
 
+/** The fulfillment summary for an authorised viewer of the prescription or
+ * lab order (see canViewOrder); 404 for everyone else. */
+export async function getOrderFulfillmentSummaryForViewer(
+  orderType: OrderType,
+  orderId: string,
+  viewer: OrderViewer,
+) {
+  const order = orderType === 'prescription'
+    ? await prescriptionsService.getPrescription(orderId).then((rx) => ({
+      patientProfileId: rx.patientProfileId, issuingDoctorId: rx.prescribingDoctorId, facilityProfileId: rx.facilityProfileId,
+    })).catch(() => null)
+    : await labOrdersService.getLabOrder(orderId).then((lab) => ({
+      patientProfileId: lab.patientProfileId, issuingDoctorId: lab.orderingDoctorId, facilityProfileId: lab.facilityProfileId,
+    })).catch(() => null);
+  const allowed = order !== null && (await canViewOrder(viewer, { orderType, id: orderId, ...order }));
+  if (!order || !allowed) throw new HttpError('ORDER_NOT_FOUND', 'Order not found.');
+  return getOrderFulfillmentSummary(orderType, orderId);
+}
+
 /** Derived order-level fulfillment state WITHOUT writing it back (read
  * path for the patient/doctor UI). Includes rejection/unfulfilled reasons
  * from all records so the patient can see why items were not dispensed
@@ -523,7 +542,7 @@ export async function fulfillPharmacyOrder(
     // An order already routed to a facility can only be fulfilled by that
     // facility; for any other facility it does not exist.
     if (!existing || (existing.facilityProfileId !== null && existing.facilityProfileId !== facilityProfile.id)) {
-      throw new HttpError(404, 'Pharmacy order not found.');
+      throw new HttpError('PHARMACY_ORDER_NOT_FOUND', 'Pharmacy order not found.');
     }
     if (existing.status === 'fulfilled') {
       throw new HttpError('PHARMACY_ORDER_ALREADY_FULFILLED', 'Pharmacy order has already been fulfilled.');
@@ -567,12 +586,66 @@ export async function fulfillPharmacyOrder(
   return formatOrderResponse(result);
 }
 
-export async function getPharmacyOrderById(orderId: string) {
-  const order = await repo.findOrderById(prisma, orderId, 'pharmacy');
-  if (!order) {
-    throw new HttpError('PHARMACY_ORDER_NOT_FOUND', 'Pharmacy order not found.');
+/**
+ * Who may read one legacy `Order` row (pharmacy or lab). Same people as
+ * {@link canViewOrder}: admins, the prescribing doctor, the patient or an
+ * ACTIVE guardian, and the facility the order is routed to. An order not yet
+ * routed (`facilityProfileId` null) is not visible to any facility. Everyone
+ * else gets `false`; callers answer 404 so existence never leaks.
+ */
+export async function canViewLegacyOrder(
+  viewer: OrderViewer,
+  order: { patientProfileId: string; facilityProfileId: string | null; prescribingDoctorId: string | null },
+): Promise<boolean> {
+  switch (viewer.role) {
+    case 'admin':
+      return true;
+    case 'doctor': {
+      if (!order.prescribingDoctorId) return false;
+      const doctor = await doctorsService.getMyDoctorProfile(viewer.userId).catch(() => null);
+      return doctor !== null && doctor.id === order.prescribingDoctorId;
+    }
+    case 'patient': {
+      const acting = await patientsService.resolveActingProfile(viewer.userId, order.patientProfileId).catch(() => null);
+      return acting !== null && acting.id === order.patientProfileId;
+    }
+    case 'facility': {
+      if (!order.facilityProfileId) return false;
+      const facility = await facilitiesService.findFacilityProfileByUserId(viewer.userId);
+      return facility !== null && facility.id === order.facilityProfileId;
+    }
+    default:
+      return false;
   }
+}
+
+/** Loads a legacy `Order` for an authorised viewer (see canViewLegacyOrder),
+ * writes an AccessLog row, and answers 404 to everyone else. */
+export async function getLegacyOrderForViewer(
+  orderId: string,
+  viewer: OrderViewer,
+  route: string,
+  orderType?: 'pharmacy' | 'lab',
+) {
+  const order = await repo.findOrderById(prisma, orderId, orderType);
+  const allowed = order !== null && (await canViewLegacyOrder(viewer, order));
+  if (!order || !allowed) {
+    throw orderType === 'pharmacy'
+      ? new HttpError('PHARMACY_ORDER_NOT_FOUND', 'Pharmacy order not found.')
+      : new HttpError('ORDER_NOT_FOUND', 'Order not found.');
+  }
+  recordAccess({
+    accessedBy: viewer.userId,
+    patientProfileId: order.patientProfileId,
+    entityType: 'Order',
+    entityId: order.id,
+    route,
+  });
   return formatOrderResponse(order);
+}
+
+export async function getPharmacyOrderById(orderId: string, viewer: OrderViewer, route: string) {
+  return getLegacyOrderForViewer(orderId, viewer, route, 'pharmacy');
 }
 
 export interface OrderViewer {

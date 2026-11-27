@@ -94,7 +94,7 @@ export async function getOwnFacilityProfileId(userId: string): Promise<string> {
 /** GET /facilities/me — the signed-in facility owner's full profile (issue #319). */
 export async function getOwnFacilityProfile(userId: string) {
   const facility = await facilitiesRepo.findFacilityProfileByUserId(userId);
-  if (!facility) throw new HttpError(403, 'No facility profile is linked to this account.');
+  if (!facility) throw new HttpError('FACILITY_PROFILE_REQUIRED', 'No facility profile is linked to this account.');
   return facility;
 }
 
@@ -105,7 +105,7 @@ export async function updateOwnFacilityProfile(
   version: number,
   input: { name?: string; address?: string; latitude?: number; longitude?: number },
 ) {
-  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  if (!actor.userId) throw new HttpError('AUTHENTICATION_REQUIRED', 'Authentication required.');
   const current = await getOwnFacilityProfile(actor.userId);
   const updated = await prisma.$transaction(async (tx) => {
     const result = await facilitiesRepo.updateFacilityProfile(current.id, version, input, tx);

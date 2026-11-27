@@ -27,17 +27,17 @@ export function assertAcceptableProofFile(file: { body: unknown; contentType: st
   const contentType = normaliseContentType(file.contentType);
   const signature = PROOF_FILE_SIGNATURES[contentType];
   if (!signature) {
-    throw new HttpError(415, `Proof files must be one of: ${PROOF_CONTENT_TYPES.join(', ')}.`, 'PROOF_UNSUPPORTED_TYPE');
+    throw new HttpError('PROOF_UNSUPPORTED_TYPE', `Proof files must be one of: ${PROOF_CONTENT_TYPES.join(', ')}.`);
   }
   if (!Buffer.isBuffer(file.body) || file.body.byteLength === 0) {
-    throw new HttpError(400, 'The request body must be the proof file.', 'PROOF_EMPTY');
+    throw new HttpError('PROOF_EMPTY', 'The request body must be the proof file.');
   }
   const body = file.body;
   if (body.byteLength > config.orders.proofMaxBytes) {
-    throw new HttpError(413, `Proof files may be at most ${config.orders.proofMaxBytes} bytes.`, 'PROOF_TOO_LARGE');
+    throw new HttpError('PROOF_TOO_LARGE', `Proof files may be at most ${config.orders.proofMaxBytes} bytes.`);
   }
   if (!signature.magic.every((byte, index) => body[index] === byte)) {
-    throw new HttpError(415, `The file content is not a valid ${contentType} file.`, 'PROOF_CONTENT_MISMATCH');
+    throw new HttpError('PROOF_CONTENT_MISMATCH', `The file content is not a valid ${contentType} file.`);
   }
   return { body, contentType };
 }
