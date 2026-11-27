@@ -22,4 +22,13 @@ COPY --from=build /app/prisma ./prisma
 COPY backend/package*.json ./
 USER docforum
 EXPOSE 4000
+
+# Liveness probe (issue #345). The Debian slim image ships neither curl nor
+# wget, so the probe uses Node's built-in fetch against the unauthenticated
+# `/health/live` route in src/app.ts. PORT is honoured so a non-default port
+# works without editing the image. No DB access, so it stays a liveness probe;
+# `/health/ready` is the readiness one.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 4000) + '/health/live').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))"]
+
 CMD ["node", "dist/server.js"]
