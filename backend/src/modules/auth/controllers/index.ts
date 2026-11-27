@@ -35,6 +35,12 @@ const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30d — matches c
 // `SameSite=Lax`/insecure for local dev over plain http. See
 // docs/adr/0003.
 function setRefreshCookie(res: Response, token: string) {
+  // The token is a refresh credential and belongs in the browser's cookie jar
+  // by design (see the comment above and docs/adr/0003); encrypting it again
+  // here would only move the key next to the lock. CodeQL's
+  // clear-text-storage query treats every cookie sink as storage, so every
+  // issuer — signup, login, refresh and password change — is flagged.
+  // codeql[js/clear-text-storage-of-sensitive-data]
   res.cookie(REFRESH_COOKIE, token, {
     ...config.cookie,
     httpOnly: true,
