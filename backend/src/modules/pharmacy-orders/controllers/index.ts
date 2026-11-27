@@ -3,10 +3,14 @@ import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
 import { auditActor } from '../../../middleware/request-id';
 import * as pharmacyOrdersService from '../services';
+import * as proofsService from '../services/proofs';
 import {
   createFulfillmentSchema,
+  createPharmacyOrderSchema,
+  fulfillPharmacyOrderSchema,
   listOrderFulfillmentsQuerySchema,
   orderFulfillmentStatusQuerySchema,
+  proofDownloadQuerySchema,
   updateFulfillmentItemSchema,
   updateFulfillmentRecordSchema,
 } from '../validation';
@@ -74,32 +78,25 @@ export async function listOrderFulfillments(req: Request, res: Response) {
 // --- Pharmacy order creation / fulfillment proof ------------------------
 
 export async function createPharmacyOrder(req: Request, res: Response) {
-  const { patientProfileId, prescribingDoctorId, details } = req.body || {};
-  const order = await pharmacyOrdersService.createPharmacyOrder({
-    patientProfileId,
-    prescribingDoctorId,
-    details,
-  });
+  const input = createPharmacyOrderSchema.parse(req.body);
+  const order = await pharmacyOrdersService.createPharmacyOrder(input);
   res.status(201).json(order);
 }
 
 export async function fulfillPharmacyOrder(req: Request, res: Response) {
-  const id = req.params.id as string;
-  const { referenceNumber, attachment, notes } = req.body || {};
+  const input = fulfillPharmacyOrderSchema.parse(req.body);
   const actor = auditActor(req);
-
   const order = await pharmacyOrdersService.fulfillPharmacyOrder(
-    id,
+    getParam(req, 'id'),
     req.user!.id,
-    { referenceNumber, attachment, notes },
+    input,
     actor,
   );
   res.status(200).json(order);
 }
 
 export async function getPharmacyOrder(req: Request, res: Response) {
-  const id = req.params.id as string;
-  const order = await pharmacyOrdersService.getPharmacyOrderById(id);
+  const order = await pharmacyOrdersService.getPharmacyOrderById(getParam(req, 'id'));
   res.status(200).json(order);
 }
 
@@ -109,4 +106,37 @@ export async function getPharmacyOrder(req: Request, res: Response) {
 export async function listFacilityQueue(req: Request, res: Response) {
   const records = await pharmacyOrdersService.listFacilityQueue(requireUser(req));
   res.status(200).json({ records });
+}
+
+// --- Fulfillment proof files (issue #316) --------------------------------
+
+/** PUT /fulfillment-proofs/:proofId/attachment — raw-body upload by the
+ * facility that recorded the proof. */
+export async function attachProofFile(req: Request, res: Response) {
+  const attachment = await proofsService.attachProofFile(auditActor(req), getParam(req, 'proofId'), {
+    body: req.body,
+    contentType: req.headers['content-type'],
+  });
+  res.status(201).json(attachment);
+}
+
+/** GET /fulfillment-proofs/:proofId/attachment — access-checked download. */
+export async function downloadProofFile(req: Request, res: Response) {
+  const { patientProfileId } = proofDownloadQuerySchema.parse(req.query);
+  const file = await proofsService.openProofFile(
+    { id: requireUser(req).userId, role: requireUser(req).role },
+    getParam(req, 'proofId'),
+    'GET /fulfillment-proofs/:proofId/attachment',
+    patientProfileId,
+  );
+  res.set({
+    'Content-Type': file.contentType,
+    'Content-Length': String(file.body.length),
+    'Content-Disposition': `attachment; filename="${file.filename}"`,
+    // Never cached by a browser or shared proxy, never sniffed into
+    // something renderable.
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.status(200).send(file.body);
 }

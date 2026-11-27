@@ -42,6 +42,8 @@ export type AuditEntityType =
   // Issue #320: admin add/remove facility capabilities.
   | 'FacilityCapability'
   | 'Order'
+  // Issue #316: a facility attaching a proof file (`fulfillment_proof.attached`).
+  | 'FulfillmentProof'
   | 'OrderDispute'
   | 'FeatureFlag'
   // Issue #277: an admin revoking a pending invite (`admin_invite.revoked`).
@@ -208,7 +210,9 @@ export type AccessEntityType =
   | 'Referral'
   | 'PaymentIntent'
   | 'PatientProfile'
-  | 'Appointment';
+  | 'Appointment'
+  // Issue #316: a fulfillment proof file download.
+  | 'FulfillmentProof';
 
 export interface AccessLogInput {
   /** The viewer. Null only for anonymous/system reads (there are none today). */

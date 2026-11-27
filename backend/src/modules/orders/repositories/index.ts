@@ -241,7 +241,7 @@ export async function findOrderForPatient(
       patientProfileId,
     },
     include: {
-      fulfillmentProofs: true,
+      fulfillmentProofs: { omit: { attachmentObjectKey: true } },
       disputes: {
         include: {
           resolutions: true,

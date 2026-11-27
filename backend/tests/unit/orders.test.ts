@@ -1,34 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { DefaultStorageProvider } from '../../src/utils/storage';
 import { computeConfirmedSignal, formatOrderResponse } from '../../src/utils/order-utils';
 
 describe('orders unit tests', () => {
-  describe('DefaultStorageProvider', () => {
-    it('returns exact string URL if a string is provided', async () => {
-      const provider = new DefaultStorageProvider();
-      const url = await provider.uploadAttachment('https://example.com/receipt.pdf');
-      expect(url).toBe('https://example.com/receipt.pdf');
-    });
-
-    it('returns options.url if specified in object', async () => {
-      const provider = new DefaultStorageProvider();
-      const url = await provider.uploadAttachment({ url: 'https://example.com/proof.png' });
-      expect(url).toBe('https://example.com/proof.png');
-    });
-
-    it('generates a storage URI if fileName is provided', async () => {
-      const provider = new DefaultStorageProvider();
-      const url = await provider.uploadAttachment({ fileName: 'test-lab.pdf' });
-      expect(url).toMatch(/^storage:\/\/attachments\/\d+-test-lab\.pdf$/);
-    });
-
-    it('generates a fallback storage URI if object has no URL or fileName', async () => {
-      const provider = new DefaultStorageProvider();
-      const url = await provider.uploadAttachment({});
-      expect(url).toMatch(/^storage:\/\/attachments\/\d+-attachment$/);
-    });
-  });
-
   describe('computeConfirmedSignal', () => {
     it('returns true if order is explicitly confirmed', () => {
       const signal = computeConfirmedSignal({

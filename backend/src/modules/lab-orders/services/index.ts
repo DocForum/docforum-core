@@ -8,7 +8,6 @@
 import { prisma } from '../../../db/prisma-client';
 import { HttpError } from '../../../http-error';
 import { publish } from '../../../events';
-import { storageService } from '../../../utils/storage';
 import { record, recordAccess, type AuditActor } from '../../audit/services';
 import { decryptField } from '../../../utils/field-encryption';
 import type { OrderStatus } from '@prisma/client';
@@ -56,20 +55,16 @@ export async function applyFulfillmentStatus(
 }
 
 export async function createLabOrder(data: {
-  patientProfileId?: string;
+  patientProfileId: string;
   orderingDoctorId?: string;
   details?: string;
 }) {
-  if (!data.patientProfileId || typeof data.patientProfileId !== 'string') {
-    throw new HttpError(400, 'Patient profile ID is required.');
-  }
-
   await patientsService.getPatientProfileById(data.patientProfileId);
 
   const order = await prisma.$transaction(async (tx) => {
     return repo.createOrder(tx, {
       orderType: 'lab',
-      patientProfileId: data.patientProfileId!,
+      patientProfileId: data.patientProfileId,
       prescribingDoctorId: data.orderingDoctorId,
       details: data.details,
     });
@@ -84,32 +79,18 @@ export async function fulfillLabOrder(
   input: FulfillOrderInput,
   actor: AuditActor,
 ) {
-  if (!orderId || typeof orderId !== 'string') {
-    throw new HttpError(400, 'Order ID is required.');
-  }
-
-  const existingCheck = await prisma.order.findUnique({ where: { id: orderId } });
-  if (!existingCheck || existingCheck.orderType !== 'lab') {
-    throw new HttpError(404, 'Lab order not found.');
-  }
-
-  if (!input?.referenceNumber || typeof input.referenceNumber !== 'string' || input.referenceNumber.trim().length === 0) {
-    throw new HttpError(400, 'Reference number is required for fulfillment proof.');
-  }
-
+  // Input shape (ids, a non-empty referenceNumber) is guaranteed by the
+  // controller's Zod schema (issue #317).
   const facilityProfile = await facilitiesService.findFacilityProfileByUserId(facilityUserId);
   if (!facilityProfile) {
     throw new HttpError(403, 'Facility profile required.');
   }
 
-  let attachmentUrl: string | undefined = undefined;
-  if (input.attachment) {
-    attachmentUrl = await storageService.uploadAttachment(input.attachment);
-  }
-
   const result = await prisma.$transaction(async (tx) => {
     const existing = await repo.findOrderById(tx, orderId, 'lab');
-    if (!existing) {
+    // An order already routed to a facility can only be fulfilled by that
+    // facility; for any other facility it does not exist.
+    if (!existing || (existing.facilityProfileId !== null && existing.facilityProfileId !== facilityProfile.id)) {
       throw new HttpError(404, 'Lab order not found.');
     }
     if (existing.status === 'fulfilled') {
@@ -127,8 +108,7 @@ export async function fulfillLabOrder(
     await repo.createFulfillmentProof(tx, {
       orderId,
       facilityProfileId: facilityProfile.id,
-      referenceNumber: input.referenceNumber.trim(),
-      attachmentUrl,
+      referenceNumber: input.referenceNumber,
       notes: input.notes,
     });
 
@@ -140,7 +120,7 @@ export async function fulfillLabOrder(
       toState: 'fulfilled',
       metadata: {
         orderType: 'lab',
-        referenceNumber: input.referenceNumber.trim(),
+        referenceNumber: input.referenceNumber,
         facilityProfileId: facilityProfile.id,
       },
     });
