@@ -1,6 +1,10 @@
 import { prisma } from '../../../db/prisma-client';
 import { Prisma } from '@prisma/client';
-import type { ReferralExpiryReason as ExpiryReason, ReferralStatus } from '@prisma/client';
+import type {
+  ReferralExpiryReason as ExpiryReason,
+  ReferralStatus,
+  ReferralDeclineReason,
+} from '@prisma/client';
 import type { ChainNode } from '../loop';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
@@ -61,6 +65,8 @@ export function updateReferralConditional(
     expiredAt?: Date;
     expiredReason?: ExpiryReason;
     cancelledReason?: string;
+    declineReason?: ReferralDeclineReason;
+    declineReasonNote?: string | null;
   },
 ) {
   return db.referral.updateMany({
