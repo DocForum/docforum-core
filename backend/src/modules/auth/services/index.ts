@@ -687,12 +687,14 @@ export interface ChangePasswordInput {
  * Re-authenticates the current password via the throttled `confirmPassword` path,
  * rejects new passwords that equal the current one, updates `passwordHash`,
  * bumps `tokenVersion`, and revokes all other active sessions while keeping
- * the caller's own session alive.
+ * the caller's own session row alive. The bumper also invalidates the
+ * caller's own tokens, so the caller re-issues its pair afterwards through
+ * `reissueCallerSession` — this function returns no session material.
  */
 export async function changePassword(
   input: ChangePasswordInput,
   actor?: AuditActor,
-): Promise<{ tokenVersion: number; refreshToken?: string }> {
+): Promise<{ tokenVersion: number }> {
   if (input.currentPassword === input.newPassword) {
     throw new HttpError(400, 'New password must be different from current password.', 'PASSWORD_UNCHANGED');
   }
@@ -740,17 +742,24 @@ export async function changePassword(
       });
     }
 
-    let refreshToken: string | undefined;
-    if (input.currentSessionId) {
-      const tokens = issueTokensForSession(
-        { id: user.id, role: user.role, tokenVersion: updatedUser.tokenVersion, locale: user.locale },
-        input.currentSessionId,
-      );
-      refreshToken = tokens.refreshToken;
-    }
-
-    return { tokenVersion: updatedUser.tokenVersion, refreshToken };
+    return { tokenVersion: updatedUser.tokenVersion };
   });
+}
+
+/**
+ * Re-issues the caller's session token pair after `changePassword` bumped
+ * `User.tokenVersion` (issue #270). The bump invalidates every token minted
+ * before it — the caller's own refresh cookie included — so "keep the caller
+ * signed in" means minting one fresh pair for the session they called from.
+ * The session id is unchanged, so `GET /auth/sessions` still shows a single
+ * entry for this device. Kept out of `changePassword` on purpose: this is the
+ * same same-session rotation `refresh` performs, and the credential path
+ * should not hand back session material.
+ */
+export async function reissueCallerSession(userId: string, sessionId: string): Promise<AuthSession> {
+  const user = await findUserById(userId);
+  if (!user || user.deletedAt) throw new HttpError(401, 'Authentication required.');
+  return { user: toPublicUser(user), ...issueTokensForSession(user, sessionId), sessionId };
 }
 
 export async function isAccountDeleted(userId: string): Promise<boolean> {

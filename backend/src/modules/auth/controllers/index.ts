@@ -35,15 +35,10 @@ const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30d — matches c
 // `SameSite=Lax`/insecure for local dev over plain http. See
 // docs/adr/0003.
 //
-// Expected CodeQL finding, not a suppression: js/clear-text-storage-of-
-// sensitive-data reports this sink for every refresh-token issuer (signup,
-// login, refresh, password change). Its heuristics treat a `*Token` value and
-// the return value of a `*Password` function as sensitive, and a cookie as
-// clear-text storage — so any new path that re-issues the cookie is reported,
-// and only a reviewer can dismiss it as the intended httpOnly-cookie design.
-// `#270` requires the caller to stay signed in across a password change, and
-// the tokenVersion bump invalidates the old refresh token, which is why this
-// path has to write a new one.
+// Every route that mints a session (signup, login, refresh, 2FA verify,
+// password change) goes through `sessionResponse`/`reissuedSessionResponse`,
+// so a token pair reaches the client by exactly one path: the refresh token as
+// this httpOnly cookie, the access and CSRF tokens in the JSON body.
 function setRefreshCookie(res: Response, token: string) {
   res.cookie(REFRESH_COOKIE, token, {
     ...config.cookie,
@@ -64,6 +59,21 @@ function sessionResponse(res: Response, session: authService.AuthSession) {
   // middleware/csrf.ts for why a cross-site frontend can't use a cookie for
   // this. docforum-web keeps it in memory alongside the access token.
   res.status(200).json({
+    user: session.user,
+    accessToken: session.accessToken,
+    csrfToken: session.csrfToken,
+    sessionId: session.sessionId,
+  });
+}
+
+/** `POST /auth/password` answers with a message *and* the caller's re-issued
+ * pair: the tokenVersion bump killed the old access and CSRF tokens along
+ * with the old refresh cookie, so the client needs the replacements in the
+ * same response to stay signed in (#270). */
+function reissuedSessionResponse(res: Response, session: authService.AuthSession) {
+  setRefreshCookie(res, session.refreshToken);
+  res.status(200).json({
+    message: 'Password changed successfully.',
     user: session.user,
     accessToken: session.accessToken,
     csrfToken: session.csrfToken,
@@ -216,7 +226,7 @@ export async function changePassword(req: Request, res: Response) {
   const userId = requireUserId(req);
   const currentSessionId = authService.sessionIdFromRefreshToken(refreshCookieValue(req));
   try {
-    const { refreshToken } = await authService.changePassword(
+    await authService.changePassword(
       {
         userId,
         currentPassword,
@@ -227,9 +237,12 @@ export async function changePassword(req: Request, res: Response) {
       auditActor(req),
     );
 
-    // If caller has an active session, update refresh cookie with the fresh token
-    if (refreshToken) {
-      setRefreshCookie(res, refreshToken);
+    // The tokenVersion bump invalidated every token issued before it, the
+    // caller's own included. When this request carried a session cookie, give
+    // that same session a fresh pair so the caller stays signed in (#270).
+    if (currentSessionId) {
+      reissuedSessionResponse(res, await authService.reissueCallerSession(userId, currentSessionId));
+      return;
     }
 
     res.status(200).json({ message: 'Password changed successfully.' });

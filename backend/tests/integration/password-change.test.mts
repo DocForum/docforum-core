@@ -212,6 +212,12 @@ describe('POST /auth/password (Phase 8, issue #270)', () => {
 
     expect(changeRes.status).toBe(200);
     expect(changeRes.body.message).toMatch(/updated|success/i);
+    // The caller gets a fresh pair back: the bump invalidated the old access
+    // and CSRF tokens too, so a new cookie alone would not keep it signed in.
+    expect(changeRes.body.accessToken).toBeDefined();
+    expect(changeRes.body.csrfToken).toBeDefined();
+    const callerCookie = cookieFrom(changeRes);
+    const callerCsrf = changeRes.body.csrfToken as string;
 
     // 4. Verify user tokenVersion was bumped
     const updatedUser = await prisma.user.findUnique({ where: { id: userId } });
@@ -237,6 +243,15 @@ describe('POST /auth/password (Phase 8, issue #270)', () => {
       .set('Cookie', session1Cookie)
       .set('X-CSRF-Token', session1Csrf);
     expect(session1Refresh.status).toBe(401);
+
+    // The re-issued pair keeps the caller signed in: the session it called
+    // from still refreshes, with the new tokenVersion and CSRF token.
+    const callerRefresh = await request(app)
+      .post('/auth/refresh')
+      .set('Cookie', callerCookie)
+      .set('X-CSRF-Token', callerCsrf);
+    expect(callerRefresh.status).toBe(200);
+    expect(callerRefresh.body.sessionId).toBe(changeRes.body.sessionId);
 
     // 7. Verify an AuditEvent was written without password material
     const auditEvents = await prisma.auditEvent.findMany({
