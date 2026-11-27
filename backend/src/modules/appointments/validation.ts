@@ -57,3 +57,15 @@ export const doctorScheduleQuerySchema = z
     status: z.enum(['scheduled', 'completed', 'cancelled', 'late_cancelled', 'no_show']).optional(),
   })
   .strict();
+
+// Phase 2, issue #338: doctor cancels the rest of one day. `date` is a
+// calendar day in the doctor's own time zone.
+export const cancelDaySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD.').refine(
+    (value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().startsWith(value),
+    'date must be a real calendar day.',
+  ),
+  // A code, not free text: it is written to the audit trail, which only
+  // ever holds ids and codes (no PHI).
+  reason: z.enum(['illness', 'emergency', 'personal', 'other']).optional(),
+});

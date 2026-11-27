@@ -57,6 +57,13 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   const requestLogger: Logger =
     (req as Request & { log?: Logger }).log ?? rootLogger;
 
+  // The response already went out (e.g. the request deadline answered 503
+  // while the handler was still running, issue #335): log it, write nothing.
+  if (res.headersSent) {
+    requestLogger.warn({ err }, 'Request failed after its response was sent');
+    return;
+  }
+
   const bodyError = bodyParserErrorMapping(err);
   if (bodyError) {
     // Never log `err` itself: body-parser attaches the raw request body to

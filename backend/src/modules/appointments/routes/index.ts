@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { apiRateLimit } from '../../../middleware/rate-limit';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
 import { idempotency } from '../../../middleware/idempotency';
 import * as appointmentsController from '../controllers';
@@ -105,6 +106,17 @@ appointmentsRouter.patch(
   authenticate,
   requireRole('patient'),
   appointmentsController.cancelMine,
+);
+
+// Doctor cancels the rest of a day (Phase 2, issue #338). Body:
+// `{ date: 'YYYY-MM-DD', reason? }`, the date in the doctor's time zone.
+appointmentsRouter.post(
+  '/doctor/cancel-day',
+  apiRateLimit,
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  appointmentsController.cancelDay,
 );
 
 // Role-scoped appointment detail (Phase 2, issue #296): patient, guardian, or treating doctor

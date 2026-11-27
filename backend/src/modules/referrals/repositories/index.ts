@@ -273,3 +273,14 @@ export function listAdminQueue(filters: {
 export async function patientHasReferrals(patientProfileId: string): Promise<boolean> {
   return (await prisma.referral.findFirst({ where: { patientProfileId }, select: { id: true } })) !== null;
 }
+
+/** One keyset page of a patient's referrals (issue #336). Referral columns
+ * only — snapshot notes, lineage and status come from this table directly. */
+export function findReferralsPageForPatient(patientProfileId: string, cursor: string | undefined, take: number) {
+  return prisma.referral.findMany({
+    where: { patientProfileId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  });
+}
