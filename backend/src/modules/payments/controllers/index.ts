@@ -1,7 +1,7 @@
 import { once } from 'node:events';
 import type { Request, Response } from 'express';
 import * as paymentsService from '../services';
-import { walletLinkSchema, paymentHistoryQuerySchema, ledgerCsvQuerySchema } from '../validation';
+import { walletLinkSchema, paymentHistoryQuerySchema, ledgerCsvQuerySchema, adminIntentListQuerySchema } from '../validation';
 import { logger as rootLogger } from '../../../logger';
 import { HttpError } from '../../../http-error';
 import { getParam } from '../../../request-params';
@@ -69,11 +69,48 @@ export async function listPendingWalletLinks(_req: Request, res: Response) {
   res.status(200).json({ items: await paymentsService.listPendingFacilityWalletLinks() });
 }
 
+/** GET /admin/payments/fee-sponsor (issue #82): sponsor balance, spend per
+ * window and top consumers. */
+export async function getFeeSponsorStatus(_req: Request, res: Response) {
+  res.status(200).json({
+    sponsorPublicKey: process.env.PLATFORM_FEE_SPONSOR_PUBLIC_KEY ?? process.env.PLATFORM_PAYER_PUBLIC_KEY ?? null,
+    ...paymentsService.feeSponsorshipSnapshot(),
+  });
+}
+
 export async function getIntent(req: Request, res: Response) {
   const id = getParam(req, 'id');
   const intent = await paymentsService.getPaymentIntent(id);
   setVersionEtag(res, intent.version);
   res.status(200).json(serializeIntent(intent));
+}
+
+// Issue #326: owner-scoped read — patient (payer) or facility (payee).
+// Same shape as their history rows plus on-chain references; no admin fields.
+function serializeOwnerIntent(intent: Parameters<typeof serializeIntent>[0]) {
+  const {
+    preparedTxHash: _preparedTxHash,
+    preparedExpiryLedger: _preparedExpiryLedger,
+    preparedExpiresAt: _preparedExpiresAt,
+    ...rest
+  } = serializeIntent(intent);
+  return rest;
+}
+
+export async function getOwnIntent(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const id = getParam(req, 'id');
+  const role = req.user.role as 'patient' | 'facility';
+  const intent = await paymentsService.getPaymentIntentForOwner(id, req.user.id, role);
+  if (!intent) throw new HttpError(404, 'PaymentIntent not found.');
+  setVersionEtag(res, intent.version);
+  res.status(200).json(serializeOwnerIntent(intent));
+}
+
+// Issue #325: admin list of all payment intents with filters.
+export async function listIntents(req: Request, res: Response) {
+  const filters = adminIntentListQuerySchema.parse(req.query);
+  res.status(200).json(await paymentsService.listAdminPaymentIntents(filters));
 }
 
 export async function prepareIntent(req: Request, res: Response) {
@@ -87,6 +124,19 @@ export async function prepareIntent(req: Request, res: Response) {
     xdr: prepared.xdr,
     txHash: prepared.txHash,
     expiryLedger: prepared.expiryLedger,
+  });
+}
+
+export async function submitIntent(req: Request, res: Response) {
+  const id = getParam(req, 'id');
+  const signedXdr = String((req.body as { signedXdr?: unknown })?.signedXdr ?? '');
+  if (!signedXdr) throw new HttpError(400, 'signedXdr is required.');
+  const result = await paymentsService.submitPaymentIntent(auditActor(req), id, signedXdr);
+  setVersionEtag(res, result.intent.version);
+  res.status(200).json({
+    ...serializeIntent(result.intent),
+    escrowId: result.escrowId?.toString() ?? null,
+    stellarTxHash: result.stellarTxHash,
   });
 }
 

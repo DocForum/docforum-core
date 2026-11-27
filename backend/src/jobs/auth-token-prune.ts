@@ -17,6 +17,7 @@ import {
 } from '../modules/auth/services';
 import { pruneExpiredAdminInvites } from '../modules/users/services';
 import { pruneExpiredSep10Challenges } from '../modules/payments/services';
+import { logger } from '../logger';
 
 interface Pruner {
   /** Log label only — never a table dump. */
@@ -59,14 +60,12 @@ export function startAuthTokenPruneJob(): () => void {
         for (const [name, deleted] of Object.entries(counts)) {
           if (deleted > 0) {
             // Counts only — these tables hold hashed credentials/addresses.
-            // eslint-disable-next-line no-console
-            console.log(`[jobs] auth token prune: removed ${deleted} ${name}`);
+            logger.info(`[jobs] auth token prune: removed ${deleted} ${name}`);
           }
         }
       })
       .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error(`[jobs] auth token prune failed: ${err instanceof Error ? err.name : typeof err}`);
+        logger.error(`[jobs] auth token prune failed: ${err instanceof Error ? err.name : typeof err}`);
       })
       .finally(() => {
         running = false;

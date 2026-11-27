@@ -11,7 +11,7 @@ to `main` that touches docs in this repo, manual `workflow_dispatch`, or
 ## The one rule this is built around
 
 **No content here is hand-maintained.** Every page under `product/`,
-`architecture/`, `api/`, `roadmap/`, and `repos/*/readme.md` /
+`architecture/`, `api/`, `roadmap/`, `runbooks/`, and `repos/*/readme.md` /
 `architecture.md` / `roadmap.md` / `adr-*.md` is synced at build time by
 `scripts/sync-docs.mjs` — this repo's own root docs are copied locally,
 `docforum-web`'s and `docforum-escrow`'s are fetched from their `main`
@@ -21,7 +21,8 @@ lost. Edit the source instead:
 
 - This repo's docs → `../../PRD.md`, `../../ARCHITECTURE.md`,
   `../../ARCHITECTURE_ESSENTIALS.md`, `../../ROADMAP.md`,
-  `../../docs/adr/*.md`, `../../docs/api/README.md`.
+  `../../docs/adr/*.md`, `../../docs/api/README.md`,
+  `../../docs/runbooks/*.md`.
 - `docforum-web`'s / `docforum-escrow`'s docs → their own repos.
 
 Only `.vitepress/` (config, theme) and the hand-authored pages
@@ -40,9 +41,35 @@ npm run dev      # syncs, then starts the dev server
 `.vitepress/dist/` (gitignored). `npm run docs:sync` alone just refreshes
 the synced content without starting/building anything.
 
+## Checking a docs change on a PR
+
+`.github/workflows/build-docs.yml` runs the production build on every PR that
+touches the site or a document it syncs in, and does nothing else: no Pages
+artifact, no deploy, and a read-only `contents: read` token, so a fork PR
+cannot publish. It is the same command with the same base path the deploy uses,
+so the PR build predicts what merging would do:
+
+```bash
+cd docs/site
+GITHUB_PAGES=true npm run build
+```
+
+VitePress fails that build on a dead internal link (`ignoreDeadLinks` is
+explicitly `false` in `.vitepress/config.ts`), on bad front matter, and on
+markdown that isn't a valid Vue template — the same ways a docs change used to
+pass review and then break the deploy on `main`. Since the sibling repos'
+documents are fetched from their `main` branches at build time, a break in
+`docforum-web` or `docforum-escrow` lands here too: re-run the build a while
+later to see whether the failure was yours.
+
 ## Rebuilding on upstream changes (cross-repo docs sync)
 
-The site deploys automatically when documentation changes land in `docforum-core`.
+The site deploys automatically when documentation changes land in `docforum-core`:
+`.github/workflows/deploy-docs.yml`'s `paths:` filter lists `docs/site/**`,
+`PRD.md`, `ARCHITECTURE.md`, `ARCHITECTURE_ESSENTIALS.md`, `ROADMAP.md`,
+`docs/adr/**`, `docs/api/**` and `docs/runbooks/**`. A new synced source needs
+adding there too, or a push that only edits it won't redeploy the site.
+
 When documentation changes land on `main` in sibling repositories (`docforum-web`
 or `docforum-escrow`), the site is rebuilt via GitHub's `repository_dispatch` event
 ([issue #29](https://github.com/DocForum/docforum-core/issues/29)).

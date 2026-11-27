@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
 import { idempotency } from '../../../middleware/idempotency';
+import { apiRateLimit } from '../../../middleware/rate-limit';
 import * as paymentsController from '../controllers';
 
 export const paymentsRouter = Router();
@@ -25,7 +26,23 @@ paymentsRouter.get(
   paymentsController.getOwnWallet,
 );
 
-paymentsRouter.get('/intents/:id', authenticate, requireRole('admin'), paymentsController.getIntent);
+// Issue #325: admin list of all payment intents with filters.
+paymentsRouter.get('/intents', apiRateLimit, authenticate, requireRole('admin'), paymentsController.listIntents);
+
+// Issue #326: patient (payer) and payee facility can read their own intent.
+// Admin gets the full admin view; owners get the reduced owner view (no
+// internal prepare fields). The route admits all three roles; the controller
+// routes admin vs owner internally.
+paymentsRouter.get(
+  '/intents/:id',
+  apiRateLimit,
+  authenticate,
+  requireRole('admin', 'patient', 'facility'),
+  async (req, res) => {
+    if (req.user?.role === 'admin') return paymentsController.getIntent(req, res);
+    return paymentsController.getOwnIntent(req, res);
+  },
+);
 
 // ADR 0005 step 2 (issue #80) — the patient prepares their own intent for
 // signing. Ownership is enforced in the service (not merely by the role),
@@ -38,6 +55,14 @@ paymentsRouter.post(
   requireRole('patient'),
   requireVerifiedEmail,
   paymentsController.prepareIntent,
+);
+
+paymentsRouter.post(
+  '/intents/:id/submit',
+  authenticate,
+  requireRole('patient'),
+  requireVerifiedEmail,
+  paymentsController.submitIntent,
 );
 paymentsRouter.post(
   '/intents/:id/fund',
@@ -89,3 +114,4 @@ paymentsRouter.post(
 // Issue #328: facility payout-wallet changes still inside their cool-down.
 export const paymentsAdminRouter = Router();
 paymentsAdminRouter.get('/wallet-links/pending', authenticate, requireRole('admin'), paymentsController.listPendingWalletLinks);
+paymentsAdminRouter.get('/fee-sponsor', authenticate, requireRole('admin'), paymentsController.getFeeSponsorStatus);

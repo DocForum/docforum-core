@@ -26,6 +26,25 @@ export const createReferralBatchSchema = z.object({
 
 export const acceptReferralSchema = z.object({
   availabilitySlotId: z.string().min(1),
+  patientProfileId: z.string().uuid().optional(),
+});
+
+export const declineReferralSchema = z.object({
+  patientProfileId: z.string().uuid().optional(),
+  reason: z.object({
+    enum: z.enum(['cost', 'distance', 'second_opinion', 'other']),
+    note: z.string().trim().max(200).optional(),
+  }).optional(),
+});
+
+/** GET /referrals/mine — issue #305: an active guardian lists a dependent's
+ * referrals by naming the dependent. Authorised in the service. */
+export const listMineQuerySchema = z.object({
+  patientProfileId: z.string().uuid().optional(),
+});
+
+export const referralDetailQuerySchema = z.object({
+  patientProfileId: z.string().min(1).optional(),
 });
 
 // The reason travels into the audit trail as a metadata value, and the
@@ -38,6 +57,10 @@ export const adminReassignSchema = z.object({
 });
 
 export const adminCancelSchema = z.object({
+  reason: z.string().trim().min(1).max(200),
+});
+
+export const withdrawReferralSchema = z.object({
   reason: z.string().trim().min(1).max(200),
 });
 
@@ -58,4 +81,6 @@ export const adminQueueQuerySchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((value) => value === 'true'),
+  targetSpecialtyId: z.string().optional(),
+  targetDoctorId: z.string().optional(),
 });

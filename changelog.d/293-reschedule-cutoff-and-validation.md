@@ -1,2 +1,0 @@
-Phase 2: fix inverted reschedule cutoff check and add concurrency/validations ([issue #293](https://github.com/DocForum/docforum-core/issues/293)).
-`rescheduleSlot` now correctly evaluates the cutoff window using `config.appointments.cutoffHours`, rejecting last-minute attempts within the window and permitting far-future reschedules. Added validations requiring `scheduled` status, matching doctor profile, and future slot timing. Both old and new slots are updated conditionally through `availabilityService` in one transaction.

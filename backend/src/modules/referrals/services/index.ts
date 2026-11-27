@@ -13,13 +13,14 @@
 import { prisma } from '../../../db/prisma-client';
 import { config } from '../../../config';
 import { HttpError } from '../../../http-error';
-import type { Prisma, ReferralStatus } from '@prisma/client';
+import type { Prisma, ReferralStatus, ReferralDeclineReason } from '@prisma/client';
 import * as referralsRepo from '../repositories';
 import * as appointmentsService from '../../appointments/services';
 import * as auditService from '../../audit/services';
 import * as doctorsService from '../../doctors/services';
 import * as patientsService from '../../patients/services';
-import { decryptField, isEncrypted } from '../../../utils/field-encryption';
+import * as intakeService from '../../intake/services';
+import { decryptField, encryptField, isEncrypted } from '../../../utils/field-encryption';
 import { evaluateReferralLoop, LoopGuardError, REFERRAL_MAX_HOPS } from '../loop';
 import { selectLeastLoaded } from '../routing';
 
@@ -49,6 +50,7 @@ interface PreparedReferral {
   targetDoctorId: string;
   targetSpecialtyId?: string;
   snapshotNotes: string;
+  snapshotIntake: string | null;
   parentReferralId?: string;
   loopFlaggedAt?: Date;
   loopFlagReason?: string;
@@ -203,6 +205,15 @@ async function prepareReferralTarget(
     }
   }
 
+  // Capture the patient's most-recent intake form as an immutable snapshot
+  // (issue #5, ARCHITECTURE.md §4.4). Null when no intake exists yet (issue
+  // #2 not yet enforced). Encrypted the same way as snapshotNotes so the
+  // referral row carries no plaintext PHI.
+  const latestIntake = await intakeService.findLatestIntakeForReferral(db, patientProfileId);
+  const snapshotIntake = latestIntake
+    ? (encryptField(JSON.stringify(latestIntake)) ?? null)
+    : null;
+
   return {
     patientProfileId,
     sourceConsultationId: consultation.id,
@@ -210,6 +221,7 @@ async function prepareReferralTarget(
     targetDoctorId,
     targetSpecialtyId: target.targetSpecialtyId,
     snapshotNotes: target.snapshotNotes,
+    snapshotIntake,
     parentReferralId,
     loopFlaggedAt,
     loopFlagReason,
@@ -298,9 +310,15 @@ export async function acceptReferral(
   actor: auditService.AuditActor,
   referralId: string,
   availabilitySlotId: string,
+  patientProfileId?: string,
 ) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  // Issue #305: no patientProfileId keeps the self-service path; naming one
+  // resolves an active guardianship (or the caller's own profile) first, so
+  // an ended guardianship is refused before the referral is touched.
+  const patientProfile = patientProfileId
+    ? await patientsService.resolveActingProfile(actor.userId, patientProfileId)
+    : await patientsService.getMyPatientProfile(actor.userId);
 
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
@@ -311,6 +329,9 @@ export async function acceptReferral(
     if (referral.status !== 'pending') {
       throw new HttpError(409, 'Only a pending referral can be accepted.');
     }
+
+    // Ensure the target doctor is active (not deactivated or deleted)
+    await doctorsService.assertDoctorActive(referral.targetDoctorId, tx);
 
     // Conditional pending → accepted FIRST: if two accepts race, exactly
     // one matches, same shape as claimOpenSlot (hard rule 2's philosophy,
@@ -351,7 +372,7 @@ export async function acceptReferral(
       action: 'referral.accepted',
       fromState: 'pending',
       toState: 'accepted',
-      metadata: { appointmentId: appointment.id },
+      metadata: { appointmentId: appointment.id, patientProfileId: patientProfile.id },
     });
 
     return referralsRepo.findReferralById(tx, referralId);
@@ -364,10 +385,22 @@ export async function acceptReferral(
  * out is cancelling that appointment — which the cascade below returns to
  * pending (re-bookable), from which declining is then possible. Keeps one
  * narrow transition instead of two overlapping exit paths.
+ *
+ * Issue #309: optional reason when a patient declines a referral. The reason
+ * is stored on the referral record and included in the audit metadata. When
+ * no reason is provided (omitted body), the referral is declined without a
+ * reason — backwards compatible.
  */
-export async function declineReferral(actor: auditService.AuditActor, referralId: string) {
+export async function declineReferral(
+  actor: auditService.AuditActor,
+  referralId: string,
+  patientProfileId?: string,
+  reason?: { enum?: ReferralDeclineReason; note?: string },
+) {
   if (!actor.userId) throw new HttpError(401, 'Authentication required.');
-  const patientProfile = await patientsService.getMyPatientProfile(actor.userId);
+  const patientProfile = patientProfileId
+    ? await patientsService.resolveActingProfile(actor.userId, patientProfileId)
+    : await patientsService.getMyPatientProfile(actor.userId);
   return prisma.$transaction(async (tx) => {
     const referral = await referralsRepo.findReferralById(tx, referralId);
     if (!referral) throw new HttpError(404, 'Referral not found.');
@@ -378,10 +411,60 @@ export async function declineReferral(actor: auditService.AuditActor, referralId
       throw new HttpError(409, 'Only a pending referral can be declined.');
     }
 
+    // Issue #309: resolve the optional decline reason once for both the row
+    // write and the audit metadata, so the two can never disagree.
+    const declineReason = reason?.enum;
+    const declineReasonNote = reason?.note && reason.note.trim() ? reason.note.trim() : null;
+
     const updated = await referralsRepo.updateReferralConditional(
       tx,
       { id: referralId, status: 'pending', resultingAppointmentId: null },
-      { status: 'declined' },
+      { status: 'declined', declineReason, declineReasonNote },
+    );
+    if (updated.count !== 1) {
+      throw new HttpError(409, 'This referral is no longer pending.');
+    }
+
+    // Only the enum goes into the audit metadata. The free-text note is
+    // patient-written and may carry PHI, which the audit guard keeps out of
+    // metadata (it rejects "note"-like keys), so it stays on the referral row.
+    const auditMetadata: auditService.AuditMetadata = { patientProfileId: patientProfile.id };
+    if (declineReason) auditMetadata.declineReason = declineReason;
+
+    await auditService.record(tx, actor, {
+      entityType: 'Referral',
+      entityId: referralId,
+      action: 'referral.declined',
+      fromState: 'pending',
+      toState: 'declined',
+      metadata: auditMetadata,
+    });
+
+    return referralsRepo.findReferralById(tx, referralId);
+  });
+}
+
+export async function withdrawReferral(
+  actor: auditService.AuditActor,
+  referralId: string,
+  input: { reason: string },
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const referringDoctor = await doctorsService.getMyDoctorProfile(actor.userId);
+
+  return prisma.$transaction(async (tx) => {
+    const referral = await referralsRepo.findReferralById(tx, referralId);
+    if (!referral || referral.referringDoctorId !== referringDoctor.id) {
+      throw new HttpError(404, 'Referral not found.');
+    }
+    if (referral.status !== 'pending') {
+      throw new HttpError(409, 'Only a pending referral can be withdrawn.');
+    }
+
+    const updated = await referralsRepo.updateReferralConditional(
+      tx,
+      { id: referralId, status: 'pending', resultingAppointmentId: null },
+      { status: 'cancelled', cancelledReason: input.reason },
     );
     if (updated.count !== 1) {
       throw new HttpError(409, 'This referral is no longer pending.');
@@ -390,22 +473,40 @@ export async function declineReferral(actor: auditService.AuditActor, referralId
     await auditService.record(tx, actor, {
       entityType: 'Referral',
       entityId: referralId,
-      action: 'referral.declined',
+      action: 'referral.withdraw',
       fromState: 'pending',
-      toState: 'declined',
+      toState: 'cancelled',
+      metadata: { reason: input.reason },
     });
 
     return referralsRepo.findReferralById(tx, referralId);
   });
 }
 
-export async function listMine(userId: string) {
-  const patientProfile = await patientsService.getMyPatientProfile(userId);
-  return referralsRepo.listReferralsForPatient(patientProfile.id);
+export async function listMine(userId: string, patientProfileId?: string) {
+  const patientProfile = patientProfileId
+    ? await patientsService.resolveActingProfile(userId, patientProfileId)
+    : await patientsService.getMyPatientProfile(userId);
+  const referrals = await referralsRepo.listReferralsForPatient(patientProfile.id);
+  const detail = patientProfile.userId === null ? 'referral list read (guardian)' : 'referral list read';
+  for (const referral of referrals) {
+    auditService.recordAccess({
+      accessedBy: userId,
+      patientProfileId: patientProfile.id,
+      entityType: 'Referral',
+      entityId: referral.id,
+      route: 'GET /referrals/mine',
+      detail,
+    });
+  }
+  return referrals;
 }
 
 export async function listCreated(userId: string) {
   const referringDoctor = await doctorsService.getMyDoctorProfile(userId);
+  // Issue #309: the rows carry `declineReason` and `declineReasonNote` as
+  // model scalars, so the referring doctor sees why the patient declined
+  // without a second query.
   return referralsRepo.listReferralsCreatedBy(referringDoctor.id);
 }
 
@@ -430,6 +531,54 @@ function readableSnapshotNotes(value: string): string {
   return isEncrypted(value) ? decryptField(value) ?? value : value;
 }
 
+function readableSnapshotIntake(value: string | null): unknown {
+  if (!value) return null;
+  const raw = isEncrypted(value) ? decryptField(value) ?? value : value;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+export async function getReferralDetail(
+  actor: auditService.AuditActor,
+  referralId: string,
+  patientProfileId?: string,
+) {
+  if (!actor.userId) throw new HttpError(401, 'Authentication required.');
+  const referral = await referralsRepo.findReferralById(prisma, referralId);
+  if (!referral) throw new HttpError(404, 'Referral not found.');
+
+  let authorized = false;
+  if (actor.role === 'admin') {
+    authorized = true;
+  } else if (actor.role === 'doctor') {
+    const doctor = await doctorsService.getMyDoctorProfile(actor.userId);
+    authorized = doctor.id === referral.referringDoctorId || doctor.id === referral.targetDoctorId;
+  } else if (actor.role === 'patient') {
+    const actingProfile = await patientsService.resolveActingProfile(actor.userId, patientProfileId);
+    authorized = actingProfile.id === referral.patientProfileId;
+  }
+
+  if (!authorized) throw new HttpError(404, 'Referral not found.');
+
+  auditService.recordAccess({
+    accessedBy: actor.userId,
+    patientProfileId: referral.patientProfileId,
+    entityType: 'Referral',
+    entityId: referral.id,
+    route: 'GET /referrals/:referralId',
+    detail: 'referral detail read',
+  });
+
+  return {
+    ...referral,
+    snapshotNotes: readableSnapshotNotes(referral.snapshotNotes),
+    snapshotIntake: readableSnapshotIntake(referral.snapshotIntake),
+  };
+}
+
 export interface IncomingReferralFilters {
   status?: ReferralStatus;
   limit?: number;
@@ -452,6 +601,7 @@ export async function listIncoming(userId: string, filters: IncomingReferralFilt
   const items = pageRows.map((row) => ({
     ...row,
     snapshotNotes: readableSnapshotNotes(row.snapshotNotes),
+    snapshotIntake: readableSnapshotIntake(row.snapshotIntake),
   }));
 
   for (const row of pageRows) {
@@ -579,6 +729,8 @@ export interface AdminQueueFilters {
    * duration are returned. */
   olderThan?: string;
   loopFlagged?: boolean;
+  targetSpecialtyId?: string;
+  targetDoctorId?: string;
 }
 
 function parseDuration(value: string): number {
@@ -588,14 +740,16 @@ function parseDuration(value: string): number {
   return match[2] === 'h' ? amount * 60 * 60 * 1000 : amount * 24 * 60 * 60 * 1000;
 }
 
-/** Issue #68 queue endpoint: stuck referrals (by status + age) and/or
- * loop-flagged ones, with a derived human-readable reason and age. */
+/** Issue #68 + #339 queue endpoint: stuck referrals (by status + age + specialty + doctor)
+ * and/or loop-flagged ones, with a derived human-readable reason and age. */
 export async function adminListReferrals(_userId: string, filters: AdminQueueFilters) {
   const createdBefore = filters.olderThan ? new Date(Date.now() - parseDuration(filters.olderThan)) : undefined;
   const rows = await referralsRepo.listAdminQueue({
     status: filters.status,
     createdBefore,
     loopFlagged: filters.loopFlagged,
+    targetSpecialtyId: filters.targetSpecialtyId,
+    targetDoctorId: filters.targetDoctorId,
   });
 
   const now = Date.now();

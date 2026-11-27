@@ -8,6 +8,8 @@
 // one-time token (same rule the admin bootstrap CLI follows for
 // passwords — see issue #39). Tests inject their own sender to capture
 // the link.
+import { logger } from '../../../logger';
+
 export interface EmailMessage {
   to: string;
   subject: string;
@@ -17,8 +19,7 @@ export interface EmailMessage {
 export type EmailSender = (message: EmailMessage) => Promise<void>;
 
 async function defaultEmailSender(message: EmailMessage): Promise<void> {
-  // eslint-disable-next-line no-console
-  console.info(`[email] no provider configured yet (Phase 6 / issue #17) — "${message.subject}" to ${message.to} was not sent.`);
+  logger.info(`[email] no provider configured yet (Phase 6 / issue #17) — "${message.subject}" to ${message.to} was not sent.`);
 }
 
 let currentSender: EmailSender = defaultEmailSender;

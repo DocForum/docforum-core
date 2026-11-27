@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate, requireRole, requireVerifiedEmail } from '../../../middleware/auth';
+import { idempotency } from '../../../middleware/idempotency';
 import * as referralsController from '../controllers';
 
 export const referralsRouter = Router();
@@ -32,6 +33,7 @@ referralsRouter.post(
   authenticate,
   requireRole('patient'),
   requireVerifiedEmail,
+  idempotency(),
   referralsController.accept,
 );
 referralsRouter.post(
@@ -40,6 +42,13 @@ referralsRouter.post(
   requireRole('patient'),
   requireVerifiedEmail,
   referralsController.decline,
+);
+referralsRouter.post(
+  '/:referralId/withdraw',
+  authenticate,
+  requireRole('doctor'),
+  requireVerifiedEmail,
+  referralsController.withdraw,
 );
 referralsRouter.get('/incoming', authenticate, requireRole('doctor'), referralsController.listIncoming);
 referralsRouter.get('/mine', authenticate, requireRole('patient'), referralsController.listMine);
@@ -74,3 +83,4 @@ referralsRouter.get(
   requireRole('admin'),
   referralsController.auditTrail,
 );
+referralsRouter.get('/:referralId', authenticate, referralsController.getOne);

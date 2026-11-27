@@ -117,6 +117,14 @@ export async function removeCapability(req: Request, res: Response) {
   res.status(204).send();
 }
 
+export async function verifyOrder(req: Request, res: Response) {
+  if (!req.user) throw new HttpError(401, 'Authentication required.');
+  const token = String((req.body as { token?: unknown })?.token ?? '');
+  if (!token) throw new HttpError(400, 'token is required.');
+  const result = await facilitiesService.verifyOrder(auditActor(req), token);
+  res.status(200).json(result);
+}
+
 /** POST /facilities/me/prices/retire — facility retires an item. */
 export async function retireOwnPriceItem(req: Request, res: Response) {
   if (!req.user) throw new HttpError(401, 'Authentication required.');

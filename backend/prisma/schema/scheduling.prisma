@@ -35,18 +35,21 @@ model AvailabilitySlot {
   appointment   Appointment?
 
   // Prevents two slot ROWS for the same doctor/time range (duplicate
-  // generation). This is NOT what prevents double-BOOKING of one slot by
-  // two patients — that's the conditional `UPDATE ... WHERE status =
-  // 'open'` in availability/services, inside a transaction. See
-  // ARCHITECTURE.md §5.1 and the integration test in
-  // backend/tests/integration/booking.test.ts.
+  // generation). Also backed at the database level by a PostgreSQL exclusion
+  // constraint (issue #287):
+  //   EXCLUDE USING gist ("doctorProfileId" WITH =, tsrange("startTime", "endTime") WITH &&)
+  // preventing any overlapping slots per doctor regardless of slot length.
+  // This is NOT what prevents double-BOOKING of one slot by two patients —
+  // that's the conditional `UPDATE ... WHERE status = 'open' AND "startTime" > now`
+  // in availability/services, inside a transaction (issue #285). See
+  // ARCHITECTURE.md §5.1 and backend/tests/integration/booking.test.mts.
   @@unique([doctorProfileId, startTime, endTime])
   @@index([doctorProfileId, status, startTime])
 }
 
 model Appointment {
   id                 String            @id @default(uuid())
-  version     Int      @default(1)
+  version            Int               @default(1)
   patientProfileId   String
   doctorProfileId    String
   // Nullable because a CANCELLED appointment releases its slot back to
@@ -83,7 +86,7 @@ model Appointment {
   consultation     Consultation?
   // Phase 2, issue #63: the follow-up request this appointment satisfied,
   // if it was booked that way (the FK lives on FollowUpRequest).
-  followUpRequest  FollowUpRequest? @relation("FollowUpBookedAppointment")
+  followUpRequest  FollowUpRequest?  @relation("FollowUpBookedAppointment")
 
   // TODO Phase 2: intakeId (FK -> IntakeForm). PRD FR-5 requires intake
   // before confirmation, not enforced yet — booking works without it in

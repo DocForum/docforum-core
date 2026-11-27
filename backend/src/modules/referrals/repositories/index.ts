@@ -1,6 +1,10 @@
 import { prisma } from '../../../db/prisma-client';
 import { Prisma } from '@prisma/client';
-import type { ReferralExpiryReason as ExpiryReason, ReferralStatus } from '@prisma/client';
+import type {
+  ReferralExpiryReason as ExpiryReason,
+  ReferralStatus,
+  ReferralDeclineReason,
+} from '@prisma/client';
 import type { ChainNode } from '../loop';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
@@ -12,6 +16,7 @@ export interface CreateReferralData {
   targetDoctorId: string;
   targetSpecialtyId?: string;
   snapshotNotes: string;
+  snapshotIntake?: string | null;
   parentReferralId?: string;
   loopFlaggedAt?: Date;
   loopFlagReason?: string;
@@ -60,6 +65,9 @@ export function updateReferralConditional(
     referringDoctorNotifiedAt?: Date;
     expiredAt?: Date;
     expiredReason?: ExpiryReason;
+    cancelledReason?: string;
+    declineReason?: ReferralDeclineReason;
+    declineReasonNote?: string | null;
   },
 ) {
   return db.referral.updateMany({
@@ -231,20 +239,30 @@ export async function findParentReferralForConsultation(
   return rows[0]?.referralId ?? null;
 }
 
-/** Issue #68: stuck-referral / loop-flagged admin queues. Filters are
- * conjunctive; every one is optional so the same repo call serves both
- * the "stale pending" view and the "loop-flagged" view. */
+/** Issue #68 + #339: stuck-referral / loop-flagged admin queues with
+ * specialty and target-doctor filters. Every filter is optional; the
+ * specialty filter skips referrals whose targetSpecialtyId is null
+ * (named-doctor referrals). */
 export function listAdminQueue(filters: {
   status?: ReferralStatus;
   createdBefore?: Date;
   loopFlagged?: boolean;
+  targetSpecialtyId?: string;
+  targetDoctorId?: string;
 }) {
+  const where: Prisma.ReferralWhereInput = {
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.createdBefore ? { createdAt: { lt: filters.createdBefore } } : {}),
+    ...(filters.loopFlagged ? { loopFlaggedAt: { not: null } } : {}),
+    ...(filters.targetSpecialtyId
+      ? { targetSpecialtyId: filters.targetSpecialtyId }
+      : {}),
+    ...(filters.targetDoctorId
+      ? { targetDoctorId: filters.targetDoctorId }
+      : {}),
+  };
   return prisma.referral.findMany({
-    where: {
-      ...(filters.status ? { status: filters.status } : {}),
-      ...(filters.createdBefore ? { createdAt: { lt: filters.createdBefore } } : {}),
-      ...(filters.loopFlagged ? { loopFlaggedAt: { not: null } } : {}),
-    },
+    where,
     include: {
       sourceConsultation: { select: { id: true, outcome: true } },
     },

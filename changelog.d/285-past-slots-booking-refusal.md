@@ -1,0 +1,1 @@
+Phase 2: prevent booking or rescheduling into past availability slots ([issue #285](https://github.com/DocForum/docforum-core/issues/285)). `claimOpenSlot` conditionally guards on `startTime > now` at the database level, and booking/reschedule routes return 409 if a slot's start time has passed.
