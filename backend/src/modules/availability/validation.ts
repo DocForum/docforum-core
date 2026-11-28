@@ -76,3 +76,58 @@ export const listSlotsQuerySchema = z
     to: z.string().datetime({ offset: true }).optional(),
   })
   .strict();
+
+// --- Closure calendar (Phase 2, issue #131) --------------------------------
+
+/** A real calendar day, `YYYY-MM-DD` (rejects 2026-02-30). */
+const calendarDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD')
+  .refine((value) => {
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    // `toISOString` throws on an invalid date, so check before comparing.
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  }, 'date must be a real calendar day');
+
+/**
+ * Body for `POST /availability/admin/closures`. The range is inclusive; the
+ * zone is the zone the all-day range is read in (defaults to UTC in the
+ * service). Scope/facility consistency and the range size are checked in the
+ * service, where the DB-backed facility lookup and the configured horizon are
+ * available.
+ */
+export const createClosurePeriodSchema = z
+  .object({
+    scope: z.enum(['platform', 'facility']),
+    facilityProfileId: z.string().min(1).optional(),
+    startDate: calendarDateSchema,
+    endDate: calendarDateSchema,
+    timeZone: z.string().min(1).max(64).optional(),
+    reason: z.string().trim().min(1, 'reason is required').max(200),
+  })
+  .strict();
+
+/** Body for `PATCH /availability/admin/closures/:closureId` — partial, at
+ * least one field. The version comes from `If-Match`, not the body. */
+export const updateClosurePeriodSchema = z
+  .object({
+    startDate: calendarDateSchema.optional(),
+    endDate: calendarDateSchema.optional(),
+    timeZone: z.string().min(1).max(64).optional(),
+    reason: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict()
+  .refine((data) => Object.values(data).some((value) => value !== undefined), {
+    message: 'At least one of startDate, endDate, timeZone or reason is required.',
+  });
+
+/** Query for both closure lists. `from`/`to` bound the calendar range
+ * (inclusive); the public list defaults `from` to today, the admin list does
+ * not filter at all unless asked. */
+export const listClosurePeriodsQuerySchema = z
+  .object({
+    from: calendarDateSchema.optional(),
+    to: calendarDateSchema.optional(),
+    scope: z.enum(['platform', 'facility']).optional(),
+  })
+  .strict();

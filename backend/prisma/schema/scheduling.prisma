@@ -131,6 +131,52 @@ model WaitlistEntry {
   @@index([patientProfileId, status])
 }
 
+// Phase 2, issue #131: the admin-managed closure calendar. A closure covers an
+// inclusive range of whole calendar days (`timeZone` is the zone those days are
+// read in, so an all-day closure is correct across DST).
+//
+// Scope semantics (v1):
+//   - `platform` — a public holiday / platform-wide shutdown: slot generation
+//     skips the range and creating the closure removes every still-open slot
+//     in it. Booked appointments are REPORTED (`Appointment` rows are never
+//     touched — no silent cancellation).
+//   - `facility` — a clinic/location closure. Recorded and listed, but it does
+//     not block a doctor's calendar yet: `AvailabilitySlot` has no facility, and
+//     v1 assumes one calendar per doctor (PRD §8.6 / ARCHITECTURE.md §8).
+//     Applying it is a one-predicate change once that gap is closed.
+enum ClosureScope {
+  platform
+  facility
+}
+
+model ClosurePeriod {
+  id                String       @id @default(uuid())
+  // Optimistic concurrency (hard rule 7): PATCH is one conditional UPDATE
+  // `WHERE id = ? AND version = ?` that increments this.
+  version           Int          @default(1)
+  scope             ClosureScope
+  // NULL for a platform-wide closure; required for a facility closure (DB CHECK).
+  facilityProfileId String?
+  // Inclusive calendar-day range, interpreted in `timeZone`. DATE columns: a
+  // closure is an all-day span, never a partial-day block.
+  startDate         DateTime     @db.Date
+  endDate           DateTime     @db.Date
+  timeZone          String       @default("UTC")
+  // Operational note for the client calendar ("Christmas Day", "building
+  // maintenance"). Never patient data.
+  reason            String
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  // Config rows, not clinical records: a deleted facility takes its closures
+  // with it (ADR 0010's retention rules cover patient-linked rows only).
+  facilityProfile FacilityProfile? @relation(fields: [facilityProfileId], references: [id], onDelete: Cascade)
+
+  @@index([startDate, endDate])
+  @@index([scope, startDate])
+  @@index([facilityProfileId])
+}
+
 model WindowTime {
   id    String   @id @default(uuid())
   start DateTime

@@ -895,6 +895,27 @@ export const ERROR_CATALOGUE = {
     meaning: 'The generation window or slot length is invalid.',
     guidance: 'Send a whole-hour start, end after start, and a positive slot length that divides the window.',
   },
+  CLOSURE_NOT_FOUND: {
+    status: 404,
+    module: 'availability',
+    message: 'Closure period not found.',
+    meaning: 'No closure period matches the identifier.',
+    guidance: 'Refresh the closure calendar and use a current id.',
+  },
+  CLOSURE_FACILITY_REQUIRED: {
+    status: 400,
+    module: 'availability',
+    message: 'A clinic closure needs facilityProfileId.',
+    meaning: 'A facility-scoped closure was sent without naming the facility.',
+    guidance: 'Send facilityProfileId, or use scope "platform" for a platform-wide closure.',
+  },
+  CLOSURE_SCOPE_CONFLICT: {
+    status: 400,
+    module: 'availability',
+    message: 'A platform-wide closure must not name a facility.',
+    meaning: 'facilityProfileId was sent together with scope "platform".',
+    guidance: 'Send facilityProfileId only with scope "facility".',
+  },
 
   // ---------------------------------------------------------------------------
   // Appointments

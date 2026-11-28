@@ -56,7 +56,9 @@ export type AuditEntityType =
   | 'AdminInvite'
   | 'LoginAttempt'
   // Issue #328: facility payout-wallet changes (`wallet_link.linked|changed`).
-  | 'WalletLink';
+  | 'WalletLink'
+  // Issue #131: admin create/update/delete of a closure period.
+  | 'ClosurePeriod';
 
 export type AuditMetadataValue = string | number | boolean | null;
 export type AuditMetadata = Record<string, AuditMetadataValue>;

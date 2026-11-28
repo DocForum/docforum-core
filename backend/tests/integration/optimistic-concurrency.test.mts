@@ -442,6 +442,10 @@ describe('optimistic concurrency (version + If-Match)', () => {
       // design — see ARCHITECTURE.md §5.4.4.
       expect(rows.map((r) => r.table_name)).toEqual([
         'Appointment',
+        // Closure calendar (issue #131): editable by admins, so PATCH is
+        // If-Match guarded and the row is versioned like the other mutable
+        // records.
+        'ClosurePeriod',
         'DoctorProfile',
         'FacilityCapability',
         'FacilityProfile',
