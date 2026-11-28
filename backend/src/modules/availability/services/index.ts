@@ -3,7 +3,13 @@ import { config } from '../../../config';
 import * as availabilityRepo from '../repositories';
 import * as doctorsService from '../../doctors/services';
 import { buildSlotRanges } from '../slot-generation';
+import { excludeClosedSlots } from '../closure-periods';
 import { validateSlotGenerationDate } from '../validation';
+import { findApplicableClosureWindows } from './closures';
+
+// The closure-calendar service (issue #131) lives in ./closures; re-exported
+// here so callers keep importing one module service surface.
+export * from './closures';
 
 export function isOverlapOrUniqueViolation(error: unknown): boolean {
   if (typeof error !== 'object' || !error) return false;
@@ -64,7 +70,17 @@ export async function listOpenSlots(
   const isVerified = await doctorsService.isDoctorVerified(doctorProfileId);
   if (!isVerified) return [];
 
-  return availabilityRepo.findOpenSlots(doctorProfileId, fromDate, toDate);
+  // A closure removes the slots it covers when it is created, so this filter
+  // is belt-and-braces: it also hides a slot that was released after the
+  // closure existed (a cancelled booking hands its slot back to the
+  // calendar). Booking by slot id is deliberately unchanged — the closure
+  // sweep owns the calendar, and the booking hot path stays one conditional
+  // UPDATE (hard rule 2). See ARCHITECTURE.md §4.2.
+  const [slots, windows] = await Promise.all([
+    availabilityRepo.findOpenSlots(doctorProfileId, fromDate, toDate),
+    findApplicableClosureWindows(fromDate, toDate),
+  ]);
+  return excludeClosedSlots(slots, windows);
 }
 
 export interface GenerateSlotsInput {
@@ -99,21 +115,35 @@ export async function generateSlots(input: GenerateSlotsInput) {
   } catch (error) {
     throw new HttpError('INVALID_SLOT_GENERATION', error instanceof Error ? error.message : 'Invalid slot-generation input.');
   }
-  if (proposedSlots.length === 0) return { created: 0, skippedOverlapping: 0, skipped: 0 };
+  if (proposedSlots.length === 0) return { created: 0, skippedOverlapping: 0, skippedClosed: 0, skipped: 0 };
 
-  const existing = await availabilityRepo.findExistingSlotRanges(
-    doctorProfileId,
+  // Phase 2, issue #131: a closure removes slots at the source, so generation
+  // never creates one inside a closed period in the first place.
+  const closureWindows = await findApplicableClosureWindows(
     proposedSlots[0].startTime,
     proposedSlots[proposedSlots.length - 1].endTime,
   );
-  const rows = buildSlotRanges(inputWithCutoff, existing);
+  const openSlots = excludeClosedSlots(proposedSlots, closureWindows);
+  const skippedClosed = proposedSlots.length - openSlots.length;
+  if (openSlots.length === 0) return { created: 0, skippedOverlapping: 0, skippedClosed, skipped: skippedClosed };
 
-  const skippedOverlapping = proposedSlots.length - rows.length;
-  if (rows.length === 0) return { created: 0, skippedOverlapping, skipped: skippedOverlapping };
+  const existing = await availabilityRepo.findExistingSlotRanges(
+    doctorProfileId,
+    openSlots[0].startTime,
+    openSlots[openSlots.length - 1].endTime,
+  );
+  const rows = openSlots.filter(
+    (slot) => !existing.some((row) => slot.startTime < row.endTime && slot.endTime > row.startTime),
+  );
+
+  const skippedOverlapping = openSlots.length - rows.length;
+  if (rows.length === 0) {
+    return { created: 0, skippedOverlapping, skippedClosed, skipped: skippedOverlapping + skippedClosed };
+  }
 
   try {
     const result = await availabilityRepo.createSlots(rows);
-    return { created: result.count, skippedOverlapping, skipped: skippedOverlapping };
+    return { created: result.count, skippedOverlapping, skippedClosed, skipped: skippedOverlapping + skippedClosed };
   } catch (error) {
     if (isOverlapOrUniqueViolation(error)) {
       throw new HttpError('SLOT_OVERLAP', 'Slot overlaps with an existing slot.');
@@ -147,3 +177,4 @@ export function getNextAvailableSlots(doctorProfileIds: string[], now = new Date
 export function getDoctorIdsWithAvailableSlotsBefore(before: Date, now = new Date()): Promise<string[]> {
   return availabilityRepo.findDoctorProfileIdsWithAvailableSlotsBefore(before, now);
 }
+

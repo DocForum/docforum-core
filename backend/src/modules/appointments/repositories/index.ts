@@ -142,6 +142,27 @@ export function clearAvailabilitySlotLink(db: DbClient, id: string) {
   return db.appointment.updateMany({ where: { id }, data: { availabilitySlotId: null } });
 }
 
+/**
+ * Phase 2, issue #131: the scheduled appointments whose booked slot overlaps
+ * `[from, to)`, for the availability module's closure report. Selected fields
+ * are identifiers and times only — the report is operational and never carries
+ * patient identity or clinical detail.
+ */
+export function findScheduledAppointmentsInWindow(from: Date, to: Date) {
+  return prisma.appointment.findMany({
+    where: {
+      status: 'scheduled',
+      availabilitySlot: { is: { startTime: { lt: to }, endTime: { gt: from } } },
+    },
+    select: {
+      id: true,
+      doctorProfileId: true,
+      availabilitySlot: { select: { startTime: true } },
+    },
+    orderBy: { id: 'asc' },
+  });
+}
+
 /** Existence check for the account-deletion retention hold (issue #41). */
 export async function patientHasAppointments(patientProfileId: string): Promise<boolean> {
   return (await prisma.appointment.findFirst({ where: { patientProfileId }, select: { id: true } })) !== null;

@@ -52,6 +52,7 @@ describe('query budgets for list endpoints', () => {
   let manyDoctorToken: string;
   let smallFacilityToken: string;
   let manyFacilityToken: string;
+  let adminToken: string;
 
   async function createUser(role: Role, label: string) {
     const user = await prisma.user.create({
@@ -232,6 +233,25 @@ describe('query budgets for list endpoints', () => {
       data: { userId: smallPatient.user.id, type: 'appointment_booked', payload: { appointmentId: '00000000-0000-4000-8000-000000000099' } },
     });
 
+    // Closure calendar (issue #131): one closure on its own day and fifty on
+    // another, so both lists are measured at 1 row and at 50 rows.
+    await prisma.closurePeriod.create({
+      data: {
+        scope: 'platform',
+        startDate: new Date('2032-03-01T00:00:00.000Z'),
+        endDate: new Date('2032-03-01T00:00:00.000Z'),
+        reason: 'query budget small closure',
+      },
+    });
+    await prisma.closurePeriod.createMany({
+      data: Array.from({ length: 50 }, (_, index) => {
+        // One closure per day from 2032-04-01, so 50 days fit April–May.
+        const day = new Date(Date.UTC(2032, 3, 1 + index));
+        return { scope: 'platform' as const, startDate: day, endDate: day, reason: `query budget closure ${index}` };
+      }),
+    });
+    adminToken = (await createUser('admin', 'closure-admin')).token;
+
     // Public doctor search: 50 verified doctors with a specialty and one open
     // slot each, plus the two doctors above. Measured with `limit=1` and
     // `limit=50` (result size, not a different query shape).
@@ -384,6 +404,28 @@ describe('query budgets for list endpoints', () => {
     );
     expect(one.response.body.items).toHaveLength(1);
     expect(fifty.response.body.items).toHaveLength(50);
+  });
+
+  // Issue #131: both closure lists are single-query reads; a per-row query
+  // would mean deriving something from each closure, which they never do.
+  it('keeps the closure lists constant from 1 to 50 closures', async () => {
+    const publicRange = (from: string, to: string) => `/availability/closures?from=${from}&to=${to}`;
+    const { one, fifty } = await expectConstantBudget(
+      1,
+      (a) => a.get(publicRange('2032-03-01', '2032-03-31')),
+      (a) => a.get(publicRange('2032-04-01', '2032-06-30')),
+    );
+    expect(one.response.body.closures).toHaveLength(1);
+    expect(fifty.response.body.closures).toHaveLength(50);
+
+    const adminRange = (from: string, to: string) => `/availability/admin/closures?from=${from}&to=${to}`;
+    const admin = await expectConstantBudget(
+      2,
+      (a) => a.get(adminRange('2032-03-01', '2032-03-31')).set('Authorization', `Bearer ${adminToken}`),
+      (a) => a.get(adminRange('2032-04-01', '2032-06-30')).set('Authorization', `Bearer ${adminToken}`),
+    );
+    expect(admin.one.response.body.closures).toHaveLength(1);
+    expect(admin.fifty.response.body.closures).toHaveLength(50);
   });
 
   it('keeps GET /pharmacy-orders/facility/queue constant from 1 to 50 records', async () => {

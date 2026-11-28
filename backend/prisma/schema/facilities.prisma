@@ -43,6 +43,8 @@ model FacilityProfile {
   prices            FacilityPrice[]
   orders            Order[]
   fulfillmentProofs FulfillmentProof[]
+  // Issue #131: clinic/location closures declared against this facility.
+  closurePeriods    ClosurePeriod[]
 
   // Composite b-tree index backing the "indexed bounding box" prefilter
   // of the distance query (issue #74). Chosen over PostGIS: no extension

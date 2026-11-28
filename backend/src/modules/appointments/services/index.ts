@@ -593,10 +593,40 @@ export async function getAppointmentParticipants(appointmentId: string) {
   };
 }
 
+/** Public shape of a booked appointment that falls inside a closure, for the
+ * availability module's report (issue #131). No patient identity: the admin
+ * handling the closure gets ids and times, and resolves anything else through
+ * the normal appointment routes. */
+export interface ClosureAffectedBooking {
+  appointmentId: string;
+  doctorProfileId: string;
+  startTime: Date | null;
+}
+
+/**
+ * Phase 2, issue #131: the still-`scheduled` appointments whose booked slot
+ * overlaps `[from, to)`. Used by the availability module when a closure is
+ * created or moved: those appointments are REPORTED for manual handling and
+ * are never cancelled by the closure (the doctor/patient flows own
+ * cancellation). Runs under the caller's RLS context, so the admin request
+ * that creates the closure sees them and a patient-scoped call does not.
+ */
+export async function findScheduledAppointmentsInWindow(
+  from: Date,
+  to: Date,
+): Promise<ClosureAffectedBooking[]> {
+  const rows = await appointmentsRepo.findScheduledAppointmentsInWindow(from, to);
+  return rows.map((row) => ({
+    appointmentId: row.id,
+    doctorProfileId: row.doctorProfileId,
+    // A `scheduled` appointment always still holds its booked slot.
+    startTime: row.availabilitySlot?.startTime ?? null,
+  }));
+}
+
 /** This module's contribution to the patient data export (issue #40).
  * Slot times and the doctor's name are fetched per page through the
- * availability and doctors services — never by joining their tables. */
-export const appointmentsExportSection: patientsService.PatientExportSection = {
+ * availability and doctors services — never by joining their tables. */export const appointmentsExportSection: patientsService.PatientExportSection = {
   name: 'appointments',
   version: 1,
   pages(subject, pageSize) {

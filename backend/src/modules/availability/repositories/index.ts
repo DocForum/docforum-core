@@ -119,6 +119,95 @@ export async function releaseBookedSlotIfFuture(db: DbClient, slotId: string): P
   return result.count === 1;
 }
 
+// --- Closure calendar (Phase 2, issue #131) --------------------------------
+
+export type ClosureScopeName = 'platform' | 'facility';
+
+export interface ClosurePeriodInput {
+  scope: ClosureScopeName;
+  facilityProfileId: string | null;
+  startDate: Date;
+  endDate: Date;
+  timeZone: string;
+  reason: string;
+}
+
+export function createClosurePeriod(db: DbClient, data: ClosurePeriodInput) {
+  return db.closurePeriod.create({ data });
+}
+
+export function findClosureById(db: DbClient, id: string) {
+  return db.closurePeriod.findUnique({ where: { id } });
+}
+
+/**
+ * Closures whose inclusive calendar-day range overlaps `[fromDate, toDate]`.
+ * Callers widen the requested boundary by a day: a closure is stored as
+ * calendar dates in its own `timeZone`, so a slot near midnight UTC can belong
+ * to the neighbouring closure date. The exact filtering is done on the
+ * converted instant windows (`closure-periods.ts`), not on this query.
+ */
+export function findClosuresOverlapping(fromDate: Date, toDate: Date) {
+  return prisma.closurePeriod.findMany({
+    where: { startDate: { lte: toDate }, endDate: { gte: fromDate } },
+    orderBy: [{ startDate: 'asc' }, { id: 'asc' }],
+  });
+}
+
+/** Lists closures, optionally bounded by calendar dates (inclusive). */
+export function findClosures(
+  filters: { fromDate?: Date; toDate?: Date; scope?: ClosureScopeName },
+) {
+  return prisma.closurePeriod.findMany({
+    where: {
+      ...(filters.fromDate ? { endDate: { gte: filters.fromDate } } : {}),
+      ...(filters.toDate ? { startDate: { lte: filters.toDate } } : {}),
+      ...(filters.scope ? { scope: filters.scope } : {}),
+    },
+    orderBy: [{ startDate: 'asc' }, { id: 'asc' }],
+  });
+}
+
+/**
+ * ONE conditional UPDATE that also moves `version` (hard rule 7). Zero rows
+ * means someone else changed the row since the caller read it — the service
+ * turns that into `412`.
+ */
+export function updateClosureIfVersion(
+  db: DbClient,
+  id: string,
+  expectedVersion: number,
+  data: { startDate: Date; endDate: Date; timeZone: string; reason?: string },
+) {
+  return db.closurePeriod.updateManyAndReturn({
+    where: { id, version: expectedVersion },
+    data: { ...data, version: { increment: 1 } },
+  });
+}
+
+export function deleteClosurePeriod(db: DbClient, id: string) {
+  return db.closurePeriod.deleteMany({ where: { id } });
+}
+
+/**
+ * Conditionally removes the still-open slots that overlap `[from, end)`.
+ *
+ * The conditions are the point: `status = 'open'` and no appointment means a
+ * slot booked (or held) at the same instant is left untouched, and the whole
+ * thing is one DELETE rather than a read-then-write loop. Booked appointments
+ * are reported by the service, never cancelled here.
+ */
+export function deleteOpenSlotsInWindow(db: DbClient, from: Date, end: Date) {
+  return db.availabilitySlot.deleteMany({
+    where: {
+      status: 'open',
+      startTime: { lt: end },
+      endTime: { gt: from },
+      appointment: { is: null },
+    },
+  });
+}
+
 /**
  * Closes (deletes) a doctor's still-open slots that start in [from, end)
  * — the doctor-cancels-a-day action (issue #338). Conditional on

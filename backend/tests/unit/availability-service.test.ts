@@ -9,9 +9,12 @@ import * as doctorsService from '../../src/modules/doctors/services';
 import { HttpError } from '../../src/http-error';
 
 vi.mock('../../src/modules/availability/repositories', () => ({
-  findExistingSlotRanges: vi.fn(),
-  createSlots: vi.fn(),
-  findOpenSlots: vi.fn(),
+  findExistingSlotRanges: vi.fn().mockResolvedValue([]),
+  createSlots: vi.fn().mockResolvedValue({ count: 0 }),
+  findOpenSlots: vi.fn().mockResolvedValue([]),
+  // Issue #131: generation and the public slot list both read the closure
+  // calendar; default to "no closures" so these tests exercise the slot logic.
+  findClosuresOverlapping: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../../src/modules/doctors/services', () => ({
@@ -142,22 +145,54 @@ describe('availability service unit tests', () => {
       vi.mocked(availabilityRepo.findOpenSlots).mockResolvedValueOnce(mockSlots);
 
       const slots = await listOpenSlots('doc-1', undefined, fixedNow);
-      expect(slots).toBe(mockSlots);
+      // A copy, not the same array: the closure filter rebuilds the list.
+      expect(slots).toEqual(mockSlots);
+    });
+
+    it('hides open slots that fall inside a platform closure', async () => {
+      vi.mocked(doctorsService.getDoctorProfileById).mockResolvedValueOnce({
+        id: 'doc-1',
+        user: { deactivatedAt: null, deletedAt: null },
+      } as any);
+      vi.mocked(doctorsService.isDoctorVerified).mockResolvedValueOnce(true);
+      vi.mocked(availabilityRepo.findOpenSlots).mockResolvedValueOnce([
+        { id: 'inside', startTime: new Date('2026-12-25T09:00:00.000Z'), endTime: new Date('2026-12-25T09:30:00.000Z') },
+        { id: 'outside', startTime: new Date('2026-12-26T09:00:00.000Z'), endTime: new Date('2026-12-26T09:30:00.000Z') },
+      ] as any);
+      vi.mocked(availabilityRepo.findClosuresOverlapping).mockResolvedValueOnce([
+        {
+          scope: 'platform',
+          startDate: new Date('2026-12-25T00:00:00.000Z'),
+          endDate: new Date('2026-12-25T00:00:00.000Z'),
+          timeZone: 'UTC',
+        },
+      ] as any);
+
+      const slots = await listOpenSlots('doc-1', undefined, fixedNow);
+      expect(slots.map((slot) => slot.id)).toEqual(['outside']);
     });
   });
 
   describe('generateSlots', () => {
     it('returns 0 created when all proposed slots are skipped in past', async () => {
-      const result = await generateSlots({
-        doctorProfileId: 'doc-1',
-        date: new Intl.DateTimeFormat('en-CA', { timeZone: 'UTC' }).format(new Date()),
-        startHour: 0,
-        endHour: 1,
-        slotLengthMinutes: 30,
-        timeZone: 'UTC',
-      });
-      // StartHour 0 to 1 today is in the past
-      expect(result).toEqual({ created: 0, skippedOverlapping: 0, skipped: 0 });
+      // Pin the clock: "00:00–01:00 today" is only entirely past if the suite
+      // does not run in that first hour of the UTC day.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-11-20T12:00:00.000Z'));
+      try {
+        const result = await generateSlots({
+          doctorProfileId: 'doc-1',
+          date: '2026-11-20',
+          startHour: 0,
+          endHour: 1,
+          slotLengthMinutes: 30,
+          timeZone: 'UTC',
+        });
+        // StartHour 0 to 1 today is in the past
+        expect(result).toEqual({ created: 0, skippedOverlapping: 0, skippedClosed: 0, skipped: 0 });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('returns skipped count when all proposed slots overlap existing slots', async () => {
@@ -176,7 +211,7 @@ describe('availability service unit tests', () => {
         slotLengthMinutes: 60,
         timeZone: 'UTC',
       });
-      expect(result).toEqual({ created: 0, skippedOverlapping: 2, skipped: 2 });
+      expect(result).toEqual({ created: 0, skippedOverlapping: 2, skippedClosed: 0, skipped: 2 });
     });
 
     it('creates slots and returns created and skipped counts', async () => {
@@ -196,7 +231,53 @@ describe('availability service unit tests', () => {
         slotLengthMinutes: 60,
         timeZone: 'UTC',
       });
-      expect(result).toEqual({ created: 1, skippedOverlapping: 1, skipped: 1 });
+      expect(result).toEqual({ created: 1, skippedOverlapping: 1, skippedClosed: 0, skipped: 1 });
+    });
+
+    it('skips slots inside a platform closure (issue #131)', async () => {
+      vi.mocked(availabilityRepo.findClosuresOverlapping).mockResolvedValueOnce([
+        {
+          scope: 'platform',
+          startDate: new Date('2026-12-01T00:00:00.000Z'),
+          endDate: new Date('2026-12-01T00:00:00.000Z'),
+          timeZone: 'UTC',
+        },
+      ] as any);
+
+      const result = await generateSlots({
+        doctorProfileId: 'doc-1',
+        date: '2026-12-01',
+        startHour: 9,
+        endHour: 11,
+        slotLengthMinutes: 60,
+        timeZone: 'UTC',
+      });
+      expect(result).toEqual({ created: 0, skippedOverlapping: 0, skippedClosed: 2, skipped: 2 });
+      expect(availabilityRepo.createSlots).not.toHaveBeenCalled();
+    });
+
+    it('does not apply a facility-scoped closure to a doctor’s calendar yet', async () => {
+      vi.mocked(availabilityRepo.findClosuresOverlapping).mockResolvedValueOnce([
+        {
+          scope: 'facility',
+          facilityProfileId: 'facility-1',
+          startDate: new Date('2026-12-01T00:00:00.000Z'),
+          endDate: new Date('2026-12-01T00:00:00.000Z'),
+          timeZone: 'UTC',
+        },
+      ] as any);
+      vi.mocked(availabilityRepo.findExistingSlotRanges).mockResolvedValueOnce([]);
+      vi.mocked(availabilityRepo.createSlots).mockResolvedValueOnce({ count: 2 });
+
+      const result = await generateSlots({
+        doctorProfileId: 'doc-1',
+        date: '2026-12-01',
+        startHour: 9,
+        endHour: 11,
+        slotLengthMinutes: 60,
+        timeZone: 'UTC',
+      });
+      expect(result).toEqual({ created: 2, skippedOverlapping: 0, skippedClosed: 0, skipped: 0 });
     });
 
     it('throws 409 when createSlots fails with unique or exclusion constraint error', async () => {

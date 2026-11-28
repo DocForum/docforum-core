@@ -160,6 +160,9 @@ This page is generated — edit the catalogue and run
 
 | Code | HTTP | Meaning | Client guidance |
 |---|---|---|---|
+| `CLOSURE_FACILITY_REQUIRED` | 400 | A facility-scoped closure was sent without naming the facility. | Send facilityProfileId, or use scope "platform" for a platform-wide closure. |
+| `CLOSURE_NOT_FOUND` | 404 | No closure period matches the identifier. | Refresh the closure calendar and use a current id. |
+| `CLOSURE_SCOPE_CONFLICT` | 400 | facilityProfileId was sent together with scope "platform". | Send facilityProfileId only with scope "facility". |
 | `DATE_RANGE_TOO_LARGE` | 400 | The range exceeds the configured maximum span. | Narrow the range to the maximum stated in message. |
 | `INVALID_DATE` | 400 | A date or date-time parameter could not be parsed. | Send ISO-8601 dates (YYYY-MM-DD) or timestamps. |
 | `INVALID_DATE_RANGE` | 400 | The date range is inverted. | Swap the bounds so from ≤ to. |
